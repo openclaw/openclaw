@@ -71,6 +71,7 @@ import {
   type SessionStatusDeliveryContextDetails,
   type SessionStatusOriginDetails,
 } from "./session-status-tool.schema.js";
+import { assertSessionStatusVisible } from "./session-status-visibility.js";
 import {
   formatSessionToolAccessDenial,
   resolveCurrentSessionClientAlias,
@@ -647,20 +648,17 @@ export function createSessionStatusTool(opts?: {
         requestedKeyInput,
       );
       let scopedResolved = resolved;
-      const assertStatusVisible = async () => {
-        operatorSelection.assertCurrent();
-        if (!operatorSelection.operatorAuthority || !scopedResolved.persisted) {
-          return;
-        }
-        const described = await gatewayCall<{ session: { sessionId?: string } | null }>({
-          method: "sessions.describe",
-          params: { key: scopedResolved.key, agentId },
+      const assertStatusVisible = () =>
+        assertSessionStatusVisible({
+          selection: operatorSelection,
+          resolved: scopedResolved,
+          agentId,
+          requesterAgentId,
+          currentSessionKey: opts?.runSessionKey?.trim() ?? effectiveRequesterLookupKey,
+          normalizeSessionKey: normalizeVisibilityTargetSessionKey,
+          requestedKey: requestedKeyInput,
+          gatewayCall,
         });
-        operatorSelection.assertCurrent();
-        if (described.session?.sessionId !== scopedResolved.entry.sessionId) {
-          throw new Error(`Session not visible from session tools: ${requestedKeyInput}`);
-        }
-      };
       await assertStatusVisible();
 
       return await runWithScopedSessionAccess({

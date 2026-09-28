@@ -86,7 +86,7 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
-import { resolveRuntimeSessionParticipant } from "./session-tool-participant.js";
+import { resolveRuntimeSessionParticipantRequest } from "./session-tool-participant.js";
 import { classifyGatewayStaleInstall } from "./stale-install.js";
 
 export { coreGatewayHandlers };
@@ -498,10 +498,10 @@ export async function handleGatewayRequest(
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
   const { req, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } = opts;
-  const runtimeParticipant = resolveRuntimeSessionParticipant(
-    req.method,
-    client?.internal?.agentRuntimeIdentity,
-  );
+  const runtimeParticipant = resolveRuntimeSessionParticipantRequest(opts);
+  if (runtimeParticipant === null) {
+    return;
+  }
   const profileBinding =
     opts.expectedProfileBinding ??
     (req.expectedProfileId === undefined

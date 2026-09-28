@@ -16,6 +16,7 @@ import {
   type AgentToolGatewayRequestCaller,
   runWithGatewayToolCleanupContext,
 } from "../agents/tools/in-process-gateway.js";
+import * as inProcessGateway from "../agents/tools/in-process-gateway.js";
 import { createSessionStatusTool } from "../agents/tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import { createSessionsListTool } from "../agents/tools/sessions-list-tool.js";
@@ -50,7 +51,9 @@ import {
   readGatewayDeviceSourceAuthority,
 } from "./device-revocation.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
-import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
+import { mockSessionStatusModelDependencies } from "./local-request-context.session-status.test-support.js";
+import { handleGatewayRequest } from "./server-methods.js";
+import type { GatewayRequestOptions } from "./server-methods/types.js";
 import {
   runWithOperatorToolGatewayCleanupContext,
   withOperatorToolGatewayAuthority,
@@ -273,6 +276,28 @@ describe("built-in session tool role authority", () => {
     });
   });
 
+  it("reads named-participant status while keeping current-session status local", async () => {
+    mockSessionStatusModelDependencies();
+    await withParticipantSessionToolsFixture(async ({ cfg, turn, bob }) => {
+      expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+      const statusGateway = vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest");
+      onTestFinished(() => statusGateway.mockRestore());
+      const sessionStatus = createSessionStatusTool({
+        config: cfg,
+        agentSessionKey: REQUESTER,
+        runSessionKey: REQUESTER,
+      });
+      await expect(
+        sessionStatus.execute("selected-status", { sessionKey: "current", user: bob.profileId }),
+      ).resolves.toMatchObject({
+        details: { ok: true, sessionKey: REQUESTER, agentId: "main" },
+      });
+      expect(
+        statusGateway.mock.calls.filter(([request]) => request.method === "sessions.describe"),
+      ).toHaveLength(0);
+    });
+  });
+
   it("rejects an unnamed history read when another participant steers during the read", async () => {
     await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
       const context = getPluginRuntimeGatewayRequestScope()?.context;
@@ -325,24 +350,44 @@ describe("built-in session tool role authority", () => {
         operatorRunAuthority,
         operatorRoleActor: { kind: "operator", profileId: alice.profileId },
       };
+      const respond = vi.fn<GatewayRequestOptions["respond"]>();
       const read = () =>
         withoutGatewayToolCallerIdentity(() =>
-          dispatchGatewayRequestInProcessRaw(
-            "chat.history",
-            { sessionKey: PARTICIPANT_DRAFT, agentId: "main" },
-            { context, client },
-          ),
+          handleGatewayRequest({
+            req: {
+              type: "req",
+              id: "runtime-participant-history",
+              method: "chat.history",
+              params: { sessionKey: PARTICIPANT_DRAFT, agentId: "main" },
+            },
+            context,
+            client,
+            isWebchatConnect: () => false,
+            respond,
+          }),
         );
-      await expect(read()).resolves.toMatchObject({
-        ok: true,
-        payload: {
-          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-        },
-      });
+      await expect(read()).resolves.toBeUndefined();
+      expect(respond.mock.calls).toMatchObject([
+        [
+          true,
+          { messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })] },
+        ],
+      ]);
       expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-      await expect(read()).rejects.toThrow(
-        `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
-      );
+      respond.mockClear();
+      await expect(read()).resolves.toBeUndefined();
+      expect(respond.mock.calls).toMatchObject([
+        [
+          false,
+          undefined,
+          {
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining(
+              `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
+            ),
+          },
+        ],
+      ]);
     });
   });
 
