@@ -26,7 +26,10 @@ import {
   createGatewayWorkerPlacementChangePublisher,
   subscribeGatewayWorkerMachineShapeChanges,
 } from "./server-worker-placement-change-events.js";
-import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
+import {
+  createGatewayWorkerDispatchAdmission,
+  createGatewayWorkerPlacementDrain,
+} from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
@@ -251,15 +254,11 @@ export function createGatewayWorkerPlacementRuntime(
         executionMode,
         authorize,
         signal,
+        releaseDrain,
         startDispatch,
       }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
-        const {
-          resolveWorkerPlacementExecutionMode,
-          resolveGatewaySessionStoreTargetWithStore,
-          resolveWorkerPlacementSessionRuntime,
-        } = sessionRuntime;
-        const target = resolveGatewaySessionStoreTargetWithStore({
+        const target = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
           cfg: getRuntimeConfig(),
           key: sessionKey,
           agentId,
@@ -273,15 +272,17 @@ export function createGatewayWorkerPlacementRuntime(
           sessionId,
         ];
         let placement: Awaited<ReturnType<typeof startDispatch>> | undefined;
-        await runExclusiveSessionLifecycleMutation({
+        return await runExclusiveSessionLifecycleMutation({
           scope: target.storePath,
           identities: lifecycleIdentities,
           signal,
           prepare: async () => {
+            // The mutation now holds ingress; keep new messages queued instead of rejected.
+            releaseDrain?.();
             const {
-              config: currentConfig,
+              config,
               target: currentTarget,
-              entry: currentEntry,
+              entry,
               workspace,
             } = resolveWorkerPlacementSessionTarget({
               sessionRuntime,
@@ -292,18 +293,20 @@ export function createGatewayWorkerPlacementRuntime(
               expectedTarget: target,
               errorMessage: `Session ${sessionKey} changed before cloud worker dispatch. Retry.`,
             });
-            if (currentEntry.archivedAt !== undefined) {
+            if (entry.archivedAt !== undefined) {
               throw new WorkerDispatchTargetChangedError(
                 `Session ${sessionKey} was archived before cloud worker dispatch. Retry.`,
               );
             }
-            const currentRuntime = resolveWorkerPlacementSessionRuntime({
-              cfg: currentConfig,
-              entry: currentEntry,
+            const currentRuntime = sessionRuntime.resolveWorkerPlacementSessionRuntime({
+              cfg: config,
+              entry,
               agentId: currentTarget.agentId,
               sessionKey: currentTarget.canonicalKey,
             });
-            if (resolveWorkerPlacementExecutionMode(currentRuntime) !== executionMode) {
+            if (
+              sessionRuntime.resolveWorkerPlacementExecutionMode(currentRuntime) !== executionMode
+            ) {
               throw new WorkerDispatchTargetChangedError(
                 `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker dispatch. Retry.`,
               );
@@ -319,6 +322,7 @@ export function createGatewayWorkerPlacementRuntime(
               sessionId,
               sessionKeys: lifecycleIdentities,
             });
+            // Move's destination dispatch enters directly and still needs this local drain.
             const released = await interruptSessionWorkAdmissions({
               scope: target.storePath,
               identities: lifecycleIdentities,
@@ -329,6 +333,7 @@ export function createGatewayWorkerPlacementRuntime(
             }
             await params.placements.waitForTurnClaimRelease(sessionId, {
               timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+              signal,
             });
             await runExclusiveSessionStoreWrite(target.storePath, async () => {}, {
               reentrant: true,
@@ -338,12 +343,9 @@ export function createGatewayWorkerPlacementRuntime(
             if (!placement) {
               throw new Error(`Session ${sessionKey} dispatch barrier did not start`);
             }
+            return placement;
           },
         });
-        if (!placement) {
-          throw new Error(`Session ${sessionKey} dispatch barrier did not complete`);
-        }
-        return placement;
       },
       runActivationBarrier: async ({ authorize, activate, ...identity }) =>
         await runWorkerPlacementSessionBarrier({
@@ -436,6 +438,7 @@ export function createGatewayWorkerPlacementRuntime(
         stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted,
     }),
     publishPlacementChanges,
+    createGatewayWorkerPlacementDrain(params.placements, loadWorkerPlacementSessionRuntimeModule),
   );
   const placementIdleSweep = createWorkerPlacementIdleSweep({
     placements: params.placements,

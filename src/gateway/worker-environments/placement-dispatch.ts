@@ -53,6 +53,7 @@ type WorkerLocalDispatchBarrier = (params: {
   executionMode: WorkerPlacementDispatchRequest["executionMode"];
   authorize?: WorkerPlacementAuthorization;
   signal?: AbortSignal;
+  releaseDrain?: () => void;
   startDispatch: () => Promise<WorkerDispatchPlacement>;
 }) => Promise<WorkerDispatchPlacement>;
 
@@ -107,6 +108,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
+    releaseDrain?: () => void,
   ): Promise<WorkerActiveDispatchPlacement> => {
     const assertCurrent = () => {
       signal?.throwIfAborted();
@@ -122,6 +124,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         executionMode: request.executionMode,
         authorize: assertCurrent,
         signal,
+        releaseDrain,
         startDispatch: async () => {
           placement = await placements.startDispatch(
             {

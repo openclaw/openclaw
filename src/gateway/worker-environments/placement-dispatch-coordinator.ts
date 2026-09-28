@@ -12,6 +12,14 @@ import type {
   WorkerPlacementCancellationTarget,
 } from "./service-contract.js";
 
+export type WorkerPlacementDrain = (
+  params: Parameters<WorkerPlacementDispatchAdmission>[0] & {
+    action: "dispatch" | "move";
+    authorize?: () => void;
+    signal?: AbortSignal;
+  },
+) => Promise<{ release: () => void }>;
+
 function trackPlacementOperation<T extends WorkerDispatchPlacement | void>(
   run: (report: (placement: WorkerDispatchPlacement) => void) => Promise<T>,
   onTransition?: (placement: WorkerDispatchPlacement) => void,
@@ -51,6 +59,7 @@ export function coordinateWorkerPlacementDispatch(
   admitDispatch: WorkerPlacementDispatchAdmission,
   recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
   reportReconciliation?: (operation: () => Promise<void>) => Promise<void>,
+  drain?: WorkerPlacementDrain,
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
   hasPendingPlacementLifecycleOperation(sessionId: string): boolean;
@@ -288,10 +297,8 @@ export function coordinateWorkerPlacementDispatch(
           callerSignal,
         );
       }
-      // Capture only earlier Stops. A later Stop must drain this dispatch, not precede it.
-      const predecessors = pendingOperations(request.sessionId).filter(
-        (pending) => pending.kind === "reclaim",
-      );
+      // Drain only after earlier placement owners settle; a later Stop still cancels this work.
+      const predecessors = pendingOperations(request.sessionId);
       const tracked = trackPlacementOperation(async (report) => {
         await racePromiseWithAbortSignal(
           Promise.allSettled(predecessors.map((pending) => pending.operation)),
@@ -299,16 +306,28 @@ export function coordinateWorkerPlacementDispatch(
         );
         return await admitDispatch(
           request,
-          (signal) => {
+          async (signal) => {
             signal?.throwIfAborted();
-            const admission = reserveSessions([request.sessionId]);
-            return admission.hold(
-              (async () => {
-                await racePromiseWithAbortSignal(admission.ready, signal);
-                signal?.throwIfAborted();
-                return await service.dispatch(request, report, authorize, signal);
-              })(),
-            );
+            const drained = await drain?.({ ...request, action: "dispatch", authorize, signal });
+            try {
+              signal?.throwIfAborted();
+              const admission = reserveSessions([request.sessionId]);
+              return await admission.hold(
+                (async () => {
+                  await racePromiseWithAbortSignal(admission.ready, signal);
+                  signal?.throwIfAborted();
+                  return await service.dispatch(
+                    request,
+                    report,
+                    authorize,
+                    signal,
+                    drained?.release,
+                  );
+                })(),
+              );
+            } finally {
+              drained?.release();
+            }
           },
           authorize,
           callerSignal,
@@ -364,23 +383,29 @@ export function coordinateWorkerPlacementDispatch(
         }
         return await joinOperation(inFlight.operation, authorize);
       }
-      const predecessors = pendingOperations(request.sessionId).filter(
-        (pending) => pending.kind === "reclaim",
-      );
+      const predecessors = pendingOperations(request.sessionId);
       const tracked = trackPlacementOperation(async (report) => {
         await Promise.allSettled(predecessors.map((pending) => pending.operation));
         return await admitDispatch(
           request,
-          (signal) => {
+          async (signal) => {
             signal?.throwIfAborted();
-            const admission = reserveSessions([request.sessionId]);
-            return admission.hold(
-              (async () => {
-                await racePromiseWithAbortSignal(admission.ready, signal);
-                signal?.throwIfAborted();
-                return await service.move(request, report, authorize, signal);
-              })(),
-            );
+            const drained = request.abandonSource
+              ? undefined
+              : await drain?.({ ...request, action: "move", authorize, signal });
+            try {
+              signal?.throwIfAborted();
+              const admission = reserveSessions([request.sessionId]);
+              return await admission.hold(
+                (async () => {
+                  await racePromiseWithAbortSignal(admission.ready, signal);
+                  signal?.throwIfAborted();
+                  return await service.move(request, report, authorize, signal, drained?.release);
+                })(),
+              );
+            } finally {
+              drained?.release();
+            }
           },
           authorize,
         );

@@ -5,7 +5,10 @@ import {
   closeSessionWorkAdmissions,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import {
+  coordinateWorkerPlacementDispatch,
+  type WorkerPlacementDrain,
+} from "./placement-dispatch-coordinator.js";
 import {
   ACTIVE_PLACEMENT,
   admittedRecovery,
@@ -23,6 +26,73 @@ import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 type DispatchService = WorkerPlacementDispatchService;
 
 describe("worker placement dispatch coordinator", () => {
+  it.each([
+    { predecessor: "dispatch", successor: "move" },
+    { predecessor: "move", successor: "dispatch" },
+    { predecessor: "recovery", successor: "dispatch" },
+    { predecessor: "recovery", successor: "move" },
+  ] as const)(
+    "drains $successor only after earlier $predecessor settlement",
+    async ({ predecessor, successor }) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const block = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      const drain = vi.fn<WorkerPlacementDrain>(async () => ({ release: () => {} }));
+      const coordinated = coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({
+          dispatch: async (request) => {
+            if (predecessor === "dispatch" && request.sessionId === REQUEST.sessionId) {
+              await block();
+            }
+            return { ...ACTIVE_PLACEMENT, ...request };
+          },
+          move: async () => {
+            if (predecessor === "move") {
+              await block();
+            }
+            return LOCAL_PLACEMENT;
+          },
+          resumeProvisioning: admittedRecovery(block),
+        }),
+        (_request, run) => run(),
+        undefined,
+        undefined,
+        drain,
+      );
+      const earlier =
+        predecessor === "dispatch"
+          ? coordinated.dispatch(REQUEST)
+          : predecessor === "move"
+            ? coordinated.move(MOVE_REQUEST)
+            : coordinated.resumeProvisioning(
+                { ...PROVISIONING_PLACEMENT, ...REQUEST },
+                async () => {},
+              );
+      await entered.promise;
+      const later =
+        successor === "dispatch" ? coordinated.dispatch(REQUEST) : coordinated.move(MOVE_REQUEST);
+      const sessionDrains = () =>
+        drain.mock.calls
+          .filter(([request]) => request.sessionId === REQUEST.sessionId)
+          .map(([request]) => request.action);
+      try {
+        await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+        expect(sessionDrains()).toEqual(predecessor === "recovery" ? [] : [predecessor]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([earlier, later]);
+      }
+      await later;
+      expect(sessionDrains()).toEqual([
+        ...(predecessor === "recovery" ? [] : [predecessor]),
+        successor,
+      ]);
+    },
+  );
+
   it.each(["dispatch", "move"] as const)(
     "rejects admission-cancelled %s after its same-session predecessor settles",
     async (kind) => {
@@ -319,7 +389,13 @@ describe("worker placement dispatch coordinator", () => {
       authorize,
     );
 
-    expect(dispatch).toHaveBeenCalledWith(REQUEST, expect.any(Function), authorize, undefined);
+    expect(dispatch).toHaveBeenCalledWith(
+      REQUEST,
+      expect.any(Function),
+      authorize,
+      undefined,
+      undefined,
+    );
     expect(authorize).toHaveBeenCalledOnce();
     expect(observer).toHaveBeenCalledExactlyOnceWith(placement);
   });

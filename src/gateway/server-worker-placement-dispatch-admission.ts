@@ -1,10 +1,70 @@
 import { getRuntimeConfig } from "../config/config.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import {
+  beginSessionWorkAdmission,
+  closeSessionWorkAdmissions,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+  startSessionWorkAdmissionInterruption,
+  waitForSessionWorkAdmissionRelease,
+} from "../sessions/session-lifecycle-admission.js";
 import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
+import type { WorkerPlacementDrain } from "./worker-environments/placement-dispatch-coordinator.js";
+import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import {
   WorkerPlacementAdmissionTargetError,
   type WorkerPlacementDispatchAdmission,
 } from "./worker-environments/service-contract.js";
+
+export function createGatewayWorkerPlacementDrain(
+  placements: Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">,
+  loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>,
+): WorkerPlacementDrain {
+  return async ({ sessionId, sessionKey, agentId, action, authorize, signal }) => {
+    signal?.throwIfAborted();
+    const runtime = await racePromiseWithAbortSignal(loadSessionRuntime(), signal);
+    const target = runtime.resolveGatewaySessionStoreTargetWithStore({
+      cfg: getRuntimeConfig(),
+      key: sessionKey,
+      agentId,
+      clone: false,
+      exactRead: true,
+    });
+    const lifecycle = {
+      scope: target.storePath,
+      identities: [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId],
+    };
+    signal?.throwIfAborted();
+    authorize?.();
+    // Fence ingress without a mutex so targeted result recovery can still release the claim.
+    const release = closeSessionWorkAdmissions({
+      ...lifecycle,
+      reason: new Error("Session work admission interrupted"),
+    });
+    try {
+      const { released } = startSessionWorkAdmissionInterruption(lifecycle);
+      if (
+        !(await waitForSessionWorkAdmissionRelease(
+          racePromiseWithAbortSignal(released, signal),
+          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        ))
+      ) {
+        throw new Error(
+          `Session ${sessionKey} is still active; ${action === "move" ? "placement move interrupted" : "dispatch stopped"}`,
+        );
+      }
+      signal?.throwIfAborted();
+      await placements.waitForTurnClaimRelease(sessionId, {
+        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        signal,
+      });
+      signal?.throwIfAborted();
+      return { release };
+    } catch (error) {
+      release();
+      throw error;
+    }
+  };
+}
 
 export function createGatewayWorkerDispatchAdmission(
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>,

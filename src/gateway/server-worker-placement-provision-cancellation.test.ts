@@ -35,6 +35,7 @@ import {
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
+import type { WorkerPlacementRecoveryAdmission } from "./worker-environments/placement-recovery-contract.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import * as support from "./worker-environments/service.test-support.js";
@@ -45,6 +46,22 @@ const REQUEST = {
   profileId: "development",
   executionMode: "remote-exec" as const,
 };
+
+function createRuntime(
+  placements: ReturnType<typeof createWorkerSessionPlacementStore>,
+  environments: ReturnType<typeof support.createService>,
+) {
+  return createGatewayWorkerPlacementRuntime({
+    scheduler: createTestGatewayScheduler(),
+    getCommittedRuntimeConfig: getRuntimeConfig,
+    placements,
+    environments,
+    gatewayNamespace: "gateway-test",
+    warn: vi.fn(),
+    cancelSessionWork: vi.fn(async () => {}),
+    revokeSessionAuthority: vi.fn(),
+  });
+}
 
 describe("dispatch Stop before provider allocation", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -81,6 +98,81 @@ describe("dispatch Stop before provider allocation", () => {
       worktree,
       workspace: { kind: "local", path: worktree.path },
     });
+  });
+
+  it("admits targeted claim settlement before the local dispatch barrier writes requested", async () => {
+    const createDispatch = runtimeFactoryMocks.createDispatch.getMockImplementation()!;
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const claim = await placements.claimTurn({
+      ...REQUEST,
+      claimId: "local-drain-claim",
+      runId: "local-drain-run",
+      owner: { kind: "local" },
+    });
+    const claimWaitEntered = createDeferredCore();
+    const targetedAdmission = createDeferredCore();
+    const cleanup = new AbortController();
+    const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+    vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
+      const waiting = waitForClaim(sessionId, {
+        ...options,
+        signal: options.signal ? AbortSignal.any([options.signal, cleanup.signal]) : cleanup.signal,
+      });
+      claimWaitEntered.resolve();
+      return waiting;
+    });
+    let stateAtRecovery: string | undefined;
+    const recover = vi.fn(async () => {
+      stateAtRecovery = placements.get(REQUEST.sessionId)?.state;
+      await placements.releaseTurn(claim);
+    });
+    runtimeFactoryMocks.createDispatch.mockImplementation((options) => ({
+      ...createDispatch(options),
+      reconcileActive: async (
+        environmentId: string | undefined,
+        admit?: WorkerPlacementRecoveryAdmission,
+      ) => {
+        const recovery = admit!(
+          [environmentId === "unrelated" ? "unrelated" : REQUEST.sessionId],
+          environmentId === "unrelated" ? async () => {} : recover,
+        );
+        targetedAdmission.resolve();
+        await recovery;
+      },
+    }));
+    workspace.preflight.mockResolvedValue(undefined);
+    const environments = support.createService(support.createProvider());
+    vi.spyOn(environments, "prepareProjectIntent").mockRejectedValue(
+      new Error("fixture: barrier complete"),
+    );
+    const allocate = vi.spyOn(environments, "createWithRequest");
+    const start = vi.spyOn(placements, "startDispatch");
+    const runtime = createRuntime(placements, environments);
+    const dispatching = runtime.dispatchService.dispatch(REQUEST).catch((error: unknown) => error);
+    let recovery: Promise<void> | undefined;
+    try {
+      await Promise.race([
+        claimWaitEntered.promise,
+        dispatching.then(() => {
+          throw new Error("Dispatch ended before waiting for its claim");
+        }),
+      ]);
+      recovery = runtime.dispatchService.reconcileActive("local-result");
+      await targetedAdmission.promise;
+      await runtime.dispatchService.reconcileActive("unrelated");
+      expect(recover).toHaveBeenCalledOnce();
+      await recovery;
+      expect(stateAtRecovery).toBe("local");
+      expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
+      await expect(dispatching).resolves.toMatchObject({
+        message: "fixture: barrier complete",
+      });
+      expect(start).toHaveBeenCalledOnce();
+      expect(allocate).not.toHaveBeenCalled();
+    } finally {
+      cleanup.abort();
+      await Promise.allSettled([dispatching, recovery]);
+    }
   });
 
   it.each([
@@ -306,16 +398,7 @@ describe("dispatch Stop before provider allocation", () => {
     });
     const environments = support.createService(support.createProvider({ provision }));
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const runtime = createGatewayWorkerPlacementRuntime({
-      scheduler: createTestGatewayScheduler(),
-      getCommittedRuntimeConfig: getRuntimeConfig,
-      placements,
-      environments,
-      gatewayNamespace: "gateway-test",
-      warn: vi.fn(),
-      cancelSessionWork: vi.fn(async () => {}),
-      revokeSessionAuthority: vi.fn(),
-    });
+    const runtime = createRuntime(placements, environments);
     const dispatch = runtime.dispatchService.dispatch(REQUEST).catch((error: unknown) => error);
     await entered.promise;
     expect(placements.get(REQUEST.sessionId)).toBeUndefined();
@@ -394,16 +477,7 @@ describe("dispatch Stop before provider allocation", () => {
         await release.promise;
       });
       const create = vi.spyOn(environments, "createWithRequest");
-      const runtime = createGatewayWorkerPlacementRuntime({
-        scheduler: createTestGatewayScheduler(),
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        placements,
-        environments,
-        gatewayNamespace: "gateway-test",
-        warn: vi.fn(),
-        cancelSessionWork: vi.fn(async () => {}),
-        revokeSessionAuthority: vi.fn(),
-      });
+      const runtime = createRuntime(placements, environments);
       const sweep = runtime.dispatchService.reconcileActive();
       await entered.promise;
       const dispatch = runtime.dispatchService.dispatch(REQUEST).then(
@@ -439,16 +513,7 @@ describe("dispatch Stop before provider allocation", () => {
       assertAllowed: () => {},
       onInterrupt: interrupted,
     });
-    const runtime = createGatewayWorkerPlacementRuntime({
-      scheduler: createTestGatewayScheduler(),
-      getCommittedRuntimeConfig: getRuntimeConfig,
-      placements,
-      environments,
-      gatewayNamespace: "gateway-test",
-      warn: vi.fn(),
-      cancelSessionWork: vi.fn(async () => {}),
-      revokeSessionAuthority: vi.fn(),
-    });
+    const runtime = createRuntime(placements, environments);
     try {
       await expect(runtime.dispatchService.reclaim(REQUEST)).rejects.toThrow();
       expect(interrupted).not.toHaveBeenCalled();
@@ -539,16 +604,7 @@ describe("dispatch Stop before provider allocation", () => {
         ...support.createService(support.createProvider()),
         ...harness.environments,
       };
-      const runtime = createGatewayWorkerPlacementRuntime({
-        scheduler: createTestGatewayScheduler(),
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        placements,
-        environments,
-        gatewayNamespace: "gateway-test",
-        warn: vi.fn(),
-        cancelSessionWork: vi.fn(async () => {}),
-        revokeSessionAuthority: vi.fn(),
-      });
+      const runtime = createRuntime(placements, environments);
       const initial =
         phase === "recovery"
           ? await harness.placements.seedProvisioning("remote-exec")
@@ -668,16 +724,7 @@ describe("dispatch Stop before provider allocation", () => {
           new Error("Bootstrap failed"),
         );
       }
-      const runtime = createGatewayWorkerPlacementRuntime({
-        scheduler: createTestGatewayScheduler(),
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        placements,
-        environments,
-        gatewayNamespace: "gateway-test",
-        warn: vi.fn(),
-        cancelSessionWork: vi.fn(async () => {}),
-        revokeSessionAuthority: vi.fn(),
-      });
+      const runtime = createRuntime(placements, environments);
       const uninstall = installWorkerPlacementReconcileGuard({
         placements,
         environments,

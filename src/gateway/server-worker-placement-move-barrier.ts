@@ -30,6 +30,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
     sourceDisposition,
     authorize,
     signal,
+    releaseDrain,
     begin,
   }) => {
     const sessionRuntime = await params.loadSessionRuntime();
@@ -47,6 +48,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
       identities: lifecycleIdentities,
       signal,
       prepare: async () => {
+        releaseDrain?.();
         resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
@@ -86,6 +88,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
         }
         await params.placements.waitForTurnClaimRelease(sessionId, {
           timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          signal,
         });
         await runExclusiveSessionStoreWrite(target.storePath, async () => {}, {
           reentrant: true,
