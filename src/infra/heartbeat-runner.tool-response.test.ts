@@ -214,6 +214,17 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   }
 
+  it("delivers explicit notification text even when it ends in a silent line", async () => {
+    const text = "Investigate the following marker:\n\nNO_REPLY";
+    const { sendTelegram, cfg } = await runWithToolResponse({
+      outcome: "needs_attention",
+      notify: true,
+      summary: "A marker needs review",
+      notificationText: text,
+    });
+    expectTelegramSend(sendTelegram, { text, cfg });
+  });
+
   async function runPlainFallbackReply(text: string, options: { showOk?: boolean } = {}) {
     return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath, showOk: options.showOk });
