@@ -139,3 +139,111 @@ it.each([false, true])(
     });
   },
 );
+
+it("archives unindexed history pointer sidecars with their receipt-bound transcripts", async () => {
+  await withOpenClawTestState({ label: "orphan-pointer-settlement" }, async (state) => {
+    const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "default");
+    const sessionsDir = path.dirname(storePath);
+    const history = path.join(sessionsDir, "history.jsonl");
+    const trajectory = path.join(sessionsDir, "history.trajectory.jsonl");
+    const pointer = path.join(sessionsDir, "history.trajectory-path.json");
+    fs.writeFileSync(
+      history,
+      [
+        { type: "session", version: 3, id: "history" },
+        { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+    fs.writeFileSync(trajectory, '{"traceSchema":"openclaw-trajectory"}\n');
+    const pointerBytes = Buffer.from(
+      JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: "history",
+        runtimeFile: trajectory,
+      }),
+    );
+    fs.writeFileSync(pointer, pointerBytes);
+    const run = () =>
+      runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+    // The unavailable plugin defers archival; this import discovers the history into the receipt.
+    const imported = await run();
+    const target = expectDefined(imported.targets[0], "imported target");
+    const receipt = readDeferredPluginSessionImport({
+      cfg,
+      env: state.env,
+      target,
+      sqlitePath: target.sqlitePath,
+    });
+    expect(receipt?.sources.map((source) => source.path)).toEqual(
+      expect.arrayContaining([history, trajectory, pointer]),
+    );
+    // Files outside the receipt stay put, including a pointer beside its own live transcript.
+    const untouched = new Map([
+      [path.join(sessionsDir, "later.jsonl"), Buffer.from('{"type":"event"}\n')],
+      [path.join(sessionsDir, "later.trajectory-path.json"), Buffer.from('{"later":true}')],
+      [path.join(sessionsDir, "notes.txt"), Buffer.from("user notes\n")],
+    ]);
+    for (const [file, bytes] of untouched) {
+      fs.writeFileSync(file, bytes);
+    }
+    const archivedMoves = (source: string) =>
+      listSessionSqliteMigrationManifestPaths(state.env)
+        .flatMap((file) => readSessionSqliteMigrationManifest(file)?.targets ?? [])
+        .flatMap((entry) => entry.completedMoves)
+        .filter((move) => move.sourcePath === source);
+
+    await withDoctorSqliteMaintenanceLock({
+      env: state.env,
+      operation: "orphan pointer settlement",
+      protectedPaths: [storePath],
+      run: async (authority) => {
+        // A later run settles from the receipt without rediscovering the unindexed history.
+        const report = await run();
+        await settleRetainedDoctorSessionSources(report, ["fixture-plugin"], authority, () =>
+          authority.assertCurrent(),
+        );
+        expect(report.targets.flatMap((entry) => entry.issues)).toEqual([]);
+      },
+    });
+    for (const file of [storePath, history, trajectory, pointer]) {
+      expect(fs.existsSync(file)).toBe(false);
+    }
+    const [settled] = archivedMoves(pointer);
+    expect(fs.readFileSync(expectDefined(settled, "pointer archive").archivePath)).toEqual(
+      pointerBytes,
+    );
+    for (const [file, bytes] of untouched) {
+      expect(fs.readFileSync(file)).toEqual(bytes);
+    }
+    for (const file of untouched.keys()) {
+      fs.rmSync(file);
+    }
+    await recordDeferredPluginMigrations({
+      env: state.env,
+      pending: [],
+      resolvedPluginIds: ["fixture-plugin"],
+    });
+    const inspect = () =>
+      runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "inspect" });
+    expect((await inspect()).targets.flatMap((entry) => entry.issues)).toEqual([]);
+
+    // Earlier releases archived the transcript but left its verified pointer live.
+    fs.writeFileSync(pointer, pointerBytes);
+    expect((await inspect()).targets.flatMap((entry) => entry.issues)).toContainEqual(
+      expect.objectContaining({ code: "plugin_migration_source_retained" }),
+    );
+    await run();
+    expect(fs.existsSync(pointer)).toBe(false);
+    const recovered = archivedMoves(pointer).find((move) => move !== settled);
+    expect(
+      fs.readFileSync(expectDefined(recovered, "stranded pointer archive").archivePath),
+    ).toEqual(pointerBytes);
+    expect((await inspect()).targets.flatMap((entry) => entry.issues)).toEqual([]);
+    const repeated = await run();
+    expect(repeated.totals.archivedTranscriptFiles).toBe(0);
+    expect(repeated.totals.archivedUnreferencedJsonlFiles).toBe(0);
+  });
+});
