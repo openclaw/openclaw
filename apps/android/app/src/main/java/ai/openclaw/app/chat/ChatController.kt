@@ -3835,6 +3835,12 @@ class ChatController internal constructor(
         }
       }
 
+      "session.narration" -> {
+        // Native foreground subscriptions use full streams; bounded narration
+        // tails cannot replace transcript messages.
+        return
+      }
+
       else -> {
         if (payloadJson.isNullOrBlank()) return
         when (event) {

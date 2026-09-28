@@ -161,8 +161,7 @@ FRV and publication workflow identities independently, then joins supported
 manifest recorded by that publisher. An original plan from attempt 1 can bind a
 final validation manifest from attempt 2. The two attempts are reported
 separately; neither is silently replaced with the latest attempt.
-Linked children retain their own observed tooling SHA/ref. The recorded normal
-ClawHub ref can differ from an alpha publisher's ref.
+Linked children retain their own observed tooling SHA/ref.
 
 This view reports observations, **not release authorization or current registry
 visibility**. Writer selection, verification selection, job conclusions,

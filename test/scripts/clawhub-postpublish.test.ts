@@ -436,6 +436,19 @@ function preparedSealingFixture(attempts: readonly [number, number] = [2, 2]) {
   };
 }
 
+it.each([{ version: "2026.8.2-alpha.1" }, { publishTag: "alpha" }])(
+  "rejects retired alpha prepared selection %j",
+  (override) => {
+    const f = preparedFixture();
+    expect(() =>
+      createPreparedClawHubManifest({
+        ...f.sealOptions,
+        matrix: f.sealOptions.matrix.map((entry) => ({ ...entry, ...override })),
+      }),
+    ).toThrow("Alpha releases are retired;");
+  },
+);
+
 describe("ClawHub prepared publication", () => {
   it("seals a lone prepared package from a flat artifact download", () => {
     const f = preparedFixture();

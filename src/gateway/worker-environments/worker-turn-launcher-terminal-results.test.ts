@@ -22,13 +22,22 @@ import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-messa
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
+import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
+import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import {
+  ACTIVE_PLACEMENT,
+  LOCAL_PLACEMENT,
+  REQUEST,
+  createCoordinatorTestService,
+} from "./placement-dispatch-coordinator.test-support.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
@@ -279,6 +288,8 @@ describe("worker turn launcher terminal results", () => {
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         }),
       }) satisfies WorkerTunnelHandle;
@@ -455,11 +466,74 @@ describe("worker turn launcher terminal results", () => {
     },
   );
 
-  it("requests immediate recovery when reconciliation fails after worker finishing", async () => {
+  it("settles targeted result recovery while same-session Stop waits for its turn claim", async () => {
     await seedActivePlacement();
+    const stopController = new AbortController();
+    const claimWaitCleanup = new AbortController();
+    const transferEntered = createDeferredCore();
+    const failTransfer = createDeferredCore();
+    const claimWaitEntered = createDeferredCore();
+    const targetedAdmission = createDeferredCore();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+    );
+    const targetRecovery = vi.fn(async () => {
+      const [pending] = placements.listPendingWorkspaceResults();
+      if (!pending) {
+        throw new Error("expected pending workspace result");
+      }
+      placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
+    });
+    const stopCleanup = vi.fn(async () => ({
+      ...LOCAL_PLACEMENT,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    }));
+    const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+    vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
+      const pending = waitForClaim(sessionId, { ...options, signal: claimWaitCleanup.signal });
+      claimWaitEntered.resolve();
+      return pending;
+    });
+    const entry = { sessionId: SESSION_ID, updatedAt: 1 };
+    const barriers = createGatewayWorkerPlacementReclaimBarriers({
+      placements,
+      loadSessionRuntime: async () => ({
+        managedWorktrees: { findLiveByOwner: () => undefined },
+        resolveGatewaySessionStoreTargetWithStore: () => ({
+          storePath: sessionTarget.storePath,
+          canonicalKey: SESSION_KEY,
+          storeKeys: [SESSION_KEY],
+          agentId: "main",
+          store: { [SESSION_KEY]: entry },
+        }),
+        resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+      }),
+      cancelSessionWork: async ({ assertCurrent }) => {
+        assertCurrent();
+        stopController.abort(new Error("Stop requested"));
+      },
+      revokeSessionAuthority: () => {},
+    });
+    const dispatch = coordinateWorkerPlacementDispatch(
+      createCoordinatorTestService({
+        dispatch: async (request) => ({ ...ACTIVE_PLACEMENT, ...request }),
+        reclaim: async (request, authorize, beforeDrain, serialize, pendingOperations) =>
+          barriers.runReclaimPreparation({
+            ...request,
+            authorize,
+            beforeDrain,
+            pendingOperations,
+            run: async () => serialize!(stopCleanup),
+          }),
+        reconcileActive: async (_environmentId, admit) => {
+          const pending = admit ? admit([SESSION_ID], targetRecovery) : targetRecovery();
+          targetedAdmission.resolve();
+          await pending;
+        },
+      }),
+      (_request, run) => run(),
     );
     const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
@@ -474,6 +548,8 @@ describe("worker turn launcher terminal results", () => {
         return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
       }),
       reconcileWorkspace: vi.fn(async () => {
+        transferEntered.resolve();
+        await failTransfer.promise;
         throw tunnelFailure;
       }),
     });
@@ -485,35 +561,56 @@ describe("worker turn launcher terminal results", () => {
       startTunnel: vi.fn(async () => tunnel),
       destroy,
     };
-    const reconcileActivePlacement = vi.fn(async () => {
-      const [pending] = placements.listPendingWorkspaceResults();
-      if (!pending) {
-        throw new Error("expected pending workspace result");
-      }
-      placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
-    });
+    const reconcileActivePlacement = vi.fn(dispatch.reconcileActive);
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
       placements,
       reconcileActivePlacement,
     });
 
-    await expect(
-      provider.executeTurn(
+    const workerTurn = {
+      ...turn("run-reconcile-tunnel-loss"),
+      abortSignal: stopController.signal,
+    };
+    const running = provider
+      .executeTurn(
         {
           sessionId: SESSION_ID,
           sessionKey: SESSION_KEY,
           agentId: "main",
           runId: "run-reconcile-tunnel-loss",
         },
-        turn("run-reconcile-tunnel-loss"),
+        workerTurn,
         async () => ({ meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toMatchObject({
-      name: "WorkerWorkspaceReconciliationError",
-      message:
-        "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
-    });
+      )
+      .catch((error: unknown) => error);
+    await transferEntered.promise;
+    const stopping = dispatch
+      .reclaim({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" })
+      .catch((error: unknown) => error);
+    try {
+      await claimWaitEntered.promise;
+      expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
+      failTransfer.resolve();
+      await targetedAdmission.promise;
+      // An unrelated completed dispatch gives admitted recovery a deterministic progress
+      // boundary; a Stop that reserved this session too early leaves recovery unentered.
+      await dispatch.dispatch({ ...REQUEST, sessionId: "unrelated" });
+      expect(targetRecovery).toHaveBeenCalledOnce();
+      await expect(running).resolves.toMatchObject({
+        name: "WorkerWorkspaceReconciliationError",
+        message:
+          "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
+      });
+      await expect(stopping).resolves.toMatchObject({ state: "local", sessionId: SESSION_ID });
+      expect(stopCleanup).toHaveBeenCalledOnce();
+    } finally {
+      failTransfer.resolve();
+      // Failure cleanup aborts only the waiter; recovery remains the sole claim-release owner.
+      claimWaitCleanup.abort();
+      await Promise.all([running, stopping]);
+      workerTurn.preparedRunAdmission.close();
+    }
 
     expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });

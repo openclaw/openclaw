@@ -83,16 +83,6 @@ export function resolveCapabilityAgentOption(
     ? rawAgentId
     : inheritOptionFromParent<string>(command, "agent");
 }
-function getAuthProfileIdsForProvider(
-  cfg: OpenClawConfig,
-  providerId: string,
-  agentId: string,
-): string[] {
-  const agentDir = resolveAgentDir(cfg, agentId);
-  const store = loadAuthProfileStoreForRuntime(agentDir);
-  return listProfilesForProvider(store, providerId);
-}
-
 export function providerHasGenericConfig(params: {
   cfg: OpenClawConfig;
   providerId: string;
@@ -112,7 +102,10 @@ export function providerHasGenericConfig(params: {
   const envConfigured = envVars.some((envVar) => Boolean(process.env[envVar]?.trim()));
   return (
     (params.agentId
-      ? getAuthProfileIdsForProvider(params.cfg, params.providerId, params.agentId).length > 0
+      ? listProfilesForProvider(
+          loadAuthProfileStoreForRuntime(resolveAgentDir(params.cfg, params.agentId)),
+          params.providerId,
+        ).length > 0
       : false) ||
     hasOwnKeys(modelsProviders[params.providerId]) ||
     hasOwnKeys(pluginEntries[params.providerId]?.config) ||
@@ -211,6 +204,23 @@ export async function resolveLocalCapabilityRuntimeConfig(params: {
   });
   pinRuntimeConfigSnapshot(effectiveConfig);
   return effectiveConfig;
+}
+
+export async function resolveLocalCapabilityAgent(params: {
+  commandName: string;
+  targetIds: Set<string>;
+  agent?: string;
+  surface?: string;
+}) {
+  const cfg = await resolveLocalCapabilityRuntimeConfig(params);
+  const agentId = resolveCapabilityProviderAgentId(
+    cfg,
+    params.agent,
+    params.surface ?? params.commandName,
+  );
+  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
+  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+  return { cfg, agentId, agentDir: resolveAgentDir(cfg, agentId) };
 }
 
 export function pinRuntimeConfigSnapshot(config: OpenClawConfig): void {

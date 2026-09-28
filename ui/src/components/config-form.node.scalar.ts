@@ -108,48 +108,33 @@ function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams[
   return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidNumber");
 }
 
-type NumericInputState =
-  | { kind: "empty" }
-  | { kind: "invalid" }
-  | { kind: "value"; parsed: number; message: string };
+type NumericInputState = { parsed?: number; message: string };
 
 // Partial numeric text ("3.", "-", "1e") reports value === "" with
 // validity.badInput set. Treating it as an intentional clear committed
 // undefined mid-keystroke, wiping the stored value and the user's input.
 function resolveNumericInputState(
   target: HTMLInputElement,
-  schema: ConfigNodeRenderParams["schema"],
+  { schema, isRequired }: Pick<ConfigNodeRenderParams, "schema" | "isRequired">,
 ): NumericInputState {
   const raw = target.value;
   if (raw.trim() === "") {
-    return target.validity.badInput ? { kind: "invalid" } : { kind: "empty" };
+    return {
+      message: target.validity.badInput || isRequired === true ? t("configForm.invalidNumber") : "",
+    };
   }
   const parsed = coerceConfigFormNumberString(raw, schemaType(schema) === "integer");
-  if (typeof parsed !== "number") {
-    return { kind: "invalid" };
-  }
-  return { kind: "value", parsed, message: numericConstraintMessage(parsed, schema) };
-}
-
-function numericStateMessage(state: NumericInputState, isRequired: boolean): string {
-  if (state.kind === "value") {
-    return state.message;
-  }
-  return state.kind === "invalid" || isRequired ? t("configForm.invalidNumber") : "";
+  return typeof parsed === "number"
+    ? { parsed, message: numericConstraintMessage(parsed, schema) }
+    : { message: t("configForm.invalidNumber") };
 }
 
 function applyNumericInputState(
   target: HTMLInputElement,
   state: NumericInputState,
-  params: { isRequired?: boolean },
   commit: (candidate: unknown) => unknown,
 ): void {
-  if (!setControlValidity(target, numericStateMessage(state, params.isRequired === true))) {
-    return;
-  }
-  if (state.kind === "empty") {
-    commit(undefined);
-  } else if (state.kind === "value") {
+  if (setControlValidity(target, state.message)) {
     commit(state.parsed);
   }
 }
@@ -227,10 +212,7 @@ export function renderTextInput(
       return;
     }
     if (inputType === "number") {
-      setControlValidity(
-        target,
-        numericStateMessage(resolveNumericInputState(target, schema), params.isRequired === true),
-      );
+      setControlValidity(target, resolveNumericInputState(target, params).message);
       return;
     }
     setControlValidity(
@@ -258,7 +240,7 @@ export function renderTextInput(
     const commit = (candidate: unknown) =>
       configValuesEqual(patchedValue, candidate) || commitScalarValue(target, candidate);
     if (inputType === "number") {
-      applyNumericInputState(target, resolveNumericInputState(target, schema), params, commit);
+      applyNumericInputState(target, resolveNumericInputState(target, params), commit);
       return;
     }
     const editHint = beginScalarEdit(target, initialBranch);
@@ -322,11 +304,8 @@ export function renderTextInput(
           return;
         }
         if (inputType === "number") {
-          applyNumericInputState(
-            target,
-            resolveNumericInputState(target, schema),
-            params,
-            (candidate) => commitScalarValue(target, candidate),
+          applyNumericInputState(target, resolveNumericInputState(target, params), (candidate) =>
+            commitScalarValue(target, candidate),
           );
           return;
         }
@@ -398,10 +377,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   );
   const renderedValue = formatConfigValueText(displayValue);
   const revalidate = (target: HTMLInputElement) => {
-    setControlValidity(
-      target,
-      numericStateMessage(resolveNumericInputState(target, schema), params.isRequired === true),
-    );
+    setControlValidity(target, resolveNumericInputState(target, params).message);
   };
   // Input and change may run before the patched draft is rendered.
   let patchedValue = value;
@@ -489,11 +465,8 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           revalidate(target);
           return;
         }
-        applyNumericInputState(
-          target,
-          resolveNumericInputState(target, schema),
-          params,
-          (candidate) => commitScalarValue(target, candidate),
+        applyNumericInputState(target, resolveNumericInputState(target, params), (candidate) =>
+          commitScalarValue(target, candidate),
         );
       }}
       @change=${(event: Event) => {
@@ -501,9 +474,9 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           return;
         }
         const target = event.target as HTMLInputElement;
-        const state = resolveNumericInputState(target, schema);
-        if (state.kind !== "value") {
-          setControlValidity(target, numericStateMessage(state, params.isRequired === true));
+        const state = resolveNumericInputState(target, params);
+        if (state.parsed === undefined) {
+          setControlValidity(target, state.message);
           return;
         }
         const normalized = normalizeNumericValue(state.parsed, schema);
@@ -521,13 +494,13 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         if (!params.commitOnBlur || target.value === renderedValue) {
           return;
         }
-        const state = resolveNumericInputState(target, schema);
-        if (state.kind === "value") {
+        const state = resolveNumericInputState(target, params);
+        if (state.parsed !== undefined) {
           state.parsed = normalizeNumericValue(state.parsed, schema);
           state.message = numericConstraintMessage(state.parsed, schema);
           target.value = formatConfigValueText(state.parsed);
         }
-        applyNumericInputState(target, state, params, (candidate) => {
+        applyNumericInputState(target, state, (candidate) => {
           if (!configValuesEqual(patchedValue, candidate)) {
             commitScalarValue(target, candidate);
           }

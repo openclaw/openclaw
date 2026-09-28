@@ -121,7 +121,7 @@ export async function inspectWithContext(params: {
     }
     return { status: "found", inspect };
   }
-  if (result.termination === "exit" && isUnrecognizedLease(result, params.id)) {
+  if (isUnrecognizedLease(result, params.id, "inspect")) {
     return { status: "unknown" };
   }
   throw crabboxCommandError(action, result);

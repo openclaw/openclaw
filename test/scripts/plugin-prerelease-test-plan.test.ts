@@ -1309,7 +1309,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(releaseChecksWorkflow.concurrency).toEqual({
       group:
         "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
-      "cancel-in-progress": "${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}",
+      "cancel-in-progress": false,
     });
     expect(readPluginPrereleaseWorkflow().concurrency).toEqual({
       group:
@@ -1378,7 +1378,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "ubuntu-24.04",
     );
     for (const jobName of [
-      "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease_independent",
       "plugin_prerelease_candidate",
@@ -1401,25 +1400,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
       "needs.evidence_reuse.outputs.reuse != 'true'",
     );
-    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
-      "${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('[\"success\",\"skipped\"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('[\"success\",\"skipped\"]'), needs.evidence_reuse.result) && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}",
-    );
-    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
-    const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Verify Docker runtime-assets prune path",
-    );
-    expect(dockerPreflightStep).toBeDefined();
-    expect(dockerPreflightStep?.run).toContain("docker build");
-    expect(dockerPreflightStep?.run).toContain("--target runtime-assets");
-    expect(dockerPreflightStep?.run).toContain("timeout --kill-after=30s 15m docker build");
-    expect(dockerPreflightStep?.run).toContain(
-      '--build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex"',
-    );
-    expect(
-      fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.some(
-        (step: WorkflowStep) => step.name === "Build and smoke test final Docker runtime image",
-      ),
-    ).toBe(false);
     for (const jobName of [
       "plugin_prerelease_independent",
       "plugin_prerelease_candidate",
@@ -1513,7 +1493,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(captureInputs?.run).toContain('RELEASE_REF_INPUT" == "refs/heads/main"');
     expect(captureInputs?.run).toContain("release/[0-9]{4}");
     expect(captureInputs?.run).toContain("extended-stable/[0-9]{4}");
-    expect(captureInputs?.run).toContain("tideclaw/alpha/");
     expect(captureInputs?.run).toContain("refs/tags/");
     expect(captureInputs?.run).toContain("RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT");
     expect(captureInputs?.run).toContain("allow_unreleased_changelog=false");

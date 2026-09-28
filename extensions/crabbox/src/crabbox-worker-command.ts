@@ -1,6 +1,6 @@
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -94,9 +94,8 @@ export function crabboxCommandError(action: string, result: SpawnResult): Error 
       `Crabbox ${action} did not exit normally (${result.termination})${crabboxCommandDetail(result)}`,
     );
   }
-  const exitCode = result.code === null ? "unknown" : String(result.code);
   return new Error(
-    `Crabbox ${action} failed with exit code ${exitCode}${crabboxCommandDetail(result)}`,
+    `Crabbox ${action} failed with exit code ${result.code ?? "unknown"}${crabboxCommandDetail(result)}`,
   );
 }
 
@@ -115,30 +114,69 @@ export function parseCrabboxJson(stdout: string, action: string): unknown {
   }
 }
 
-// Recognition failure does not prove resource absence; only the stop owner can confirm cleanup.
-export function isUnrecognizedLease(result: SpawnResult, identifier: string): boolean {
+export function isUnrecognizedLease(
+  result: SpawnResult,
+  identifier: string,
+  action: "inspect" | "stop",
+): boolean {
   const output = `${result.stderr}\n${result.stdout}`;
   if (
-    !output.includes(identifier) ||
-    /\b(?:access\s+denied|authentication|authorization|credentials?|forbidden|permission|token|unauthorized)\b/iu.test(
+    result.termination !== "exit" ||
+    result.code === null ||
+    result.code === 0 ||
+    !new RegExp(`(?:^|[^\\w-])${escapeRegExp(identifier)}(?=$|[^\\w-])`, "u").test(output) ||
+    /\b(?:access\s+denied|auth|authentication|authorization|credentials?|forbidden|permission|token|unauthorized)\b/iu.test(
       output,
     )
   ) {
     return false;
   }
+  if (/\bcoordinator\b/iu.test(output)) {
+    const responses = output
+      .trim()
+      .split(/[\r\n]+/u)
+      .map((line) =>
+        line.match(
+          /^(?:warning: could not inspect lease before release: )?coordinator (GET|POST) (?:https?:\/\/[^/\s]+)?\/v1\/leases\/([^/:\s]+)(\/release)?:[ \t]*http (\d{3})\b([^\r\n]*)$/iu,
+        ),
+      );
+    const hasRead = responses.some(
+      (response) =>
+        response?.[1] === "GET" &&
+        response[2] === identifier &&
+        !response[3] &&
+        response[4] === "404",
+    );
+    if (action === "inspect") {
+      return hasRead;
+    }
+    // A missing read alone cannot attest release. Accept only complete, matching
+    // read/release not_found diagnostics, with no other failure output.
+    return (
+      hasRead &&
+      responses.some((response) => response?.[1] === "POST" && response[3] === "/release") &&
+      responses.every(
+        (response) =>
+          response?.[2] === identifier &&
+          response[4] === "404" &&
+          (response[1] === "GET" ? !response[3] : response[3] === "/release") &&
+          /^:\s*(?:not_found|\{\s*"error"\s*:\s*"not_found"\s*\})\s*$/u.test(response[5] ?? ""),
+      )
+    );
+  }
   return (
-    (result.code === 4 && /\b(?:was\s+)?not found\b/iu.test(output)) ||
-    (result.code === 4 && /\bno longer exists\b/iu.test(output)) ||
     (result.code === 4 &&
-      /\b(?:points to|is bound to) (?:a )?missing (?:instance|sandbox)\b/iu.test(output)) ||
-    (result.code === 4 && /\bdisappeared before release\b/iu.test(output)) ||
-    (result.code === 4 && /\bunknown blacksmith testbox(?:\s|:)/iu.test(output)) ||
-    (result.code === 4 && /\bis not claimed by Crabbox\b/iu.test(output)) ||
-    (result.code === 4 &&
-      /\bwandb sandbox "[^"\r\n]+" has no matching local ownership claim\b/iu.test(output)) ||
-    (result.code === 5 && /\bcoder workspace "[^"\r\n]+" not found\b/iu.test(output)) ||
-    /\bcoordinator GET \S*\/v1\/leases\/\S+:\s*http 404\b/iu.test(output) ||
-    (result.code === 4 && /\bunknown lease(?:\s|:)/iu.test(output))
+      (/\b(?:was\s+)?not found\b/iu.test(output) ||
+        /\bno longer exists\b/iu.test(output) ||
+        /\b(?:points to|is bound to) (?:a )?missing (?:instance|sandbox)\b/iu.test(output) ||
+        /\bdisappeared before release\b/iu.test(output) ||
+        /\bunknown blacksmith testbox(?:\s|:)/iu.test(output) ||
+        /\bis not claimed by Crabbox\b/iu.test(output) ||
+        /\bwandb sandbox "[^"\r\n]+" has no matching local ownership claim\b/iu.test(output) ||
+        /\bunknown lease(?:\s|:)/iu.test(output))) ||
+    (action === "inspect" &&
+      result.code === 5 &&
+      /\bcoder workspace "[^"\r\n]+" not found\b/iu.test(output))
   );
 }
 
@@ -147,6 +185,7 @@ export async function stopCrabboxLease(params: {
   id: string;
   provider: string;
   runCommand: CrabboxCommandRunner;
+  warn: (message: string) => void;
 }): Promise<void> {
   const result = await runCrabboxCommand({
     action: "stop",
@@ -155,5 +194,11 @@ export async function stopCrabboxLease(params: {
     runCommand: params.runCommand,
     timeoutMs: CRABBOX_STOP_TIMEOUT_MS,
   });
+  if (isUnrecognizedLease(result, params.id, "stop")) {
+    params.warn(
+      `Crabbox lease ${params.id} (provider ${params.provider}) is absent; treating stop as already released`,
+    );
+    return;
+  }
   crabboxCommandOutput("stop", result);
 }

@@ -228,6 +228,11 @@ merge_outcome_load_local() {
           (if $next.recovery.providerRejection != null then
              .accepted == false and .route == "admin" and $next.route == "admin" and
              .priorCiAdmin.dispatchTransport == "rest" and .head == $next.head
+           elif $next.route == "admin" then
+             .route == "auto" and .method == "squash" and .cancellation.state == "confirmed" and
+             $next.priorCiAdmin.dispatchTransport == "rest" and
+             $next.recovery.preDispatchRefusal == null and
+             $next.recovery.replacementHead == $next.head and .head != $next.head
            else
              ((.accepted == false and (.route == "immediate" or
                 (.route == "auto" and $next.recovery.preDispatchRefusal != null))) or

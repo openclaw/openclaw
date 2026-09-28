@@ -278,18 +278,6 @@ func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws 
         mode: resolvedMode)
 }
 
-private func resolvedCredential(
-    _ explicit: String?,
-    mode: String,
-    local: String?,
-    remote: String?,
-    inheritConfigCredentials: Bool = true) -> String?
-{
-    if let explicit, !explicit.isEmpty { return explicit }
-    guard inheritConfigCredentials else { return nil }
-    return mode == "remote" ? remote : local
-}
-
 func makeGatewayConnectOptions(
     opts: ConnectOptions,
     endpoint: GatewayEndpoint,

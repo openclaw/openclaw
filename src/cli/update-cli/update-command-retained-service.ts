@@ -100,8 +100,6 @@ export async function withRetainedUpdateServiceAuthority<T>(
       result.termination === "exit" &&
       result.code === 1 &&
       result.stdout === "" &&
-      result.cleanup !== "uncertain" &&
-      result.cleanup !== "forced" &&
       !result.stdoutTruncatedBytes &&
       !result.stderrTruncatedBytes &&
       result.stderr.startsWith(prefix)
