@@ -290,6 +290,26 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect.element(trigger).toHaveFocus();
   });
 
+  it("keeps Tab and Shift+Tab inside the phone sheet", async () => {
+    const { sidebar, page } = await mountFilters(390);
+    const { userEvent } = await import("vitest/browser");
+    await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+    const owners = page.getByRole("button", { name: "Owners: All owners", exact: true });
+    const sources = page.getByRole("link", { name: "Session sources", exact: true });
+    await expect.element(owners).toHaveFocus();
+    // The backdrop stays a pointer target, not a tab stop.
+    const backdrop = sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel__backdrop")!;
+    expect(backdrop.tabIndex).toBe(-1);
+    await userEvent.tab({ shift: true });
+    await expect.element(sources).toHaveFocus();
+    await userEvent.tab();
+    await expect.element(owners).toHaveFocus();
+    expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
+    await expect
+      .element(sidebar.querySelector<HTMLElement>(".sidebar-session-filter-panel")!)
+      .toBeVisible();
+  });
+
   it("fades the owner list at the edges it scrolls past", async () => {
     const { sidebar, page } = await mountFilters(1440, 30);
     await page.getByRole("button", { name: "Filter & sort", exact: true }).click();

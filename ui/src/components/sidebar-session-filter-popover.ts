@@ -8,6 +8,23 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import "./menu-surface.ts";
 
+const TABBABLE_SELECTOR =
+  "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]";
+
+// The sheet is modal: Tab and Shift+Tab wrap between its first and last tabbable controls.
+function keepSheetFocus(panel: HTMLElement, event: KeyboardEvent) {
+  const tabbable = [...panel.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)].filter(
+    (candidate) => candidate.tabIndex >= 0 && candidate.checkVisibility(),
+  );
+  const boundary = event.shiftKey ? tabbable[0] : tabbable.at(-1);
+  const target = event.shiftKey ? tabbable.at(-1) : tabbable[0];
+  // Read focus after inner handlers ran: a closing picker page hands it back to its trigger.
+  if (!target || panel.ownerDocument.activeElement === boundary) {
+    event.preventDefault();
+    target?.focus({ preventScroll: true });
+  }
+}
+
 class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) anchor: HTMLElement | null = null;
   @property({ attribute: false }) label = "";
@@ -38,6 +55,8 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
       event.preventDefault();
       event.stopPropagation();
       this.onClose(true);
+    } else if (event.key === "Tab" && !event.defaultPrevented && isMobileNavLayout()) {
+      keepSheetFocus(event.currentTarget as HTMLElement, event);
     }
   };
 
@@ -91,6 +110,7 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
       ? html`<button
             type="button"
             class="sidebar-session-filter-panel__backdrop"
+            tabindex="-1"
             aria-label=${t("common.close")}
             @click=${() => this.onClose(true)}
           ></button>
