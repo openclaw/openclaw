@@ -270,7 +270,10 @@ it.each(["kv", "health"] as const)(
 it.each(["config.health.patch", "diagnostic.register"] as const)(
   "retains %s writes from existing-only actors until last close and durably reopens",
   async (operation) => {
-    const context = createExistingStateContext();
+    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    const initialBytes = readFileSync(databasePath);
+    const context = captureOpenClawStateWorkerContext({ path: databasePath, env: state.env });
     const first = runWithSqliteWorkerStateContext(context, () =>
       openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
     );
@@ -284,8 +287,8 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       runWithSqliteWorkerStateContext(context, () =>
         first.execute({ type: "config.health.read", input: { artifactPreserving: false } }),
       ),
-    ).toEqual({ state: {}, basis: {} });
-    expect(readFileSync(context.admission.databasePath)).toEqual(Buffer.alloc(0));
+    ).toEqual({ state: { entries: {} }, basis: {} });
+    expect(readFileSync(databasePath)).toEqual(initialBytes);
 
     const scope = "tests/health-native-borrow";
     const write = (backend: typeof first, key: string) =>
