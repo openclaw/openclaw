@@ -80,6 +80,7 @@ writer is best-effort, not a lossless compliance archive.
     consoleLevel: "info",
     consoleStyle: "pretty", // pretty | json
     redactPatterns: ["\\bTOKEN\\b\\s*[=:]\\s*([\"']?)([^\\s\"']+)\\1"],
+    redactAllowPatterns: ["^my-demo-placeholder$"],
   },
 }
 ```
@@ -90,6 +91,7 @@ writer is best-effort, not a lossless compliance archive.
 - `consoleStyle`: `"pretty"` or `"json"`. The earlier `"compact"` value is retired; [`openclaw doctor --fix`](/cli/doctor) maps it to `"pretty"`.
 - `maxFileBytes`: maximum active log file size in bytes before rotation (positive integer; default: `104857600` = 100 MB). OpenClaw keeps up to five numbered archives beside the active file.
 - `redactPatterns`: regexes for best-effort masking of console output, file logs, OTLP log records, and persisted session transcript text. Setting this **replaces** only the default string regex list for log and transcript output. Built-in form-body, structured auth-header, and bare AWS key protections always apply. Tool payload redaction is separate and always merges your patterns with the default string list.
+- `redactAllowPatterns`: regexes that exempt matching candidate secret values from masking. Use it to stop a known false positive from repeatedly masking a benign project value (an environment-variable name, a demo placeholder, a non-secret build token). Default `[]` leaves behavior unchanged; registered exact secret values stay masked.
 - Redaction is always on and is no longer configurable. [`openclaw doctor --fix`](/cli/doctor) removes the retired switch from older config files; the runtime always applies `tools`-mode redaction to logs and transcripts. UI, tool, and diagnostic safety surfaces redact secrets independently of this policy.
 
 ---
