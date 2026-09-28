@@ -197,6 +197,23 @@ const allowedEvidence = new Set([
   "seclogon",
   "manifestGeneration",
 ]);
+const allowedMaintainerEvidence = new Set(["pid", "creationTime"]);
+const allowedCanonicalAccountEvidence = new Set(["name", "sid"]);
+
+/** JSON evidence must contain plain, own-keyed records at every schema boundary. */
+function isAllowlistedRecord(
+  value: unknown,
+  allowedKeys: ReadonlySet<string>,
+): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const names = Object.getOwnPropertyNames(value);
+  return (
+    names.every(
+      (key) => allowedKeys.has(key) && Object.prototype.propertyIsEnumerable.call(value, key),
+    ) && Object.getOwnPropertySymbols(value).length === 0
+  );
+}
 
 export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvidence {
   let parsed: unknown;
@@ -205,11 +222,7 @@ export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvid
   } catch {
     throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");
   }
-  if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    Object.keys(parsed).some((key) => !allowedEvidence.has(key))
-  )
+  if (!isAllowlistedRecord(parsed, allowedEvidence))
     throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");
   const evidence = parsed as PhaseEEvidence;
   if (
@@ -232,12 +245,12 @@ export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvid
     !Array.isArray(evidence.canonicalAccounts) ||
     evidence.canonicalAccounts.some(
       (a) =>
-        !a ||
+        !isAllowlistedRecord(a, allowedCanonicalAccountEvidence) ||
         typeof a.name !== "string" ||
         !PHASE_E_POOL.includes(a.name) ||
         (a.sid !== undefined && typeof a.sid !== "string"),
     ) ||
-    !evidence.maintainer ||
+    !isAllowlistedRecord(evidence.maintainer, allowedMaintainerEvidence) ||
     !Number.isInteger(evidence.maintainer.pid) ||
     evidence.maintainer.pid <= 0 ||
     typeof evidence.maintainer.creationTime !== "string" ||

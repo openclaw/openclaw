@@ -101,6 +101,36 @@ describe("Phase E maintainer policy", () => {
         "preflight",
       ),
     ).toThrow("INVALID_EVIDENCE");
+    expect(() =>
+      parsePhaseEEvidence(
+        JSON.stringify({
+          ...JSON.parse(valid),
+          maintainer: { pid: 42, creationTime: "133713371337", password: "hunter2" },
+        }),
+        "preflight",
+      ),
+    ).toThrow("INVALID_EVIDENCE");
+    expect(() =>
+      parsePhaseEEvidence(
+        JSON.stringify({
+          ...JSON.parse(valid),
+          canonicalAccounts: [
+            { name: "srt-w0-01", sid: "S-1-5-21-1" },
+            { name: "srt-w0-02", sid: "S-1-5-21-2", token: "x" },
+          ],
+        }),
+        "preflight",
+      ),
+    ).toThrow("INVALID_EVIDENCE");
+    expect(() =>
+      parsePhaseEEvidence(JSON.stringify({ ...JSON.parse(valid), maintainer: [] }), "preflight"),
+    ).toThrow("INVALID_EVIDENCE");
+    expect(() =>
+      parsePhaseEEvidence(
+        JSON.stringify({ ...JSON.parse(valid), canonicalAccounts: [null] }),
+        "preflight",
+      ),
+    ).toThrow("INVALID_EVIDENCE");
   });
   it("allows only bounded in-process mutation fault points", () => {
     const native = {
