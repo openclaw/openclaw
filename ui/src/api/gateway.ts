@@ -283,7 +283,9 @@ export class GatewayBrowserClient {
                   });
                 }
               })
-              .catch((error: unknown) => console.error("[gateway] close handler error:", error));
+              .catch((callbackError: unknown) =>
+                console.error("[gateway] close handler error:", callbackError),
+              );
           } else {
             this.opts.onClose?.(info);
           }

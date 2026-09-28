@@ -22,7 +22,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const client of clients.splice(0)) client.stop();
+  for (const client of clients.splice(0)) {
+    client.stop();
+  }
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -67,7 +69,9 @@ it.each(["cross-origin", "opened"])("does not probe a %s transport", async (kind
   const { socket, onClose } = connect(
     kind === "cross-origin" ? "wss://gateway.example" : gatewayUrl,
   );
-  if (kind === "opened") socket.emitOpen();
+  if (kind === "opened") {
+    socket.emitOpen();
+  }
   socket.emitClose(1006);
   await vi.advanceTimersByTimeAsync(0);
   expect(fetchProbe).not.toHaveBeenCalled();
@@ -81,8 +85,11 @@ it.each(["stop", "retry"])("discards a late liveness response after %s", async (
   vi.stubGlobal("fetch", fetchProbe);
   const { client, socket, onClose } = connect();
   socket.emitClose(1006);
-  if (action === "stop") client.stop();
-  else await vi.advanceTimersByTimeAsync(800);
+  if (action === "stop") {
+    client.stop();
+  } else {
+    await vi.advanceTimersByTimeAsync(800);
+  }
   pending.resolve(Response.json({ ok: true, status: "live" }));
   await vi.advanceTimersByTimeAsync(0);
   expect(onClose).not.toHaveBeenCalled();
