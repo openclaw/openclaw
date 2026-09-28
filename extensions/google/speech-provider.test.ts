@@ -807,12 +807,10 @@ describe("Google speech provider", () => {
         },
       },
     });
-    const annotation = (
-      requireFirstRecordArg(requestMock, "Google 3.8 TTS request") as {
-        body: { input: Array<{ content: Array<{ annotations: Array<Record<string, unknown>> }> }> };
-      }
-    ).body.input[0].content[0].annotations[0];
-    expect(JSON.stringify(annotation)).not.toMatch(/Alfred|Speaker name|Persona/u);
+    // Neither the persona label nor a "Speaker name:" line may leak into the request.
+    expect(
+      JSON.stringify(requireFirstRecordArg(requestMock, "Google 3.8 TTS request")),
+    ).not.toMatch(/Alfred|Speaker name|Persona/u);
   });
 
   it("keeps the single-voice Gemini 3.8 speech config when no speaker label is set", async () => {
@@ -827,14 +825,14 @@ describe("Google speech provider", () => {
       timeoutMs: 10_000,
     });
 
-    const body = (requireFirstRecordArg(requestMock, "Google 3.8 TTS request") as {
+    const request = requireFirstRecordArg(requestMock, "Google 3.8 TTS request");
+    expect(request).toMatchObject({
       body: {
-        input: Array<{ content: Array<Record<string, unknown>> }>;
-        generation_config: { speech_config: unknown };
-      };
-    }).body;
-    expect(body.input[0].content[0]).toEqual({ type: "text", text: "Plain status update." });
-    expect(body.generation_config.speech_config).toEqual([{ voice: "Kore" }]);
+        input: [{ type: "user_input", content: [{ type: "text", text: "Plain status update." }] }],
+        generation_config: { speech_config: [{ voice: "Kore" }] },
+      },
+    });
+    expect(JSON.stringify(request)).not.toContain("annotations");
   });
 
   it("extracts the transcript from a wrapped audio profile before Gemini 3.8 synthesis", async () => {

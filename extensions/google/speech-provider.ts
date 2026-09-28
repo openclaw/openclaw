@@ -355,7 +355,10 @@ function composeGoogleInteractionsSpeechStyle(params: {
   audioProfile?: string;
   personaPrompt?: string;
 }): string | undefined {
-  const style = [trimToUndefined(params.audioProfile), trimToUndefined(params.personaPrompt)]
+  const style = [
+    normalizeOptionalString(params.audioProfile),
+    normalizeOptionalString(params.personaPrompt),
+  ]
     .filter((part): part is string => part !== undefined)
     .join("\n\n");
   return style || undefined;
@@ -433,7 +436,7 @@ function buildGoogleInteractionsTtsBody(params: {
   personaPrompt?: string;
 }): Record<string, unknown> {
   const style = composeGoogleInteractionsSpeechStyle(params);
-  const speaker = trimToUndefined(params.speakerName);
+  const speaker = normalizeOptionalString(params.speakerName);
   const textBlock: Record<string, unknown> = {
     type: "text",
     text: params.text,
