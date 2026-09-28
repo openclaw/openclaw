@@ -606,7 +606,11 @@ export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
-/** Close shared state handles and clear terminal failure latches for test isolation. */
+/**
+ * Close shared state handles and clear terminal failure latches for test isolation.
+ * Worker retirement continues after return; await closeOpenClawStateDatabaseAsync()
+ * before raw SQLite or file access to a database that workers have used.
+ */
 export function closeOpenClawStateDatabaseForTest(): void {
   closeOpenClawStateDatabase();
   terminalOpenLatch.clearAll();
