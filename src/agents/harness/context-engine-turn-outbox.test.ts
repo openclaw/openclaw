@@ -13,6 +13,7 @@ import type {
 } from "../../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -834,8 +835,8 @@ describe("context-engine turn outbox", () => {
       agentId: "other",
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-    const releaseOther = Promise.withResolvers<void>();
-    const otherEntered = Promise.withResolvers<void>();
+    const releaseOther = createDeferredCore();
+    const otherEntered = createDeferredCore();
     const otherWrite = runOpenClawAgentWriteAdmission(
       { agentId: otherDatabase.agentId, path: otherDatabase.path },
       async () => {
