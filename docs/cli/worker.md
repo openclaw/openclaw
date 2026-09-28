@@ -104,7 +104,15 @@ to each `exec` child. GitHub CLI must be installed on the worker host; the bundl
 includes the launcher, not `gh`.
 
 Materialized skill files are temporary turn inputs in a private directory separate
-from worker state and its GitHub credentials. A failed per-turn deletion logs
+from worker state and its GitHub credentials. Their directory is scoped to the
+session and workspace, and each skill path uses a short readable name with a digest
+of its name, source, and verified content.
+Unchanged deliveries recreate the same paths in deterministic prompt order, so
+later turns can reuse the provider's prompt prefix and read references from earlier
+turns without rewriting transcript history. Changed skill content receives a new
+path. The worker holds a filesystem lock through cleanup; another live turn cannot
+replace its inputs, and crash recovery only reclaims a definitely dead owner.
+A failed per-turn deletion logs
 `Materialized skill cleanup failed`. Node Claude skill sessions separately report
 `Node Claude skill session cleanup failed` for temporary Workshop configuration. These
 bounded, redacted warnings identify files that may remain. Wait until the worker or

@@ -122,6 +122,9 @@ describe("desktop panel presentation lifecycle", () => {
     await settleTasks();
     inventory.resolve(desktopEnvironment);
     await settleTasks();
+    expect(panel.renderRoot.querySelector(".desktop-status > div")?.textContent?.trim()).toBe(
+      "Desktop disconnected",
+    );
     expect(panel.renderRoot.querySelector("[aria-busy='true']")).toBeNull();
     expect(panel.renderRoot.querySelector(".desktop-status button")?.textContent).toContain(
       "Reconnect",
