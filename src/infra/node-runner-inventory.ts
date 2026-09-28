@@ -4,8 +4,6 @@ import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/s
 import { parseWorkerSlotSummary } from "../shared/node-list-parse.js";
 import { workerProtocolObject } from "../worker/protocol-record.js";
 
-export { NODE_WORKER_CAPACITY_MAX } from "../shared/node-list-parse.js";
-
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
 export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
 const RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES = [

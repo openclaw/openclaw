@@ -1,9 +1,7 @@
 import os from "node:os";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
-import {
-  NODE_WORKER_CAPACITY_MAX,
-  type NodeWorkerCapacitySnapshot,
-} from "../infra/node-runner-inventory.js";
+import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
+import { NODE_WORKER_CAPACITY_MAX } from "../shared/node-list-parse.js";
 import type { NodeWorkerJournalAuthority } from "./node-worker-journal.types.js";
 import {
   NodeWorkerLaunchStore,
