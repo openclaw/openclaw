@@ -214,12 +214,13 @@
   gap: 5px;
   padding: 24px;
   color: var(--muted);
+  font-size: var(--control-ui-text-sm);
   text-align: center;
 }
 
 .sidebar-issues-panel__empty strong {
   color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--control-ui-text-md);
 }
 
 .sidebar-issues-panel__empty-icon {
