@@ -11,8 +11,10 @@ import {
 } from "../../packages/markdown-core/src/fences.js";
 import { prepareIndentedCode } from "./embedded-agent-block-chunker.code.js";
 import {
+  findTableBreakIndex,
   findUnsplittableTableSpans,
   type BreakSpan,
+  type BreakSpans,
 } from "./embedded-agent-block-chunker.tables.js";
 
 export type BlockReplyChunking = {
@@ -27,13 +29,6 @@ type FenceSplit = {
   closeFenceLine: string;
   reopenFenceLine: string;
   fence: FenceSpan;
-};
-
-type BreakSpans = {
-  fences: FenceSpan[];
-  tables: BreakSpan[];
-  /** Fences and whole-kept tables, sorted by start. */
-  unsafe: BreakSpan[];
 };
 
 type BreakResult = {
@@ -683,20 +678,9 @@ export class EmbeddedBlockChunker {
       return { index: -1 };
     }
 
-    // Below minChars is still better than cutting a table that fits the next message.
-    const cut = offset + window.length;
-    const table = spans.tables.find((span) => span.start < cut && cut <= span.end);
-    if (table && table.start > offset) {
-      const tableBreak = buffer.slice(0, table.start - offset).trimEnd().length;
-      if (tableBreak > 0 && isSafeFenceBreak(spans.fences, offset + tableBreak)) {
-        return { index: tableBreak };
-      }
-    }
-    if (table && table.start <= offset && table.end === offset + buffer.length) {
-      // Only a streaming table's span reaches past its last row, so this table
-      // exactly fills the window and may end here; wait for the next delta or
-      // the final flush instead of cutting before its last row.
-      return { index: -1 };
+    const tableBreak = findTableBreakIndex(buffer, offset, window.length, spans);
+    if (tableBreak !== undefined) {
+      return { index: tableBreak };
     }
 
     for (let i = window.length - 1; i >= minChars; i--) {

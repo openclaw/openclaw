@@ -983,5 +983,26 @@ describe("EmbeddedBlockChunker", () => {
         );
       }
     });
+
+    it("streams pipe-bearing prose at the same boundaries as plain prose", () => {
+      const text = Array.from({ length: 60 }, (_, i) => `step ${i}: alpha | beta | gamma`).join(
+        "\n",
+      );
+      for (const delta of [1, 17]) {
+        const lengths = (source: string) =>
+          streamChunks(source, delta).map((chunk) => chunk.length);
+        expect(lengths(text)).toEqual(lengths(text.replaceAll("|", "/")));
+      }
+    });
+
+    it("emits a table that exactly fills maxChars once the next line starts", () => {
+      const chunker = new EmbeddedBlockChunker(chunking);
+      const chunks: string[] = [];
+      for (const character of `${tableAtCap}\n${" ".repeat(20)}`) {
+        chunker.append(character);
+        chunks.push(...drainChunks(chunker));
+      }
+      expect(chunks).toEqual([tableAtCap]);
+    });
   });
 });
