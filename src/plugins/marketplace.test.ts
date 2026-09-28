@@ -311,6 +311,21 @@ describe("marketplace plugins", () => {
       expected: { kind: "github", repo: "owner/repo", path: undefined, ref: undefined },
     },
     {
+      label: "Git subdirectory repo and subdir aliases",
+      source: {
+        type: "git-subdir",
+        repo: " https://example.com/alias.git ",
+        subdir: " plugins/example ",
+        tag: " v1 ",
+      },
+      expected: {
+        kind: "git-subdir",
+        url: "https://example.com/alias.git",
+        path: "plugins/example",
+        ref: "v1",
+      },
+    },
+    {
       label: "Git explicit ref before branch and tag",
       source: {
         type: "git",
@@ -345,6 +360,10 @@ describe("marketplace plugins", () => {
   it.each([
     { source: { type: "github", repo: " ", url: false }, error: 'github source missing "repo"' },
     { source: { type: "git", url: null, repo: "\t" }, error: 'git source missing "url"' },
+    {
+      source: { type: "git-subdir", repo: "https://example.com/repo.git" },
+      error: 'git-subdir source missing "path"',
+    },
   ])("preserves $error in local marketplace listings", async ({ source, error }) => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const manifestPath = await writeMarketplaceManifest(rootDir, {

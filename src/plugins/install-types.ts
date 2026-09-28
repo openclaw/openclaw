@@ -12,8 +12,6 @@ export type PluginInstallLogger = import("../infra/install-progress.js").Install
 };
 
 export type PackageManifest = PluginPackageManifest & {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 };
 
@@ -62,13 +60,6 @@ export type InstallPluginResult =
     };
 
 export type PluginInstallFailureResult = Extract<InstallPluginResult, { ok: false }>;
-
-export type PluginNpmIntegrityDriftParams = {
-  spec: string;
-  expectedIntegrity: string;
-  actualIntegrity: string;
-  resolution: NpmSpecResolution;
-};
 
 export type PluginInstallPolicyRequest = {
   kind: "plugin-dir" | "plugin-archive" | "plugin-npm" | "plugin-git";

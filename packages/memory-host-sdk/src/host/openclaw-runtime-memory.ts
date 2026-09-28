@@ -14,7 +14,7 @@ export type {
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderRuntime,
-} from "../../../../src/plugins/memory-embedding-providers.js";
+} from "../../../../src/plugins/registry-contribution-types.js";
 export { emptyPluginConfigSchema } from "../../../../src/plugins/config-schema.js";
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,

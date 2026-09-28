@@ -10,4 +10,4 @@ export type {
   MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
-} from "../plugins/memory-embedding-providers.js";
+} from "../plugins/registry-contribution-types.js";

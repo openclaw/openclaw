@@ -15,19 +15,18 @@ export class PluginInvocationScope {
   private readonly bindings = new Map<PluginInstanceHandle, PluginInvocationBinding>();
   private readonly consumers = new Map<PluginInstanceHandle, PluginInstanceConsumer>();
   private closed = false;
-  private readonly consumerKind: "work" | "custody";
 
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
     options: { retained?: boolean; parent?: PluginInvocationScope; kind?: "work" | "custody" } = {},
   ) {
-    this.consumerKind = options.kind ?? "work";
+    const consumerKind = options.kind ?? "work";
     try {
       for (const instance of new Set(instances)) {
         if (options.retained) {
           const acquire = () =>
-            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
+            instance.retainConsumer((run) => this.run(run), registry, consumerKind);
           const parent = options.parent?.consumer(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
@@ -132,20 +131,13 @@ export function collectRegistryInvocationInstances(
   registry: PluginRegistry,
 ): Set<PluginInstanceHandle> {
   const instances = new Set<PluginInstanceHandle>();
-  for (const record of registry.plugins) {
+  const records = [
+    ...registry.plugins,
+    ...registry.decisionProviders.map(({ host }) => host.record),
+    ...registry.channels.flatMap(({ borrowedRuntimeRecord }) => borrowedRuntimeRecord ?? []),
+  ];
+  for (const record of records) {
     const instance = getPluginInstance(record);
-    if (instance) {
-      instances.add(instance);
-    }
-  }
-  for (const { host } of registry.decisionProviders) {
-    const instance = getPluginInstance(host.record);
-    if (instance) {
-      instances.add(instance);
-    }
-  }
-  for (const entry of registry.channels) {
-    const instance = entry.borrowedRuntimeRecord && getPluginInstance(entry.borrowedRuntimeRecord);
     if (instance) {
       instances.add(instance);
     }

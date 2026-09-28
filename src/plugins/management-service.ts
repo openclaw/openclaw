@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type {
   PluginInspectSource,
   PluginsInspectResult,
+  PluginsListResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
@@ -46,7 +47,6 @@ import {
   resolvePluginIconSources,
   resolvePluginActivityIconSource,
   type ManagedPluginCatalogEntry,
-  type ManagedPluginCatalog,
   getManagedPluginCache,
   withManagedPluginCache,
   prepareCatalogEntry,
@@ -96,8 +96,6 @@ function resolveManagedPluginState(params: {
   }
   return params.setupMode === "missing" ? "needs-setup" : "disabled";
 }
-
-export type ManagedPluginInspection = PluginsInspectResult;
 
 const CLAWHUB_CATEGORY_BATCH_LIMIT = 200;
 
@@ -242,7 +240,7 @@ export const listManagedPlugins = withManagedPluginCache(
     env?: NodeJS.ProcessEnv;
     officialCatalog?: OfficialCatalogResult;
     metadata?: PluginMetadataSnapshot;
-  }): Promise<ManagedPluginCatalog> => {
+  }): Promise<PluginsListResult> => {
     // Manifest schemas describe authored SecretRefs, not resolved runtime strings.
     // Retain the paired source before hosted catalog I/O can publish another generation.
     const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
@@ -551,7 +549,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
     config: OpenClawConfig;
     pluginId: string;
     env?: NodeJS.ProcessEnv;
-  }): Promise<ManagedPluginInspection> => {
+  }): Promise<PluginsInspectResult> => {
     const env = params.env ?? process.env;
     const metadata = resolveManagedPluginMetadata(params.config, env);
     const pluginId = metadata.normalizePluginId(params.pluginId);

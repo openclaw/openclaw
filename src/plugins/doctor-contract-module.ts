@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
@@ -218,13 +219,10 @@ function coerceLegacyConfigRules(value: unknown): LegacyConfigRule[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const candidate = entry as { path?: unknown; message?: unknown };
-    return Array.isArray(candidate.path) && typeof candidate.message === "string";
-  }) as LegacyConfigRule[];
+  return value.filter((entry): entry is LegacyConfigRule => {
+    const candidate = asOptionalObjectRecord(entry);
+    return Array.isArray(candidate?.path) && typeof candidate?.message === "string";
+  });
 }
 
 function coerceNormalizeCompatibilityConfig(
@@ -242,17 +240,9 @@ function coerceSessionStoreAgentIdsResolver(
 }
 
 function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStateMigration {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as {
-    id?: unknown;
-    label?: unknown;
-    detectLegacyState?: unknown;
-    migrateLegacyState?: unknown;
-  };
+  const candidate = asOptionalObjectRecord(value);
   return (
-    typeof candidate.id === "string" &&
+    typeof candidate?.id === "string" &&
     candidate.id.trim().length > 0 &&
     typeof candidate.label === "string" &&
     candidate.label.trim().length > 0 &&
