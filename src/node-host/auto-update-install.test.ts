@@ -180,6 +180,9 @@ describe("Bun private node runtime installation", () => {
         true,
       );
       expect(options.env.OPENCLAW_PACKAGE_BUN_LAUNCHER).toBe(process.execPath);
+      // Npm freshness policy would probe `npm config get globalconfig`.
+      expect(options.env.npm_config_before).toBeUndefined();
+      expect(options.env.npm_config_min_release_age).toBeUndefined();
     }
     expect(await fs.realpath(path.join(candidate.runtimeRoot, "bin", "openclaw"))).toBe(
       path.join(candidate.packageRoot, "openclaw.mjs"),

@@ -564,6 +564,7 @@ export function resolveGlobalInstallSpec(params: {
  */
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
+  options: { manager?: GlobalInstallManager } = {},
 ): Promise<NodeJS.ProcessEnv | undefined> {
   const pathPrepend = await resolvePortableGitPathPrepend();
   const sourceEnv = env ?? process.env;
@@ -575,7 +576,10 @@ export async function createGlobalInstallEnv(
   applyPathPrepend(merged, pathPrepend);
   applyWindowsPackageInstallEnv(merged);
   applyCorepackDownloadPromptEnv(merged);
-  applyNpmFreshnessBypassEnv(merged);
+  // Npm freshness policy probes npm itself; Bun installs neither need nor may spawn it.
+  if (options.manager !== "bun") {
+    applyNpmFreshnessBypassEnv(merged);
+  }
   applyPosixNpmScriptShellEnv(merged);
   if (process.versions.bun) {
     merged.OPENCLAW_PACKAGE_BUN_LAUNCHER = process.execPath;

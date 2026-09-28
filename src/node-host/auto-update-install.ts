@@ -174,18 +174,21 @@ export async function prepareNodeRuntimeUpdate(params: {
           }
           archivePath = packed.archivePath;
         }
-        const env = await createGlobalInstallEnv({
-          ...process.env,
-          // Lifecycle work must not select an operator's live state or config.
-          OPENCLAW_STATE_DIR: path.join(workspace, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(workspace, "openclaw.json"),
-          ...(manager === "bun"
-            ? {
-                BUN_INSTALL_GLOBAL_DIR: path.dirname(layout.globalRoot),
-                BUN_INSTALL_BIN: layout.binDir,
-              }
-            : {}),
-        });
+        const env = await createGlobalInstallEnv(
+          {
+            ...process.env,
+            // Lifecycle work must not select an operator's live state or config.
+            OPENCLAW_STATE_DIR: path.join(workspace, "state"),
+            OPENCLAW_CONFIG_PATH: path.join(workspace, "openclaw.json"),
+            ...(manager === "bun"
+              ? {
+                  BUN_INSTALL_GLOBAL_DIR: path.dirname(layout.globalRoot),
+                  BUN_INSTALL_BIN: layout.binDir,
+                }
+              : {}),
+          },
+          { manager },
+        );
         const runCommand: CommandRunner = async (argv, options) => {
           assertCurrent();
           const result = await runCommandWithTimeout(argv, {
