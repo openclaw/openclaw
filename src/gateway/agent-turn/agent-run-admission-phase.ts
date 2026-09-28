@@ -590,11 +590,18 @@ export async function prepareAgentRunDispatch(
       isOneShotModelRun: params.isOneShotModelRun,
       isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
     });
+    const releaseOperatorAuthority = capturedOperator.release;
     return {
       activeGatewayWorkAdmission,
       activeRunAbort,
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
-      releaseCallerAuthority: capturedOperator.release,
+      releaseCallerAuthority: () => {
+        try {
+          cronCreatorAuthority?.release?.();
+        } finally {
+          releaseOperatorAuthority();
+        }
+      },
       ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
       operationalRunInstance,
       effectiveProviderOverride,

@@ -167,7 +167,7 @@ async function injectTtsAuthProfileApiKey(params: {
     return params.cfg;
   }
   const effectiveTtsConfig = resolveTtsConfig(params.cfg, { channelId: params.channelId });
-  if (resolvedTtsConfigHasProviderApiKey(effectiveTtsConfig, providerId)) {
+  if (ttsProviderConfigHasApiKey(effectiveTtsConfig.providerConfigs[providerId])) {
     return params.cfg;
   }
   const existingProviderConfig = resolveExistingTtsProviderConfig({
@@ -361,13 +361,6 @@ function buildTtsConfigWithHydratedProvider(params: {
 
 function ttsProviderConfigHasApiKey(value: unknown): boolean {
   return isObjectRecord(value) && "apiKey" in value;
-}
-
-function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string): boolean {
-  if (!isObjectRecord(config) || !isObjectRecord(config.providerConfigs)) {
-    return false;
-  }
-  return ttsProviderConfigHasApiKey(config.providerConfigs[providerId]);
 }
 
 export async function runTtsProviders(transport: CapabilityTransport, rawAgentId?: string) {
