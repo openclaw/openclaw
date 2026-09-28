@@ -529,7 +529,7 @@ extension OnboardingView {
 
     func isSelectedGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool {
         guard state.connectionMode == .remote else { return false }
-        return effectivePreferredGatewayID == gateway.stableID
+        return GatewayDiscoveryPreferences.preferredStableID() == gateway.stableID
     }
 
     func connectionChoiceButton(
@@ -755,7 +755,7 @@ extension OnboardingView {
                     title: "Open the menu bar panel",
                     subtitle: "Click the OpenClaw menu bar icon for the compact chat panel and status.",
                     systemImage: "bubble.left.and.bubble.right")
-                self.featureActionRow(
+                self.featureRow(
                     title: "Connect Discord, Slack, Telegram, WhatsApp, …",
                     subtitle: "Open Dashboard → Settings → Channels to link channels and monitor status.",
                     systemImage: "link",
@@ -773,7 +773,7 @@ extension OnboardingView {
                     subtitle: "Open the compact chat panel; the agent can show previews " +
                         "and richer visuals in Canvas.",
                     systemImage: "rectangle.inset.filled.and.person.filled")
-                self.featureActionRow(
+                self.featureRow(
                     title: "Give your agent more powers",
                     subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Dashboard → Skills.",
                     systemImage: "sparkles",
