@@ -1,5 +1,5 @@
 // Tests heartbeat runner typing indicator behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -96,13 +96,7 @@ async function runHeartbeatWithFakeIntervals(options: Parameters<typeof runHeart
 
 describe("runHeartbeatOnce heartbeat typing", () => {
   beforeEach(() => {
-    // Typing keepalive ticks follow the fake clock, so slow runs cannot add refreshes.
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     setActivePluginRegistry(createTestRegistry());
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   it("keeps typing alive during a heartbeat run and clears it once", async () => {
@@ -137,10 +131,9 @@ describe("runHeartbeatOnce heartbeat typing", () => {
           nowMs: () => 0,
         },
       });
-      await vi.advanceTimersByTimeAsync(TYPING_INTERVAL_SECONDS * 1000);
       recordTypingCounts();
 
-      // Before the reply, after one keepalive interval, and one interval after the run.
+      // Before the reply, after one configured keepalive interval, and after the run.
       expect(typingCounts).toEqual([
         { sent: 1, cleared: 0 },
         { sent: 2, cleared: 0 },
