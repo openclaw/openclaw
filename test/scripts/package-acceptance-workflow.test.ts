@@ -8125,7 +8125,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(dispatchInputs?.advisory).toBeUndefined();
     expect(callInputs?.advisory).toBeUndefined();
     expect(callInputs?.telegram_advisory).toBeUndefined();
-    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(24);
+    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(25);
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.telegram_advisory).toBeUndefined();
     expect(parsedWorkflow.on?.workflow_call?.inputs?.suite_profile).toMatchObject({
       default: "package",
