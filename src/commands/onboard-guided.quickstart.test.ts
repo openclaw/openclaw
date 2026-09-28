@@ -395,7 +395,7 @@ describe("runGuidedOnboarding quick start", () => {
                 ),
               },
             };
-            return setupApplyResult();
+            return { ...setupApplyResult(), lines: ["Workspace prepared"] };
           },
         ),
       });
@@ -427,6 +427,8 @@ describe("runGuidedOnboarding quick start", () => {
       if (skip) {
         expect(deps.activate).not.toHaveBeenCalled();
         expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+        expect(prompter.note).not.toHaveBeenCalledWith(expect.any(String), "Inference ready");
+        expect(prompter.note).toHaveBeenCalledWith("Workspace prepared", "Local setup");
         expect(prompter.note).toHaveBeenCalledWith(
           expect.stringContaining("AI"),
           expect.any(String),
