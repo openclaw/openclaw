@@ -91,8 +91,15 @@ static void NormalizeOwnedSecurity(HANDLE object) {
   SECURITY_DESCRIPTOR_CONTROL control=0; DWORD revision=0; bool protectedDacl=GetSecurityDescriptorControl(actual,&control,&revision) && (control&SE_DACL_PROTECTED);
   LocalFree(actual); if(!protectedDacl) throw std::string("PHASE_E_ACL_VERIFY_FAILED");
 }
+static std::wstring CurrentUserSid() {
+  HANDLE token=nullptr; if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))throw std::string("PHASE_E_TOKEN_QUERY_FAILED");
+  DWORD length=0; GetTokenInformation(token,TokenUser,nullptr,0,&length); std::vector<BYTE> buffer(length);
+  if(!length||!GetTokenInformation(token,TokenUser,buffer.data(),length,&length)){CloseHandle(token);throw std::string("PHASE_E_TOKEN_QUERY_FAILED");}
+  CloseHandle(token); return Sid(reinterpret_cast<TOKEN_USER*>(buffer.data())->User.Sid);
+}
 static void NormalizeSlotSecurity(HANDLE object,const std::wstring& sid) {
-  std::wstring sddl=L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;"+sid+L")S:(ML;;NW;;;HI)";
+  std::wstring userSid=CurrentUserSid(); if(userSid.empty())throw std::string("PHASE_E_TOKEN_QUERY_FAILED");
+  std::wstring sddl=L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;"+sid+L")(A;;0x1200a9;;;"+userSid+L")S:(ML;;NW;;;HI)";
   PSECURITY_DESCRIPTOR descriptor=nullptr;
   if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(),SDDL_REVISION_1,&descriptor,nullptr)) throw std::string("PHASE_E_ACL_BUILD_FAILED");
   PACL dacl=nullptr; BOOL present=FALSE, defaulted=FALSE;

@@ -178,6 +178,7 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain("FaultPoint::ProfileScratch");
     expect(source).toContain("EnsureProfilesAndScratch(accounts)");
     expect(source).toContain("NormalizeSlotSecurity");
+    expect(source).toContain("CurrentUserSid()");
     expect(source).toContain("VerifyRecordedMaintainerDead(json)");
     expect(source).toContain("PHASE_E_STALE_PROCESS_IDENTITY");
     expect(source).toContain("HasPartialOwnedArtifacts()");
