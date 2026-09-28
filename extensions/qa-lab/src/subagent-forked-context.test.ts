@@ -228,46 +228,118 @@ async function runForkEvidence(evidence: EvidenceCase) {
 describe("subagent forked-context evidence", () => {
   it.each([
     { name: "catalog dispatcher alone", tools: ["tool_call"], delivery: undefined },
+    ...(["system", "developer", "instructions"] as const).map((carrier) => ({
+      name: `ordinary message prose in ${carrier}`,
+      // Reduced from the failed maintained canary: shell exec plus catalog
+      // controls, with no named message definition. The prose is not a tool list.
+      tools: ["exec", "tool_call", "tool_describe", "tool_search", "sessions_yield"],
+      instructions:
+        "Keep internal details private, and continue the request without waiting for another message.\n" +
+        "## Messaging\n- Current-session final text normally routes to source.\n" +
+        "- Cross-session: `sessions_send(sessionKey, message)`.\n" +
+        "## Tools\n- message: a local note does not grant availability.",
+      carrier,
+      delivery: undefined,
+    })),
     { name: "similarly named tool", tools: ["tool_call", "message_preview"], delivery: undefined },
     { name: "direct message", tools: ["tool_call", "message"], delivery: "message" },
     {
       name: "named catalog message",
       tools: ["tool_call"],
-      instructions: "Use message for channel delivery through the tool catalog.",
+      instructions: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
       delivery: "tool_call",
     },
-  ])("finishes fork completion with $name", async ({ tools, instructions, delivery }) => {
-    const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
-    try {
-      const response = await fetch(`${server.baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          stream: false,
-          instructions,
-          tools: tools.map((name) => ({ type: "function", name })),
-          input: [userInput(prompt), settledInput(childResult)],
-        }),
-      });
-      expect(response.status).toBe(200);
-      const output = (await response.json()).output;
-      if (delivery) {
-        expect(output).toHaveLength(1);
-        expect(output[0]).toMatchObject({ type: "function_call", name: delivery });
-        const args = { action: "send", message: childResult, final: true };
-        expect(JSON.parse(output[0].arguments)).toEqual(
-          delivery === "tool_call" ? { id: "message", args } : args,
-        );
-      } else {
-        expect(output).toMatchObject([
-          { type: "message", content: [{ type: "output_text", text: childResult }] },
-        ]);
-        expect(output).toHaveLength(1);
+    {
+      name: "policy-filtered message list",
+      tools: ["tool_call"],
+      instructions:
+        "## Tooling\nTools policy-filtered. Names case-sensitive; call exact.\n- message: Message/channel actions\n## Safety\nFollow tool policy.",
+      delivery: "tool_call",
+    },
+    {
+      name: "Code Mode message",
+      tools: ["exec", "wait"],
+      instructions: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
+      delivery: "exec",
+    },
+    {
+      name: "message declaration without an invocation surface",
+      tools: ["tool_search"],
+      instructions: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
+      delivery: undefined,
+    },
+  ])(
+    "finishes fork completion with $name",
+    async ({ tools, instructions, delivery, ...testCase }) => {
+      const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
+      try {
+        const response = await fetch(`${server.baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            stream: false,
+            instructions:
+              "carrier" in testCase && testCase.carrier !== "instructions"
+                ? undefined
+                : instructions,
+            tools: tools.map((name) => ({
+              type: "function",
+              name,
+              ...(name === "exec"
+                ? {
+                    parameters: {
+                      type: "object",
+                      properties:
+                        delivery === "exec"
+                          ? { code: { type: "string" } }
+                          : { command: { type: "string" } },
+                      required: [delivery === "exec" ? "code" : "command"],
+                    },
+                  }
+                : {}),
+            })),
+            input: [
+              ...("carrier" in testCase && testCase.carrier !== "instructions"
+                ? [
+                    {
+                      role: testCase.carrier,
+                      content: [{ type: "input_text", text: instructions }],
+                    },
+                  ]
+                : []),
+              userInput(prompt),
+              settledInput(childResult),
+            ],
+          }),
+        });
+        expect(response.status).toBe(200);
+        const output = (await response.json()).output;
+        if (delivery) {
+          expect(output).toHaveLength(1);
+          expect(output[0]).toMatchObject({ type: "function_call", name: delivery });
+          const args = { action: "send", message: childResult, final: true };
+          const actual = JSON.parse(output[0].arguments);
+          if (delivery === "exec") {
+            const debug = await (await fetch(`${server.baseUrl}/debug/last-request`)).json();
+            expect(debug).toMatchObject({
+              plannedToolName: "message",
+              plannedToolArgs: args,
+              plannedWireToolName: "exec",
+            });
+          } else {
+            expect(actual).toEqual(delivery === "tool_call" ? { id: "message", args } : args);
+          }
+        } else {
+          expect(output).toMatchObject([
+            { type: "message", content: [{ type: "output_text", text: childResult }] },
+          ]);
+          expect(output).toHaveLength(1);
+        }
+      } finally {
+        await server.stop();
       }
-    } finally {
-      await server.stop();
-    }
-  });
+    },
+  );
 
   it("does not dispatch a new spawn or completion from projected historical requests", async () => {
     const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });

@@ -211,7 +211,7 @@ function extractBareToolArg(text: string, name: string) {
 export function hasDeclaredTool(body: Record<string, unknown>, name: string) {
   return (
     hasToolDefinition(body, name) ||
-    instructionTextMentionsToolName(extractInstructionsText(body), name)
+    instructionTextDeclaresTool(extractInstructionsText(body), name)
   );
 }
 
@@ -251,12 +251,18 @@ export function findNamedToolDefinition(
   return null;
 }
 
-function instructionTextMentionsToolName(text: string, name: string) {
-  if (!text) {
-    return false;
-  }
+function instructionTextDeclaresTool(text: string, name: string) {
+  // Mirror the policy-filtered list and availability-gated messaging heading
+  // from system-prompt-tool-list.ts / system-prompt-messaging.ts. Ordinary
+  // instructions (including AGENTS.md's Tools notes) do not declare tools.
+  const sections = text.replaceAll("\r\n", "\n").split(/^## /m);
+  const tooling = sections.find((section) => section.startsWith("Tooling\n")) ?? "";
+  const messaging = sections.find((section) => section.startsWith("Messaging\n")) ?? "";
   const escapedName = escapeRegExp(name);
-  return new RegExp(`(^|[^A-Za-z0-9_])${escapedName}([^A-Za-z0-9_]|$)`).test(text);
+  return (
+    new RegExp(`^- ${escapedName}(?:: |$)`, "m").test(tooling) ||
+    new RegExp(`^### ${escapedName} tool$`, "m").test(messaging)
+  );
 }
 
 export function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
