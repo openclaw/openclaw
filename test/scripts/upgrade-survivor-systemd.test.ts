@@ -90,8 +90,10 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
       resolve("scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh"),
       "utf8",
     );
-    const resetLane = firstHop.slice(
-      firstHop.indexOf("reset_lane() {"),
+    // Load the real helper declarations together: reset_lane can call shared helpers.
+    // Skip the destructive package setup above and the scenario runners below.
+    const laneHelpers = firstHop.slice(
+      firstHop.indexOf("package_root() {"),
       firstHop.indexOf("run_negative_control() {"),
     );
     writeFileSync(unit, buildSystemdUnit({ programArguments: ["/usr/bin/fixture", "gateway"] }));
@@ -101,7 +103,7 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
     const reset = shell(`
 ARTIFACT_DIR="$HOME"
 openclaw() { return 1; }
-${resetLane}
+${laneHelpers}
 reset_lane negative
 `);
     expect(reset.status, reset.stderr).toBe(0);
