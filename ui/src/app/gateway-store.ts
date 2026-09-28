@@ -472,7 +472,7 @@ export function createApplicationGateway(
         }
         everConnected = true;
         const canvasPluginSurfaceUrl = hello.pluginSurfaceUrls?.canvas?.trim() || null;
-        const canvasLeaseGeneration = canvasSurface.begin(nextClient);
+        const canvasLeaseGeneration = canvasSurface.begin(nextClient, hello.auth);
         setUnavailableDeadline("restartPending");
         setSnapshot({
           client: nextClient,
