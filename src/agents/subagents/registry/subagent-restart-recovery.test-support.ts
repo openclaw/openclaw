@@ -10,11 +10,6 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
@@ -22,6 +17,7 @@ import {
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   createCanonicalSubagentRunFixture,
   settleSubagentRegistryPersistenceWork,
@@ -87,23 +83,22 @@ export function useSubagentRestartRecoveryFixture() {
 
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
-  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
-  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
+  let settleRootWork: ReturnType<typeof observeRootWork>;
+  const settle = (keepObserving = true) =>
+    settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
 
   beforeEach(async () => {
     // Retained stores still belong to the previous case until its cleanup succeeds.
     if (tempStateDir !== null) {
       throw new Error("Previous restart recovery fixture cleanup is incomplete");
     }
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-integ-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     setRuntimeConfigSnapshot({ session: { store: undefined } } as never);
     vi.mocked(runSubagentAnnounceFlow).mockReset();
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockReset();
     vi.mocked(onAgentEvent).mockImplementation(() => () => undefined);
-    deliveries = captureTaskDeliveryWork();
+    settleRootWork = observeRootWork();
     activateGatewayRuntime();
     dispatchAgent.mockReset();
   });
@@ -111,7 +106,7 @@ export function useSubagentRestartRecoveryFixture() {
   afterEach(async () => {
     const failures: unknown[] = [];
     try {
-      await settle();
+      await settle(false);
     } catch (error) {
       failures.push(error);
     }
@@ -120,8 +115,6 @@ export function useSubagentRestartRecoveryFixture() {
       try {
         resetSubagentRegistryForTests({ persist: false });
         await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
         clearRuntimeConfigSnapshot();
         if (tempStateDir) {
           // Resource cleanup finished; removal failure must not retain a retired owner.
@@ -137,8 +130,6 @@ export function useSubagentRestartRecoveryFixture() {
           }
         }
         envSnapshot.restore();
-        deliveries?.[Symbol.dispose]();
-        deliveries = undefined;
         vi.restoreAllMocks();
         tempStateDir = null;
       } catch (error) {

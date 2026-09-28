@@ -117,6 +117,8 @@ async function createBuildRecoveryHarness(
   const environments: WorkerTurnEnvironmentService &
     Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
     ...unusedEnvironments(),
+    fenceWorkerTurnForRecovery:
+      createWorkerSessionPlacementGate(placements).fenceWorkerTurnForRecovery,
     prepareProjectIntent: async () => {
       throw new Error("unexpected prepared intent");
     },
@@ -236,11 +238,15 @@ async function createBuildRecoveryHarness(
     reconcileActivePlacement: async (environmentId) => {
       if (!options.pendingResult) {
         if (options.refreshInPlace) {
-          createWorkerSessionPlacementGate(placements).assertWorkerRuntimeRefresh({
+          const refresh = await createWorkerSessionPlacementGate(
+            placements,
+          ).prepareWorkerRuntimeRefresh({
             sessionId: SESSION_ID,
             environmentId,
             ownerEpoch: OWNER_EPOCH,
           });
+          refresh.assertCurrent();
+          refresh.release();
           const bundleHash = "b".repeat(64);
           environment = {
             ...environment,
@@ -307,6 +313,61 @@ async function createBuildRecoveryHarness(
 describe("worker turn launcher build recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  // A runtime refresh holds the environment lock that credential acquisition queues on.
+  // Stuck-session recovery then cancels the admitted turn before that lock is released.
+  async function cancelTurnWhileCredentialQueued() {
+    await seedActivePlacement();
+    const queued = createDeferred();
+    const lockedCredential = createDeferred<ReturnType<typeof credential>>();
+    const startTunnel = vi.fn<WorkerTurnEnvironmentService["startTunnel"]>(async () => {
+      throw new WorkerRuntimeRefreshPendingError(
+        "Worker runtime refresh is waiting for the current turn to finish",
+      );
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      placements,
+      environments: {
+        ...unusedEnvironments(),
+        get: attachedEnvironment,
+        acquireTurnCredential: () => {
+          queued.resolve();
+          return lockedCredential.promise;
+        },
+        startTunnel,
+      },
+    });
+    const input = turn();
+    const execution = provider.executeTurn(
+      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: input.runId },
+      input,
+      vi.fn(async () => ({ meta: { durationMs: 1 } })),
+    );
+    await Promise.race([queued.promise, execution]);
+    expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
+    expect(abortEmbeddedAgentRun(SESSION_ID)).toBe(true);
+    return { execution, lockedCredential, startTunnel };
+  }
+
+  it("does not open a tunnel for a turn cancelled while its credential was queued", async () => {
+    const { execution, lockedCredential, startTunnel } = await cancelTurnWhileCredentialQueued();
+    // The refresh fails, releases the lock, and the credential for the old claim arrives late.
+    lockedCredential.resolve(credential());
+
+    await expect(execution).rejects.toMatchObject({ name: "AbortError" });
+    expect(startTunnel).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+  });
+
+  it("releases a cancelled turn claim without waiting for the queued credential", async () => {
+    const { execution, lockedCredential, startTunnel } = await cancelTurnWhileCredentialQueued();
+    // The broker refuses the late grant; the turn must already have settled as cancelled.
+    lockedCredential.reject(new Error("Worker turn credential claim is not authoritative"));
+
+    await expect(execution).rejects.toMatchObject({ name: "AbortError" });
+    expect(startTunnel).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+  });
 
   it("accepts Stop through the reply owner between refresh and retry preparation", async () => {
     const operation = createReplyOperation({

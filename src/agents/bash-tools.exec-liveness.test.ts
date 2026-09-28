@@ -138,6 +138,8 @@ describe("registered exec deadline handoff", () => {
     expect(child.kill).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(deadline - Date.now());
+    // Deadline decisions wait one timer turn for pending child exit notifications.
+    await vi.advanceTimersToNextTimerAsync();
     const result = await execution;
     expect(result.details).toMatchObject({ status: "failed", failureKind: "overall-timeout" });
     await waitForDiagnosticEventsDrained();
@@ -262,6 +264,8 @@ describe("registered exec deadline handoff", () => {
     controller.abort();
     expect(child.kill).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
+    // Drain the deferred supervisor decision before checking background termination.
+    await vi.advanceTimersToNextTimerAsync();
     expect(child.kill).toHaveBeenCalledOnce();
   });
 });

@@ -47,10 +47,6 @@ import { toPublicCronJob } from "../cron/public-job.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
-import {
-  abortActiveCronTaskRuns,
-  waitForActiveCronTaskRuns,
-} from "../cron/service/active-run-cancellation.js";
 import { applyJobPatch } from "../cron/service/jobs.js";
 import {
   resolveCronDeliverySessionKey,
@@ -127,6 +123,7 @@ import {
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { drainGatewayCron } from "./server-cron-drain.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
@@ -380,8 +377,6 @@ async function finalizeCronCompletionAnnouncement(params: {
     return finish(true);
   }
 }
-
-const CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS = 10_000;
 
 export function buildGatewayCronService(params: {
   scheduler: GatewayScheduler;
@@ -885,12 +880,12 @@ export function buildGatewayCronService(params: {
       });
       return { ...result, ...completion };
     },
-    sendCronWebhook: async ({ job, event, abortSignal, onDeliveryAccepted }) => {
-      await sendGatewayCronWebhook({
+    sendCronWebhook: async ({ job, event, abortSignal, onDeliveryState }) => {
+      return await sendGatewayCronWebhook({
         job,
         event,
         abortSignal,
-        onDeliveryAccepted,
+        onDeliveryState,
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
       });
@@ -1188,8 +1183,8 @@ export function buildGatewayCronService(params: {
     logger: cronServiceLogger,
   } satisfies CronExitWatcherHandlers;
   exitWatchersRef.current = createCronExitWatchers(exitWatcherHandlers);
-  const updateCron = cron.update.bind(cron);
   streamWatchersRef.current = createCronStreamWatchers({
+    scheduler: params.scheduler,
     getProcessSupervisor,
     updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {
       return await cron.updateExternalState(jobId, streamScheduleKey, streamSourceIdentity, patch);
@@ -1224,13 +1219,9 @@ export function buildGatewayCronService(params: {
       ),
     logger: cronServiceLogger,
   });
-  const routeLiveStreamJob = async (jobId: string) => {
-    const current = cron.getJob(jobId);
-    await routeStreamWatcherMutation(jobId, current, current ? "updated" : "removed");
-  };
   const queueStreamStopAfterValidation = (
     current: CronJob,
-    patch: Parameters<typeof updateCron>[1],
+    patch: Parameters<CronService["update"]>[1],
     nowMs: number,
   ): Promise<void> | undefined => {
     if (
@@ -1288,7 +1279,7 @@ export function buildGatewayCronService(params: {
     } catch (error) {
       // The durable update already committed and the owner persisted its own
       // terminal stream diagnostic. Failing the caller here would claim a
-      // rollback that never happened; routeLiveStreamJob below retries teardown.
+      // rollback that never happened; routeLiveStreamJobLogged below retries teardown.
       cronLogger.warn(
         { jobId, err: String(error) },
         "cron-stream: source teardown failed after committed update",
@@ -1300,7 +1291,8 @@ export function buildGatewayCronService(params: {
   // already-persisted change into a caller-visible error.
   const routeLiveStreamJobLogged = async (jobId: string) => {
     try {
-      await routeLiveStreamJob(jobId);
+      const current = cron.getJob(jobId);
+      await routeStreamWatcherMutation(jobId, current, current ? "updated" : "removed");
     } catch (error) {
       cronLogger.warn(
         { jobId, err: String(error) },
@@ -1441,26 +1433,11 @@ export function buildGatewayCronService(params: {
   };
   const stopAndDrainCron = async (preserveExitWatchers = false) => {
     stopCronLifecycle(preserveExitWatchers);
-    const exitWatchersStop = exitWatchersStopPromise ?? Promise.resolve();
-    const streamWatchersStop = stopStreamWatchers().then(
-      () => ({ ok: true as const }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
-    const [activeRunDrain, , streamWatchersResult] = await Promise.all([
-      waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
-      exitWatchersStop,
-      streamWatchersStop,
-    ]);
-    if (!activeRunDrain.drained) {
-      cronLogger.warn(
-        { abortedRuns, activeRuns: activeRunDrain.active },
-        "cron: active runs did not drain before shutdown timeout",
-      );
-    }
-    if (!streamWatchersResult.ok) {
-      throw streamWatchersResult.error;
-    }
+    await drainGatewayCron({
+      exitWatchersStop: exitWatchersStopPromise ?? Promise.resolve(),
+      streamWatchersStop: stopStreamWatchers(),
+      logger: cronLogger,
+    });
   };
   cron.stopAndDrain = async () => {
     await stopAndDrainCron();

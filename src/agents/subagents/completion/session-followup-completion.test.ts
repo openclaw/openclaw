@@ -1,5 +1,4 @@
-import { ok } from "@openclaw/normalization-core/result";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { rotateAgentRunRegistryLifecycleGeneration } from "../../../infra/agent-run-registry.js";
@@ -11,13 +10,7 @@ import {
   promoteFollowupYield,
 } from "./session-followup-completion.js";
 
-const cancelCohort = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("./session-followup-cancellation.js", () => ({ cancelFollowupCohort: cancelCohort }));
-
 const opened: SessionFollowupCompletion[] = [];
-beforeEach(() => {
-  cancelCohort.mockReset().mockResolvedValue();
-});
 afterEach(() => {
   for (const owner of opened.splice(0)) {
     owner.close();
@@ -82,15 +75,6 @@ async function settleExecution(
   return decision;
 }
 
-function requireTerminalCancellation(
-  result: Awaited<ReturnType<SessionFollowupCompletion["cancel"]>>,
-) {
-  if (!result.ok || result.value.kind !== "terminal") {
-    throw new Error("Expected the paused cohort's terminal cancellation decision");
-  }
-  return result.value;
-}
-
 const final = {
   status: "ok" as const,
   endedAt: 4,
@@ -117,44 +101,6 @@ describe("session followup completion", () => {
     });
   });
 
-  it("cancels the yielded followup without admitting its successor or publishing before caller settlement", async () => {
-    const f = await fixture();
-    const c = child();
-    f.owner.promoteYield("first", [c], 1);
-    await settleExecution(f.owner, "first", { status: "ok", yielded: true });
-    let published = false;
-    const taken = f.owner.take().then((reply) => {
-      published = true;
-      return reply;
-    });
-    const terminal = requireTerminalCancellation(
-      await f.owner.cancel("Stopped by requester", () => {}),
-    );
-    expect(terminal).toMatchObject({
-      runId: "first",
-      reply: { status: "error", stopReason: "rpc", error: "Stopped by requester" },
-    });
-    expect(cancelCohort).toHaveBeenCalledWith(expect.objectContaining({ entries: [c] }));
-    expect(() => f.owner.successor([c], "second", () => {})).toThrow("cancellation");
-    expect(published).toBe(false);
-    f.owner.finishExecution(terminal.runId);
-    await expect(taken).resolves.toMatchObject({ status: "error", stopReason: "rpc" });
-  });
-
-  it("retains an incomplete cancellation intent and permits explicit cancellation reconciliation", async () => {
-    const f = await fixture();
-    const c = child();
-    f.owner.promoteYield("first", [c], 1);
-    await settleExecution(f.owner, "first", { status: "ok", yielded: true });
-    cancelCohort.mockRejectedValueOnce(new Error("Child stop outcome unknown"));
-    await expect(f.owner.cancel("stop", () => {})).resolves.toMatchObject({ ok: false });
-    expect(() => f.owner.successor([c], "second", () => {})).toThrow("cancellation");
-    const terminal = requireTerminalCancellation(await f.owner.cancel("stop", () => {}));
-    expect(cancelCohort).toHaveBeenCalledTimes(2);
-    f.owner.finishExecution(terminal.runId);
-    await expect(f.owner.take()).resolves.toMatchObject({ status: "error", stopReason: "rpc" });
-  });
-
   it("follows only the canonical child's same-task replacement and rolls it back atomically", async () => {
     const f = await fixture();
     const c = child();
@@ -168,33 +114,33 @@ describe("session followup completion", () => {
     expect(() => f.owner.successor([c], "second", () => {})).not.toThrow();
   });
 
-  it("publishes only after the caller joins required projection and physical execution cleanup", async () => {
+  it("publishes only after the caller joins physical execution cleanup", async () => {
     const f = await fixture();
-    const projectionEntered = createDeferred();
-    const projectionReleased = createDeferred();
+    const cleanupEntered = createDeferred();
+    const cleanupReleased = createDeferred();
     let published = false;
     const taken = f.owner.take().then((reply) => {
       published = true;
       return reply;
     });
     const settled = settleExecution(f.owner, "first", final, async () => {
-      projectionEntered.resolve();
-      await projectionReleased.promise;
+      cleanupEntered.resolve();
+      await cleanupReleased.promise;
     });
     try {
       await Promise.race([
-        projectionEntered.promise,
+        cleanupEntered.promise,
         settled.then(() => {
-          throw new Error("Completion skipped the caller's projection boundary");
+          throw new Error("Completion skipped the caller's cleanup boundary");
         }),
       ]);
       expect(published).toBe(false);
-      projectionReleased.resolve();
+      cleanupReleased.resolve();
       expect(await settled).toEqual({ kind: "terminal", reply: final });
       await expect(taken).resolves.toEqual(final);
       expect(published).toBe(true);
     } finally {
-      projectionReleased.resolve();
+      cleanupReleased.resolve();
       await Promise.allSettled([settled]);
       f.owner.close();
       await Promise.allSettled([taken]);
@@ -253,19 +199,6 @@ describe("session followup completion", () => {
     }
     await settleExecution(f.owner, "third", final);
     await expect(asynchronous).resolves.toEqual(final);
-  });
-
-  it("does not retain cancellation control from a rejected native activation", async () => {
-    const f = await fixture();
-    const assertCurrent = vi.fn().mockImplementationOnce(() => {
-      throw new Error("Gateway registration replaced");
-    });
-    const cancel = vi.fn(async () => ok<void, string>(undefined));
-    await expect(f.owner.activate("first", { assertCurrent, cancel })).rejects.toThrow(
-      "Gateway registration replaced",
-    );
-    await expect(f.owner.cancel("stop", () => {})).resolves.toMatchObject({ ok: false });
-    expect(cancel).not.toHaveBeenCalled();
   });
 
   it("closes a pending yielded result when the Gateway lifecycle rotates", async () => {

@@ -4,19 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
-import {
-  registerCopilotNativeTaskEventTests,
-  type NativeTaskRuntimeState,
-} from "./event-bridge.native-tasks.test-support.js";
 import { registerCopilotToolEventTests } from "./event-bridge.tools.test-support.js";
-
-const nativeTaskRuntime = vi.hoisted<NativeTaskRuntimeState>(() => ({}));
-
-vi.mock("openclaw/plugin-sdk/agent-harness-task-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-task-runtime")>();
-  return { ...actual, createAgentHarnessTaskRuntime: () => nativeTaskRuntime.current };
-});
 
 const MODEL_REF = {
   api: "openai-responses",
@@ -117,17 +105,9 @@ function attachTestBridge(
 
 afterEach(() => {
   vi.restoreAllMocks();
-  nativeTaskRuntime.current = undefined;
 });
 
 describe("attachEventBridge", () => {
-  registerCopilotNativeTaskEventTests({
-    createFakeSession,
-    makeEvent,
-    nativeTaskRuntime,
-    flushAsync,
-  });
-
   it("ignores child assistant and usage events but keeps child tool side effects", async () => {
     const session = createFakeSession();
     const onAssistantDelta = vi.fn();

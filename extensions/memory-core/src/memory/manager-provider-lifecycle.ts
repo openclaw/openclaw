@@ -506,13 +506,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         ? { meta: params.indexState.meta, hasIndexedChunks: params.indexState.hasIndexedChunks }
         : {}),
     });
-    this.indexIdentityState = state;
-    this.indexIdentityDirty =
-      state.status === "mismatched" ||
-      (state.status === "missing" &&
-        (this.sources.has("memory") ||
-          (params?.indexState?.hasIndexedChunks ?? this.hasIndexedChunks())));
-    return state;
+    return this.updateIndexIdentityState(state, params?.indexState);
   }
 
   protected refreshKeywordFallbackIndexIdentity(indexState?: MemoryRetrievalIndexState) {
@@ -524,6 +518,13 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       vectorReady: false,
       ...(indexState ? { hasIndexedChunks: indexState.hasIndexedChunks } : {}),
     });
+    return this.updateIndexIdentityState(state, indexState);
+  }
+
+  private updateIndexIdentityState(
+    state: MemoryIndexIdentityState,
+    indexState?: MemoryRetrievalIndexState,
+  ): MemoryIndexIdentityState {
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||

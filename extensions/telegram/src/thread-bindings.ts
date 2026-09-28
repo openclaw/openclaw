@@ -303,6 +303,8 @@ async function initializeThreadBindingManager(
     },
   };
 
+  const projectSessionBinding = (record: TelegramThreadBindingRecord) =>
+    toSessionBindingRecord(record, { idleTimeoutMs, maxAgeMs });
   const sessionBindingAdapter: SessionBindingAdapter = {
     channel: "telegram",
     accountId,
@@ -418,19 +420,11 @@ async function initializeThreadBindingManager(
             },
           )})`,
         );
-        return toSessionBindingRecord(record, {
-          idleTimeoutMs,
-          maxAgeMs,
-        });
+        return projectSessionBinding(record);
       });
     },
     listBySession: (targetSessionKey) =>
-      manager.listBySessionKey(targetSessionKey).map((entry) =>
-        toSessionBindingRecord(entry, {
-          idleTimeoutMs,
-          maxAgeMs,
-        }),
-      ),
+      manager.listBySessionKey(targetSessionKey).map(projectSessionBinding),
     resolveByConversation: (ref) => {
       if (ref.channel !== "telegram") {
         return null;
@@ -440,12 +434,7 @@ async function initializeThreadBindingManager(
         return null;
       }
       const record = manager.getByConversationId(conversationId);
-      return record
-        ? toSessionBindingRecord(record, {
-            idleTimeoutMs,
-            maxAgeMs,
-          })
-        : null;
+      return record ? projectSessionBinding(record) : null;
     },
     touch: (bindingId, at) => {
       const conversationId = resolveThreadBindingConversationIdFromBindingId({
@@ -478,12 +467,7 @@ async function initializeThreadBindingManager(
           sendFarewell: false,
           throwOnPersistError: true,
         });
-        return removed.map((entry) =>
-          toSessionBindingRecord(entry, {
-            idleTimeoutMs,
-            maxAgeMs,
-          }),
-        );
+        return removed.map(projectSessionBinding);
       }
       const conversationId = resolveThreadBindingConversationIdFromBindingId({
         accountId,
@@ -498,14 +482,7 @@ async function initializeThreadBindingManager(
         sendFarewell: false,
         throwOnPersistError: true,
       });
-      return removed
-        ? [
-            toSessionBindingRecord(removed, {
-              idleTimeoutMs,
-              maxAgeMs,
-            }),
-          ]
-        : [];
+      return removed ? [projectSessionBinding(removed)] : [];
     },
   };
 

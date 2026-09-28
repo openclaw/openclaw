@@ -123,8 +123,6 @@ import {
   extractExactMarkerDirective,
   resolveWhatsAppStructuredReply,
   extractBlockStreamingMarkerDirectives,
-  extractSlackProgressCommentaryDirectives,
-  QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
   hasDeclaredTool,
   hasToolDefinition,
   findNamedToolDefinition,
@@ -179,6 +177,10 @@ import {
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
+import {
+  buildSlackOwnedRequesterEvents,
+  readSlackProgressTurn,
+} from "./mock-openai-slack-requester.js";
 import { resolveMockSubagentHandoff } from "./mock-openai-subagent-completion.js";
 import {
   QA_CODE_MODE_TARGET_MARKER,
@@ -715,14 +717,11 @@ async function buildResponsesPayload(
   const canCallSessionsSpawn = canCallScenarioTool(toolDeclarationBody, "sessions_spawn");
   const canCallSessionsYield = canCallScenarioTool(toolDeclarationBody, "sessions_yield");
   const canCallMessage = canCallScenarioTool(toolDeclarationBody, "message");
-  const slackProgressTurn = extractLastMatchingUserTurn(
-    input,
-    QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
-  );
-  const slackProgressDirectives = slackProgressTurn
-    ? extractSlackProgressCommentaryDirectives(slackProgressTurn.text)
-    : null;
-  const slackProgressInput = slackProgressTurn ? input.slice(slackProgressTurn.index) : [];
+  const { slackProgressDirectives, slackProgressInput } = readSlackProgressTurn(input);
+  const slackRequester = buildSlackOwnedRequesterEvents(toolDeclarationBody, input, currentPrompt);
+  if (slackRequester) {
+    return slackRequester;
+  }
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput) {
       scenarioState.toolLoopReadAttempts = 0;
@@ -765,16 +764,6 @@ async function buildResponsesPayload(
       typeof plannedArgs.input === "string"
     ) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
-    }
-    if (!hasCompletedToolOutput && targetTool && hasDeclaredTool(body, "tool_search_code")) {
-      return buildToolCallEventsWithArgs("tool_search_code", {
-        code: [
-          `const hits = await openclaw.tools.search(${JSON.stringify(targetTool)}, { limit: 1 });`,
-          "const match = hits.find((tool) => tool.name === " + JSON.stringify(targetTool) + ");",
-          "if (!match) throw new Error('target tool not found');",
-          `return await openclaw.tools.call(match.id, ${JSON.stringify(plannedArgs)});`,
-        ].join("\n"),
-      });
     }
     if (
       !hasCompletedToolOutput &&
@@ -1462,7 +1451,7 @@ async function buildResponsesPayload(
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
     (hasCompletedToolOutput && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
   if (isTelegramCurrentSessionStatusTurn) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "session_status")) {
+    if (!hasCompletedToolOutput && canCallScenarioTool(toolDeclarationBody, "session_status")) {
       return buildToolCallEventsWithArgs("session_status", { sessionKey: "current" });
     }
     const sessionKey = extractSessionStatusSessionKey(toolJson, toolOutput);

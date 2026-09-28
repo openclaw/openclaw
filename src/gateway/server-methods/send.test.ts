@@ -51,7 +51,12 @@ import {
   messageActionContextFromSessionKeyForTests,
   resolveAgentIdFromSessionKeyForTests,
 } from "./send.test-helpers.js";
-import { createMessageMethodTestDriver, makeContext } from "./send.test-support.js";
+import {
+  createMessageMethodPluginFixtures,
+  createMessageMethodTestDriver,
+  makeContext,
+} from "./send.test-support.js";
+import { registerSendUploadPolicyTests } from "./send.upload-policy.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -285,56 +290,8 @@ function mockDeliverySuccess(messageId: string) {
   mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId, channel: "slack" }]);
 }
 
-function registerMessageThreadAddressingPlugin(id: ChannelPlugin["id"]): void {
-  const plugin: ChannelPlugin = {
-    ...createChannelTestPluginBase({ id }),
-    threading: { threadAddressing: "message" },
-  };
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: id, source: "test", plugin }]),
-    `send-test-${id}-message-thread-addressing`,
-  );
-  mocks.getChannelPlugin.mockImplementation((channel: string) =>
-    channel === id ? plugin : undefined,
-  );
-}
-
-function registerMessageActionPlugin(params: {
-  id?: ChannelPlugin["id"];
-  action?: "send" | "sendAttachment";
-  messageId?: string;
-  chatType?: "direct" | "group";
-  threading?: ChannelPlugin["threading"];
-  registrySuffix: string;
-}): ChannelPlugin {
-  const {
-    id = "telegram",
-    action = "send",
-    messageId,
-    chatType = "direct",
-    threading,
-    registrySuffix,
-  } = params;
-  const plugin: ChannelPlugin = {
-    ...createChannelTestPluginBase({
-      id,
-      capabilities: { chatTypes: [chatType] },
-      config: { resolveAccount: () => ({ enabled: true }), isConfigured: () => true },
-    }),
-    actions: {
-      describeMessageTool: () => ({ actions: [action] }),
-      supportsAction: ({ action: requestedAction }) => requestedAction === action,
-      handleAction: async () => jsonResult({ ok: true, ...(messageId ? { messageId } : {}) }),
-    },
-    ...(threading ? { threading } : {}),
-  };
-  mocks.getChannelPlugin.mockReturnValue(plugin);
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: id, source: "test", plugin }]),
-    `send-test-${registrySuffix}`,
-  );
-  return plugin;
-}
+const { registerMessageThreadAddressingPlugin, registerMessageActionPlugin } =
+  createMessageMethodPluginFixtures(mocks);
 
 async function runTelegramTerminalAction(params: {
   sessionId: string;
@@ -1853,6 +1810,14 @@ describe("gateway send mirroring", () => {
       queuePolicy: "required",
       skipQueue: false,
     });
+  });
+
+  registerSendUploadPolicyTests({
+    mocks,
+    runSendWithClient,
+    runMessageActionRequest,
+    registerMessageActionPlugin,
+    mockDeliverySuccess,
   });
 
   it("materializes buffer-only gateway sends before outbound delivery", async () => {

@@ -162,7 +162,7 @@ it.each(["activity", "work"] as const)("uses current prepared outcomes in %s sum
   expect(summary?.querySelector(".chat-tool-failure")).toBeNull();
 });
 
-it.each(["blocked", undefined] as const)(
+it.each(["blocked", "skipped", undefined] as const)(
   "retains %s outcomes when completed work is expanded",
   (status) => {
     const message = createAssistantMessage([], {
@@ -191,7 +191,11 @@ it.each(["blocked", undefined] as const)(
       );
       const summary = container.querySelector(".chat-activity-group__summary");
       expect(summary?.textContent).toContain("Worked for 1s");
-      expect(summary?.textContent).toContain(status ? "1 blocked" : "1 unknown");
+      expect(summary?.textContent).toContain(`1 ${status ?? "unknown"}`);
+      if (status === "skipped") {
+        expect(summary?.textContent?.match(/1 skipped/g)).toHaveLength(1);
+        expect(summary?.textContent).not.toMatch(/blocked|failed/);
+      }
     }
   },
 );

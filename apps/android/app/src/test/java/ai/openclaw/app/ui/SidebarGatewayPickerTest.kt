@@ -17,6 +17,7 @@ import ai.openclaw.app.drainWithMainLooper
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.chat.PendingAttachment
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -48,12 +49,14 @@ import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
@@ -76,6 +79,9 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.Insets
@@ -383,6 +389,32 @@ class SidebarGatewayPickerTest {
   }
 
   @Test
+  fun fingerSwipesScrollWithoutDismissingOrSelectingAGateway() {
+    val gateways = (1..30).map { savedGateway("Research %02d".format(it)) }
+    focus(gateways.first())
+    showSidebarAndComposer(showComposer = false)
+    openPicker()
+    val list = composeRule.onNodeWithTag("gateway-picker-list")
+    capture("touch-start", popup = true)
+    list.performTouchInput { swipeDown() }
+    capture("touch-after-down", preferredDialogTag = "gateway-picker-sheet")
+    composeRule.onNodeWithTag("gateway-picker-sheet").assertIsDisplayed()
+    repeat(2) { list.performTouchInput { swipeUp() } }
+    composeRule.onNodeWithTag("gateway-picker-search").assertIsNotDisplayed()
+    val middle = list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+    list.performTouchInput { swipeDown() }
+    composeRule.onNodeWithTag("gateway-picker-sheet").assertIsDisplayed()
+    val earlier = list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertTrue("A downward finger swipe must scroll toward earlier rows", earlier < middle)
+    list.performTouchInput { swipeUp() }
+    composeRule.onNodeWithTag("gateway-picker-sheet").assertIsDisplayed()
+    assertTrue("An upward finger swipe must scroll toward later rows", list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > earlier)
+    composeRule.runOnIdle {
+      assertEquals(gateways.first().stableId, runtime.gatewayConnectionHandoff.value.focusedStableId)
+    }
+  }
+
+  @Test
   fun growingRegistrySearchesNamesAndEndpoints() {
     val gateways = (1..4).map { savedGateway("Research $it") }.toMutableList()
     focus(gateways.first())
@@ -545,7 +577,7 @@ class SidebarGatewayPickerTest {
         composeRule.runOnIdle { model.gatewayConnectionHandoff.value.pending }
       }
       capture("queued-handoff")
-      composeRule.onNodeWithText("Message OpenClaw").assertIsNotEnabled()
+      composeRule.onNodeWithText("Message").assertIsNotEnabled()
     } finally {
       // Retire queued work before releasing the barrier: no real endpoint is contacted.
       composeRule.runOnIdle { runtime.disconnect() }
@@ -567,7 +599,7 @@ class SidebarGatewayPickerTest {
     gatewayItem(alpha).assertIsSelected().performClick()
     composeRule.runOnIdle { assertFalse(runtime.gatewayConnectionHandoff.value.pending) }
     choose(beta)
-    composeRule.onNodeWithText("Message OpenClaw").assertIsEnabled()
+    composeRule.onNodeWithText("Message main").assertIsEnabled()
     composeRule.onNode(hasSetTextAction()).performTextReplacement("Beta draft")
     choose(alpha)
     composeRule.runOnIdle { assertEquals("Restored composer owner", alphaOwner, model.captureChatShareOwner()) }
@@ -595,6 +627,11 @@ class SidebarGatewayPickerTest {
     val alpha = savedGateway("Local QA Alpha")
     val beta = savedGateway("Local QA Beta")
     focus(alpha)
+    // Chat uses screenshot RPCs here; the fail-fast socket must not invalidate their history.
+    // Stop only this fixture-owned transport, preserving the selected gateway and composer.
+    drainWithMainLooper {
+      ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession").disconnectAndJoin()
+    }
     val lifecycleOwner =
       object : LifecycleOwner {
         override val lifecycle = LifecycleRegistry(this)
@@ -820,12 +857,12 @@ class SidebarGatewayPickerTest {
         // Settings/notification-style consumers still supersede through the existing owner.
         model.switchToGateway(gamma.stableId)
       }
-      composeRule.onNodeWithText("Message OpenClaw").assertIsNotEnabled()
+      composeRule.onNodeWithText("Message").assertIsNotEnabled()
     } finally {
       barrier.unlock()
     }
     awaitFocus(gamma)
-    composeRule.onNodeWithText("Message OpenClaw").assertIsEnabled()
+    composeRule.onNodeWithText("Message main").assertIsEnabled()
     composeRule.runOnIdle { assertFalse(runtime.gatewayConnectionDisplay.value.isConnected) }
   }
 
@@ -899,7 +936,7 @@ class SidebarGatewayPickerTest {
     capture("folded-picker", popup = true)
     gatewayItem(beta).performClick()
     awaitFocus(beta)
-    composeRule.onNodeWithText("Message OpenClaw").assertIsEnabled()
+    composeRule.onNodeWithText("Message main").assertIsEnabled()
   }
 
   @Test

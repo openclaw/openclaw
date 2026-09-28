@@ -23,16 +23,18 @@ describe("video-generation live-test helpers", () => {
   it("parses provider filters and treats empty/all as unfiltered", () => {
     expect(parseVideoProviderFilter()).toBeNull();
     expect(parseVideoProviderFilter("all")).toBeNull();
-    expect(parseVideoProviderFilter(" google , openai ")).toEqual(new Set(["google", "openai"]));
+    expect(parseVideoProviderFilter(" google , xai ")).toEqual(new Set(["google", "xai"]));
   });
 
   it("parses provider model overrides by provider id", () => {
     expect(
-      parseProviderModelMap("google/veo-3.1-fast-generate-preview, openai/sora-2, invalid"),
+      parseProviderModelMap(
+        "google/veo-3.1-fast-generate-preview, xai/grok-imagine-video, invalid",
+      ),
     ).toEqual(
       new Map([
         ["google", "google/veo-3.1-fast-generate-preview"],
-        ["openai", "openai/sora-2"],
+        ["xai", "xai/grok-imagine-video"],
       ]),
     );
   });
@@ -44,7 +46,7 @@ describe("video-generation live-test helpers", () => {
           mediaModels: {
             video: {
               primary: "google/veo-3.1-fast-generate-preview",
-              fallbacks: ["openai/sora-2", "invalid"],
+              fallbacks: ["xai/grok-imagine-video", "invalid"],
             },
           },
         },
@@ -54,7 +56,7 @@ describe("video-generation live-test helpers", () => {
     expect(resolveConfiguredLiveVideoModels(cfg)).toEqual(
       new Map([
         ["google", "google/veo-3.1-fast-generate-preview"],
-        ["openai", "openai/sora-2"],
+        ["xai", "xai/grok-imagine-video"],
       ]),
     );
   });
@@ -62,7 +64,6 @@ describe("video-generation live-test helpers", () => {
   it("runs buffer-backed video-to-video only for supported providers/models", () => {
     for (const [providerId, modelRef, expected] of [
       ["google", "google/veo-3.1-fast-generate-preview", false],
-      ["openai", "openai/sora-2", false],
       ["runway", "runway/gen4_aleph", true],
       ["runway", "runway/gen4.5", false],
       ["alibaba", "alibaba/wan2.6-r2v", false],
@@ -77,7 +78,13 @@ describe("video-generation live-test helpers", () => {
 
   it("runs buffer-backed image-to-video only for providers that accept bundled image inputs", () => {
     for (const [providerId, modelRef, expected] of [
-      ["openai", "openai/sora-2", true],
+      ["xai", "xai/grok-imagine-video", true],
+      ["alibaba", "alibaba/wan2.6-t2v", true],
+      ["qwen", "qwen/wan2.6-t2v", true],
+      ["alibaba", "alibaba/wan2.6-i2v", true],
+      ["qwen", "qwen/wan2.7-r2v", true],
+      ["alibaba", "alibaba/wan2.6-r2v", false],
+      ["qwen", "qwen/wan2.6-r2v-flash", false],
       ["vydra", "vydra/veo3", false],
       ["together", "together/Wan-AI/Wan2.2-T2V-A14B", false],
       ["together", "together/Wan-AI/Wan2.2-I2V-A14B", true],

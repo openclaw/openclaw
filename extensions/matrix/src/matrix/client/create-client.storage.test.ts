@@ -87,7 +87,7 @@ describe("Matrix client factory storage", () => {
         });
       }
       await closeOpenClawStateDatabaseAsync();
-      const observation = observeHostDataSql(openMatrixStorageMetaStoreOptions(seeded.rootDir).env);
+      const observation = observeHostDataSql();
       try {
         const client = await createMatrixClient({
           ...defaultStorageAuth,

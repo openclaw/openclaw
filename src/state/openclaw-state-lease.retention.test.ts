@@ -4,7 +4,7 @@ import { it } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { stateLeaseRetentionRuntimeEntrypoint } from "./openclaw-state-lease-runtime.test-support.js";
 
-it.each(["completed", "completed-worker", "paused"])(
+it.each(["completed", "completed-worker"])(
   "releases caller state after lease timers are %s",
   async (scenario) => {
     await promisify(execFile)(

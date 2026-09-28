@@ -16,6 +16,7 @@ import {
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
   executeRequest: vi.fn(),
+  prewarmGatewaySessionHistory: vi.fn(async () => {}),
   ensureSkillsWatcher: vi.fn(),
   prepareWorkspaceSkillEntries: vi.fn<
     typeof import("../skills/loading/workspace-skill-loader.js").prepareWorkspaceSkillEntries
@@ -40,6 +41,10 @@ const mocks = vi.hoisted(() => ({
     mocks.events.push("plugins");
     return { plugins: [] };
   }),
+}));
+
+vi.mock("./server-history-prewarm.js", () => ({
+  prewarmGatewaySessionHistory: mocks.prewarmGatewaySessionHistory,
 }));
 
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
@@ -101,6 +106,7 @@ const workspaces = {
 beforeEach(() => {
   mocks.events.length = 0;
   mocks.executeRequest.mockClear();
+  mocks.prewarmGatewaySessionHistory.mockClear();
   mocks.ensureSkillsWatcher.mockClear();
   mocks.prepareWorkspaceSkillEntries.mockClear();
   mocks.prewarmContextWindowCacheAfterReady.mockClear();
@@ -147,6 +153,9 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       expect(mocks.events).toContain("agent-events");
       expect(mocks.events.filter((event) => event === "handlers")).toHaveLength(3);
       expect(mocks.executeRequest).not.toHaveBeenCalled();
+      expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledExactlyOnceWith(cfg, {
+        isCancelled: expect.any(Function),
+      });
       expect(mocks.prepareWorkspaceSkillEntries.mock.calls).toEqual([
         [workspaces.main, { config: cfg, agentId: "main" }],
         [workspaces.research, { config: cfg, agentId: "research" }],
@@ -441,6 +450,7 @@ it("skips optional discovery when foreground work arrives after idle admission",
     expect(mocks.prepareWorkspaceSkillEntries).not.toHaveBeenCalled();
     expect(mocks.ensureSkillsWatcher).not.toHaveBeenCalled();
     expect(mocks.prewarmMemorySearchWorker).not.toHaveBeenCalled();
+    expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
   } finally {
     await handle.stop();
   }

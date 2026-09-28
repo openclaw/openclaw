@@ -1,6 +1,10 @@
+import type { ProviderAcceptance } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { DiagnosticModelCallContent } from "../../../infra/diagnostic-events.js";
+import type {
+  DiagnosticEventInput,
+  DiagnosticModelCallContent,
+} from "../../../infra/diagnostic-events.js";
 import {
   cloneDiagnosticContentValue,
   type DiagnosticModelContentCapturePolicy,
@@ -8,13 +12,36 @@ import {
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
-import type {
-  ModelCallEventBase,
-  ModelCallObservationState,
-  ModelCallObserver,
-  ModelCallPromptStats,
-  ModelCallUsage,
-} from "./attempt.model-diagnostic-lifecycle.js";
+
+export type ModelCallEventBase = Omit<
+  Extract<DiagnosticEventInput, { type: "model.call.started" }>,
+  "type"
+>;
+type ModelCallPromptStats = NonNullable<
+  Extract<DiagnosticEventInput, { type: "model.call.started" }>["promptStats"]
+>;
+type ModelCallUsage = NonNullable<
+  Extract<DiagnosticEventInput, { type: "model.call.completed" }>["usage"]
+>;
+export type ModelCallObservationState = {
+  requestPayloadBytes?: number;
+  providerAcceptanceKind?: ProviderAcceptance["kind"];
+  responseStatus?: number;
+  responseStreamBytes: number;
+  /** Observed provider callbacks/chunks, not recovery or visible-content progress. */
+  lastProviderActivityAtMs?: number;
+  terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
+  timeToFirstByteMs?: number;
+  modelContent?: DiagnosticModelCallContent;
+  outputMessages?: unknown[];
+  usage?: ModelCallUsage;
+  contentCapture?: DiagnosticModelContentCapturePolicy;
+  semanticProgressEmitted?: boolean;
+  terminalEventEmitted?: boolean;
+  terminalError?: Error;
+  terminalSucceeded?: boolean;
+  suppressPluginHooks?: boolean;
+};
 
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 
@@ -295,7 +322,7 @@ export function createModelObserver(params: {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
   capturePromptStats: boolean;
-}): ModelCallObserver {
+}) {
   const modelContent = streamContextModelContentFields(params.contentCapture, params.streamContext);
   const promptStats = params.capturePromptStats
     ? streamContextModelPromptStats(params.streamContext)
@@ -311,22 +338,22 @@ export function createModelObserver(params: {
     state,
     promptStats,
     modelContent,
-    assignRequestPayloadBytes(payload) {
+    assignRequestPayloadBytes(payload: unknown) {
       const bytes = utf8JsonByteLength(payload);
       if (bytes !== undefined) {
         state.requestPayloadBytes = bytes;
       }
     },
-    observeResponseChunk(startedAt, chunk) {
+    observeResponseChunk(startedAt: number, chunk: unknown) {
       observeResponseChunk(state, startedAt, chunk);
     },
-    observeFinalResult(eventBase, startedAt, result) {
+    observeFinalResult(eventBase: ModelCallEventBase, startedAt: number, result: unknown) {
       observeResultMessageContent(state, startedAt, result);
       // Queue semantic progress beside model lifecycle events so request starts,
       // progress, and the next request retain their authoritative FIFO ordering.
       maybeEmitModelCallSemanticProgress(eventBase, state, result);
     },
-    maybeEmitStreamProgress(eventBase) {
+    maybeEmitStreamProgress(eventBase: ModelCallEventBase) {
       reportStreamProgress({
         ...eventBase,
         callId: state.terminalEventEmitted ? undefined : eventBase.callId,

@@ -6,6 +6,7 @@ struct DebugSettings: View {
     @Bindable var state: AppState
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let labelColumnWidth: CGFloat = 140
+    @AppStorage(nativeConversationForcedKey) private var useNativeConversation = false
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
     private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
@@ -603,9 +604,8 @@ struct DebugSettings: View {
                 }
                 GridRow {
                     self.gridLabel("Chat")
-                    Text("Native SwiftUI")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    Toggle("Use native conversation view", isOn: self.$useNativeConversation)
+                        .help("Use the Swift conversation view in newly opened chat windows.")
                 }
             }
         }

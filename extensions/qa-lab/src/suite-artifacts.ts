@@ -18,7 +18,6 @@ import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { splitModelRef } from "./suite-planning.js";
 import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
-import { createQaSuiteReportNotes } from "./suite-support.js";
 import {
   rejectRemovedQaChannelDriverSelection,
   type QaSuiteScenarioResult,
@@ -158,10 +157,10 @@ export async function writeQaSuiteArtifacts(
     startedAt: params.startedAt,
     finishedAt: params.finishedAt,
     scenarios: params.scenarios,
-    notes: createQaSuiteReportNotes({
-      ...params,
-      transportArtifactNotes: params.transportArtifacts?.reportNotes,
-    }),
+    notes: [
+      ...params.transport.createReportNotes(params),
+      ...(params.transportArtifacts?.reportNotes ?? []),
+    ],
   });
   const artifactPaths = [
     { kind: "summary", path: path.basename(summaryPath) },

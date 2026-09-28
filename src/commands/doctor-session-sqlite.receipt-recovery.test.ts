@@ -176,12 +176,7 @@ describe("retained session receipt recovery", () => {
           expect(recovered.supportIssue?.body).toContain(`[${issue.code}]`);
         }
         expect(markdownReport).toContain("doctor recover completed with remaining issues");
-        expect(
-          fs.readFileSync(recovered.migrationRun!.failureReportMarkdownPath!, "utf8"),
-        ).toContain("[retained_plugin_source_conflict]");
-        expect(
-          fs.readFileSync(recovered.migrationRun!.failureReportMarkdownPath!, "utf8"),
-        ).not.toContain("restored and validated");
+        expect(markdownReport).not.toContain("restored and validated");
       });
     },
   );

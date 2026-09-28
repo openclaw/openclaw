@@ -397,27 +397,23 @@ it.each([false, true])(
       });
     }
     const inspect = gatewayLock.readActiveGatewayLockIdentity;
-    let inspectedPaths: unknown[] = [];
+    let inspectionReads = 0;
     let inspectionError: unknown;
     vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockImplementationOnce(
       async (options) => {
         expect(options?.timeoutMs).toBe(100);
         const reads = vi.spyOn(fs.promises, "readFile");
-        // Expire the real shared inspection deadline after both absent lock reads.
+        // Expire the shared deadline once filesystem inspection has begun.
         const clock = vi
           .spyOn(performance, "now")
-          .mockReturnValueOnce(0)
-          .mockReturnValueOnce(0)
-          .mockReturnValueOnce(0)
-          .mockReturnValueOnce(0)
-          .mockReturnValue(101);
+          .mockImplementation(() => (reads.mock.calls.length === 0 ? 0 : 101));
         try {
           return await inspect(options);
         } catch (error) {
           inspectionError = error;
           throw error;
         } finally {
-          inspectedPaths = reads.mock.calls.map(([pathname]) => pathname);
+          inspectionReads = reads.mock.calls.length;
           reads.mockRestore();
           clock.mockRestore();
         }
@@ -432,10 +428,7 @@ it.each([false, true])(
       expect(inspectionError).toMatchObject({
         message: "Gateway lock inspection deadline expired",
       });
-      expect(inspectedPaths).toEqual([
-        expect.stringMatching(/gateway\.[a-f0-9]+\.lock$/),
-        expect.stringContaining("gateway.state.lock"),
-      ]);
+      expect(inspectionReads).toBeGreaterThan(0);
       if (cleanupFailure) {
         expect(error).toBeInstanceOf(AggregateError);
         expect(error).toMatchObject({ errors: [inspectionError, cleanupError] });

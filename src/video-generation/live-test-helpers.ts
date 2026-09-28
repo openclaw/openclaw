@@ -19,7 +19,6 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   fal: "fal/fal-ai/minimax/video-01-live",
   google: "google/veo-3.1-fast-generate-preview",
   minimax: "minimax/MiniMax-Hailuo-2.3",
-  openai: "openai/sora-2",
   openrouter: "openrouter/google/veo-3.1-fast",
   pixverse: "pixverse/v6",
   qwen: "qwen/wan2.6-t2v",
@@ -29,7 +28,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   xai: "xai/grok-imagine-video",
 };
 
-const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "openai", "qwen", "xai"]);
+const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "qwen", "xai"]);
 const BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS = new Set(["vydra"]);
 const TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL = "Wan-AI/Wan2.2-I2V-A14B";
 
@@ -94,6 +93,12 @@ export function canRunBufferBackedImageToVideoLiveLane(params: {
   const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
   if (BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS.has(providerId)) {
     return false;
+  }
+  if (providerId === "alibaba" || providerId === "qwen") {
+    // The default T2V model routes a single local image to its I2V sibling.
+    // Wan 2.6 R2V still requires URL-backed images in reference_urls.
+    const model = params.modelRef.replace(/^[^/]+\//u, "");
+    return ["wan2.6-t2v", "wan2.6-i2v", "wan2.7-r2v"].includes(model);
   }
   if (providerId === "together") {
     return params.modelRef.includes(TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL);

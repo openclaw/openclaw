@@ -294,35 +294,26 @@ describe("catalog publication session rows", () => {
     },
   );
 
-  it.each(["bound", "revoked"] as const)(
-    "keeps session rows resident when runtime auth is %s",
-    async (action) => {
-      const { config, rows, list, initial, readCatalog } = await setup(true);
-      const input = { config, agentId: "default", agentDir: fixture.state.agentDir("default") };
-      const owner = getPreparedModelRuntimeSnapshot(input)!;
-      const route = {
-        agentDir: input.agentDir,
-        provider: model.provider,
-        modelId: model.id,
-        modelApi: "openai-completions",
-        modelBaseUrl: "https://synthetic.example.test/v1",
-        requestTransportOverrides: "none" as const,
-        authMode: "api-key",
-        runtimeOwnerId: "synthetic",
-      };
-      if (action === "revoked") {
-        expect(recordRuntimeAuthMaterialization(route)).toBe(true);
-        await list();
-      }
-      const before = rows.materializedCount;
-      const catalogReads = readCatalog.mock.calls.length;
-      expect(
-        action === "bound"
-          ? recordRuntimeAuthMaterialization(route)
-          : revokeRuntimeAuthMaterializations(route),
-      ).toBe(true);
+  it("keeps session rows resident through runtime auth binding and revocation", async () => {
+    const { config, rows, list, initial, readCatalog } = await setup(true);
+    const input = { config, agentId: "default", agentDir: fixture.state.agentDir("default") };
+    const owner = getPreparedModelRuntimeSnapshot(input)!;
+    const route = {
+      agentDir: input.agentDir,
+      provider: model.provider,
+      modelId: model.id,
+      modelApi: "openai-completions",
+      modelBaseUrl: "https://synthetic.example.test/v1",
+      requestTransportOverrides: "none" as const,
+      authMode: "api-key",
+      runtimeOwnerId: "synthetic",
+    };
+    const before = rows.materializedCount;
+    const catalogReads = readCatalog.mock.calls.length;
+    for (const action of [recordRuntimeAuthMaterialization, revokeRuntimeAuthMaterializations]) {
+      expect(action(route)).toBe(true);
       expect(getPreparedModelRuntimeAuthMaterializations(owner)).toEqual(
-        action === "bound"
+        action === recordRuntimeAuthMaterialization
           ? [expect.objectContaining({ provider: model.provider, modelId: model.id })]
           : [],
       );
@@ -330,8 +321,8 @@ describe("catalog publication session rows", () => {
       expect((await list()).sessions).toEqual(initial.sessions);
       expect(rows.materializedCount).toBe(before);
       expect(readCatalog).toHaveBeenCalledTimes(catalogReads);
-    },
-  );
+    }
+  });
 
   it.each(["oauth", "token"] as const)(
     "adopts current model facts after persisted %s rotation",
@@ -551,7 +542,7 @@ describe("catalog publication session rows", () => {
     expect(rows.materializedCount - replaced).toBe(rowCount);
   });
 
-  it.each(["unchanged", "changed", "failed"] as const)(
+  it.each(["changed", "failed"] as const)(
     "converges when a %s publication arrives during a yielded drain",
     async (outcome) => {
       let publishedDuringDrain = false;

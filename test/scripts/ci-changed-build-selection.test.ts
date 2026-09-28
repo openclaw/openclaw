@@ -17,7 +17,6 @@ it("keeps source boundary proof when a narrow PR has no dist consumer", () => {
     "src/example/runtime.ts": "export const value = 1;",
     "src/example/runtime.test.ts": 'import "./runtime.js";',
     "src/gateway/client-callsites.guard.test.ts": "export {};",
-    "src/tasks/task-boundaries.test.ts": "export {};",
   })) {
     const absolute = path.join(cwd, file);
     mkdirSync(path.dirname(absolute), { recursive: true });
@@ -191,7 +190,7 @@ it("runs selected channel files in one config child while retaining separate con
   ).toHaveLength(1);
 });
 
-it("retains the canonical fallback for an untracked config importing a changed helper", () => {
+it("rejects unavailable canonical metadata for an untracked config consumer", () => {
   const cwd = tempDirs.make("ci-untracked-config-");
   const helper = "scripts/config-input.mts";
   const test = "test/scripts/config-input.test.ts";
@@ -209,7 +208,5 @@ it("retains the canonical fallback for an untracked config importing a changed h
   execFileSync("git", ["add", "--", helper, test], gitOptions);
   const onFallback = vi.fn();
   expect(createChangedNodeTestShards([helper], { cwd, onFallback })).toBeNull();
-  expect(onFallback).toHaveBeenCalledWith(
-    "changed Vitest configs lack canonical checkout metadata",
-  );
+  expect(onFallback).toHaveBeenCalledWith("test targets lack canonical shard metadata");
 });

@@ -172,40 +172,30 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           ],
         })
       : undefined;
-    const allowedBundleMcpTools = applyEmbeddedAttemptToolsAllow(
-      bundleMcpRuntime?.tools ?? [],
-      effectiveToolsAllow,
-      { toolMeta: (tool) => getPluginToolMeta(tool) },
-    );
-    const allowedBundleLspTools = applyEmbeddedAttemptToolsAllow(
-      bundleLspRuntime?.tools ?? [],
-      effectiveToolsAllow,
-      { toolMeta: (tool) => getPluginToolMeta(tool) },
-    );
-    const filteredBundledTools = applyFinalEffectiveToolPolicy({
-      bundledTools: [...allowedBundleMcpTools, ...allowedBundleLspTools],
-      config: params.attempt.config,
-      workspaceDir: params.setup.effectiveWorkspace,
-      metadataSnapshot: bundleMetadataSnapshot,
-      conversationCapabilityProfile: runtimeCapabilityProfile,
-      warn: (message) => log.warn(message),
-    });
-    if (bundleMcpRuntime?.restrictAppTools) {
-      const runtimeAllowedAppTools = applyEmbeddedAttemptToolsAllow(
-        bundleMcpRuntime.appTools ?? bundleMcpRuntime.tools,
-        effectiveToolsAllow,
-        { toolMeta: (tool) => getPluginToolMeta(tool) },
-      );
-      const allowedAppTools = applyFinalEffectiveToolPolicy({
-        bundledTools: runtimeAllowedAppTools,
+    const applyRuntimeAllowlist = (bundleTools: typeof toolsRaw) =>
+      applyEmbeddedAttemptToolsAllow(bundleTools, effectiveToolsAllow, {
+        toolMeta: (tool) => getPluginToolMeta(tool),
+      });
+    const applyBundlePolicy = (bundledTools: typeof toolsRaw) =>
+      applyFinalEffectiveToolPolicy({
+        bundledTools,
         config: params.attempt.config,
         workspaceDir: params.setup.effectiveWorkspace,
         metadataSnapshot: bundleMetadataSnapshot,
         conversationCapabilityProfile: runtimeCapabilityProfile,
         warn: (message) => log.warn(message),
       });
+    const filteredBundledTools = applyBundlePolicy([
+      ...applyRuntimeAllowlist(bundleMcpRuntime?.tools ?? []),
+      ...applyRuntimeAllowlist(bundleLspRuntime?.tools ?? []),
+    ]);
+    if (bundleMcpRuntime?.restrictAppTools) {
       // The view outlives this attempt; capture policy against the complete MCP catalog now.
-      bundleMcpRuntime.restrictAppTools(allowedAppTools);
+      bundleMcpRuntime.restrictAppTools(
+        applyBundlePolicy(
+          applyRuntimeAllowlist(bundleMcpRuntime.appTools ?? bundleMcpRuntime.tools),
+        ),
+      );
     }
     const normalizedBundledTools = (
       filteredBundledTools.length > 0 ? normalizeTools(filteredBundledTools) : filteredBundledTools

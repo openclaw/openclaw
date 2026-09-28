@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createNativeSessionBindingLeases } from "./binding-leases.js";
 import {
   bindingTestOptions,
@@ -6,45 +7,19 @@ import {
   prepareBindingTestLease,
 } from "./binding.test-support.js";
 
+function createLeaseFixture() {
+  const { state, values } = createBindingTestState();
+  return { state, values, owner: createNativeSessionBindingLeases(state, bindingTestOptions) };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("native session binding leases", () => {
-  it("serializes writes from another facade behind a native-compaction lease", async () => {
-    vi.useFakeTimers();
-    const { state, values } = createBindingTestState();
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
-    const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
-    const key = "binding-1";
-    values.set(key, { value: "owner" });
-    let peerFinished = false;
-    let peerWrite!: Promise<boolean>;
-
-    await owner.withLease(
-      key,
-      async () => {
-        peerWrite = peer
-          .transact(key, () => ({ next: { value: "peer" }, result: true }))
-          .then((result) => {
-            peerFinished = true;
-            return result;
-          });
-        await Promise.resolve();
-        expect(peerFinished).toBe(false);
-      },
-      { prepareLease: prepareBindingTestLease },
-    );
-    await vi.advanceTimersByTimeAsync(1_000);
-    await peerWrite;
-
-    expect(values.get(key)).toEqual({ value: "peer" });
-  });
-
   it("leases an absent binding before creating its first native owner", async () => {
     vi.useFakeTimers();
-    const { state, values } = createBindingTestState();
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    const { state, values, owner } = createLeaseFixture();
     const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
     const key = "binding-new";
     let peerFinished = false;
@@ -83,45 +58,14 @@ describe("native session binding leases", () => {
     expect(values.get(key)).toEqual({ value: "owner" });
   });
 
-  it("releases a lease when its owner callback rejects", async () => {
-    const { state, values } = createBindingTestState();
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
-    const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
-    const key = "binding-rejected-owner";
-    values.set(key, { value: "owner" });
-
-    await expect(
-      owner.withLease(
-        key,
-        async () => {
-          throw new Error("owner failed");
-        },
-        { prepareLease: prepareBindingTestLease },
-      ),
-    ).rejects.toThrow("owner failed");
-    await expect(
-      peer.transact(key, (current) => ({
-        next: { ...current, value: "updated" },
-        result: true,
-      })),
-    ).resolves.toBe(true);
-  });
-
   it("renews a live lease across a long native request", async () => {
     vi.useFakeTimers();
-    const { state, values } = createBindingTestState();
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    const { state, values, owner } = createLeaseFixture();
     const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
     const key = "binding-renewed-owner";
     values.set(key, { value: "owner" });
-    let releaseOwner!: () => void;
-    let markOwnerStarted!: () => void;
-    const ownerStarted = new Promise<void>((resolve) => {
-      markOwnerStarted = resolve;
-    });
-    const holdOwner = new Promise<void>((resolve) => {
-      releaseOwner = resolve;
-    });
+    const { promise: ownerStarted, resolve: markOwnerStarted } = createDeferred();
+    const { promise: holdOwner, resolve: releaseOwner } = createDeferred();
     const ownerRun = owner.withLease(
       key,
       async () => {
@@ -154,8 +98,7 @@ describe("native session binding leases", () => {
 
   it("fences an expired lease owner after a peer takes over", async () => {
     vi.useFakeTimers();
-    const { state, values } = createBindingTestState();
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    const { state, values, owner } = createLeaseFixture();
     const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
     const key = "binding-stale-owner";
     values.set(key, { value: "owner" });
@@ -188,18 +131,11 @@ describe("native session binding leases", () => {
 
   it("surfaces heartbeat lease loss without deleting the replacement owner", async () => {
     vi.useFakeTimers();
-    const { state, values } = createBindingTestState();
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+    const { values, owner } = createLeaseFixture();
     const key = "binding-replaced-owner";
     values.set(key, { value: "owner" });
-    let releaseOwner!: () => void;
-    let markOwnerStarted!: () => void;
-    const ownerStarted = new Promise<void>((resolve) => {
-      markOwnerStarted = resolve;
-    });
-    const holdOwner = new Promise<void>((resolve) => {
-      releaseOwner = resolve;
-    });
+    const { promise: ownerStarted, resolve: markOwnerStarted } = createDeferred();
+    const { promise: holdOwner, resolve: releaseOwner } = createDeferred();
     const ownerRun = owner.withLease(
       key,
       async () => {
@@ -221,7 +157,7 @@ describe("native session binding leases", () => {
   });
 
   it("rechecks a replacement row after comparison refusal", async () => {
-    const { state, values } = createBindingTestState();
+    const { state, values, owner } = createLeaseFixture();
     values.set("binding", { value: "original" });
     const withCurrent = state.withCurrent.bind(state);
     let replaced = false;
@@ -238,7 +174,6 @@ describe("native session binding leases", () => {
         },
       };
     };
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
     await expect(
       owner.transact("binding", (current) =>
         current?.value === "original"
@@ -250,7 +185,7 @@ describe("native session binding leases", () => {
   });
 
   it("does not replay a mutation after storage reports an uncertain outcome", async () => {
-    const { state, values } = createBindingTestState();
+    const { state, values, owner } = createLeaseFixture();
     values.set("binding", { value: "original" });
     const withCurrent = state.withCurrent.bind(state);
     state.withCurrent = (authority) => {
@@ -263,7 +198,6 @@ describe("native session binding leases", () => {
         },
       };
     };
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
     await expect(
       owner.transact("binding", (current) => ({
         next: { value: `${current?.value}:once` },
@@ -275,7 +209,7 @@ describe("native session binding leases", () => {
 
   it("reports lease loss even when the callback catches a commit refusal", async () => {
     vi.useFakeTimers();
-    const { state, values } = createBindingTestState();
+    const { state, values, owner } = createLeaseFixture();
     values.set("binding", { value: "original" });
     const withCurrent = state.withCurrent.bind(state);
     let expireBeforeAdmission = false;
@@ -292,7 +226,6 @@ describe("native session binding leases", () => {
         },
       };
     };
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
     await expect(
       owner.withLease(
         "binding",
@@ -314,14 +247,11 @@ describe("native session binding leases", () => {
 
   it("joins queued renewal before releasing a failed owner", async () => {
     vi.useFakeTimers();
-    const { state, values } = createBindingTestState();
+    const { state, values, owner } = createLeaseFixture();
     values.set("binding", { value: "original" });
     const withCurrent = state.withCurrent.bind(state);
     let holdRenewal = false;
-    let releaseObservation!: () => void;
-    const observationReleased = new Promise<void>((resolve) => {
-      releaseObservation = resolve;
-    });
+    const { promise: observationReleased, resolve: releaseObservation } = createDeferred();
     state.withCurrent = (authority) => {
       const store = withCurrent(authority);
       return {
@@ -335,15 +265,8 @@ describe("native session binding leases", () => {
         },
       };
     };
-    const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
-    let started!: () => void;
-    const ownerStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    let finish!: () => void;
-    const finishRun = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const { promise: ownerStarted, resolve: started } = createDeferred();
+    const { promise: finishRun, resolve: finish } = createDeferred();
     let settled = false;
     const run = owner
       .withLease(

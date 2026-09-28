@@ -8,7 +8,6 @@ import {
   type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
-import type { PlacementRecoveryDeps } from "./placement-dispatch-pending-results.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import {
   createWorkerPlacementDispatchStartup,
@@ -32,6 +31,7 @@ import {
   type WorkerPlacementReclaimOptions,
 } from "./placement-reclaim.js";
 import { reportPlacementTransition } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
@@ -98,7 +98,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     ...options,
     environments: recoveryEnvironments,
     failure: createPlacementFailureActions({ environments: recoveryEnvironments, placements }),
-    recoverPlacementMoves: (environmentId) => moveService.recoverAll(environmentId),
+    recoverPlacementMoves: (projection, environmentId) =>
+      moveService.recoverSession(projection, environmentId),
   });
 
   const dispatch = async (

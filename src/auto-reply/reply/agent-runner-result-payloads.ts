@@ -1,9 +1,9 @@
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
+  hasVisibleOutboundDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
-  hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   isSyntheticSourceReplyTurn,
@@ -33,15 +33,14 @@ import {
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
-  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   buildSilentFallbackFailurePayload,
   hasSuccessfulSourceReplyDelivery,
-  resolveTerminalReplyDelivery,
   refreshSessionEntryFromStore,
   resolveSourceReplyPolicy,
+  resolveTerminalReplyDelivery,
 } from "./agent-runner-core.js";
 import { buildEmptyInteractiveReplyPayload } from "./agent-runner-failure-reply.js";
 import { signalTypingIfNeeded } from "./agent-runner-helpers.js";
@@ -570,65 +569,51 @@ export async function prepareReplyAgentPayloads(state: {
     if (requesterSessionKey && acceptedSessionSpawns?.length && statusPayload) {
       let progressPresentation: ProgressContinuationState | undefined;
       if (implicitContinuation) {
+        let settlementPromise: Promise<void> | undefined;
         const settlement: PendingContinuationSettlement = {
-          settle: async (statusDelivered) => {
-            const presentation = progressPresentation;
-            progressPresentation = undefined;
-            try {
-              const { settleRequesterAfterSessionSpawns } =
-                await import("../../agents/subagents/registry/subagent-registry.js");
-              const requester = {
-                requesterSessionKey,
-                requesterAgentId: followupRun.run.agentId,
-                requesterTurnRunId: runId,
-                acceptedSessionSpawns,
-              };
-              const requesterYielded = statusDelivered || presentation !== undefined;
+          settle: (statusDelivered) =>
+            (settlementPromise ??= (async () => {
+              const presentation = progressPresentation;
+              progressPresentation = undefined;
               try {
-                if (
-                  !settleRequesterAfterSessionSpawns({
-                    ...requester,
-                    requesterYielded,
-                    ...(presentation ? { progressPresentation: presentation } : {}),
-                  })
-                ) {
-                  throw new Error(
-                    "accepted continuation children could not transfer terminal delivery",
-                  );
+                const { settleRequesterAfterSessionSpawns } =
+                  await import("../../agents/subagents/registry/subagent-registry.js");
+                const requester = {
+                  requesterSessionKey,
+                  requesterAgentId: followupRun.run.agentId,
+                  requesterTurnRunId: runId,
+                  acceptedSessionSpawns,
+                };
+                const requesterYielded = statusDelivered || presentation !== undefined;
+                try {
+                  if (
+                    !settleRequesterAfterSessionSpawns({
+                      ...requester,
+                      requesterYielded,
+                      ...(presentation ? { progressPresentation: presentation } : {}),
+                    })
+                  ) {
+                    throw new Error(
+                      "accepted continuation children could not transfer terminal delivery",
+                    );
+                  }
+                } catch (error) {
+                  // Adoption is positive visibility even when the later transport
+                  // outcome is unknown. A failed handoff must still release the child.
+                  if (!statusDelivered && requesterYielded) {
+                    settleRequesterAfterSessionSpawns({ ...requester, requesterYielded: false });
+                  }
+                  throw error;
                 }
-              } catch (error) {
-                // Adoption is positive visibility even when the later transport
-                // outcome is unknown. A failed handoff must still release the child.
-                if (!statusDelivered && requesterYielded) {
-                  settleRequesterAfterSessionSpawns({ ...requester, requesterYielded: false });
-                }
-                throw error;
+              } finally {
+                getReplyPayloadMetadata(statusPayload)?.progressContinuation?.close();
               }
-            } finally {
-              getReplyPayloadMetadata(statusPayload)?.progressContinuation?.close();
-            }
-          },
+            })().catch((error: unknown) => {
+              settlementPromise = undefined;
+              throw error;
+            })),
         };
         opts?.onPendingContinuation?.(settlement);
-      }
-      // Ordinary replies must not load the task presentation runtime.
-      const { createTaskProgressContinuation } =
-        await import("../../tasks/task-progress-requester.js");
-      const progressContinuation = await createTaskProgressContinuation({
-        requesterSessionKey,
-        requesterAgentId: followupRun.run.agentId,
-        requesterTurnRunId: runId,
-        acceptedSessionSpawns,
-        ...(implicitContinuation
-          ? {
-              onAdopted: (presentation: ProgressContinuationState) => {
-                progressPresentation = presentation;
-              },
-            }
-          : {}),
-      });
-      if (progressContinuation) {
-        setReplyPayloadMetadata(statusPayload, { progressContinuation });
       }
     }
   }

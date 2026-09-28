@@ -6,7 +6,7 @@
  */
 
 import type { AgentTool } from "../../runtime/index.js";
-import { wrapToolDefinition, wrapToolDefinitions } from "../tools/tool-definition-wrapper.js";
+import { wrapToolDefinition } from "../tools/tool-definition-wrapper.js";
 import type { ExtensionRunner } from "./runner.js";
 import type { RegisteredTool } from "./types.js";
 
@@ -29,8 +29,5 @@ export function wrapRegisteredTools(
   registeredTools: RegisteredTool[],
   runner: ExtensionRunner,
 ): AgentTool[] {
-  return wrapToolDefinitions(
-    registeredTools.map((registeredTool) => registeredTool.definition),
-    () => runner.createContext(),
-  );
+  return registeredTools.map((tool) => wrapRegisteredTool(tool, runner));
 }

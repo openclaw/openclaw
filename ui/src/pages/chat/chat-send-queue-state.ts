@@ -6,10 +6,10 @@ import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
-  type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";

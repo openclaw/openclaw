@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
@@ -188,14 +189,7 @@ export async function publishHeartbeatSessionReply(params: {
                 provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
                 // Unlike delivery mirrors, completion notifications remain model context.
                 model: "automation-result",
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
+                usage: makeZeroUsageSnapshot(),
                 stopReason: "stop",
                 timestamp: Date.now(),
                 idempotencyKey: key,

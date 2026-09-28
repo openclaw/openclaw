@@ -1,8 +1,3 @@
-/**
- * Subagent capability resolution.
- * Combines session-key shape, stored envelopes, spawn depth, and inherited tool
- * policy to decide role, control scope, and subagent permissions.
- */
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,

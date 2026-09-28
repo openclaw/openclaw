@@ -10,7 +10,6 @@ import {
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
 import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   type AgentRunTerminalOutcome,
@@ -176,7 +175,6 @@ export type SubagentManagerOptions = {
     provisionalKill?: boolean;
   }): void;
   completeSubagentRun(args: SubagentCompletionRequest): Promise<void>;
-  resolveSubagentTask(entry: SubagentRunRecord): DetachedTaskFindResult;
 };
 
 export class SubagentWaitManager {

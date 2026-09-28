@@ -230,7 +230,7 @@ async function onAdmittedTimer(state: CronServiceState) {
           await ensureLoaded(state, { forceReload: true });
         }
         for (const interrupted of interruptedRuns) {
-          emitInterruptedCronRun(state, interrupted);
+          await emitInterruptedCronRun(state, interrupted);
         }
       }
       // These interruptions already committed; publish them before fencing new scheduling work.
@@ -238,11 +238,14 @@ async function onAdmittedTimer(state: CronServiceState) {
         return [];
       }
       const dueCheckNow = state.deps.nowMs();
-      const due = skipCronJobsWithoutOwners(
+      const due = await skipCronJobsWithoutOwners(
         state,
         collectRunnableJobs(state, dueCheckNow),
         dueCheckNow,
       );
+      if (state.stopped || state.startupCatchup || state.lifecycleGeneration !== generation) {
+        return [];
+      }
 
       if (due.length === 0) {
         if (!state.store?.jobs.some((job) => needsCronTimerMaintenance(job, dueCheckNow))) {
@@ -293,6 +296,7 @@ async function onAdmittedTimer(state: CronServiceState) {
           reservedAtMs: now,
           reservationIdentity: reserveQueuedCronRun(state, job.id, now, {
             runReceipt,
+            lifecycleGeneration: generation,
           }),
           releaseAdmission: admissionReleases[index]!,
         }));
@@ -402,7 +406,7 @@ async function onAdmittedTimer(state: CronServiceState) {
                   state,
                   jobIds: [due.id],
                   operationLabel: "cron.skipped-reservation-cleanup",
-                  mutate: ({ database, jobs }) => {
+                  mutate: ({ database, jobs, receiptSchema }) => {
                     const current = jobs.get(due.id);
                     const ownership = state.queuedRunReservationsByJobId.get(due.id);
                     if (
@@ -413,6 +417,7 @@ async function onAdmittedTimer(state: CronServiceState) {
                       return { value: undefined };
                     }
                     finishCronRunReceiptInDatabase({
+                      receiptSchema,
                       database,
                       handle: ownership.runReceipt,
                       status: "skipped",

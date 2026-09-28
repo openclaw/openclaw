@@ -24,6 +24,9 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { resolveWorkerPlacementSessionTarget } from "../../gateway/server-worker-placement-session-target.js";
+import { resolveGatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store-lookup.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "../../gateway/session-utils-store.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -1930,6 +1933,111 @@ describe("initSessionState RawBody", () => {
       { pendingDeliveryNotice?: unknown }
     >;
     expect(store[sessionKey]?.pendingDeliveryNotice).toEqual(pendingDeliveryNotice);
+  });
+
+  it("preserves the session-owned worktree binding across an implicit daily stale rollover (#159452)", async () => {
+    // Regression: a worker-placed session's worktree reference was dropped at
+    // the implicit daily/idle rollover boundary even though the underlying
+    // worktree stays live, so the next worker dispatch failed with "dispatch
+    // requires a session-owned workspace". A session entry cannot carry both
+    // `worktree` and `repositoryWorkspaceId` (worker placement rejects that
+    // combination before dispatch), so this case covers the worktree binding
+    // and proves the placement boundary resolves after rollover.
+    const storePath = await makeStorePath("openclaw-daily-rollover-worktree-");
+    const sessionKey = "agent:main:dashboard:worktree-rollover";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+    const worktree = { id: "worktree-159452", branch: "main", repoRoot: "/repo" };
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "session-before-worktree-rollover",
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        worktree,
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello again",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionEntry.worktree).toEqual(worktree);
+
+    const store = readSessionStoreFast(storePath) as Record<string, { worktree?: unknown }>;
+    expect(store[sessionKey]?.worktree).toEqual(worktree);
+
+    // Boundary proof: worker placement, which failed with "dispatch requires
+    // a session-owned workspace" before the fix, now resolves the rolled-over
+    // entry against its live worktree.
+    const placement = resolveWorkerPlacementSessionTarget({
+      sessionRuntime: {
+        resolveGatewaySessionStoreTargetWithStore,
+        resolveCanonicalSessionEntryFromStoreKeys,
+        managedWorktrees: {
+          findLiveByOwner: (_kind, ownerId) => ({
+            id: worktree.id,
+            ownerId,
+            path: worktree.repoRoot,
+          }),
+        },
+      },
+      config: cfg,
+      sessionId: result.sessionEntry.sessionId,
+      sessionKey,
+      agentId: "main",
+      errorMessage: "placement identity changed",
+    });
+    expect(placement.workspace).toEqual({ kind: "local", path: worktree.repoRoot });
+  });
+
+  it("preserves the session-owned repository workspace binding across an implicit daily stale rollover (#159452)", async () => {
+    const storePath = await makeStorePath("openclaw-daily-rollover-repo-workspace-");
+    const sessionKey = "agent:main:dashboard:repo-workspace-rollover";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "session-before-repo-workspace-rollover",
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+        repositoryWorkspaceId: "repo-workspace-159452",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello again",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionEntry.repositoryWorkspaceId).toBe("repo-workspace-159452");
+
+    const store = readSessionStoreFast(storePath) as Record<
+      string,
+      { repositoryWorkspaceId?: string }
+    >;
+    expect(store[sessionKey]?.repositoryWorkspaceId).toBe("repo-workspace-159452");
   });
 
   it.each([undefined, "required"] as const)(
@@ -5046,6 +5154,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("disposes the previous bundle MCP runtime on session rollover", async () => {
+    await mcpFixture.bindSessionMcpRuntimeTestScheduler();
     const storePath = await makeStorePath("openclaw-stale-runtime-dispose-");
     const sessionKey = "agent:main:telegram:dm:runtime-stale-user";
     const existingSessionId = "stale-runtime-session";

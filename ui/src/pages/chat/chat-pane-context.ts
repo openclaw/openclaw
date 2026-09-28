@@ -53,7 +53,6 @@ import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import {
   reconcileChatRunAfterSessionStatePublication,
   reconcileChatRunLifecycle,
@@ -354,6 +353,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
+    // Upload controls read the live config capability; refresh every policy publication.
+    state.requestUpdate?.();
     const previousTerminalAvailable = state.terminalAvailable;
     state.terminalAvailable =
       config.terminalEnabled &&
@@ -469,7 +470,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         isUiSelectedGlobalSessionKey(state, state.sessionKey))
     ) {
       retireChatModelSelectionOwnership(state);
-      resetTaskDetail(state);
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
     }
@@ -538,27 +538,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
-    if (
-      sourceChanged &&
-      snapshot.phase === "connected" &&
-      state.sessionKey &&
-      !clientChanged &&
-      !catalogRouteKey
-    ) {
-      // A logical reconnect can retain the browser client and skip full startup.
-      // Disconnect cleanup drops transient tool rows, so reload this pane's
-      // active-run snapshot before secondary session surfaces hydrate.
-      const historyRefresh = refreshPageChat(state, {
-        startup: true,
-        awaitHistory: true,
-        deferBranches: true,
-        historyLoad: resumedHistory,
-      });
-      this.deferSessionHydrationUntilTranscript(
-        state.sessionKey,
-        historyRefresh.then(() => getChatHistoryLoadState(state).phase === "committed"),
-      );
-    }
     const canonicalRouteSessionKey =
       routeSessionKey && !catalogRouteKey
         ? resolveSessionKey(routeSessionKey, snapshot.hello)

@@ -35,7 +35,6 @@ import { createZeroUsageFixture } from "../../src/agents/test-helpers/usage-fixt
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
-import { registerBackgroundTasksEnglish } from "../../ui/src/i18n/locales/en-background-tasks.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
@@ -343,7 +342,6 @@ describe("control-ui-i18n generated ownership", () => {
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenControlUiCatalog(catalog, "en");
     for (const fragment of [
-      registerBackgroundTasksEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
       registerLabsEnglish.catalog,
       registerSettingsEnglish.catalog,

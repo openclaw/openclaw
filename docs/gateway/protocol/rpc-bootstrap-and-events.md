@@ -96,6 +96,15 @@ count.
   `chat` stream. Subscribe to one text projection for a display; consuming both
   streams into one accumulator duplicates output. In-process agent observers
   retain their cumulative-text contract.
+  A client that renders assistant text solely from `chat` can advertise
+  `chat-only-assistant-text` in its connect `caps`. The Gateway then omits
+  text-bearing `agent` events with `stream: "assistant"` from that connection,
+  including foreground and background narration subscriptions. Other agent
+  streams (tools, items, usage, run status, lifecycle, plans, and approvals),
+  assistant events without text, and the `chat` stream are unchanged. Filtered
+  frames do not consume connection sequence numbers. Clients without the
+  capability keep both projections; native clients that display current-item
+  agent text separately from cumulative chat text should not advertise it.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
 - `session.approval`: sanitized pending and terminal approval truth for an
@@ -125,7 +134,7 @@ count.
   take precedence when present. Merge an existing
   roster member's snapshot locally when the query's membership and pagination
   window remain valid. The Control UI reuses lifecycle and ordinary `patch`,
-  `placement`, `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
+  `participants`, `placement`, `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
   `chat.title` snapshots for held rows with unchanged identity, archive,
   pin, owner, and parent facts and nondecreasing recency. Keyed `sessions.changed`
   and `session.message` publications also carry `ancestorSessions`, an array of
@@ -156,9 +165,13 @@ count.
   happens to match. Missing rows, generation or revision mismatches, and uncertain
   presentation ownership require the existing authoritative refresh path.
   The Gateway bounds this per-connection record and sends full rows after first
-  delivery, reconnect, resubscribe, reset/delete, changed presentation or visibility,
+  delivery, a successful list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
   eviction, or uncertain delivery. Unsubscribe and disconnect clear the record;
   session deletion invalidates remembered ancestors.
+  Recap-only (`reason: "activity-summary"`) events keep their ancestor payloads,
+  but full rows in those events retire the corresponding reference records:
+  shared rosters may skip recap admission. The next ordinary event supplies full
+  rows again; unchanged references already held by the client remain reusable.
   Older web clients ignore the additive reference field. Because `ancestorSessions`
   contains full rows only, they cannot apply a reference as a partial row and erase
   held fields. Missing ancestor snapshots cause their existing authoritative

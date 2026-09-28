@@ -1,10 +1,10 @@
-// QA Lab mock provider contracts, wire helpers, and scenario constants.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import type { MockProviderVariant } from "../shared/mock-provider-variant.js";
+import type { QaMockRequestSnapshot } from "../shared/types.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
@@ -155,31 +155,19 @@ export type MockToolCallItem = { id: string; call_id: string; name: string; name
 
 export type MockOpenAiCodeModeExecSurface = "native" | "guest";
 
-export type MockOpenAiRequestSnapshot = {
+export type MockOpenAiRequestSnapshot = QaMockRequestSnapshot & {
   cursor: number;
   sessionId?: string;
-  raw: string;
-  body: Record<string, unknown>;
-  prompt: string;
-  allInputText: string;
   instructions?: string;
-  toolOutput: string;
-  model: string;
-  providerVariant: MockProviderVariant;
   codeModeExecSurface?: MockOpenAiCodeModeExecSurface;
-  imageInputCount: number;
   requestKind: MockOpenAiRequestKind;
   compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   outcome: MockOpenAiRequestOutcome;
   errorCode?: string;
   rawByteLength: number;
-  plannedToolCallId?: string;
   plannedToolItemId?: string;
-  plannedToolName?: string;
   plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
-  toolOutputCallId?: string;
-  toolOutputStructuredError?: true;
 };
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
@@ -197,11 +185,6 @@ export type MockOpenAiRequestSnapshotBase = Omit<
   | "toolOutputCallId"
   | "toolOutputStructuredError"
 >;
-
-// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
-// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
-export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
 // Anthropic wire fields used by the shared Responses scenario dispatcher.
 export type AnthropicMessageContentBlock =

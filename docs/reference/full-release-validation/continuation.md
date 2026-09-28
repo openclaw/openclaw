@@ -96,8 +96,10 @@ Parents whose immutable plan predates attempt-aware evidence cannot be
 continued. Start a fresh all-group Full Release Validation instead; the
 controller never reconstructs old state or dispatches a replacement parent.
 
-The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
-passes the Validation SHA as both the candidate ref and `expected_sha`, and
+For new dispatches, including dry runs, the helper first proves GitHub serves the
+exact Validation SHA by bare-SHA fetch in a fresh temporary repository. It pushes
+one immutable `release-ci/*` workflow ref pinned to the Tooling SHA,
+passes the exact Validation SHA as both `ref` and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
 active so blockers can surface while Diagnostic Drain collects failures. It
@@ -112,7 +114,8 @@ check and at most three retries, waiting 30, 60, then 120 seconds between checks
 All reads use the normal cache-aware GitHub route; cache and request latency can
 add to these intervals. The helper retains its 12-hour wait deadline. Successful
 temporary-ref cleanup still requires parent completion and strict evidence
-verification. Failed validations retain both refs for reruns and diagnosis. The
+verification. Failed validations retain the workflow ref for reruns and diagnosis;
+`--keep-branch` also retains it after success. The
 Validation SHA is the exact commit being qualified: the Code SHA, which can
 also be the Release SHA, or a later changelog-only Release SHA. It is not a
 third release identity. The workflow

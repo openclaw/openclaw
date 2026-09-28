@@ -83,7 +83,9 @@ export function isImplicitAgentModelUpdate(
 }
 
 /** Updates an existing agent entry while preserving omitted fields. */
-export async function updateAgentConfigEntry(params: AgentConfigUpdate): Promise<void> {
+export async function updateAgentConfigEntry(
+  params: AgentConfigUpdate & { assertCurrent?: () => void },
+): Promise<void> {
   const selectionError = validateAgentModelSelectionUpdate(params);
   if (selectionError) {
     throw new AgentModelSelectionError(selectionError);
@@ -102,6 +104,7 @@ export async function updateAgentConfigEntry(params: AgentConfigUpdate): Promise
     writeOptions: {
       ...(params.identity ? { allowConfigSizeDrop: true } : {}),
       assertConfigPathForWrite: () => {
+        params.assertCurrent?.();
         const error = validateSelection?.();
         if (error) {
           throw new AgentModelSelectionError(error);

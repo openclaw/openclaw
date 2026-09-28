@@ -64,10 +64,7 @@ import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
-import type {
-  SqliteWorkerPreparedBackend,
-  SqliteWorkerStateLifecycle,
-} from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-worker-contract.js";
 import type {
@@ -86,7 +83,7 @@ import type { ProjectRegistryWorkerOperations } from "../projects/project-regist
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
-import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker.js";
+import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker-contract.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker.js";
@@ -94,7 +91,6 @@ import type * as curator from "../skills/workshop/curator.kernel.js";
 import type { listStoredSkillProposalEventsInDatabase } from "../skills/workshop/store-sqlite-event.js";
 import type { SkillWorkshopExecutionOperations } from "../skills/workshop/store.worker-contract.js";
 import type { SkillProposalEvent, SkillProposalRecord } from "../skills/workshop/types.js";
-import type { TaskRegistryWorkerOperations } from "../tasks/task-registry.worker-contract.js";
 import type {
   TranscriptReadOperations,
   TranscriptWriteOperations,
@@ -149,7 +145,6 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
   TranscriptReadOperations &
   TranscriptWriteOperations &
   NodeWorkerJournalWorkerOperations &
-  TaskRegistryWorkerOperations &
   SkillUploadWorkerOperations &
   OpenClawStateLeaseLifecycleOperations &
   ManagedImageRecordWorkerOperations & {
@@ -364,8 +359,6 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
 /** Host-only admission options; never serialized with a worker command. */
 export type OpenClawStateWorkerOperationOptions = {
   preparation?: OpenClawStateWorkerOpenPreparation;
-  /** Acquire matching lifecycle custody for each dispatched command. */
-  requireStateLifecycle?: SqliteWorkerStateLifecycle;
   existingOnly?: boolean;
   assertCurrent?: (commandType?: PropertyKey) => void;
   createAdmission?: SqliteWorkerAdmissionFactory;

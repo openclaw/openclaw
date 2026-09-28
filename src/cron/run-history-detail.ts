@@ -1,6 +1,6 @@
 /** Read-side cron codec between cron history detail and the stable run-history wire shape.
  * Deliberately free of agent/runtime imports so history reads stay dependency-light;
- * the event->entry write codec lives in task-run-event-codec.ts. */
+ * the event->entry write codec lives in run-event-codec.ts. */
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   asSafeIntegerInRange,
@@ -127,7 +127,7 @@ function isJsonValue(value: unknown): value is JsonValue {
 }
 
 /** Native JSON parsing keeps released scalar/null and numeric-overflow semantics. */
-function parseCronRunDetailJson(serialized: string): JsonValue | undefined {
+export function parseCronRunDetailJson(serialized: string): JsonValue | undefined {
   const value = safeParseJson(serialized);
   return isJsonValue(value) ? value : undefined;
 }
@@ -221,7 +221,7 @@ export function parseCronRunLogEntryObject(
   return entry;
 }
 
-/** Encodes cron-owned outcome fields without changing the task lifecycle owner. */
+/** Encodes Cron-owned outcome fields for retained history. */
 export function cronRunLogEntryToDetail(
   entry: CronRunLogEntry,
   options: {

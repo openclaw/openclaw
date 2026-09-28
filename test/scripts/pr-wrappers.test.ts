@@ -687,8 +687,38 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n`,
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n<>\n<false>\n`,
     );
+  });
+
+  itPosix("resolves explicit admin evidence for admission and recovery before cwd changes", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+    const caller = join(fixture.canonical, "nested");
+    mkdirSync(caller);
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    for (const command of ["merge-run", "merge-recover"]) {
+      const outcome = command === "merge-recover" ? "a".repeat(40) : "";
+      const result = spawnSync(
+        join(fixture.canonical, "scripts/pr"),
+        [
+          command,
+          "123",
+          ...(outcome ? [outcome, "--confirmed-operator-recovery"] : []),
+          "--admin-evidence",
+          "admin proof.json",
+          "--confirmed-operator-admin",
+        ],
+        { cwd: caller, encoding: "utf8", env: fixture.env },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        `<123>\n<false>\n<${outcome}>\n<>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n`,
+      );
+    }
   });
 
   itPosix(
@@ -738,6 +768,27 @@ describe("scripts/pr wrappers", () => {
       ["merge-run", "123", "--auto-merge", "--auto-merge"],
       ["merge-recover", "123", "a".repeat(40), "--body-file", "one"],
       ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
+      ...[
+        ["--admin-evidence", "proof.json"],
+        ["--confirmed-operator-admin"],
+        [
+          "--admin-evidence",
+          "proof.json",
+          "--confirmed-operator-admin",
+          "--replacement-head",
+          "b".repeat(40),
+        ],
+        ["--admin-evidence", "proof.json", "--confirmed-operator-admin", "--cancel-auto"],
+        [
+          "--admin-evidence",
+          "proof.json",
+          "--confirmed-operator-admin",
+          "--pre-dispatch-refusal",
+          "proof",
+        ],
+      ].map((flags) =>
+        ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery"].concat(flags),
+      ),
     ]) {
       const result = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
         cwd: fixture.canonical,
@@ -776,7 +827,7 @@ describe("scripts/pr wrappers", () => {
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toBe(
-          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n<${cancel}>\n<>\n`,
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n<${cancel}>\n<>\n<>\n<false>\n`,
         );
       }
     }
@@ -816,7 +867,7 @@ describe("scripts/pr wrappers", () => {
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe(
-        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n`,
+        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n<>\n<false>\n`,
       );
     },
   );

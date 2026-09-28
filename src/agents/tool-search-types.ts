@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
@@ -8,7 +7,6 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.j
 import type { ToolDefinition } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-export const TOOL_SEARCH_CODE_MODE_TOOL_NAME = "tool_search_code";
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
 export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
 export const TOOL_CALL_RAW_TOOL_NAME = "tool_call";
@@ -21,7 +19,6 @@ export const MAX_TOOL_SEARCH_BATCH_QUERY_BYTES = 512;
 export const MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS = 4_000;
 
 export const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -33,7 +30,7 @@ export const TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES = new Set([
   TOOL_CALL_RAW_TOOL_NAME,
 ]);
 
-export type ToolSearchMode = "code" | "tools" | "directory";
+export type ToolSearchMode = "tools" | "directory";
 export type ToolSearchRequest =
   | { kind: "single"; search: { query: string; limit: number } }
   | { kind: "batch"; searches: Array<{ query: string; limit: number }> };
@@ -43,7 +40,7 @@ export type CatalogVisibilityOptions = {
   includeMcp?: boolean;
   allowedIds?: { has(id: string): boolean };
 };
-type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "catalog";
+type UnknownToolRecoverySurface = "raw-tools" | "catalog";
 export type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
@@ -77,11 +74,10 @@ export type ToolSearchCatalogToolExecutor = (params: {
   ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
 
-/** Resolved Tool Search config after defaults, limits, and runtime support checks. */
+/** Resolved Tool Search config after defaults and limits. */
 export type ToolSearchConfig = {
   enabled: boolean;
   mode: ToolSearchMode;
-  codeTimeoutMs: number;
   searchDefaultLimit: number;
   maxSearchLimit: number;
 };
@@ -139,19 +135,6 @@ export type ToolSearchCatalogRef = {
   disposeObserver?: () => void;
   onDispose?: Set<() => void>;
 };
-
-export type CodeModeBridgeMethod = "search" | "describe" | "call";
-
-export type CodeModeChildMessage =
-  | { type: "result"; ok: true; value: unknown }
-  | { type: "result"; ok: false; error?: string }
-  | { type: "log"; items?: unknown[] }
-  | { type: "bridge"; id?: unknown; method?: unknown; args?: unknown };
-
-export type CodeModeBridgeResultMessage = { type: "bridge-result"; id: string } & Result<
-  unknown,
-  string
->;
 
 export type ToolSearchCatalogApplyResult = {
   tools: AnyAgentTool[];

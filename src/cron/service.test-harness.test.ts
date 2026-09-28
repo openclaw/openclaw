@@ -1,4 +1,3 @@
-// Cron service harness tests cover per-case SQLite and filesystem cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -48,19 +47,10 @@ describe("createCronStoreHarness", () => {
     expect((await loadCronStore(previousStorePath)).jobs).toEqual([]);
   });
 
-  it("supports explicit idempotent cleanup", async () => {
-    const store = await makeStorePath();
-    await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [testJob()] });
-
-    await store.cleanup();
-    await store.cleanup();
-
-    expect((await loadCronStore(store.storePath)).jobs).toEqual([]);
-  });
-
   it("settles case-owned session work before removing its directory and preserves sibling stores", async () => {
     const store = await makeStorePath();
     const sibling = await makeStorePath();
+    await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [testJob()] });
     const dir = path.dirname(path.dirname(store.storePath));
     const siblingDir = path.dirname(path.dirname(sibling.storePath));
     const sessionStorePath = path.join(dir, "cron", "sessions", "sessions.json");
@@ -115,6 +105,8 @@ describe("createCronStoreHarness", () => {
       release.resolve();
       await retained;
       await cleanup;
+      await store.cleanup();
+      expect((await loadCronStore(store.storePath)).jobs).toEqual([]);
       expect(databases.map(({ db }) => db.isOpen)).toEqual([false, false]);
       await expect(fs.stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
       expect(siblingDatabase.db.isOpen).toBe(true);

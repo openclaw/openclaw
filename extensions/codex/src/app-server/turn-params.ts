@@ -40,7 +40,7 @@ type CodexCurrentSender = {
 
 function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentSender | undefined {
   const metadata = asOptionalRecord(
-    asOptionalRecord(params.userTurnTranscriptRecorder?.message as unknown)?.["__openclaw"],
+    asOptionalRecord(params.userTurnTranscriptRecorder?.message)?.["__openclaw"],
   );
   const recorded = [
     normalizeOptionalString(metadata?.["senderId"]),

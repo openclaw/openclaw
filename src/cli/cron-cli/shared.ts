@@ -19,6 +19,7 @@ import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import { formatExactDuration } from "../../infra/format-time/format-duration-exact.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
@@ -59,6 +60,17 @@ export function parseCronIntegerOption(
     throw new CronCliError(`Invalid ${flag} (must be a ${kind} integer).`);
   }
   return parsed;
+}
+
+export function assertCronTimeoutSupported(
+  payloadKind: CronJob["payload"]["kind"],
+): asserts payloadKind is "agentTurn" | "command" {
+  if (payloadKind === "script") {
+    throw new CronCliError("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
+  }
+  if (payloadKind !== "agentTurn" && payloadKind !== "command") {
+    throw new CronCliError(`--timeout-seconds is not supported for ${payloadKind} jobs.`);
+  }
 }
 
 export function parseCronNoOutputTimeoutOption(opts: Record<string, unknown>): number | undefined {
@@ -242,13 +254,14 @@ function formatCronStatusForDisplay(job: CronJob) {
   const streamDisabled =
     job.enabled && job.schedule?.kind === "stream" && state.streamStatus === "disabled";
   const undelivered = status === "ok" && state.lastDeliveryStatus === "not-delivered";
+  const deliveryUnknown = status === "ok" && state.lastDeliveryStatus === "unknown";
   const suppressed =
     undelivered && !streamDisabled && state.deliverySuppressionReason !== undefined;
   // The recorded non-outcome, not completion success, distinguishes silence from failed best-effort delivery.
   const color =
     status === "error"
       ? theme.error
-      : status === "running" || (undelivered && !suppressed)
+      : status === "running" || deliveryUnknown || (undelivered && !suppressed)
         ? theme.warn
         : status === "ok"
           ? theme.success
@@ -263,6 +276,8 @@ function formatCronStatusForDisplay(job: CronJob) {
         : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
   } else if (undelivered) {
     label = suppressed ? "ok (suppressed)" : "ok (not delivered)";
+  } else if (deliveryUnknown) {
+    label = "delivery unknown";
   }
   return { label, color };
 }
@@ -424,6 +439,17 @@ export function parseCronStringList(input: unknown): string[] | undefined {
     .filter((entry): entry is string => Boolean(entry));
 }
 
+const INVALID_CRON_TIMEZONE_MESSAGE =
+  "Invalid --tz. Use an IANA timezone such as America/New_York.";
+
+export function parseCronTimezoneOption(value: unknown): string | undefined {
+  const timezone = normalizeOptionalString(value);
+  if (timezone && !resolveTimezone(timezone)) {
+    throw new CronCliError(INVALID_CRON_TIMEZONE_MESSAGE);
+  }
+  return timezone;
+}
+
 /**
  * Parse a one-shot `--at` value into an ISO string (UTC).
  *
@@ -440,8 +466,16 @@ export function parseAt(input: string, tz?: string): string | null {
   // If a timezone is provided and the input looks like an offset-less ISO datetime,
   // resolve it in the given IANA timezone so users get the time they expect.
   if (tz && isOffsetlessIsoDateTime(raw)) {
-    return parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
+    const parsed = parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
+    if (!parsed.ok) {
+      if (parsed.reason === "invalid-timezone") {
+        throw new CronCliError(INVALID_CRON_TIMEZONE_MESSAGE);
+      }
+      return null;
+    }
+    return parsed.iso;
   }
+  parseCronTimezoneOption(tz);
 
   const absolute = parseAbsoluteTimeMs(raw);
   if (absolute !== null) {

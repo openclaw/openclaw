@@ -98,7 +98,7 @@ it("creates, updates, and closes file-backed ACP metadata without host data SQL"
       sessionKey: "agent:main:acp:worker",
       skipMaintenance: true,
     };
-    const observe = observeHostDataSql(state.env);
+    const observe = observeHostDataSql();
     const maintenance = vi.spyOn(historyMaintenance, "kickSessionHistoryDiskBudgetMaintenance");
     const initialize = vi.fn(() => META);
     const update = vi.fn((current: SessionAcpMeta | undefined) => {

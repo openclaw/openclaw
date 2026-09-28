@@ -202,7 +202,7 @@ export function trimChatHistoryActivity(params: {
   });
 }
 
-export function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
+function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   return {
     role: "assistant",
     timestamp: Date.now(),
@@ -274,20 +274,12 @@ export function replaceOversizedChatHistoryMessages(params: {
 }
 
 export function reportOmittedChatHistory(params: {
-  originalMessages: unknown[];
-  finalMessages: unknown[];
-  getNormalizedBytes: () => number;
+  omittedCount: number;
+  normalizedBytes: number;
   maxHistoryBytes: number;
   logDebug: (message: string) => void;
 }): number {
-  const { originalMessages, finalMessages, getNormalizedBytes, maxHistoryBytes, logDebug } = params;
-  const survivors = new Set(finalMessages);
-  let omittedCount = 0;
-  for (const message of originalMessages) {
-    if (!survivors.has(message)) {
-      omittedCount += 1;
-    }
-  }
+  const { omittedCount, normalizedBytes, maxHistoryBytes, logDebug } = params;
   if (omittedCount === 0) {
     return 0;
   }
@@ -295,7 +287,7 @@ export function reportOmittedChatHistory(params: {
   logLargePayload({
     surface: "gateway.chat.history",
     action: "truncated",
-    bytes: getNormalizedBytes(),
+    bytes: normalizedBytes,
     limitBytes: maxHistoryBytes,
     count: omittedCount,
     reason: "chat_history_budget",

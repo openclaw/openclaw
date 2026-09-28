@@ -11,6 +11,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
@@ -589,7 +590,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     const canManagePairing = hasOperatorPairingAccess(auth);
     const canAdmin = hasOperatorAdminAccess(auth);
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
           <div class="page-subtitle">

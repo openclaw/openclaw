@@ -6,6 +6,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
+  TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -18,6 +19,19 @@ import {
   SessionTranscriptWriterClaimReboundError,
 } from "./transcript-write-context.js";
 import type { InternalSessionEntry } from "./types.js";
+
+export function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    return;
+  }
+  // Message records require parent-link, idempotency, and redaction handling
+  // from appendTranscriptMessage; raw event writes would bypass those invariants.
+  if ("type" in event && event.type === "message") {
+    throw new Error(
+      "appendTranscriptEvent cannot write message transcript records; use appendTranscriptMessage instead.",
+    );
+  }
+}
 
 /** Revision guards keep this JSON predicate off stable mutation paths. */
 export function createSessionTranscriptOwnerPredicate(

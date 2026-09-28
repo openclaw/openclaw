@@ -255,6 +255,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   lastReadAt?: number;
   lastActivityAt?: number;
   lastInteractionAt?: number;
+  agentStatus?: GatewayWireSessionsPatchResult["entry"]["agentStatus"];
   permissionMode?: GatewaySessionRow["permissionMode"];
   nativeRuntimeConsent?: string;
   modelOverrideSource?: GatewayWireSessionsPatchResult["entry"]["modelOverrideSource"];

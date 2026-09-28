@@ -47,7 +47,6 @@ import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 export { buildSlackAssistantThreadMetadata } from "./assistant-thread-context.js";
 export type { SlackAssistantThreadContext } from "./assistant-thread-context.js";
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
-export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
 
 type SlackChannelCacheEntry = {
   info: SlackChannelInfo;

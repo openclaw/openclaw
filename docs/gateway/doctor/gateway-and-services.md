@@ -62,14 +62,14 @@ warnings, workspace status, gateway auth and health, and supervisors.
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
   </Accordion>
-  <Accordion title="11. Workspace status (skills, plugins, and TaskFlows)">
+  <a id="11-workspace-status-skills-plugins-and-taskflows" />
+  <Accordion title="11. Workspace status (skills and plugins)">
     Doctor prints problems and actions for the default agent, not healthy-state inventory:
 
     - **Skills**: lists allowed but unusable skill names; use `openclaw skills check` for requirement details and full counts.
     - **Plugins**: reports only errored plugin IDs; use `openclaw plugins list` for loaded, imported, disabled, and bundle-plugin inventory.
     - **Plugin compatibility warnings**: flags plugins that have compatibility issues with the current runtime.
     - **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the plugin registry.
-    - **TaskFlow recovery**: surfaces suspicious managed TaskFlows that need manual inspection or cancellation.
     - **Claude CLI**: reports only binary, authentication, profile, workspace, or project-directory problems; healthy probe details are omitted.
 
   </Accordion>
@@ -187,7 +187,7 @@ warnings, workspace status, gateway auth and health, and supervisors.
 
   </Accordion>
   <Accordion title="13. Gateway health check + restart">
-    Guided Doctor runs a health check and can offer recovery for a local Gateway, subject to service ownership and confirmation. A failed remote health check does not trigger local service recovery, even when the remote URL is a loopback SSH tunnel. Check the remote connection and recover the Gateway on its host. Explicit repair maintenance only resumes the matching service it stopped. A loaded, enabled macOS job between respawns is not treated as an intentionally stopped service.
+    Guided Doctor runs a health check and can offer recovery for a local Gateway, subject to service ownership and confirmation. A failed remote health check does not trigger local service recovery, even when the remote URL is a loopback SSH tunnel. Check the remote connection and recover the Gateway on its host. Explicit repair maintenance resumes the matching service it stopped. After successful standalone `openclaw doctor --fix`, it also starts and verifies an already-stopped managed Gateway whose service targets the current installation. Update-time Doctor leaves activation with the updater. A loaded, enabled macOS job between respawns is not treated as an intentionally stopped service.
   </Accordion>
   <Accordion title="13b. Memory search readiness">
     Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured provider:

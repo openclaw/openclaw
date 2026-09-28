@@ -13,7 +13,7 @@ import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
-import { applyOutcomeToStoredJob, applyTriggerNoFireResult } from "./timer-outcomes.js";
+import { applyOutcomeToAuthoritativeJob, applyTriggerNoFireResult } from "./timer-outcomes.js";
 import { applyJobResult, authorCronRunCompletion } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
@@ -44,9 +44,12 @@ function applyAuthoredOutcome(
   state: ReturnType<typeof createCronServiceState>,
   outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">,
 ) {
-  applyOutcomeToStoredJob(state, authorCronRunCompletion(state, outcome.job, outcome), {
-    deferredNotifications: [],
-  });
+  applyOutcomeToAuthoritativeJob(
+    state,
+    state.store!.jobs.find((job) => job.id === outcome.jobId)!,
+    authorCronRunCompletion(state, outcome.job, outcome),
+    { deferredNotifications: [] },
+  );
 }
 
 describe("cron trigger evaluation ownership", () => {

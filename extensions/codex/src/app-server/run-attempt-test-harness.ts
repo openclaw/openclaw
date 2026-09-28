@@ -674,7 +674,10 @@ export function setupRunAttemptTestHooks(): void {
     }),
   );
 
-  beforeEach(async () => {
+  beforeEach(async (context) => {
+    if (!context.codexAttemptRuntime) {
+      throw new Error("Codex run-attempt tests require the shared extension runtime fixture");
+    }
     // Direct runtime tests supply the plugin root normally owned by loader registration.
     setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
     // Machine-managed sandbox requirements must not leak into policy fixtures.
@@ -695,12 +698,16 @@ export function setupRunAttemptTestHooks(): void {
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     tempDir = tempDirs.make("openclaw-codex-run-", resolvePreferredOpenClawTmpDir());
+    await context.codexAttemptRuntime.start();
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.
     await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
   });
 
-  afterEach(async () => {
+  afterEach(async (context) => {
+    if (!context.codexAttemptRuntime) {
+      throw new Error("Codex run-attempt tests require the shared extension runtime fixture");
+    }
     const drained = await drainActiveAppServerAttemptsForTest();
     for (const close of activeHarnessHostClosuresForTest) {
       close();
@@ -714,6 +721,7 @@ export function setupRunAttemptTestHooks(): void {
     const registry = getActivePluginRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
     const pluginCleanup = registry ? await disposePluginRegistryInstances(registry) : undefined;
+    await context.codexAttemptRuntime.stop();
     // A run beyond the drain deadline still needs the original database revocation fence.
     await cleanupRunSessionOwnersForTest({ closeDatabases: !drained });
     resetCodexAppServerClientFactoryForTest();

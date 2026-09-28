@@ -9,6 +9,15 @@ import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 
+export type SlackMessageSourceOptions = {
+  source: "message" | "app_mention";
+  wasMentioned?: boolean;
+  relayIdentity?: SlackSendIdentity;
+  senderAuthentication?: "verified" | "asserted";
+  /** Non-serializable listener scope for a validated enterprise event. */
+  eventScope?: SlackEventScope;
+};
+
 export type PreparedSlackMessage = {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;

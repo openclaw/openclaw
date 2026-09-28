@@ -19,7 +19,7 @@ import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "../../transcripts/provider-types.js";
-import { TranscriptsStore } from "../../transcripts/store.js";
+import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
 type StartCapture = NonNullable<TranscriptSourceProvider["start"]>;
@@ -44,10 +44,6 @@ function registerProvider(provider: TranscriptSourceProvider): void {
     source: import.meta.url,
   });
   setActivePluginRegistry(registry);
-}
-
-function currentDateDir(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 async function createHarness(
@@ -282,10 +278,7 @@ describe("transcripts tool", () => {
     ]);
     await tool.execute("call-2", { action: "stop", sessionId: "ongoing-meeting" });
     await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "ongoing-meeting", "summary.md"),
-        "utf8",
-      ),
+      fs.readFile(path.join(ongoingStore.sessionDir(ongoingSession!), "summary.md"), "utf8"),
     ).resolves.toContain("captured after the start action completed\\nsecond\\tcolumn");
   });
 
@@ -508,9 +501,12 @@ describe("transcripts tool", () => {
       sessionId: "standup",
       title: "Standup",
     });
+    const store = storeFor(stateDir);
+    const stored = await store.readSession("standup");
+    expect(stored).toBeDefined();
     const result = await tool.execute("call-2", {
       action: "stop",
-      sessionId: `${currentDateDir()}/standup`,
+      sessionId: transcriptSessionSelector(stored!),
     });
 
     expect(stop).toHaveBeenCalledWith(
@@ -524,10 +520,7 @@ describe("transcripts tool", () => {
       },
     });
     await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "standup", "summary.md"),
-        "utf8",
-      ),
+      fs.readFile(path.join(store.sessionDir(stored!), "summary.md"), "utf8"),
     ).resolves.toContain("date-qualified selectors");
   });
 

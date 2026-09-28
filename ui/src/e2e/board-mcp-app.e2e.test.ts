@@ -401,7 +401,6 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
             } });
           </script>`,
         },
-        "tasks.list": { tasks: [] },
       },
     });
 
@@ -521,7 +520,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
 
     const typeMenu = sidePanel.locator("wa-dropdown.side-panel-type-menu");
     await typeMenu.getByRole("button", { name: "Add side panel tab" }).click();
-    await typeMenu.locator("wa-dropdown-item").filter({ hasText: "Tasks" }).click();
+    await typeMenu.locator("wa-dropdown-item").filter({ hasText: "Files" }).click();
     await expect
       .poll(() => typeMenu.evaluate((element) => Reflect.get(element, "open")))
       .toBe(false);
@@ -529,9 +528,9 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     const inactiveIdentity = await readBoardIdentity(page);
     if (artifactDir) {
       await writeFile(
-        `${artifactDir}/02-tasks.png`,
+        `${artifactDir}/02-files.png`,
         await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-          sidePanel.getByRole("tab", { name: "Tasks", exact: true }),
+          sidePanel.getByRole("tab", { name: "Files", exact: true }),
         ]),
       );
     }

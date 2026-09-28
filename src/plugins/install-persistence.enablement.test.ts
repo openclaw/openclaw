@@ -1,7 +1,7 @@
 // Plugin install enablement tests cover child policy, slot selection, and required config.
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExclusiveSlotSelectionMock,
   buildPluginDiagnosticsReportMock,
@@ -129,29 +129,11 @@ describe("persistPluginInstall enablement", () => {
         diagnostics: [],
       });
     }
-    applyExclusiveSlotSelectionMock.mockImplementation(((params: {
-      config: OpenClawConfig;
-      selectedId: string;
-      selectedKind?: string;
-      registry?: { plugins: Array<{ id: string; kind?: string }> };
-    }) => {
-      expect(params.selectedId).toBe(pluginId);
-      expect(params.selectedKind).toBe("memory");
-      expect(
-        params.registry?.plugins.map((plugin) => ({ id: plugin.id, kind: plugin.kind })),
-      ).toEqual([{ id: pluginId, kind: "memory" }]);
-      return {
-        config: {
-          ...params.config,
-          plugins: {
-            ...params.config.plugins,
-            slots: { ...params.config.plugins?.slots, memory: pluginId },
-          },
-        },
-        warnings: [],
-        changed: true,
-      };
-    }) as (...args: unknown[]) => unknown);
+    const { applyExclusiveSlotSelection } =
+      await vi.importActual<typeof import("./slots.js")>("./slots.js");
+    applyExclusiveSlotSelectionMock.mockImplementation((params) =>
+      applyExclusiveSlotSelection(params as Parameters<typeof applyExclusiveSlotSelection>[0]),
+    );
 
     const next = await persistPluginInstall({
       snapshot: installSnapshot(baseConfig),

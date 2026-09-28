@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import "../../styles/lobster-pet.css";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { normalizeChatMessageMaxWidth } from "../../app/settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
@@ -562,7 +563,10 @@ export function renderConfig(props: ConfigProps) {
                     props.uiHints,
                   );
                   const blurred = sensitiveCount > 0 && !viewState.rawRevealed;
-                  return html`<div class="settings-page">
+                  return html`<div
+                    class="settings-page"
+                    ${shellLayoutTraits({ settingsPage: true })}
+                  >
                     ${rawDiffPanel}
                     <!-- Raw editor: one group surface owning file-level operations. -->
                     <div class="settings-group">

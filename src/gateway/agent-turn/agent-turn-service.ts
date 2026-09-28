@@ -25,7 +25,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
-import { isAcceptedAgentDedupePayload, replayAgentTurnIfCached } from "./agent-dedupe.js";
+import { replayAgentTurnIfCached, resolveAgentWaitSource } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import { captureAgentJobSession, getAgentJobSession, waitForAgentJob } from "./agent-job.js";
@@ -41,6 +41,7 @@ type AgentTurnStartRequest = {
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;
   assertAdmissionCurrent?: () => void;
+  assertInputCommitAllowed?: () => void;
   hasCurrentClientAuthority?: () => boolean;
   preflight: AgentRequestPreflight;
   principal: AgentTurnPrincipal | null;
@@ -56,6 +57,7 @@ export function createAgentTurnService(
     privateCompletion,
     settleWakeReplay,
     assertAdmissionCurrent,
+    assertInputCommitAllowed,
     hasCurrentClientAuthority,
     preflight,
     principal,
@@ -67,6 +69,7 @@ export function createAgentTurnService(
     if (replayAgentTurnIfCached({ preflight, context, io, acceptedOnly: privateCompletion })) {
       return;
     }
+    assertInputCommitAllowed?.();
     const respond: RespondFn = (ok, payload, error, meta) =>
       io.emitAcceptance([ok, payload, error], meta);
     const {
@@ -149,6 +152,7 @@ export function createAgentTurnService(
     const assertRequestCurrent = () => {
       assertAdmissionCurrent?.();
       dedupeLifecycle.assertReservationCurrent();
+      assertInputCommitAllowed?.();
     };
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
@@ -650,15 +654,7 @@ export function createAgentTurnService(
       typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
         ? Math.max(0, Math.floor(params.timeoutMs))
         : 30_000;
-    const activeChatEntry = context.chatAbortControllers.get(runId);
-    // Cancellation can retire the controller before dispatch publishes its result;
-    // sessionless admissions also retain their RPC owner in the accepted dedupe.
-    let source: "agent" | "chat" | undefined;
-    if (activeChatEntry) {
-      source = activeChatEntry.kind === "agent" ? "agent" : "chat";
-    } else if (isAcceptedAgentDedupePayload(context.dedupe.get(`agent:${runId}`)?.payload)) {
-      source = "agent";
-    }
+    const source = resolveAgentWaitSource(context, runId);
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const queuedResult = () => {
       const queued = context.chatQueuedTurns.get(runId);

@@ -16,7 +16,7 @@ import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
-import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
+import { resolveSlackIngressTurnLifecycle, resolveSlackSenderAuthentication } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
@@ -278,6 +278,10 @@ export function registerSlackMessageEvents(params: {
       noteConversationMessage(inbound, eventScope);
       await handleSlackMessage(inbound, {
         source: "message",
+        // Assistant metadata identifies an asserted sender, not Slack's event actor.
+        senderAuthentication: assistantChangedInbound
+          ? undefined
+          : resolveSlackSenderAuthentication(context),
         eventScope,
         ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
         ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
@@ -355,6 +359,7 @@ export function registerSlackMessageEvents(params: {
         noteConversationMessage(mention, eventScope);
         await handleSlackMessage(mention as unknown as SlackMessageEvent, {
           source: "app_mention",
+          senderAuthentication: resolveSlackSenderAuthentication(context),
           wasMentioned: true,
           eventScope,
           ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),

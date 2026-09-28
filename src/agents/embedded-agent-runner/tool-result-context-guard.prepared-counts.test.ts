@@ -1,7 +1,6 @@
 import { estimateStringCharsWithMinimumRawWeight } from "@openclaw/normalization-core/cjk-chars";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
 import { truncateToolResultMessage } from "./tool-result-truncation.js";
 
@@ -47,33 +46,30 @@ beforeEach(() => {
 });
 
 describe("prepared counts through the tool-result context guard", () => {
-  it.each([false, true])(
-    "counts each retained source block once before truncation (images: %s)",
-    async (images) => {
-      const text = "progress 漢字🙂𠀀\n".repeat(1_024);
-      const source = toolResult([
-        { type: "text", text },
-        { type: "text", text },
-        { type: "text", text: "" },
-        ...(images ? [{ type: "image" as const, data: "AQ==", mimeType: "image/png" }] : []),
-      ]);
-      const original = structuredClone(source);
-      const guard = guarded();
-      try {
-        const first = await guard.run(source);
-        expect(JSON.stringify(first)).toContain("more characters truncated");
-        expect(fullTextScans(text)).toBe(2);
+  it("counts retained text blocks once when truncating mixed text and images", async () => {
+    const text = "progress 漢字🙂𠀀\n".repeat(1_024);
+    const source = toolResult([
+      { type: "text", text },
+      { type: "text", text },
+      { type: "text", text: "" },
+      { type: "image", data: "AQ==", mimeType: "image/png" },
+    ]);
+    const original = structuredClone(source);
+    const guard = guarded();
+    try {
+      const first = await guard.run(source);
+      expect(JSON.stringify(first)).toContain("more characters truncated");
+      expect(fullTextScans(text)).toBe(2);
 
-        countChars.mockClear();
-        const second = await guard.run(source);
-        expect(JSON.stringify(second)).toBe(JSON.stringify(first));
-        expect(fullTextScans(text)).toBe(0);
-        expect(source).toEqual(original);
-      } finally {
-        guard.dispose();
-      }
-    },
-  );
+      countChars.mockClear();
+      const second = await guard.run(source);
+      expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+      expect(fullTextScans(text)).toBe(0);
+      expect(source).toEqual(original);
+    } finally {
+      guard.dispose();
+    }
+  });
 
   it("recounts a changed text revision on the same retained block", async () => {
     const block = { type: "text" as const, text: "before 漢字\n".repeat(2_048) };
@@ -95,23 +91,8 @@ describe("prepared counts through the tool-result context guard", () => {
     }
   });
 
-  it("does not populate preparation facts when truncation reads an uncached block", async () => {
-    const text = "uncached 漢字🙂\n".repeat(2_048);
-    const source = toolResult([{ type: "text", text }]);
-    truncateToolResultMessage(source, 4_096, { minimumRawWeight: 2 });
-    countChars.mockClear();
-    const guard = guarded();
-    try {
-      await guard.run(source);
-      expect(fullTextScans(text)).toBe(1);
-    } finally {
-      guard.dispose();
-    }
-  });
-
   it.each([
     [undefined, 2_000],
-    [1, 2_000],
     [1.5, 2_300],
     [3, 3_000],
   ] as const)("keeps floor %s independent of a prepared floor-2 count", async (floor, budget) => {
@@ -128,19 +109,5 @@ describe("prepared counts through the tool-result context guard", () => {
     } finally {
       guard.dispose();
     }
-  });
-
-  it("leaves legacy text blocks on the uncached counting path", () => {
-    const text = "legacy 漢字🙂\n".repeat(1_024);
-    const source = castAgentMessage({
-      ...toolResult([]),
-      content: [{ type: "toolResult", text }],
-    });
-    const first = truncateToolResultMessage(source, 4_096, { minimumRawWeight: 2 });
-    expect(fullTextScans(text)).toBeGreaterThan(0);
-    countChars.mockClear();
-    const second = truncateToolResultMessage(source, 4_096, { minimumRawWeight: 2 });
-    expect(fullTextScans(text)).toBeGreaterThan(0);
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
   });
 });

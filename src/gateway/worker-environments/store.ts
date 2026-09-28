@@ -195,7 +195,6 @@ export async function createWorkerEnvironmentStore(
           },
           {
             assertCurrent: check,
-            requireStateLifecycle: true,
             createAdmission: () => {
               let stage: "transaction" | "commit" = "transaction";
               admission = createSqliteWorkerOperationAdmission((request, grant) => {

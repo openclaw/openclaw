@@ -261,19 +261,13 @@ describe("repairLegacySubagentExecutionPayloads", () => {
 });
 
 describe("repairLegacySubagentRetainedResults", () => {
-  it("promotes shipped payload results, projects tasks, and is idempotent", () => {
+  it("promotes shipped payload results without a Task projection and is idempotent", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(`
       CREATE TABLE subagent_runs (
         run_id TEXT PRIMARY KEY,
         payload_json TEXT NOT NULL,
         pending_final_delivery_payload_json TEXT
-      ) STRICT;
-      CREATE TABLE task_runs (
-        task_id TEXT PRIMARY KEY,
-        runtime TEXT NOT NULL,
-        run_id TEXT,
-        progress_summary TEXT
       ) STRICT;
     `);
     const legacyPayload = {
@@ -301,9 +295,6 @@ describe("repairLegacySubagentRetainedResults", () => {
       }),
       JSON.stringify(legacyPayload),
     );
-    db.prepare(
-      "INSERT INTO task_runs (task_id, runtime, run_id, progress_summary) VALUES (?, ?, ?, ?)",
-    ).run("task-id", "subagent", "task-run", "(no_reply)");
 
     repairLegacySubagentRetainedResults(db);
     const firstPass = db
@@ -332,9 +323,6 @@ describe("repairLegacySubagentRetainedResults", () => {
     });
     expect(payload.delivery.payload).toEqual({ requesterSessionKey: "agent:main:main" });
     expect(JSON.parse(firstPass.pending_final_delivery_payload_json)).toEqual(legacyPayload);
-    expect(
-      db.prepare("SELECT progress_summary FROM task_runs WHERE task_id = ?").get("task-id"),
-    ).toEqual({ progress_summary: "findings captured before wake" });
   });
 
   it("preserves newer canonical results over legacy payload copies", () => {
@@ -384,12 +372,6 @@ describe("repairLegacySubagentRetainedResults", () => {
         run_id TEXT PRIMARY KEY,
         payload_json TEXT NOT NULL
       ) STRICT;
-      CREATE TABLE task_runs (
-        task_id TEXT PRIMARY KEY,
-        runtime TEXT NOT NULL,
-        run_id TEXT,
-        progress_summary TEXT
-      ) STRICT;
     `);
     const legacyPayload = {
       frozenResultText: "NO_REPLY",
@@ -407,9 +389,6 @@ describe("repairLegacySubagentRetainedResults", () => {
         delivery: { status: "suspended", payload: legacyPayload },
       }),
     );
-    db.prepare(
-      "INSERT INTO task_runs (task_id, runtime, run_id, progress_summary) VALUES (?, ?, ?, ?)",
-    ).run("silent-task", "subagent", "silent-task-run", "NO_REPLY");
 
     repairLegacySubagentRetainedResults(db);
 
@@ -422,8 +401,5 @@ describe("repairLegacySubagentRetainedResults", () => {
       fallbackResultText: "older visible fallback",
       terminalReply: { disposition: "silent" },
     });
-    expect(
-      db.prepare("SELECT progress_summary FROM task_runs WHERE task_id = ?").get("silent-task"),
-    ).toEqual({ progress_summary: null });
   });
 });

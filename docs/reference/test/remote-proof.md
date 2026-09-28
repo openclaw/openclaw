@@ -314,6 +314,15 @@ node scripts/crabbox-wrapper.mjs staging recover <id> \
   --witness-repo /path/to/retained-repository --witness-ref refs/heads/saved-source
 ```
 
+Witness verification proves that the selected ref's objects are present and connected.
+On Git 2.50+, it skips unrelated reference-database checks, so stray files such as
+Finder `.DS_Store` under `.git/refs` do not block recovery. Explicit `staging recover`
+scales its work budget with witness object storage: 120 seconds plus 30 seconds per
+GiB, at most 30 minutes. Automatic recovery after a wrapper command keeps the
+120-second bound.
+Failure reasons distinguish an exhausted budget, reference-database errors, and
+missing or unconnected objects.
+
 Recovery does not create backup repositories, archives, or permanent refs. A stage's
 own Git objects or bundle do not count as another copy. Live or uncertain owners,
 unrecorded writer settlement, interrupted recovery ownership, substituted metadata,

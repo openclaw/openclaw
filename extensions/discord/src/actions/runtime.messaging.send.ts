@@ -22,15 +22,6 @@ import { resolveDiscordChannelId } from "../targets.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
-function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, unknown> {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value as Record<string, unknown>).length > 0,
-  );
-}
-
 function resolveActionReplyReference(ctx: DiscordMessagingActionContext, replyToId?: string) {
   const reply = ctx.options?.reply;
   // Host-resolved facts own physical-send scope. Raw-only plugin callers keep
@@ -195,9 +186,11 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const suppressEmbeds =
         ctx.params.suppressEmbeds === undefined ? undefined : ctx.params.suppressEmbeds === true;
       const rawComponents = coerceDiscordComponentParam(ctx.params.components);
-      const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
-        ? readDiscordComponentSpec(rawComponents)
-        : null;
+      const componentRecord = asOptionalRecord(rawComponents);
+      const componentSpec =
+        componentRecord && Object.keys(componentRecord).length > 0
+          ? readDiscordComponentSpec(componentRecord)
+          : null;
       const components: DiscordSendComponents | undefined =
         Array.isArray(rawComponents) || typeof rawComponents === "function"
           ? (rawComponents as DiscordSendComponents)

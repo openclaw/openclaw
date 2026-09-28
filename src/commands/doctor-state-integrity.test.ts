@@ -545,7 +545,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const text = stateIntegrityText();
     expect(text).toContain("automatic restart recovery tombstoned");
     expect(text).toContain("agent:main:subagent:wedged-child");
-    expect(text).toContain("openclaw tasks maintenance --apply");
+    expect(text).toContain("openclaw doctor --fix");
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Clear stale aborted recovery flags")).toBe(
       true,
     );
