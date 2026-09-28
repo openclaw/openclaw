@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -59,6 +60,8 @@ suite.define(() => {
             .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
             .first()
             .click();
+          // Navigation skips the closed drawer; geometry needs its full roster after opening.
+          await waitForControlUiInitialRoster(page);
         }
         const active = page.locator(
           `.sidebar-recent-session--active[data-session-key="${sessionKey}"]`,

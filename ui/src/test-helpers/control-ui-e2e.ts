@@ -41,7 +41,10 @@ import {
   installControlUiE2eUnhandledRejectionRing,
 } from "./control-ui-e2e-diagnostics.ts";
 import { resolveAvailableLoopbackPort } from "./control-ui-e2e-port.ts";
-import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e-readiness.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  waitForControlUiInitialRoster,
+} from "./control-ui-e2e-readiness.ts";
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { createControlUiMockResponses } from "./control-ui-mock-responses.ts";
 import { createControlUiMockSessionSubscriptions } from "./control-ui-mock-session-subscriptions.ts";
@@ -383,6 +386,8 @@ const json5BrowserSource = readFileSync(require.resolve("json5/dist/index.min.js
 export { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 
 export type ControlUiMockGatewayScenario = {
+  /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
+  awaitInitialRoster?: boolean;
   nativePlugins?: readonly NativeControlUiPluginFixture[];
   pluginAssetsRequireAuth?: boolean;
   attachmentMaxBytes?: number;
@@ -514,7 +519,7 @@ export type ControlUiMockGatewayScenario = {
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<
-  Omit<ControlUiMockGatewayScenario, "nativePlugins">
+  Omit<ControlUiMockGatewayScenario, "nativePlugins" | "awaitInitialRoster">
 >;
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
@@ -2625,11 +2630,23 @@ function installControlUiMockGateway(
       if (this.readyState !== MockWebSocket.OPEN) {
         return;
       }
+      if (isRecord(frame) && frame.type === "res" && frame.ok === true) {
+        const request = requests.findLast((candidate) => candidate.id === frame.id);
+        if (
+          request?.method === "sessions.list" &&
+          isRecord(request.params) &&
+          request.params.includeGlobal === true &&
+          !request.params.spawnedBy
+        ) {
+          exposed.initialRosterDelivered = true;
+        }
+      }
       this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
     }
   }
 
   const exposed: ControlUiMockGateway = {
+    initialRosterDelivered: false,
     closeLatest(code, reason) {
       MockWebSocket.latest?.close(code ?? 1006, reason ?? "mock close");
     },
@@ -2889,6 +2906,42 @@ export async function installMockGateway(
   );
   await installControlUiE2eUnhandledRejectionRing(page);
   await page.addInitScript({ content: createControlUiMockGatewayInitScript(normalizedScenario) });
+  const rosterGates = new Set([
+    "connect",
+    "agents.list",
+    "sessions.resolve",
+    "chat.startup",
+    "chat.history",
+    "sessions.list",
+    "sessions.messages.subscribe",
+  ]);
+  const connectResponse = normalizedScenario.methodResponses.connect;
+  const connectFails =
+    connectResponse !== null &&
+    typeof connectResponse === "object" &&
+    "__mockError" in connectResponse;
+  if (
+    scenario.awaitInitialRoster ??
+    (!connectFails &&
+      ![...normalizedScenario.heldMethods, ...normalizedScenario.deferredMethods].some((method) =>
+        rosterGates.has(method),
+      ))
+  ) {
+    // Startup renders the selected descriptor before releasing the automatic roster.
+    // Keep navigation's Response, but give ordinary scenarios the fully rendered roster.
+    const goto = page.goto.bind(page);
+    const reload = page.reload.bind(page);
+    page.goto = async (...args) => {
+      const response = await goto(...args);
+      await waitForControlUiInitialRoster(page);
+      return response;
+    };
+    page.reload = async (...args) => {
+      const response = await reload(...args);
+      await waitForControlUiInitialRoster(page);
+      return response;
+    };
+  }
   return createMockGatewayControls(
     page,
     normalizedScenario.sessionKey,
