@@ -136,6 +136,10 @@ const privateHarnessParamCases = [
     value: { pluginId: "grant-owner", toolNames: ["optional_tool"] },
   },
   { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
+  {
+    field: "memoryFlushAppendBudget",
+    value: { acceptedChars: -10_000, acceptedLines: -10_000 },
+  },
   { field: "compactionCountOwner", value: "caller" },
   { field: "onContextAccountingEvent", value: () => undefined },
   { field: "onCompactionRequestBudget", value: () => undefined },
@@ -1703,6 +1707,10 @@ describe("runAgentHarnessAttempt", () => {
     );
 
     const params = createAttemptParams();
+    (params as unknown as Record<string, unknown>).memoryFlushAppendBudget = {
+      acceptedChars: -10_000,
+      acceptedLines: -10_000,
+    };
     const result = await runAgentHarnessAttempt(params);
 
     const classifyCall = classify.mock.calls.at(0);
@@ -1717,6 +1725,7 @@ describe("runAgentHarnessAttempt", () => {
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
     expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
+    expect(classifyCall?.[1]).not.toHaveProperty("memoryFlushAppendBudget");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });

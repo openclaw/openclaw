@@ -8,6 +8,7 @@ export function createQaMockScenarioStateStore() {
       anthropicThinkingErrorScenarioKeys: new Set<string>(),
       compactionOverflowInjected: false,
       compactionRetryActive: false,
+      memoryFlushPrimary503Served: false,
       subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
       subagentFanoutPhase: 0,
       subagentHandoffSpawned: false,

@@ -31,6 +31,7 @@ import {
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
 import { createScopedAuthProfileStore } from "./auth-store.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
+import { initializeMemoryFlushAppendBudget } from "./memory-flush-budget.js";
 import {
   resolveEmbeddedRunEffectiveModel,
   selectEmbeddedRunHarness,
@@ -511,6 +512,9 @@ export async function prepareEmbeddedRunRuntime(input: {
     admittedRunContext: params.admittedRunContext,
     preparedRunAdmission: params.preparedRunAdmission,
   });
+  if (params.trigger === "memory") {
+    initializeMemoryFlushAppendBudget(admittedRunContext.operationalRunInstance);
+  }
 
   const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(params);
   if (sourceReplyDeliveryRuntime?.origin === "runtime_default") {

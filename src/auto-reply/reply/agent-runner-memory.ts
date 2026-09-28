@@ -15,7 +15,9 @@ import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-ru
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import { initializeMemoryFlushAppendBudget } from "../../agents/embedded-agent-runner/run/memory-flush-budget.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import { isDailyMemoryPath } from "../../agents/memory-flush-append.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -1438,6 +1440,7 @@ export async function runMemoryFlushIfNeeded(params: {
     preparedRunAdmission,
     memorySession,
   } = preparedAttempt;
+  initializeMemoryFlushAppendBudget(preparedRunAdmission.operationalRunInstance);
   const sourcePolicySessionKey =
     params.runtimePolicySessionKey ??
     params.followupRun.run.runtimePolicySessionKey ??
@@ -1529,7 +1532,9 @@ export async function runMemoryFlushIfNeeded(params: {
             cfg: params.cfg,
           }),
       },
-      behavior: { kind: "maintenance" },
+      behavior: {
+        kind: isDailyMemoryPath(memoryFlushWritePath) ? "memory-flush-maintenance" : "maintenance",
+      },
       sessionOverride: { kind: "preserve" },
       abortSignal: deferredLifecycle.signal,
       runCandidate: async (provider, model, runOptions) => {

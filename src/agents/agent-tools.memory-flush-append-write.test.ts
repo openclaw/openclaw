@@ -7,6 +7,7 @@ import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES } from "./memory-flush-append.js";
 import { createWriteTool } from "./sessions/tools/index.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -106,6 +107,95 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     expect(details).toEqual({ changed: true });
     expect(validateAgainstDeclaredSchema(details).ok).toBe(true);
   });
+
+  it("records provenance for accepted appends without recording an over-budget fallback", async () => {
+    const absolutePath = path.join(root, RELATIVE_PATH);
+    const primary = "x".repeat(500);
+    const write = vi.fn(async ({ commit }: { commit: () => Promise<void> }) => await commit());
+    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
+      root,
+      relativePath: RELATIVE_PATH,
+      memoryWriteProvenance: {
+        classifies: async () => true,
+        write,
+        clearAfterDelete: async () => {},
+      },
+    });
+
+    await wrapped.execute("primary", { path: RELATIVE_PATH, content: primary });
+    expect(write).toHaveBeenCalledWith(
+      expect.objectContaining({ absolutePath, contentBefore: "", contentAfter: primary }),
+    );
+    await expect(
+      wrapped.execute("fallback", { path: RELATIVE_PATH, content: "y".repeat(301) }),
+    ).rejects.toThrow(/across this memory-flush run.*801.*max 800/);
+    expect(write).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(absolutePath, "utf8")).resolves.toBe(primary);
+  });
+
+  it("charges committed content when source authority is revoked after the append", async () => {
+    const absolutePath = path.join(root, RELATIVE_PATH);
+    const primary = "x".repeat(500);
+    const originalClaim = {};
+    let claim = originalClaim;
+    const write = vi.fn(async ({ commit }: { commit: () => Promise<void> }) => {
+      await commit();
+      claim = {};
+    });
+    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
+      root,
+      relativePath: RELATIVE_PATH,
+      memoryWriteProvenance: {
+        classifies: async () => true,
+        write,
+        clearAfterDelete: async () => {},
+      },
+    });
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:memory-flush-authority",
+          receiptAuthority: () => claim === originalClaim,
+        },
+        () => wrapped.execute("primary", { path: RELATIVE_PATH, content: primary }),
+      ),
+    ).rejects.toThrow("authority is no longer active");
+    const fallbackClaim = claim;
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:memory-flush-authority",
+          receiptAuthority: () => claim === fallbackClaim,
+        },
+        () => wrapped.execute("fallback", { path: RELATIVE_PATH, content: "y".repeat(301) }),
+      ),
+    ).rejects.toThrow(/across this memory-flush run.*801.*max 800/);
+    expect(write).toHaveBeenCalledTimes(1);
+    await expect(fs.readFile(absolutePath, "utf8")).resolves.toBe(primary);
+  });
+
+  it.each([RELATIVE_PATH, "MEMORY.md"])(
+    "keeps the existing-file read ceiling scoped to daily memory (%s)",
+    async (relativePath) => {
+      const absolutePath = path.join(root, relativePath);
+      const original = "x".repeat(DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES + 1);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, original);
+      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), { root, relativePath });
+      const pending = wrapped.execute("large-existing", { path: relativePath, content: "note" });
+
+      if (relativePath === RELATIVE_PATH) {
+        await expect(pending).rejects.toThrow(/existing daily memory file exceeds/);
+        await expect(fs.readFile(absolutePath, "utf8")).resolves.toBe(original);
+      } else {
+        await expect(pending).resolves.toMatchObject({ details: { changed: true } });
+        await expect(fs.readFile(absolutePath, "utf8")).resolves.toBe(`${original}\nnote`);
+      }
+    },
+  );
 
   it("appends schema-conforming results only to the allowed memory file", async () => {
     const absolute = path.join(root, RELATIVE_PATH);

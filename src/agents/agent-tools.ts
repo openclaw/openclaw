@@ -620,6 +620,7 @@ export function createOpenClawCodingToolsInternal(
       ? {
           root: memoryFlushWriteRoot,
           relativePath: memoryFlushWritePath,
+          operationalRunInstance: options?.operationalRunInstance,
           memoryWriteProvenance,
           containerWorkdir: sandbox?.containerWorkdir,
           sandbox:
