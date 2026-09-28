@@ -76,6 +76,42 @@ overrides, never alternate release identities. No release arguments are required
 pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
+## Screenshot-only validation
+
+Run **iOS Store Release** with operation **screenshots** and select the candidate
+branch to exercise the release screenshot lane without an upload. This job runs
+on `xcode-27-xlarge`, matching the release and qualification jobs. It checks out
+the exact selected commit and runs the same local command:
+
+```bash
+pnpm ios:screenshots
+```
+
+The command builds the simulator app, captures four screenshots each on iPhone
+and 13-inch iPad, and captures the Apple Watch screenshot. It does not generate
+release notes, archive an IPA, or access signing assets or App Store credentials.
+The existing release operation remains restricted to `main`.
+
+Capture creates a fresh simulator for each selected device type and runtime,
+then shuts down and deletes that exact simulator before starting the next one.
+An already running simulator stops the command before capture; shut it down
+when it is no longer in use and rerun. This changes only the screenshot
+environment, not the app's rendered states.
+
+The screenshot-only job enables `OPENCLAW_SNAPSHOT_DIAGNOSTICS=1`. To collect the
+same diagnostics locally:
+
+```bash
+OPENCLAW_SNAPSHOT_DIAGNOSTICS=1 pnpm ios:screenshots
+```
+
+Sanitized startup, resource, and crash facts are recorded in
+`apps/ios/build/screenshot-diagnostics.json`. The separate
+`capture-attempts.json` ledger keeps its existing schema for release evidence.
+GitHub retains both files and fixture PNGs in
+`ios-screenshots-<run-id>-<run-attempt>`. Raw Xcode logs and XCTest result bundles
+are excluded from the uploaded diagnostics.
+
 ## Apple bundle mapping
 
 Gateway `2026.7.2`, revision `1`, build `3` maps to:

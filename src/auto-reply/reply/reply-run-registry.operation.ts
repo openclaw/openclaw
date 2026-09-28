@@ -136,6 +136,7 @@ export function createReplyOperation(params: {
   };
   const setResult = (next: ReplyOperationResult) => {
     result = next;
+    toolAuthority.close();
     recordActivity();
   };
   const markProgress = (reason: string) => {
@@ -154,6 +155,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    toolAuthority.close();
     terminalSettleTimer.clear();
     finalizationLease.clear();
     expireReplyOperationByOperation.delete(operation);
@@ -258,6 +260,9 @@ export function createReplyOperation(params: {
     },
     get toolAuthorityFingerprint() {
       return toolAuthority.toolAuthorityFingerprint;
+    },
+    get personalToolParticipants() {
+      return toolAuthority.personalToolParticipants;
     },
     get toolAuthorityRoute() {
       return toolAuthority.toolAuthorityRoute;
