@@ -8,15 +8,17 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  testing.resetReplyRunRegistry();
-  closeOpenClawAgentDatabasesForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    testing.resetReplyRunRegistry();
+    await closeOpenClawAgentDatabasesAsync();
+    cleanup();
+  }),
+);
 
 it.each(["current", "previous"] as const)(
   "admits monitoring without claiming foreground recovery from %s delivery residue",

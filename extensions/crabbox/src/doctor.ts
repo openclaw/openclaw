@@ -52,6 +52,7 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
         }
         return pending;
       };
+      let managed: ReturnType<typeof managedBinary.findManagedCrabboxBinary> | undefined;
       const findings: HealthFinding[] = [];
       for (const [profileId, profile] of profiles) {
         const explicitBinary = nonEmptyString(readRecord(profile.settings)?.binary);
@@ -64,9 +65,11 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
         if (result?.status === "supported") {
           continue;
         }
-        let managedPath: string;
         try {
-          managedPath = managedBinary.resolveManagedCrabboxBinaryPath(ctx.env);
+          managed ??= managedBinary.findManagedCrabboxBinary({ env: ctx.env });
+          if (await managed) {
+            continue;
+          }
         } catch (error) {
           findings.push({
             checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
@@ -75,10 +78,6 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
             target: profileId,
             message: error instanceof Error ? error.message : "Crabbox host is unsupported",
           });
-          continue;
-        }
-        const installed = findCrabboxBinary({ explicit: managedPath, openclawRoot });
-        if (installed && (await probe(installed)).status === "supported") {
           continue;
         }
         const reason = !result

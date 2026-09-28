@@ -46,8 +46,11 @@ type DashboardSessionTitleRequest = {
   storePath: string;
 };
 
-export function scheduleChatDashboardSessionTitle(params: DashboardSessionTitleRequest): void {
-  scheduleDashboardSessionTitle(params, "session");
+export function scheduleChatDashboardSessionTitle(
+  params: DashboardSessionTitleRequest,
+  ready: Promise<void>,
+): void {
+  scheduleDashboardSessionTitle(params, "session", ready);
 }
 
 export function scheduleCreatedDashboardSessionTitle(
@@ -84,6 +87,7 @@ export function scheduleCreatedDashboardSessionTitle(
 function scheduleDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
   admissionScope: "session" | "gateway",
+  ready?: Promise<void>,
 ): void {
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
@@ -96,6 +100,10 @@ function scheduleDashboardSessionTitle(
   }
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     const generateTitle = async () => {
+      // Retain admission and the caller's context while reply progress releases the gate.
+      if (ready) {
+        await ready;
+      }
       const updated = await maybeGenerateDashboardSessionTitle({
         cfg: params.cfg,
         agentId: params.agentId,

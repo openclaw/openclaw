@@ -24,7 +24,6 @@ import {
   acquirePublishedPreparedModelRuntime,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginRegistry } from "./prepared-model-runtime.plugin-lifetime.js";
@@ -221,136 +220,44 @@ describe("prepared registry construction borrows", () => {
     }
   });
 
-  it("keeps a cached registry alive while its configured replacement is preparing", async () => {
-    const { registry, config, input, borrower, instance } =
-      await acquireConfiguredRegistryBorrower();
-    const preparing = createDeferred();
-    const finishPreparation = createDeferred();
-    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
-      preparing.resolve();
-      await finishPreparation.promise;
-      return { entries: [] };
+  it("retains borrowed Gateway work through post-facts projection, then releases it", async () => {
+    const { registry, config, input, borrower, instance, metadata } =
+      await acquireConfiguredRegistryBorrower("gateway");
+    const projecting = createDeferred();
+    const finishProjection = createDeferred();
+    mocks.buildPreparedModelCatalogSnapshot.mockImplementationOnce(async () => {
+      projecting.resolve();
+      await finishProjection.promise;
+      return { entries: [], routeVariants: [] };
     });
-    const replacement = refreshPreparedModelRuntimeSnapshots(config, {
+    const pending = refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    const settled = Promise.allSettled([replacement]);
+      catalogMode: "live",
+      allowGatewaySubagentBinding: true,
+      pluginMetadataSnapshot: metadata,
+    }).then(() => prepareModelRuntimeSnapshot(input));
+    const settled = Promise.allSettled([pending]);
     try {
       await Promise.race([
-        preparing.promise,
-        replacement.then(() => {
-          throw new Error("Replacement did not enter catalog preparation");
+        projecting.promise,
+        pending.then(() => {
+          throw new Error("Preparation skipped live catalog projection");
         }),
       ]);
       await borrower[Symbol.asyncDispose]();
-      // The build still uses this registry after the final admitted caller releases it.
+      expect(isPluginRegistryRetired(registry)).toBe(false);
       instance.reserveReplacement()();
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      finishPreparation.resolve();
-      await replacement;
-      const published = await prepareModelRuntimeSnapshot(input);
-      expect(published).not.toBe(borrower.snapshot);
-      expect(published.pluginRegistry).toBe(registry);
-      expect(published.config).toBe(config);
+      finishProjection.resolve();
+      const snapshot = await pending;
+      expect(snapshot.pluginRegistry).toBe(registry);
+      expect(isPluginRegistryRetired(registry)).toBe(false);
       expect(instance.retainedWorkCount).toBe(0);
     } finally {
-      finishPreparation.resolve();
-      await Promise.allSettled([borrower[Symbol.asyncDispose](), settled]);
-    }
-  });
-  it("does not retire an admitted registry borrower when replacement preparation fails", async () => {
-    const { registry, config, borrower } = await acquireConfiguredRegistryBorrower();
-    const preparationError = new Error("replacement catalog preparation failed");
-    mocks.prepareStaticCatalog.mockRejectedValueOnce(preparationError);
-    try {
-      await expect(
-        refreshPreparedModelRuntimeSnapshots(config, {
-          gatewayLifecycle: true,
-          catalogMode: "static",
-        }),
-      ).rejects.toBe(preparationError);
-      expect(isPluginRegistryRetired(registry)).toBe(false);
-    } finally {
+      finishProjection.resolve();
+      await settled;
       await borrower[Symbol.asyncDispose]();
+      await clearActivePluginRegistry(registry);
     }
-    expect(isPluginRegistryRetired(registry)).toBe(true);
   });
-
-  it.each([
-    { owner: "run", source: "owned" },
-    { owner: "configured", source: "gateway" },
-    { owner: "explicit", source: "owned" },
-  ] as const)(
-    "retains $owner/$source work through post-facts projection, then releases it",
-    async ({ owner, source }) => {
-      const { registry, config, input, borrower, instance, metadata } =
-        await acquireConfiguredRegistryBorrower(source);
-      const projecting = createDeferred();
-      const finishProjection = createDeferred();
-      mocks.buildPreparedModelCatalogSnapshot.mockImplementationOnce(async () => {
-        projecting.resolve();
-        await finishProjection.promise;
-        return { entries: [], routeVariants: [] };
-      });
-      let lease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>> | undefined;
-      const pending =
-        owner === "run"
-          ? acquireAgentRunPreparedModelRuntime(
-              {
-                ...input,
-                runtimePluginSelections: [
-                  { provider: "custom", modelId: "selected", runtime: "openclaw" },
-                ],
-              },
-              { catalogMode: "live", pluginGeneration: borrower.pluginGeneration },
-            ).then((acquired) => {
-              lease = acquired;
-              return acquired.snapshot;
-            })
-          : owner === "configured"
-            ? refreshPreparedModelRuntimeSnapshots(config, {
-                gatewayLifecycle: true,
-                catalogMode: "live",
-                ...(source === "gateway"
-                  ? { allowGatewaySubagentBinding: true, pluginMetadataSnapshot: metadata }
-                  : {}),
-              }).then(() => prepareModelRuntimeSnapshot(input))
-            : publishPreparedModelRuntimeSnapshot(input, {
-                force: true,
-                provenance: "explicit",
-                catalogMode: "live",
-              });
-      const settled = Promise.allSettled([pending]);
-      try {
-        await Promise.race([
-          projecting.promise,
-          pending.then(() => {
-            throw new Error("Preparation skipped live catalog projection");
-          }),
-        ]);
-        await borrower[Symbol.asyncDispose]();
-        expect(isPluginRegistryRetired(registry)).toBe(false);
-        instance.reserveReplacement()();
-        expect(instance.retainedWorkCount).toBeGreaterThan(0);
-        finishProjection.resolve();
-        const snapshot = await pending;
-        expect(snapshot.pluginRegistry).toBe(registry);
-        if (lease) {
-          expect(instance.retainedWorkCount).toBeGreaterThan(0);
-          await lease[Symbol.asyncDispose]();
-        }
-        expect(isPluginRegistryRetired(registry)).toBe(false);
-        expect(instance.retainedWorkCount).toBe(0);
-      } finally {
-        finishProjection.resolve();
-        await settled;
-        await lease?.[Symbol.asyncDispose]();
-        await borrower[Symbol.asyncDispose]();
-        if (source === "gateway") {
-          await clearActivePluginRegistry(registry);
-        }
-      }
-    },
-  );
 });

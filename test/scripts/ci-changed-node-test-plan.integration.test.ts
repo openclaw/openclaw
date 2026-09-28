@@ -2,14 +2,13 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { collectTrackedBundledPluginSourceCandidates } from "../../scripts/lib/bundled-plugin-source-utils.mts";
 import {
   createChangedNodeTestShards,
   hasControlUiPerformanceAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { createChangedExtensionConfigShardsForPaths } from "../../scripts/lib/ci-extension-test-shards.mts";
 import {
   createNodeTestShardBundles,
+  createSelectedNodeTestShardBundles,
   createUiTestShardGroups,
   resolveCanonicalNodeTestConfig,
   type CompactNodeTestShard,
@@ -65,23 +64,11 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     "unrelated PR owner plan",
   );
   // Plugin Prerelease owns the same full extension inventory on its hourly
-  // schedule and as Full Release Validation's exact-target child.
+  // schedule and as Full Release Validation's exact-target child, including
+  // manifest-only plugins through the same discovery owner.
   const extensionGroups = createExtensionTestShards({
     shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   }).flatMap((shard) => shard.planGroups);
-  const sourceRoots = expectDefined(
-    collectTrackedBundledPluginSourceCandidates(process.cwd()),
-    "bundled plugin source metadata",
-  )
-    .filter((entry) => entry.manifestPath && !entry.packageJsonPath)
-    .map((entry) => `extensions/${entry.dirName}`);
-  const sourceGroups = createChangedExtensionConfigShardsForPaths(sourceRoots, process.cwd(), {
-    includePrExemptRuntimeTests: true,
-  }).map((shard) => ({
-    config: expectDefined(shard.configs[0], "source plugin config"),
-    roots: expectDefined(shard.includePatterns, "source plugin tests"),
-  }));
-  const allExtensionGroups = [...extensionGroups, ...sourceGroups];
   // Discover in the same Node context as the prerelease planner, without the
   // parent Vitest invocation's file filter or transformed config module graph.
   const discovery = spawnSync(
@@ -120,7 +107,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     `,
       JSON.stringify([
         ...new Set([
-          ...allExtensionGroups.map((group) => group.config),
+          ...extensionGroups.map((group) => group.config),
           "ui/vitest.config.ts",
           "test/vitest/vitest.ui-browser.config.ts",
           "test/vitest/vitest.ui-e2e.config.ts",
@@ -139,7 +126,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
     projects: Record<string, Array<{ name: string; files: string[] }>>;
   } = JSON.parse(discovery.stdout);
   const configFiles = discovered.files;
-  const retainedExtensionGroups = allExtensionGroups.map((group) => ({
+  const retainedExtensionGroups = extensionGroups.map((group) => ({
     configs: [group.config],
     includePatterns: expectDefined(configFiles[group.config], group.config).filter((file) =>
       group.roots.some((root) => file === root || file.startsWith(`${root}/`)),
@@ -427,6 +414,7 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
   expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
   const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
   let canonical: CompactNodeTestShard[];
+  let selectedCanonical: CompactNodeTestShard[];
   try {
     canonical = createNodeTestShardBundles({
       compactMode: "pull-request",
@@ -435,14 +423,49 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       includeReleaseOnlyToolingShards: true,
       includeProofTests: false,
       includeReleaseOnlyRuntimeTests: true,
+      // Match the focused selector's admitted owner inventory before comparing resources.
+      includePrExemptRuntimeTests: true,
     });
+    selectedCanonical = expectDefined(
+      createSelectedNodeTestShardBundles(
+        (shards ?? []).flatMap(
+          (job) => job.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
+        ),
+        {
+          runnerBackend: options.runnerBackend,
+          includeReleaseOnlyRuntimeTests: true,
+          includePrExemptRuntimeTests: true,
+        },
+      ),
+      "canonical selected UI consumer owners",
+    );
   } finally {
     placement.mockRestore();
   }
+  // Precise tooling is repacked without unrelated compiler fixtures whose full
+  // inventory promotes their shared job. Compare against the same selected owner.
+  const toolingTargets = (shards ?? []).flatMap((job) =>
+    (job.groups ?? []).flatMap((group) =>
+      group.configs.includes("test/vitest/vitest.tooling.config.ts")
+        ? (group.includePatterns ?? [])
+        : [],
+    ),
+  );
+  const canonicalTooling = expectDefined(
+    createSelectedNodeTestShardBundles(toolingTargets, {
+      runnerBackend: "hybrid",
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+    }),
+    "canonical selected tooling owners",
+  );
   for (const job of shards ?? []) {
     for (const group of job.groups ?? []) {
+      const owners = group.configs.includes("test/vitest/vitest.tooling.config.ts")
+        ? canonicalTooling
+        : canonical;
       const ownerJob = expectDefined(
-        canonical.find((candidate) =>
+        owners.find((candidate) =>
           candidate.groups.some((owner) => owner.shard_name === group.shard_name),
         ),
         `canonical UI consumer job for ${group.shard_name}`,
@@ -457,12 +480,38 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
         expect(group).toEqual(owner);
       }
       expect(group.configs.every((config) => owner.configs.includes(config))).toBe(true);
-      expect(group.env).toEqual(owner.env);
-      expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
-      expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
-      expect(job.env).toEqual(ownerJob.env);
-      expect(job.runner).toBe(ownerJob.runner);
-      expect(job.planConcurrency).toBe(ownerJob.planConcurrency);
+      // Tooling capacity follows selected files; an excluded compiler can require a larger full job.
+      const selectedJob = expectDefined(
+        selectedCanonical.find((candidate) =>
+          candidate.groups.some((selected) => selected.shard_name === group.shard_name),
+        ),
+        `selected UI consumer job for ${group.shard_name}`,
+      );
+      const selectedGroup = expectDefined(
+        selectedJob.groups.find((selected) => selected.shard_name === group.shard_name),
+        "selected UI consumer group",
+      );
+      for (const key of [
+        "configs",
+        "env",
+        "runner",
+        "fallbackMaxWorkers",
+        "minTotalMemoryBytes",
+        "pretestBuildMode",
+        "requiresDist",
+      ] as const) {
+        expect(group[key], `${group.shard_name} group ${key}`).toEqual(selectedGroup[key]);
+      }
+      for (const key of [
+        "env",
+        "runner",
+        "planConcurrency",
+        "pretestBuildMode",
+        "requiresDist",
+        "timeoutMinutes",
+      ] as const) {
+        expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
+      }
     }
   }
   expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(

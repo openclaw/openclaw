@@ -17,8 +17,10 @@ import {
   type WorkerTurnTunnelHandle,
 } from "./tunnel-contract.js";
 import {
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
+  acknowledgeCompletedWorkerTurn,
   ENVIRONMENT_ID,
-  MANIFEST_REF,
   OWNER_EPOCH,
   SESSION_ID,
   SESSION_KEY,
@@ -27,7 +29,6 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   database,
-  measureLaunchTurn,
   openSessionManager,
   placements,
   root,
@@ -95,28 +96,14 @@ async function createBuildRecoveryHarness(
         timestamp: 51,
       }),
     );
-    createWorkerSessionPlacementGate(placements).updateAckCursors({
-      claim: request.turnClaim,
-      transcriptSeq: 2,
-      liveSeq: 1,
-    });
-    return {
-      stdout: JSON.stringify({
-        status: "completed",
-        transcriptLeafId: leafId,
-        transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-      }),
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    };
+    return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
   });
   const destroy = vi.fn(async () => environment);
   const environments: WorkerTurnEnvironmentService &
     Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
     ...unusedEnvironments(),
+    fenceWorkerTurnForRecovery:
+      createWorkerSessionPlacementGate(placements).fenceWorkerTurnForRecovery,
     prepareProjectIntent: async () => {
       throw new Error("unexpected prepared intent");
     },
@@ -150,31 +137,16 @@ async function createBuildRecoveryHarness(
         }
         throw new StaleWorkerBuildError();
       }
-      return {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
+      return createWorkerTurnTunnel({
         quiesceWorkspace: async () => ({
           assertActive: async () => {},
           resume: async () => {},
         }),
-        measureLaunchTurn,
         launchTurn,
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        },
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
         stop: async () => {},
-      };
+      });
     },
     stopTunnel: vi.fn(async () => {}),
     destroy,
@@ -236,11 +208,15 @@ async function createBuildRecoveryHarness(
     reconcileActivePlacement: async (environmentId) => {
       if (!options.pendingResult) {
         if (options.refreshInPlace) {
-          createWorkerSessionPlacementGate(placements).assertWorkerRuntimeRefresh({
+          const refresh = await createWorkerSessionPlacementGate(
+            placements,
+          ).prepareWorkerRuntimeRefresh({
             sessionId: SESSION_ID,
             environmentId,
             ownerEpoch: OWNER_EPOCH,
           });
+          refresh.assertCurrent();
+          refresh.release();
           const bundleHash = "b".repeat(64);
           environment = {
             ...environment,

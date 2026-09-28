@@ -8,9 +8,14 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import {
   nodeWorkerPlanHash,
   type NodeWorkerLaunchInput,
@@ -150,6 +155,32 @@ function launchRequest(input = launchInput()) {
 }
 
 describe("node worker launch adapter", () => {
+  it("hands a dispatched turn to restart recovery without waiting for remote cancellation", async () => {
+    const controller = new AbortController();
+    const interruption = createAgentRunRestartAbortError();
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      if (request.command === "worker.cancel.v1") {
+        throw new Error("stopping Gateway cannot confirm remote cancellation");
+      }
+      request.onDispatchReady?.("invoke-shutdown");
+      markGatewayRestartDraining();
+      controller.abort(interruption);
+      resetGatewayWorkAdmission();
+      throw interruption;
+    });
+    try {
+      await expect(
+        createNodeWorkerLaunchAdapter({ getTransport: () => transportWith(invoke) }).launch({
+          ...launchRequest(),
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(interruption);
+      expect(invoke.mock.calls.map(([request]) => request.command)).toEqual(["worker.launch.v1"]);
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
   it("re-arms only a settled pre-admission deadline with fresh idempotent launch identities", async () => {
     const input = launchInput();
     input.descriptor.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(10_000);

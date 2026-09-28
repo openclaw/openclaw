@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
 
 type NotificationRegistry = Pick<
@@ -9,21 +10,16 @@ type NotificationRegistry = Pick<
   "listCurrentConnected" | "isConnectionCurrentPairingState" | "invoke"
 >;
 
-type RouterOptions = {
-  primaryDelayMs?: number;
-  fallbackDelayMs?: number;
-};
-
 type PendingConnectionAlert = {
   nodeId: string;
   connId: string;
   pairingIdentity?: string;
   pairingGeneration?: string;
-  timer?: ReturnType<typeof setTimeout>;
+  job?: GatewayScheduledJob;
 };
 
-const DEFAULT_PRIMARY_DELAY_MS = 750;
-const DEFAULT_FALLBACK_DELAY_MS = 5_000;
+const PRIMARY_DELAY_MS = 750;
+const FALLBACK_DELAY_MS = 5_000;
 
 function isMacNotificationNode(node: NodeSession): boolean {
   const platform = node.platform?.trim().toLowerCase() ?? "";
@@ -46,19 +42,14 @@ function connectionLabel(node: NodeSession): string {
   return sliceUtf16Safe(raw.replace(/\s+/g, " "), 0, 80);
 }
 
-/** One gateway-runtime router with short-lived first-connection timers. */
+/** One Gateway-runtime router for staged first-connection alerts. */
 class NodeConnectionNotificationRouter {
-  private readonly primaryDelayMs: number;
-  private readonly fallbackDelayMs: number;
   private readonly pendingByNodeId = new Map<string, PendingConnectionAlert>();
 
   constructor(
     private readonly registry: NotificationRegistry,
-    options: RouterOptions = {},
-  ) {
-    this.primaryDelayMs = options.primaryDelayMs ?? DEFAULT_PRIMARY_DELAY_MS;
-    this.fallbackDelayMs = options.fallbackDelayMs ?? DEFAULT_FALLBACK_DELAY_MS;
-  }
+    private readonly scheduler: GatewayScheduler,
+  ) {}
 
   onConnected(source: NodeSession, isFirstConnection: boolean): void {
     // A rapid replacement may take over an already-pending first-connection alert.
@@ -67,9 +58,7 @@ class NodeConnectionNotificationRouter {
       return;
     }
     const previous = this.pendingByNodeId.get(source.nodeId);
-    if (previous?.timer) {
-      clearTimeout(previous.timer);
-    }
+    previous?.job?.cancel();
     const pending: PendingConnectionAlert = {
       nodeId: source.nodeId,
       connId: source.connId,
@@ -77,14 +66,12 @@ class NodeConnectionNotificationRouter {
       pairingGeneration: source.pairingGeneration,
     };
     this.pendingByNodeId.set(source.nodeId, pending);
-    this.armTimer(pending, this.primaryDelayMs, () => this.deliverPrimary(pending));
+    this.scheduleDelivery(pending, PRIMARY_DELAY_MS, () => this.deliverPrimary(pending));
   }
 
   dispose(): void {
     for (const pending of this.pendingByNodeId.values()) {
-      if (pending.timer) {
-        clearTimeout(pending.timer);
-      }
+      pending.job?.cancel();
     }
     this.pendingByNodeId.clear();
   }
@@ -109,7 +96,7 @@ class NodeConnectionNotificationRouter {
       this.finishAlert(pending);
       return;
     }
-    this.armTimer(pending, this.fallbackDelayMs, () =>
+    this.scheduleDelivery(pending, FALLBACK_DELAY_MS, () =>
       this.deliverFallback(pending, primary?.connId),
     );
   }
@@ -150,16 +137,14 @@ class NodeConnectionNotificationRouter {
   }
 
   private attemptIsCurrent(pending: PendingConnectionAlert): boolean {
-    // Object identity lets a replacement invalidate both staged timers and
+    // Object identity lets a replacement invalidate both staged jobs and
     // in-flight deliveries without a second generation bookkeeping path.
     return this.pendingByNodeId.get(pending.nodeId) === pending;
   }
 
   private finishAlert(pending: PendingConnectionAlert): void {
     if (this.attemptIsCurrent(pending)) {
-      if (pending.timer) {
-        clearTimeout(pending.timer);
-      }
+      pending.job?.cancel();
       this.pendingByNodeId.delete(pending.nodeId);
     }
   }
@@ -204,18 +189,16 @@ class NodeConnectionNotificationRouter {
     }
   }
 
-  private armTimer(
+  private scheduleDelivery(
     pending: PendingConnectionAlert,
     delayMs: number,
     deliver: () => Promise<void>,
   ): void {
-    if (pending.timer) {
-      clearTimeout(pending.timer);
-    }
-    pending.timer = setTimeout(() => {
-      pending.timer = undefined;
-      void deliver();
-    }, delayMs);
+    pending.job = this.scheduler.schedule({
+      id: `node-connection/${pending.connId}`,
+      delayMs,
+      run: deliver,
+    });
   }
 }
 
@@ -227,23 +210,18 @@ export function scheduleNodeConnectionNotification(
   source: NodeSession,
   options: { isFirstConnection: boolean },
 ): void {
-  let router = routersByRegistry.get(registry);
-  if (!options.isFirstConnection && !router) {
-    return;
-  }
-  if (!router) {
-    router = new NodeConnectionNotificationRouter(registry);
-    routersByRegistry.set(registry, router);
-  }
-  router.onConnected(source, options.isFirstConnection);
+  routersByRegistry.get(registry)?.onConnected(source, options.isFirstConnection);
 }
 
-/** Cancels staged alerts owned by a gateway node registry during shutdown. */
-export function disposeNodeConnectionNotifications(registry: NodeRegistry): void {
-  const router = routersByRegistry.get(registry);
-  if (!router) {
-    return;
-  }
-  router.dispose();
-  routersByRegistry.delete(registry);
+/** Registers the Gateway's alert owner and returns its shutdown cleanup. */
+export function startNodeConnectionNotifications(
+  registry: NodeRegistry,
+  scheduler: GatewayScheduler,
+): () => void {
+  const router = new NodeConnectionNotificationRouter(registry, scheduler);
+  routersByRegistry.set(registry, router);
+  return () => {
+    router.dispose();
+    routersByRegistry.delete(registry);
+  };
 }

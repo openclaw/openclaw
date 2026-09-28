@@ -11,7 +11,7 @@ import { advanceSessionPlacementDraft as advanceSessionPlacementDraftWithRecover
 
 type AdvanceParams = Omit<
   Parameters<typeof advanceSessionPlacementDraftWithRecovery>[0],
-  "cleanupOnCancellation" | "recovery"
+  "cleanupOnCancellation" | "describe" | "recovery"
 > &
   Omit<SessionPlacementRecovery, "sessionKey" | "phase"> & {
     cleanupOnCancellation?: boolean;
@@ -46,6 +46,7 @@ function advanceSessionPlacementDraft(params: AdvanceParams) {
   } = params;
   return advanceSessionPlacementDraftWithRecovery({
     ...options,
+    describe: (describeParams) => options.client.request("sessions.describe", describeParams),
     cleanupOnCancellation: () => options.cleanupOnCancellation ?? true,
     recovery: {
       sessionKey: key,

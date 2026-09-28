@@ -3,7 +3,6 @@ import {
   reduceSessionProjectionRunEvent,
   type SessionProjectionRunStatus,
 } from "../../packages/gateway-client/src/session-projection.js";
-// Handles TUI keyboard, paste, backend, and command events.
 import type { ChatLogOperations } from "./components/chat-log.js";
 import {
   formatPrimitiveString,
@@ -27,6 +26,7 @@ import {
 import { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
+  clearPendingSubmitDraft,
   getPendingSubmitAcceptedRunId,
   hasPendingSubmit,
 } from "./tui-submit-state.js";
@@ -124,11 +124,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog,
     clearStaleStreamingIfNoTrackedRunRemains,
     clearTrackedRunState,
-    dispose,
     finalizeRun,
     flushPendingHistoryRefreshIfIdle,
     hasConcurrentActiveRun,
-    markSubmittedRunRegistered,
     maybeRefreshHistoryForRun,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
@@ -641,7 +639,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isPendingRun) {
         // Exact run ownership matters: concurrent clients share this event stream.
         runCoordinator.noteSessionRun(evt.runId, { protectStream: true });
-        markSubmittedRunRegistered(evt.runId);
+        clearPendingSubmitDraft(state, evt.runId);
         state.activeChatRunId = evt.runId;
         noteLocalRunId?.(evt.runId);
         clearPendingSubmit(state, evt.runId);
@@ -756,6 +754,6 @@ export function createEventHandlers(context: EventHandlerContext) {
     captureHistoryRunMembership: () => runCoordinator.captureHistoryRunMembership(),
     reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
-    dispose,
+    dispose: clearTrackedRunState,
   };
 }
