@@ -431,9 +431,6 @@ export const zh_CN = {
       workspaceDirectory: "工作区目录",
       workspaceNotDirectory: '"{path}" 不是目录。请在目录中选择工作区路径。',
       workspacePathError: '无法检查 "{path}"：{error}。请检查路径后重试。',
-      workspacePathInvalid: '"{path}" 无效。请选择有效的工作区路径。',
-      workspacePathTooLong: '"{path}" 过长。请选择更短的工作区路径。',
-      workspacePermissionDenied: '检查 "{path}" 时权限被拒绝。请检查目录权限或选择可访问的工作区。',
       workspaceSymlinkLoop: '"{path}" 因符号链接循环而无法解析。请修复符号链接或选择其他工作区。',
       workspaceSymlinkNotDirectory:
         '"{path}" 是一个无法解析到现有目录的符号链接。请在目录中选择工作区路径。',

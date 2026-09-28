@@ -93,10 +93,7 @@ it.each(["workspace", "ancestor", "symlink target"] as const)(
     try {
       for (const [code, message] of [
         ["ELOOP", "symlink loop"],
-        ["EACCES", "Permission denied"],
-        ["EPERM", "Permission denied"],
-        ["ENAMETOOLONG", "too long"],
-        ["EINVAL", "invalid"],
+        ["EACCES", "Cannot inspect"],
         ["EIO", "Cannot inspect"],
       ]) {
         probe.mockImplementation((input) => {

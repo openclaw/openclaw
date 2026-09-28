@@ -31,22 +31,12 @@ export function validateSetupWorkspacePath(workspaceDir: string): string | undef
         : t("wizard.setup.workspaceNotDirectory", { path: candidate });
     } catch (error) {
       if (!isMissingPathError(error)) {
-        switch (extractErrorCode(error)) {
-          case "ELOOP":
-            return t("wizard.setup.workspaceSymlinkLoop", { path: candidate });
-          case "EACCES":
-          case "EPERM":
-            return t("wizard.setup.workspacePermissionDenied", { path: candidate });
-          case "ENAMETOOLONG":
-            return t("wizard.setup.workspacePathTooLong", { path: candidate });
-          case "EINVAL":
-            return t("wizard.setup.workspacePathInvalid", { path: candidate });
-          default:
-            return t("wizard.setup.workspacePathError", {
+        return extractErrorCode(error) === "ELOOP"
+          ? t("wizard.setup.workspaceSymlinkLoop", { path: candidate })
+          : t("wizard.setup.workspacePathError", {
               path: candidate,
               error: formatErrorMessageWithCode(error),
             });
-        }
       }
     }
     const parent = path.dirname(candidate);

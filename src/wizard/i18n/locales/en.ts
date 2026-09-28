@@ -441,10 +441,6 @@ export const en = {
       workspaceDirectory: "Workspace directory",
       workspaceNotDirectory: '"{path}" is not a directory. Choose a workspace inside a directory.',
       workspacePathError: 'Cannot inspect "{path}": {error}. Check the path and try again.',
-      workspacePathInvalid: '"{path}" is invalid. Choose a valid workspace path.',
-      workspacePathTooLong: '"{path}" is too long. Choose a shorter workspace path.',
-      workspacePermissionDenied:
-        'Permission denied while inspecting "{path}". Check directory permissions or choose an accessible workspace.',
       workspaceSymlinkLoop:
         '"{path}" cannot be resolved because of a symlink loop. Fix the symbolic links or choose another workspace.',
       workspaceSymlinkNotDirectory:
