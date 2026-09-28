@@ -1,4 +1,5 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
@@ -29,6 +30,27 @@ function resolveSelectedSessionMessageSubscriptionAgentId(
     return resolveUiSelectedGlobalAgentId(state);
   }
   return resolveUiGlobalAliasAgentId(state, key);
+}
+
+function isCurrentSelectedSessionMessageSubscriptionSync(
+  state: ChatSessionMessageSubscriptionState,
+  params: {
+    generation: number;
+    client: GatewayBrowserClient;
+    connectionEpoch: number;
+    requestedKey: string;
+    requestedAgentId?: string | null;
+  },
+): boolean {
+  return (
+    chatHistoryRequests(state).subscriptionGeneration === params.generation &&
+    state.client === params.client &&
+    state.connectionEpoch === params.connectionEpoch &&
+    state.connected &&
+    state.sessionKey.trim() === params.requestedKey &&
+    resolveSelectedSessionMessageSubscriptionAgentId(state, params.requestedKey) ===
+      (params.requestedAgentId ?? null)
+  );
 }
 
 async function retryPendingSessionMessageSubscriptionReleases(
@@ -167,12 +189,13 @@ async function synchronizeSelectedSessionMessageSubscription(
     previousCanonicalKey === null ||
     previousRequestedKey === null;
   const isCurrent = () =>
-    paneRequests.subscriptionGeneration === generation &&
-    state.client === client &&
-    state.connectionEpoch === connectionEpoch &&
-    state.connected &&
-    state.sessionKey.trim() === nextKey &&
-    resolveSelectedSessionMessageSubscriptionAgentId(state, nextKey) === nextSubscriptionAgentId;
+    isCurrentSelectedSessionMessageSubscriptionSync(state, {
+      generation,
+      client,
+      connectionEpoch,
+      requestedKey: nextKey,
+      requestedAgentId: nextSubscriptionAgentId,
+    });
   const clearRecoveredError = () => {
     const message = paneRequests.subscriptionError;
     if (!message || paneRequests.pendingSubscriptionReleases.size > 0) {
