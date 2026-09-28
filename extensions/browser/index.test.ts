@@ -216,10 +216,14 @@ describe("browser plugin", () => {
   it("bundles the browser automation skill with the plugin", () => {
     const manifest = JSON.parse(
       fs.readFileSync(path.join(__dirname, "openclaw.plugin.json"), "utf8"),
-    ) as { skills?: string[] };
+    ) as {
+      skills?: string[];
+      toolMetadata?: Record<string, { profiles?: string[] }>;
+    };
     const skillPath = path.join(__dirname, "skills", "browser-automation", "SKILL.md");
 
     expect(manifest.skills).toEqual(["./skills"]);
+    expect(manifest.toolMetadata?.browser?.profiles).toEqual(["coding", "full"]);
     expect(fs.readFileSync(skillPath, "utf8")).toContain("name: browser-automation");
   });
 
@@ -265,6 +269,7 @@ describe("browser plugin", () => {
       agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
+      runtimeConfig: { browser: { headless: true } },
       activeModel: { provider: "openai", modelId: "gpt-5.5" },
       deliveryContext: { channel: "telegram" },
     });
@@ -283,6 +288,47 @@ describe("browser plugin", () => {
       },
       toolCapabilities: expect.any(Object),
     });
+  });
+
+  it("uses managed Browser Harness by default for an ordinary unsandboxed workspace", () => {
+    const tool = createTool({
+      workspaceDir: "/tmp/workspace",
+      browser: { allowHostControl: true },
+    });
+    expect(tool.name).toBe("browser");
+    expect(tool.description).toContain("Browser Use CLI 3.0");
+    expect(tool.description).toContain("installs Browser Harness on first use");
+    expect(
+      Reflect.get(tool, Symbol.for("openclaw.internal.approvalFreeHostExecFallback"))?.description,
+    ).toContain("Host target");
+  });
+
+  it("preserves the native browser for authored browser config and sandbox routing", () => {
+    for (const context of [
+      { workspaceDir: "/tmp/workspace", runtimeConfig: { browser: { headless: true } } },
+      { workspaceDir: "/tmp/workspace", runtimeConfig: { browser: { enabled: true } } },
+      { workspaceDir: "/tmp/workspace", sandboxed: true },
+    ]) {
+      const tool = createTool(context);
+      expect(tool.description).toContain("Host target");
+      expect(tool.description).not.toContain("Browser Use CLI 3.0");
+    }
+  });
+
+  it("hides the browser tool when browser.enabled is false", () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    expect(
+      factory({
+        workspaceDir: "/tmp/workspace",
+        runtimeConfig: { browser: { enabled: false } },
+      }),
+    ).toBeNull();
   });
 
   it("describes and freezes only effective tab-bound actions when evaluation is disabled", async () => {
