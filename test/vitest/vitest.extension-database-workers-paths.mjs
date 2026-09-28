@@ -369,6 +369,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/channel.gateway.test.ts",
   "extensions/telegram/src/message-cache.retained.test.ts",
   "extensions/telegram/src/message-cache.test.ts",
+  "extensions/telegram/src/miniapp/routes.test.ts",
   "extensions/telegram/src/monitor.webhook-identity.test.ts",
   "extensions/telegram/src/outbound-adapter.telegram-http.test.ts",
   "extensions/telegram/src/outbound-message-context.test.ts",

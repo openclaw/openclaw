@@ -94,11 +94,7 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     telegramDeps: TelegramNativeCommandDeps;
     runtimeCfg: OpenClawConfig;
     runtimeTelegramCfg: TelegramAccountConfig;
-    turnSettings: ReturnType<typeof resolveTelegramMessageTurnSettings>;
     threadParams: ReturnType<typeof buildTelegramThreadParams>;
-    route: ReturnType<typeof inspectTelegramConversationRoute>["route"];
-    mediaLocalRoots: readonly string[] | undefined;
-    targetSessionKey: string;
     nativeCommandRuntime: TelegramNativeCommandRuntime;
     buildDeliveryBaseOptions: (params?: {
       sessionKeyForInternalHooks?: string;
@@ -391,7 +387,7 @@ export async function prepareTelegramCommandDispatch(
   if (!auth) {
     return null;
   }
-  const { route, bindingMode, targetSessionKey } = auth;
+  const { route, bindingMode } = auth;
   const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
   auth.assertOwnerCurrent?.();
   await touchTelegramConversationRoute(auth.inspectedRoute);
@@ -459,12 +455,8 @@ export async function prepareTelegramCommandDispatch(
     telegramDeps,
     runtimeCfg,
     runtimeTelegramCfg,
-    turnSettings,
     ...auth,
     threadParams: buildTelegramThreadParams(auth.threadSpec),
-    route,
-    mediaLocalRoots,
-    targetSessionKey,
     nativeCommandRuntime,
     buildDeliveryBaseOptions,
     loadDeliveryRuntime: loadTelegramNativeCommandDeliveryRuntime,
