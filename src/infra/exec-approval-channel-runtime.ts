@@ -310,6 +310,8 @@ export function createExecApprovalChannelRuntime<
           // Subscribe before replay so a request created during the list calls is not lost.
           unsubscribeGatewayRuntime = gatewayRuntime.subscribe({
             eventKinds,
+            channel: adapter.channel,
+            accountId: adapter.accountId,
             // SAFETY: Gateway-owned subscribers publish the canonical normalized request union.
             shouldHandle: (request) =>
               shouldKeepRunning() &&

@@ -5,6 +5,7 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApprovalChannelReviewer } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { projectApprovalRequestForExternal } from "../../infra/approval-request-projection.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
@@ -291,6 +292,7 @@ export async function handlePendingApprovalRequest<
   clientConnId?: string;
   requestEventName: string;
   requestEvent: RequestedApprovalEvent<TPayload>;
+  nativeRequestEvent?: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
   approvalKind?: ChannelApprovalKind;
   deliverRequest: () => boolean | Promise<boolean>;
@@ -371,7 +373,7 @@ export async function handlePendingApprovalRequest<
         ? 0
         : (params.context.approvalEvents?.publishRequested(
             params.approvalKind ?? "exec",
-            params.requestEvent,
+            params.nativeRequestEvent ?? params.requestEvent,
           ) ?? 0);
 
     const hasApprovalClients = suppressDelivery
@@ -668,11 +670,15 @@ export async function handleApprovalResolve<
     ts: Date.now(),
     request: resolved.snapshot.request,
   };
+  const externalResolvedEvent = {
+    ...resolvedEvent,
+    request: projectApprovalRequestForExternal(resolvedEvent.request),
+  };
   broadcastApprovalResolvedEvent({
     approvalKind: params.approvalKind,
     context: params.context,
     record: resolved.snapshot,
-    event: resolvedEvent,
+    event: externalResolvedEvent,
   });
   if (params.approvalKind !== "system-agent") {
     params.context.approvalEvents?.publishResolved(params.approvalKind, resolvedEvent as never);
@@ -705,7 +711,7 @@ export async function handleApprovalResolve<
   // best-effort so a plugin/channel forwarding failure cannot reopen it.
   for (const followUp of followUps) {
     try {
-      await followUp.run(resolvedEvent);
+      await followUp.run(externalResolvedEvent);
     } catch (err) {
       params.context.logGateway?.error?.(`${followUp.errorLabel}: ${String(err)}`);
     }

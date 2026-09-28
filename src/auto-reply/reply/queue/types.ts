@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { GatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import type { GatewayUiCommandTarget } from "../../../gateway/ui-command-target.types.js";
+import type { PluginApprovalSource } from "../../../infra/plugin-approvals.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
@@ -112,6 +113,8 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
 }
 
 export type FollowupRun = {
+  /** Bounded host snapshot of a single admitted message; synthetic aggregates omit it. */
+  approvalSource?: PluginApprovalSource;
   /** External-turn eligibility; queued execution refreshes the session-selected profile. */
   personalBootstrapEligible?: boolean;
   prompt: string;

@@ -1,3 +1,4 @@
+import { projectApprovalRequestForExternal } from "../../infra/approval-request-projection.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 // Best-effort legacy approval resolution events after durable CAS wins.
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
@@ -77,11 +78,17 @@ export async function publishAppliedApprovalResolution(params: {
     resolvedBy,
     ts,
     request: params.liveRecord.request,
-    ...(params.record.kind === "system-agent" &&
+    ...((params.record.kind === "system-agent" || params.record.kind === "plugin") &&
     (params.record.status === "expired" || params.record.status === "cancelled")
       ? { terminalStatus: params.record.status }
       : {}),
   };
+  const externalRequest = projectApprovalRequestForExternal(params.liveRecord.request);
+  const externalEvent = { ...event, request: externalRequest };
+  const externalRecord =
+    externalRequest === params.liveRecord.request
+      ? params.liveRecord
+      : { ...params.liveRecord, request: externalRequest };
   await runSideEffect({
     context: params.context,
     approvalKind: params.record.kind,
@@ -90,7 +97,7 @@ export async function publishAppliedApprovalResolution(params: {
       broadcastApprovalResolvedEvent({
         approvalKind: params.record.kind,
         context: params.context,
-        event,
+        event: externalEvent,
         record: params.liveRecord,
       }),
   });
@@ -112,8 +119,8 @@ export async function publishAppliedApprovalResolution(params: {
       effect: "web-push",
       run: () =>
         params.record.status === "expired"
-          ? webPushDelivery.handleExpired(params.liveRecord)
-          : webPushDelivery.handleResolved(event),
+          ? webPushDelivery.handleExpired(externalRecord)
+          : webPushDelivery.handleResolved(externalEvent),
     });
   }
   if (params.record.kind === "exec" && params.forwarder) {
@@ -121,7 +128,7 @@ export async function publishAppliedApprovalResolution(params: {
       context: params.context,
       approvalKind: "exec",
       effect: "forwarder",
-      run: () => params.forwarder!.handleResolved(event as ExecApprovalResolved),
+      run: () => params.forwarder!.handleResolved(externalEvent as ExecApprovalResolved),
     });
   }
   if (params.record.kind === "exec" && params.iosPushDelivery?.handleResolved) {
@@ -129,7 +136,7 @@ export async function publishAppliedApprovalResolution(params: {
       context: params.context,
       approvalKind: "exec",
       effect: "ios-push",
-      run: () => params.iosPushDelivery!.handleResolved!(event as ExecApprovalResolved),
+      run: () => params.iosPushDelivery!.handleResolved!(externalEvent as ExecApprovalResolved),
     });
   }
   if (params.record.kind === "plugin" && params.forwarder?.handlePluginApprovalResolved) {
@@ -137,7 +144,8 @@ export async function publishAppliedApprovalResolution(params: {
       context: params.context,
       approvalKind: "plugin",
       effect: "forwarder",
-      run: () => params.forwarder!.handlePluginApprovalResolved!(event as PluginApprovalResolved),
+      run: () =>
+        params.forwarder!.handlePluginApprovalResolved!(externalEvent as PluginApprovalResolved),
     });
   }
   if (params.record.kind === "plugin" && params.pluginIosPushDelivery?.handleResolved) {
@@ -145,7 +153,8 @@ export async function publishAppliedApprovalResolution(params: {
       context: params.context,
       approvalKind: "plugin",
       effect: "ios-push",
-      run: () => params.pluginIosPushDelivery!.handleResolved!(event as PluginApprovalResolved),
+      run: () =>
+        params.pluginIosPushDelivery!.handleResolved!(externalEvent as PluginApprovalResolved),
     });
   }
   // Decisions (allowed or denied) report their outcome from the system-agent owner.
@@ -159,8 +168,10 @@ export async function publishAppliedApprovalResolution(params: {
       approvalKind: "system-agent",
       effect: "forwarder",
       run: () =>
-        // SAFETY: a system-agent record's live request is a system-agent payload.
-        params.forwarder!.handleSystemAgentApprovalResolved!(event as SystemAgentApprovalResolved),
+        params.forwarder!.handleSystemAgentApprovalResolved!(
+          // SAFETY: a system-agent record's live request is a system-agent payload.
+          externalEvent as SystemAgentApprovalResolved,
+        ),
     });
   }
 }

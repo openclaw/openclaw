@@ -51,7 +51,7 @@ function createDeliveryFixture(
   >(test, {
     approvalKind: caller.approvalKind,
   });
-  const record = manager.create(caller.request, 60_000, caller.id);
+  const record = manager.create({ ...caller.request }, 60_000, caller.id);
   const decision = createDeferredCore<ExecApprovalDecision | null>();
   // Persistence/decision custody is a separate owner; delivery still uses its real work tracker.
   vi.spyOn(manager, "registerDecisionHandoff").mockImplementation((_id, run) => ({
@@ -153,6 +153,58 @@ describe("handlePendingApprovalRequestWithDelivery", () => {
 
     expectAccepted(fixture);
     expect(fixture.webPush).toHaveBeenCalledExactlyOnceWith(fixture.record);
+    fixture.settle();
+    await request;
+  });
+
+  it("keeps the original message on native delivery while omitting it from public request routes", async (test) => {
+    const fixture = createDeliveryFixture(test, approvalDeliveryCallers[1]);
+    (fixture.record.request as PluginApprovalRequestPayload).approvalSource = {
+      channel: "slack",
+      senderId: "U123",
+      userMessageExcerpt: "private original message",
+    };
+    const forwardRequest = vi.fn(async () => true);
+    const handleRequested = vi.fn(async () => true);
+    const request = fixture.start({
+      forwardRequest,
+      getIosPushDelivery: () => ({ handleRequested }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const publicSource = { channel: "slack", senderId: "U123" };
+    expect(fixture.context.approvalEvents?.publishRequested).toHaveBeenCalledWith(
+      "plugin",
+      expect.objectContaining({
+        request: expect.objectContaining({
+          approvalSource: { ...publicSource, userMessageExcerpt: "private original message" },
+        }),
+      }),
+    );
+    expect(fixture.context.broadcastToConnIds).toHaveBeenCalledWith(
+      "plugin.approval.requested",
+      expect.objectContaining({
+        request: expect.objectContaining({ approvalSource: publicSource }),
+      }),
+      new Set(),
+      { dropIfSlow: true },
+    );
+    expect(forwardRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ approvalSource: publicSource }),
+      }),
+    );
+    expect(handleRequested).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ approvalSource: publicSource }),
+      }),
+      { isTargetVisible: expect.any(Function) },
+    );
+    expect(fixture.webPush).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ approvalSource: publicSource }),
+      }),
+    );
     fixture.settle();
     await request;
   });

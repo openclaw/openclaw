@@ -552,6 +552,16 @@ function buildChannelInboundEventContextValue(
     InboundAccessAuthorized: true,
     ConversationRouteContextObserved: params.conversation.routePeer ? true : undefined,
     ...params.extra,
+    // Bind approval notices to the admitted sender; channel-specific display text stays opt-in.
+    ApprovalSource:
+      params.sender.id && params.sender.isBot !== true && params.sender.isSelf !== true
+        ? {
+            channel: params.channel,
+            senderId: params.sender.id,
+            senderName: params.sender.name ?? params.sender.displayLabel,
+            conversationKind: params.conversation.kind,
+          }
+        : undefined,
   };
   copyConversationBindingRouteFacts(params.route, context);
   const finalizeParams = {

@@ -476,6 +476,12 @@ describe("Mattermost slash HTTP boundary", () => {
           Body: "/status hello",
           SenderId: "user-1",
           InboundAccessAuthorized: true,
+          ApprovalSource: {
+            channel: "mattermost",
+            senderId: "user-1",
+            senderName: "boundary-user",
+            conversationKind: "channel",
+          },
         },
       });
     });

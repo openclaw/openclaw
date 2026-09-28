@@ -1319,6 +1319,31 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   );
 
+  it("shares compilation across groups with different project parallelism", async () => {
+    vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
+    const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
+    const runChild = vi.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => 0);
+    const plans = resolveShardPlans({
+      OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
+        {
+          configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+          env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "2", OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        },
+        { configs: ["test/vitest/vitest.extension-browser.config.ts"] },
+      ]),
+    });
+
+    await expect(
+      runShardPlans(plans, { env: { CI: "true" }, scratchDir: makeScratchDir(), runChild }),
+    ).resolves.toBe(0);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+    expect(createWorker.mock.calls[0]?.[0]?.OPENCLAW_TEST_PROJECTS_PARALLEL).toBeUndefined();
+    expect(runChild.mock.calls.map(([, env]) => env.OPENCLAW_TEST_PROJECTS_PARALLEL)).toEqual([
+      "2",
+      "1",
+    ]);
+  });
+
   it.each([
     { key: "NODE_OPTIONS", shared: true },
     { key: "NODE_OPTIONS", shared: false },

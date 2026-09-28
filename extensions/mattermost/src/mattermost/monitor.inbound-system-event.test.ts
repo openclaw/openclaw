@@ -978,6 +978,12 @@ describe("mattermost inbound user posts", () => {
       expect(ctx?.GroupSpace).toBe("team-1");
       expect(ctx?.NativeChannelId).toBe("chan-1");
       expect(ctx?.InboundAccessAuthorized).toBe(true);
+      expect(ctx?.ApprovalSource).toEqual({
+        channel: "mattermost",
+        senderId: "user-1",
+        senderName: "alice",
+        conversationKind: "channel",
+      });
       expect(ctx?.OriginatingChannel).toBe("mattermost");
       expect(ctx?.Provider).toBe("mattermost");
     },

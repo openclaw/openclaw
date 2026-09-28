@@ -490,6 +490,12 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
       WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
+      ApprovalSource: {
+        channel: "mattermost",
+        senderId,
+        senderName,
+        conversationKind: kind,
+      },
       // Tag typed text-slash control commands (e.g. ` /new`, ` /reset` sent via the regular
       // post path rather than Mattermost's native slash UI) so the explicit-command turn
       // exception in source-reply-delivery-mode.ts surfaces their acknowledgements under

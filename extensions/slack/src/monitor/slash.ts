@@ -748,6 +748,15 @@ export function createSlackCommandHandler(params: {
         AccountId: route.accountId,
         CommandSource: "native" as const,
         CommandAuthorized: commandAuthorized,
+        // Slash commands bypass the inbound context builder; this sender passed the gates above.
+        InboundAccessAuthorized: true,
+        ApprovalSource: {
+          channel: "slack",
+          senderId: command.user_id,
+          senderName,
+          ...(routingTeamId ? { workspaceId: routingTeamId } : {}),
+          conversationKind: chatType,
+        },
         OriginatingChannel: "slack" as const,
         OriginatingTo: p.threadTs
           ? resolveSlackDeferredActionTarget({

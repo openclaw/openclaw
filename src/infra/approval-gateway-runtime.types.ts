@@ -1,5 +1,7 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalMethod } from "./approval-gateway-runtime-methods.js";
 import type { ApprovalNativeRouteCoordinator } from "./approval-native-route-coordinator.js";
+import type { ApprovalRouteSendParams } from "./approval-native-route-notice.js";
 import type { ApprovalRequest, ChannelApprovalKind } from "./approval-types.js";
 import type { ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
@@ -13,6 +15,8 @@ export type GatewayApprovalResolved =
 
 export type GatewayApprovalEventSubscriber = {
   eventKinds: ReadonlySet<ChannelApprovalKind>;
+  channel?: string;
+  accountId?: string | null;
   shouldHandle: (request: GatewayApprovalRequest) => boolean;
   onRequested: (request: GatewayApprovalRequest) => void;
   onResolved: (resolved: GatewayApprovalResolved) => void;
@@ -25,7 +29,11 @@ export type GatewayNativeApprovalRuntime = {
     params: Record<string, unknown>,
     options?: { clientDisplayName?: string },
   ) => Promise<T>;
-  requestRoute: <T = unknown>(method: "send", params: Record<string, unknown>) => Promise<T>;
+  requestRoute: (
+    method: "send",
+    params: ApprovalRouteSendParams,
+    options?: { liveOnlyWhenCurrent: (cfg?: OpenClawConfig) => boolean },
+  ) => Promise<void>;
   routeCoordinator: ApprovalNativeRouteCoordinator;
   subscribe: (subscriber: GatewayApprovalEventSubscriber) => () => void;
 };

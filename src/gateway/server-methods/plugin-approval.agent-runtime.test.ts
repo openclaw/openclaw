@@ -164,81 +164,103 @@ describe("plugin approval signed agent runtime", () => {
     });
   });
 
-  it("uses signed runtime owner and route instead of forged request metadata", async (testContext) => {
-    const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(
-      testContext,
-      {
-        approvalKind: "plugin",
-        validateAgentRuntimeDelegatedAuthority: () => true,
-      },
-    );
-    const { manager, databaseOptions: options } = fixture;
-    await fixture.run(async () => {
-      const opts = requestOptions({
-        request: {
-          pluginId: "forged-plugin",
-          title: "Sensitive action",
-          description: "D",
-          agentId: "forged-agent",
-          sessionKey: "forged-session",
-          turnSourceChannel: "forged-channel",
-          turnSourceTo: "forged-target",
-          twoPhase: true,
+  for (const originThreadId of [null, "origin-thread"] as const) {
+    it(`uses signed runtime owner and ${originThreadId} plugin origin instead of forged request metadata`, async (testContext) => {
+      const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(
+        testContext,
+        {
+          approvalKind: "plugin",
+          validateAgentRuntimeDelegatedAuthority: () => true,
         },
-        identity: {
-          kind: "agentRuntime",
-          operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
-          delegatedAuthority: {
-            kind: "local",
-            operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
-            lifecycleGeneration: "generation-1",
-            claimId: "claim-1",
+      );
+      const { manager, databaseOptions: options } = fixture;
+      await fixture.run(async () => {
+        const opts = requestOptions({
+          request: {
+            pluginId: "forged-plugin",
+            title: "Sensitive action",
+            description: "D",
+            agentId: "forged-agent",
+            sessionKey: "forged-session",
+            turnSourceChannel: "forged-channel",
+            turnSourceTo: "forged-target",
+            twoPhase: true,
           },
-          executionIdentity: executionIdentity(),
-          approvalOwnerPluginId: "codex",
+          identity: {
+            kind: "agentRuntime",
+            operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+            delegatedAuthority: {
+              kind: "local",
+              operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+              lifecycleGeneration: "generation-1",
+              claimId: "claim-1",
+            },
+            executionIdentity: executionIdentity(),
+            approvalOwnerPluginId: "codex",
+            agentId: "main",
+            sessionKey: "agent:main:session-1",
+            turnSourceChannel: "slack",
+            turnSourceTo: "D1",
+            turnSourceAccountId: "default",
+            turnSourceThreadId: "reply-anchor",
+            pluginApprovalOriginThreadId: originThreadId,
+            approvalSource: {
+              channel: "slack",
+              senderId: "U123",
+              senderName: "Lightning McQueen",
+              conversationKind: "direct",
+              userMessageExcerpt: "trusted original text",
+            },
+          },
+        });
+
+        const { pending } = await waitForApprovalRequested(
+          opts.context,
+          "plugin.approval.requested",
+          () => fixture.track(Promise.resolve(requestHandler(manager)(opts))),
+        );
+        expect(opts.context.broadcast).toHaveBeenCalled();
+        const broadcastPayload = vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as
+          | { id?: unknown }
+          | undefined;
+        const approvalId = String(broadcastPayload?.id);
+        expect((await manager.getSnapshot(approvalId))?.request).toMatchObject({
+          pluginId: "codex",
           agentId: "main",
           sessionKey: "agent:main:session-1",
-          turnSourceChannel: "telegram",
-          turnSourceTo: "chat-1",
+          turnSourceChannel: "slack",
+          turnSourceTo: "D1",
           turnSourceAccountId: "default",
-          turnSourceThreadId: "thread-1",
-        },
+          turnSourceThreadId: originThreadId,
+          approvalSource: {
+            channel: "slack",
+            senderId: "U123",
+            senderName: "Lightning McQueen",
+            userMessageExcerpt: "trusted original text",
+          },
+        });
+        const durablePresentation = openOpenClawStateDatabase(options)
+          .db.prepare("SELECT presentation_json FROM operator_approvals WHERE approval_id = ?")
+          .get(approvalId);
+        expect(durablePresentation).toMatchObject({
+          presentation_json: expect.not.stringContaining("trusted original text"),
+        });
+        expect(
+          openOpenClawStateDatabase(options)
+            .db.prepare(
+              "SELECT approval_id, source_context_id, source_execution_id FROM operator_approval_execution_identities WHERE approval_id = ?",
+            )
+            .get(approvalId),
+        ).toEqual({
+          approval_id: approvalId,
+          source_context_id: "context-1",
+          source_execution_id: "execution-1",
+        });
+        await manager.resolve(approvalId, "deny");
+        await pending;
       });
-
-      const { pending } = await waitForApprovalRequested(
-        opts.context,
-        "plugin.approval.requested",
-        () => fixture.track(Promise.resolve(requestHandler(manager)(opts))),
-      );
-      expect(opts.context.broadcast).toHaveBeenCalled();
-      const broadcastPayload = vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as
-        | { id?: unknown }
-        | undefined;
-      const approvalId = String(broadcastPayload?.id);
-      expect((await manager.getSnapshot(approvalId))?.request).toMatchObject({
-        pluginId: "codex",
-        agentId: "main",
-        sessionKey: "agent:main:session-1",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "chat-1",
-        turnSourceAccountId: "default",
-        turnSourceThreadId: "thread-1",
-      });
-      expect(
-        openOpenClawStateDatabase(options)
-          .db.prepare(
-            "SELECT approval_id, source_context_id, source_execution_id FROM operator_approval_execution_identities WHERE approval_id = ?",
-          )
-          .get(approvalId),
-      ).toEqual({
-        approval_id: approvalId,
-        source_context_id: "context-1",
-        source_execution_id: "execution-1",
-      });
-      await manager.resolve(approvalId, "deny");
-      await pending;
     });
-  });
+  }
 
   it("does not create execution identity storage when collection is disabled", async (testContext) => {
     const fixture = await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(

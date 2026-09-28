@@ -230,6 +230,7 @@ export async function resolveMatrixInboundContext(config: {
       id: senderId,
       name: senderName,
       username: senderId.split(":")[0]?.replace(/^@/, ""),
+      isBot: handler.configuredBotUserIds.has(senderId) || undefined,
     },
     conversation: {
       kind: isDirectMessage ? "direct" : "channel",

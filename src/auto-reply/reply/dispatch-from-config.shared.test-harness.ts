@@ -437,6 +437,9 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
+  prepareAcpSessionControlRead: vi.fn(() => {
+    throw new Error("ACP session control reads are outside this dispatch test harness");
+  }),
   readAcpSessionEntry: acpMocks.readAcpSessionEntry,
   readAcpSessionEntryAsync: async (params: {
     sessionKey: string;
@@ -450,6 +453,9 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
     cfg?: OpenClawConfig;
   }) => acpMocks.readAcpSessionMeta(params),
   upsertAcpSessionMeta: acpMocks.upsertAcpSessionMeta,
+  upsertAcpSessionMetaForControl: vi.fn(() => {
+    throw new Error("ACP control writes are outside this dispatch test harness");
+  }),
 }));
 vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: acpMocks.getAcpRuntimeBackend,

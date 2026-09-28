@@ -2344,7 +2344,6 @@ src/gateway/server-cron-reconciled.ts	1
 src/gateway/server-cron.ts	1
 src/gateway/server-http-upgrades.ts	2
 src/gateway/server-in-process-dispatch.ts	3
-src/gateway/server-instance-runtime.ts	3
 src/gateway/server-maintenance.ts	4
 src/gateway/server-methods.ts	3
 src/gateway/server-methods/agent-run-handler.ts	1

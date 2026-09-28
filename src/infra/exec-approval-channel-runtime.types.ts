@@ -25,6 +25,8 @@ export type ExecApprovalChannelRuntimeAdapter<
   clientDisplayName: string;
   cfg: OpenClawConfig;
   gatewayUrl?: string;
+  channel?: string;
+  accountId?: string | null;
   /** Defaults to exec-only; include plugin when the adapter can handle plugin approvals. */
   eventKinds?: readonly ChannelApprovalKind[];
   isConfigured: () => boolean;

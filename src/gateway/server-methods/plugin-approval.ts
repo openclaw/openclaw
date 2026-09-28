@@ -7,6 +7,7 @@ import {
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { projectApprovalRequestForExternal } from "../../infra/approval-request-projection.js";
 import { sanitizeApprovalScope } from "../../infra/approval-scope.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
@@ -52,7 +53,10 @@ type PluginApprovalIosPushDelivery = NonNullable<
 /** Create plugin approval handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-  opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
+  opts?: {
+    forwarder?: ExecApprovalForwarder;
+    iosPushDelivery?: PluginApprovalIosPushDelivery;
+  },
 ): GatewayRequestHandlers {
   return {
     "plugin.approval.list": async (options) => {
@@ -66,6 +70,9 @@ export function createPluginApprovalHandlers(
         ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
       });
       authority.assertCurrent();
+      for (const approval of approvals) {
+        approval.request = projectApprovalRequestForExternal(approval.request);
+      }
       respond(true, approvals, undefined);
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
@@ -163,6 +170,11 @@ export function createPluginApprovalHandlers(
         normalizeTrimmedString(value) === null
           ? null
           : sanitizeExecApprovalDisplayText(normalizeTrimmedString(value)!);
+      const approvalSource =
+        trustedAgentRuntime?.approvalSource &&
+        trustedAgentRuntime.approvalSource.channel === trustedAgentRuntime.turnSourceChannel
+          ? trustedAgentRuntime.approvalSource
+          : undefined;
       const request: PluginApprovalRequestPayload = {
         pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
@@ -188,6 +200,7 @@ export function createPluginApprovalHandlers(
           (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
         sessionKey,
         runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
+        ...(approvalSource ? { approvalSource } : {}),
         turnSourceChannel: trustedAgentRuntime
           ? normalizeTrimmedString(trustedAgentRuntime.turnSourceChannel)
           : normalizeTrimmedString(p.turnSourceChannel),
@@ -198,7 +211,9 @@ export function createPluginApprovalHandlers(
           ? normalizeTrimmedString(trustedAgentRuntime.turnSourceAccountId)
           : normalizeTrimmedString(p.turnSourceAccountId),
         turnSourceThreadId: trustedAgentRuntime
-          ? (trustedAgentRuntime.turnSourceThreadId ?? null)
+          ? approvalSource && trustedAgentRuntime.pluginApprovalOriginThreadId !== undefined
+            ? trustedAgentRuntime.pluginApprovalOriginThreadId
+            : (trustedAgentRuntime.turnSourceThreadId ?? null)
           : (p.turnSourceThreadId ?? null),
       };
 

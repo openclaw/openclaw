@@ -7,7 +7,7 @@ import type { ApprovalScope } from "./approval-scope.js";
 import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalDecision, ExecApprovalResolved } from "./exec-approvals-core.js";
-import type { PluginApprovalResolved } from "./plugin-approvals.js";
+import type { PluginApprovalResolved, PluginApprovalSource } from "./plugin-approvals.js";
 import type {
   SystemAgentApprovalApplicationStatus,
   SystemAgentApprovalResolved,
@@ -80,6 +80,7 @@ export type ExecApprovalExpiredView = ExecApprovalViewBase & {
 /** Shared presentation fields for plugin approval views across all phases. */
 export type PluginApprovalViewBase = ApprovalViewBase & {
   approvalKind: "plugin";
+  approvalSource?: PluginApprovalSource;
   agentId?: string | null;
   pluginId?: string | null;
   scope?: ApprovalScope | null;

@@ -57,7 +57,7 @@ function buildPluginMetadata(request: PluginApprovalRequest): ApprovalMetadataVi
     metadata.push({ label: "Tool", value: request.request.toolName });
   }
   if (request.request.pluginId) {
-    metadata.push({ label: "Plugin", value: request.request.pluginId });
+    metadata.push({ label: "Approval plugin", value: request.request.pluginId });
   }
   if (request.request.agentId) {
     metadata.push({ label: "Agent", value: request.request.agentId });
@@ -106,6 +106,7 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
     title: request.request.title,
     description: request.request.description ?? null,
     metadata: buildPluginMetadata(request),
+    ...(request.request.approvalSource ? { approvalSource: request.request.approvalSource } : {}),
     agentId: request.request.agentId ?? null,
     pluginId: request.request.pluginId ?? null,
     ...(request.request.scope ? { scope: request.request.scope } : {}),

@@ -1,14 +1,22 @@
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type {
+  ChannelApprovalKind,
+  ChannelApprovalNativeAvailabilityAdapter,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelNativeOriginTargetResolver,
   createNativeApprovalForwardingFallbackSuppressor,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listSlackAccountIds } from "./accounts.js";
+import {
+  listSlackAccountIds,
+  resolveSlackAccount,
+  resolveSlackOperationToken,
+} from "./accounts.js";
 import {
   getSlackApprovalApproversForTeam,
   isSlackApprovalAuthorizedSender,
@@ -45,6 +53,45 @@ type SlackSuppressionAccountInput = {
   };
 };
 
+type SlackOriginContext = {
+  app?: unknown;
+  writeToken?: string;
+  readConfig?: () => OpenClawConfig;
+  assertCurrent?: () => void;
+};
+
+// Origin capture runs before the deferred runtime loads. Check the monitor and
+// its original write token here so a replaced account cannot send its notice.
+export const isSlackApprovalOriginCurrent: NonNullable<
+  ChannelApprovalNativeAvailabilityAdapter["isOriginCurrent"]
+> = (params, handoffConfig) => {
+  // SAFETY: Slack monitor origin capture supplies this context; the required fields are checked below.
+  const context = params.context as SlackOriginContext | undefined;
+  const accountId = normalizeOptionalString(params.accountId);
+  if (
+    !context?.app ||
+    !accountId ||
+    !context.assertCurrent ||
+    !context.readConfig ||
+    !context.writeToken
+  ) {
+    return false;
+  }
+  try {
+    context.assertCurrent();
+    const hasOriginalWriteToken = (cfg: OpenClawConfig) => {
+      const account = resolveSlackAccount({ cfg, accountId });
+      return account.enabled && resolveSlackOperationToken(account, "write") === context.writeToken;
+    };
+    return (
+      hasOriginalWriteToken(context.readConfig()) &&
+      (!handoffConfig || hasOriginalWriteToken(handoffConfig))
+    );
+  } catch {
+    return false;
+  }
+};
+
 function resolveSlackNativeSuppressionAccountId({
   target,
   request,
@@ -79,7 +126,7 @@ const resolveSlackOriginTarget = createChannelNativeOriginTargetResolver({
   resolveFallbackTarget: resolveSlackFallbackOriginTarget,
 });
 
-function resolveSlackApproverDmTargets(params: {
+export function resolveSlackApproverDmTargets(params: {
   cfg: Parameters<typeof shouldHandleSlackNativeApprovalRequest>[0]["cfg"];
   accountId?: string | null;
   approvalKind: ChannelApprovalKind;
@@ -147,6 +194,7 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
   notifyOriginWhenDmOnly: true,
   nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
     capabilityBoundary: true,
+    isOriginCurrent: isSlackApprovalOriginCurrent,
     eventKinds: ["exec", "plugin", "system-agent"],
     isConfigured: isSlackAnyNativeApprovalClientEnabled,
     shouldHandle: shouldHandleSlackNativeApprovalRequest,

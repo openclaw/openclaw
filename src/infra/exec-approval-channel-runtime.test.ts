@@ -404,6 +404,61 @@ describe("createExecApprovalChannelRuntime", () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it("uses the private native plugin replay when the public list follows", async () => {
+    const privateRequest = createPluginReplayRequest("plugin:private-replay");
+    privateRequest.request.approvalSource = {
+      channel: "slack",
+      senderId: "U123",
+      userMessageExcerpt: "original message",
+    };
+    privateRequest.expiresAtMs = Date.now() + 60_000;
+    const nativeRequest = { ...privateRequest, approvalKind: "plugin" as const };
+    const publicRequest = {
+      ...nativeRequest,
+      request: {
+        ...privateRequest.request,
+        approvalSource: { channel: "slack", senderId: "U123" },
+      },
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "plugin.approval.list" ? [publicRequest] : { ok: true },
+    );
+    const shouldHandle = vi.fn(() => true);
+    const deliverRequested = vi.fn(async () => [{ id: privateRequest.id }]);
+    const gatewayRuntime: GatewayNativeApprovalRuntime = {
+      request: request as GatewayNativeApprovalRuntime["request"],
+      requestRoute: vi.fn(),
+      routeCoordinator: {} as never,
+      subscribe: (subscriber) => {
+        if (subscriber.shouldHandle(publicRequest)) {
+          subscriber.onRequested(nativeRequest);
+        }
+        return vi.fn();
+      },
+    };
+    const runtime = withGatewayNativeApprovalRuntime(gatewayRuntime, () =>
+      createRuntime<PluginApprovalRequest, PluginApprovalResolved>({
+        eventKinds: ["plugin"],
+        channel: "slack",
+        accountId: "work",
+        shouldHandle,
+        deliverRequested,
+      }),
+    );
+
+    await runtime.start();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("plugin.approval.list", {}));
+    expect(deliverRequested).toHaveBeenCalledTimes(1);
+    expect(deliverRequested).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          approvalSource: expect.objectContaining({ userMessageExcerpt: "original message" }),
+        }),
+      }),
+    );
+    await runtime.stop();
+  });
+
   it("rejects write RPCs before they reach the approvals-only gateway client", async () => {
     const runtime = createRuntime();
 

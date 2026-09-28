@@ -213,6 +213,10 @@ export function createAgentHarnessHostCapabilities(params: {
     turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
     turnSourceAccountId: attempt.agentAccountId,
     turnSourceThreadId: attempt.currentThreadTs,
+    pluginApprovalOriginThreadId: attempt.approvalSource
+      ? (attempt.messageThreadId ?? null)
+      : undefined,
+    approvalSource: attempt.approvalSource,
   });
   const inactiveError = (message: string) => {
     // Gateway closure can precede the run's abort marker. Keep its captured

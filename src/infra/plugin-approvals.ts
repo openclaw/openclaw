@@ -26,6 +26,15 @@ type PluginApprovalPlacementGrantBinding = {
   cwd: string;
 };
 
+export type PluginApprovalSource = {
+  channel: string;
+  senderId?: string;
+  senderName?: string;
+  workspaceId?: string;
+  conversationKind?: "direct" | "group" | "channel";
+  userMessageExcerpt?: string;
+};
+
 export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
   title: string;
@@ -36,6 +45,8 @@ export type PluginApprovalRequestPayload = {
   scope?: ApprovalScope | null;
   toolName?: string | null;
   toolCallId?: string | null;
+  /** Host-derived source context for the active approval card, not approval authority. */
+  approvalSource?: PluginApprovalSource;
   /** Exact MCP persistence intent; the host separately binds live tool-call proof. */
   mcpTool?: { server: string; tool: string };
   allowedDecisions?: readonly ExecApprovalDecision[] | null;

@@ -17,11 +17,11 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { channelReadyPatch } from "./channel-status-patches.js";
-import { createChannelManager, type ChannelManager } from "./server-channels.js";
+import { createChannelManager } from "./server-channels.js";
 
 describe("channel ownership startup", () => {
   let state: OpenClawTestState;
-  let manager: ChannelManager;
+  let manager: ReturnType<typeof createChannelManager>;
   let registry: ReturnType<typeof createEmptyPluginRegistry>;
   let previousRegistry: ReturnType<typeof getActivePluginRegistry>;
   const started = vi.fn<(accountId: string, ownerAgentId: string) => void>();
@@ -77,6 +77,21 @@ describe("channel ownership startup", () => {
     await manager.startChannels();
     await vi.advanceTimersByTimeAsync(0);
   }
+
+  it("keeps a captured account task bound to its original lifetime", async () => {
+    await start({ channels: { discord: { enabled: true } } });
+    const original = manager.captureCurrentAccountTask("discord", "default");
+    expect(original?.()).toBe(true);
+
+    await manager.stopChannel("discord", "default");
+    expect(original?.()).toBe(false);
+    expect(manager.captureCurrentAccountTask("discord", "default")).toBeUndefined();
+
+    await manager.startChannel("discord", "default");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(manager.captureCurrentAccountTask("discord", "default")?.()).toBe(true);
+    expect(original?.()).toBe(false);
+  });
 
   it("blocks an unowned account without retrying while its bound sibling stays online", async () => {
     await start({

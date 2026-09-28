@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
+import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -49,6 +51,197 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("createGatewayInstanceRuntime", () => {
+  it("replays pending plugin context only to its Slack account", () => {
+    const context = createContext();
+    const request: PluginApprovalRequest = {
+      approvalKind: "plugin",
+      id: "plugin:replay-private",
+      request: {
+        title: "Sensitive action",
+        description: "Needs approval",
+        turnSourceChannel: "slack",
+        turnSourceAccountId: "work",
+        approvalSource: {
+          channel: "slack",
+          senderId: "U123",
+          userMessageExcerpt: "private original message",
+        },
+      },
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    };
+    context.pluginApprovalManager = {
+      listLocalPendingRecords: () => [request],
+    } as unknown as NonNullable<GatewayRequestContext["pluginApprovalManager"]>;
+    const runtime = createGatewayInstanceRuntime({
+      getContext: () => context,
+      getMethodRegistry: () => createRegistry({}),
+      isDispatchAvailable: () => true,
+    });
+    const subscribe = (channel: string, accountId: string) => {
+      const shouldHandle = vi.fn(() => true);
+      const onRequested = vi.fn();
+      runtime.nativeApprovals.subscribe({
+        eventKinds: new Set(["plugin"]),
+        channel,
+        accountId,
+        shouldHandle,
+        onRequested,
+        onResolved: vi.fn(),
+      });
+      return { shouldHandle, onRequested };
+    };
+    const owner = subscribe("slack", "work");
+    const otherAccount = subscribe("slack", "personal");
+    const otherChannel = subscribe("matrix", "work");
+
+    for (const recipient of [owner, otherAccount, otherChannel]) {
+      expect(recipient.shouldHandle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            approvalSource: { channel: "slack", senderId: "U123" },
+          }),
+        }),
+      );
+    }
+    expect(owner.onRequested).toHaveBeenCalledWith(request);
+    for (const recipient of [otherAccount, otherChannel]) {
+      expect(recipient.onRequested).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            approvalSource: { channel: "slack", senderId: "U123" },
+          }),
+        }),
+      );
+    }
+    runtime.close();
+  });
+
+  it("keeps a requester excerpt inside the matching Slack native approval runtime", () => {
+    const runtime = createGatewayInstanceRuntime({
+      getContext: createContext,
+      getMethodRegistry: () => createRegistry({}),
+      isDispatchAvailable: () => true,
+    });
+    const source = {
+      channel: "slack",
+      senderId: "U123",
+      userMessageExcerpt: "private original message",
+    };
+    const request: PluginApprovalRequest = {
+      approvalKind: "plugin",
+      id: "plugin:private",
+      request: {
+        title: "Sensitive action",
+        description: "Needs approval",
+        turnSourceChannel: "slack",
+        turnSourceAccountId: "work",
+        approvalSource: source,
+      },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    };
+    const recipients = [
+      { channel: "slack", accountId: "work" },
+      { channel: "slack", accountId: "personal" },
+      { channel: "matrix", accountId: "work" },
+      { channel: "slack", accountId: "default" },
+    ].map(({ channel, accountId }) => {
+      const shouldHandle = vi.fn(() => true);
+      const onRequested = vi.fn();
+      const onResolved = vi.fn();
+      runtime.nativeApprovals.subscribe({
+        eventKinds: new Set(["plugin"]),
+        channel,
+        accountId,
+        shouldHandle,
+        onRequested,
+        onResolved,
+      });
+      return { shouldHandle, onRequested, onResolved };
+    });
+
+    expect(runtime.approvalEvents.publishRequested("plugin", request)).toBe(4);
+    for (const recipient of recipients) {
+      expect(recipient.shouldHandle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            approvalSource: { channel: "slack", senderId: "U123" },
+          }),
+        }),
+      );
+    }
+    expect(recipients[0]?.onRequested).toHaveBeenCalledWith(request);
+    for (const recipient of recipients.slice(1)) {
+      expect(recipient.onRequested).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            approvalSource: { channel: "slack", senderId: "U123" },
+          }),
+        }),
+      );
+    }
+
+    for (const recipient of recipients) {
+      recipient.onRequested.mockClear();
+    }
+    const defaultRequest: PluginApprovalRequest = {
+      ...request,
+      id: "plugin:default",
+      request: { ...request.request, turnSourceAccountId: null },
+    };
+    expect(runtime.approvalEvents.publishRequested("plugin", defaultRequest)).toBe(4);
+    const publicDefaultRequest = {
+      ...defaultRequest,
+      request: {
+        ...defaultRequest.request,
+        approvalSource: { channel: "slack", senderId: "U123" },
+      },
+    };
+    for (const recipient of recipients) {
+      expect(recipient.onRequested).toHaveBeenCalledWith(publicDefaultRequest);
+    }
+
+    runtime.approvalEvents.publishResolved("plugin", {
+      id: request.id,
+      decision: "deny",
+      ts: 3,
+      request: request.request,
+    });
+    for (const recipient of recipients) {
+      expect(recipient.onResolved).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            approvalSource: { channel: "slack", senderId: "U123" },
+          }),
+        }),
+      );
+    }
+    runtime.close();
+  });
+
+  it.each([
+    [{ decision: "deny" as const }, "denied"],
+    [{ decision: "deny" as const, terminalStatus: "expired" as const }, "expired"],
+    [{ decision: "deny" as const, terminalStatus: "cancelled" as const }, "cancelled"],
+    [{ decision: "allow-once" as const }, "allowed"],
+  ])("passes the plugin approval terminal outcome to the native route owner", (event, status) => {
+    const context = createContext();
+    const runtime = createGatewayInstanceRuntime({
+      getContext: () => context,
+      getMethodRegistry: () => createRegistry({}),
+      isDispatchAvailable: () => true,
+    });
+    const publishTerminal = vi
+      .spyOn(runtime.nativeApprovals.routeCoordinator, "publishPluginTerminal")
+      .mockResolvedValue();
+
+    runtime.approvalEvents.publishResolved("plugin", { id: "plugin:1", ts: 1, ...event });
+
+    expect(publishTerminal).toHaveBeenCalledWith({ approvalId: "plugin:1", status });
+    runtime.close();
+  });
+
   it.each([false, true])(
     "revalidates recovery authority across admission (dedicated principal=%s)",
     async (dedicatedPrincipal) => {
@@ -195,7 +388,7 @@ describe("createGatewayInstanceRuntime", () => {
     expect(recoveryPrincipal?.internal?.sessionCreation).toBeUndefined();
   });
 
-  it("sends recovery notices through normal outbound without invoking plugin actions", async () => {
+  it("sends recovery and live approval notices through normal outbound without plugin actions", async () => {
     await withOpenClawTestState({ layout: "state-only", prefix: "recovery-notice-" }, async () => {
       let releasePlatformDispatch: (() => void) | undefined;
       let platformDispatchHold: Promise<void> | undefined;
@@ -316,12 +509,216 @@ describe("createGatewayInstanceRuntime", () => {
         expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
           status: "completed",
         });
+
+        let approvalPending = true;
+        platformDispatchHold = new Promise<void>((resolve) => {
+          releasePlatformDispatch = resolve;
+        });
+        const approvalNoticeKey = "approval-route-notice:plugin:pending-handoff";
+        const pendingNotice = runtime.nativeApprovals.requestRoute(
+          "send",
+          {
+            channel: "signal",
+            to: "+15551234567",
+            accountId: "work",
+            threadId: "thread-1",
+            message: "Approval required",
+            idempotencyKey: approvalNoticeKey,
+          },
+          { liveOnlyWhenCurrent: () => approvalPending },
+        );
+        await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(4));
+        approvalPending = false;
+        releasePlatformDispatch?.();
+        await expect(pendingNotice).rejects.toThrow(
+          "Recovery notice owner retired before delivery",
+        );
+        expect(visibleSend).toHaveBeenCalledTimes(2);
+        expect(await findDeliveryIntentOwner(approvalNoticeKey)).toBeNull();
+        expect(handleAction).not.toHaveBeenCalled();
       } finally {
         runtime.close();
         restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
       }
     });
   });
+
+  it.each([
+    {
+      label: "reassigned before delivery",
+      terminalToken: "xoxb-other",
+      reassignment: "before" as const,
+      terminalAttempts: 0,
+      terminalPosts: 0,
+    },
+    {
+      label: "reassigned at platform handoff",
+      terminalToken: "xoxb-other",
+      reassignment: "at-handoff" as const,
+      terminalAttempts: 1,
+      terminalPosts: 0,
+    },
+    {
+      label: "unchanged after config refresh",
+      terminalToken: "xoxb-original",
+      reassignment: "before" as const,
+      terminalAttempts: 1,
+      terminalPosts: 1,
+    },
+  ])(
+    "routes a Slack approval outcome with its write token $label",
+    async ({ terminalToken, reassignment, terminalAttempts, terminalPosts }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "approval-terminal-token-" },
+        async () => {
+          const originalToken = "xoxb-original";
+          const configForToken = (botToken: string): OpenClawConfig => ({
+            channels: { slack: { accounts: { work: { botToken } } } },
+          });
+          const sourceConfig = configForToken(originalToken);
+          let currentConfig = sourceConfig;
+          const posts: Array<{ text: string; token: unknown }> = [];
+          const sendText = vi.fn(
+            async (options: {
+              text: string;
+              cfg: OpenClawConfig;
+              onPlatformSendDispatch?: () => Promise<void>;
+              assertDirectAdapterHandoff?: () => void;
+            }) => {
+              if (reassignment === "at-handoff" && options.text.includes("was denied")) {
+                currentConfig = configForToken(terminalToken);
+              }
+              await options.onPlatformSendDispatch?.();
+              options.assertDirectAdapterHandoff?.();
+              posts.push({
+                text: options.text,
+                token: options.cfg.channels?.slack?.accounts?.work?.botToken,
+              });
+              return { channel: "slack", messageId: `1712345678.${posts.length}` };
+            },
+          );
+          const plugin: ChannelPlugin = {
+            id: "slack",
+            meta: {
+              id: "slack",
+              label: "Slack",
+              selectionLabel: "Slack",
+              docsPath: "/channels/slack",
+              blurb: "Slack-shaped approval test plugin.",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => ["work"],
+              resolveAccount: () => ({}),
+              isConfigured: () => true,
+            },
+            outbound: {
+              deliveryMode: "direct",
+              resolveTarget: ({ to }) => ({ ok: true, to: to?.trim() ?? "" }),
+              sendText,
+            },
+          };
+          const pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
+          stageActivePluginRegistry(
+            createTestRegistry([{ pluginId: "slack", source: "test", plugin }]),
+            null,
+            "default",
+          );
+          const context = {
+            ...createContext(),
+            getRuntimeConfig: () => currentConfig,
+          } as GatewayRequestContext;
+          const runtime = createGatewayInstanceRuntime({
+            getContext: () => context,
+            getMethodRegistry: () => createRegistry({}),
+            isDispatchAvailable: () => true,
+          });
+          const reporter = runtime.nativeApprovals.routeCoordinator.createReporter({
+            handledKinds: new Set(["plugin"]),
+            channel: "slack",
+            channelLabel: "Slack",
+            accountId: "work",
+            sourceConfig,
+            isOriginCurrent: () =>
+              currentConfig.channels?.slack?.accounts?.work?.botToken === originalToken,
+            requestGateway: runtime.nativeApprovals.requestRoute,
+            shouldHandle: () => true,
+            classifyRoute: () => "unbound",
+          });
+
+          try {
+            const request: PluginApprovalRequest = {
+              approvalKind: "plugin",
+              id: `plugin:terminal-token-${terminalPosts}`,
+              request: {
+                title: "Review action",
+                description: "Approve an operation",
+                turnSourceChannel: "slack",
+                turnSourceTo: "channel:C123",
+                turnSourceAccountId: "work",
+                turnSourceThreadId: "1712345678.123456",
+              },
+              createdAtMs: Date.now(),
+              expiresAtMs: Date.now() + 60_000,
+            };
+            const approverDm = {
+              surface: "approver-dm" as const,
+              reason: "preferred" as const,
+              target: { to: "user:U123" },
+            };
+            reporter.start();
+            expect(reporter.selectRequest({ approvalKind: "plugin", request })).toEqual({
+              kind: "selected",
+            });
+            await reporter.reportDelivery({
+              approvalKind: "plugin",
+              request,
+              deliveryPlan: {
+                targets: [approverDm],
+                originTarget: { to: "channel:C123", threadId: "1712345678.123456" },
+                notifyOriginWhenDmOnly: true,
+              },
+              deliveredTargets: [approverDm],
+            });
+            expect(posts).toEqual([
+              {
+                text: `Approval ${request.id} required. I sent the approval request to Slack DMs, not this chat.`,
+                token: originalToken,
+              },
+            ]);
+
+            if (reassignment === "before") {
+              currentConfig = configForToken(terminalToken);
+            }
+            const publish = runtime.nativeApprovals.routeCoordinator.publishPluginTerminal({
+              approvalId: request.id,
+              status: "denied",
+            });
+            if (terminalPosts === 0) {
+              await publish.catch(() => undefined);
+            } else {
+              await publish;
+            }
+            expect(
+              sendText.mock.calls.filter((call) => call[0].text.includes("was denied")),
+            ).toHaveLength(terminalAttempts);
+            const terminalMessages = posts.filter((post) => post.text.includes("was denied"));
+            expect(terminalMessages).toHaveLength(terminalPosts);
+            expect(terminalMessages.map((post) => post.token)).toEqual(
+              terminalPosts ? [originalToken] : [],
+            );
+            expect(
+              await findDeliveryIntentOwner(`approval-terminal-notice:${request.id}`),
+            ).toBeNull();
+          } finally {
+            await reporter.stop();
+            runtime.close();
+            restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
+          }
+        },
+      );
+    },
+  );
 
   it("keeps approval subscribers isolated by Gateway instance and unregisters exactly once", () => {
     const registry = createRegistry({});
@@ -384,9 +781,14 @@ describe("createGatewayInstanceRuntime", () => {
     await expect(
       runtime.nativeApprovals.request("config.get" as GatewayNativeApprovalMethod, {}),
     ).rejects.toThrow("internal principal cannot dispatch config.get");
-    await expect(runtime.nativeApprovals.requestRoute("config.get" as "send", {})).rejects.toThrow(
-      "internal principal cannot dispatch config.get",
-    );
+    await expect(
+      runtime.nativeApprovals.requestRoute("config.get" as "send", {
+        channel: "slack",
+        to: "channel:C123",
+        message: "test",
+        idempotencyKey: "approval-route-notice:test",
+      }),
+    ).rejects.toThrow("internal principal cannot dispatch config.get");
     runtime.close();
   });
 
@@ -431,7 +833,12 @@ describe("createGatewayInstanceRuntime", () => {
       });
 
       try {
-        const request = runtime.nativeApprovals.requestRoute("send", { message: "test" });
+        const request = runtime.nativeApprovals.requestRoute("send", {
+          channel: "slack",
+          to: "channel:C123",
+          message: "test",
+          idempotencyKey: "approval-route-notice:test",
+        });
         const error = request.catch((value: unknown) => value);
         await started;
         await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);

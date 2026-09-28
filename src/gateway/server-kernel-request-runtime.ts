@@ -134,6 +134,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
     isDispatchAvailable: () => startupState.dispatchReady && !lifecycle.closePreludeStarted,
+    captureCurrentChannelAccountTask: runtime.channelManager.captureCurrentAccountTask,
     logError: (message) => log.error(message),
   });
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;

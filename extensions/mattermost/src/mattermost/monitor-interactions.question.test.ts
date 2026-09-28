@@ -10,11 +10,13 @@ type CapturedAuthorize = (opts: never) => Promise<{
   ok: boolean;
   response?: { update?: unknown; ephemeral_text?: string };
 }>;
+type CapturedButtonDispatch = (opts: never) => Promise<void>;
 const createInteractionHandlerMock = vi.hoisted(() =>
   vi.fn(
     (_options: {
       handleInteraction?: CapturedDispatch;
       authorizeButtonClick?: CapturedAuthorize;
+      dispatchButtonClick?: CapturedButtonDispatch;
     }) =>
       async () => {},
   ),
@@ -42,6 +44,7 @@ const { registerMattermostInteractions } = await import("./monitor-interactions.
 const QUESTION_ID = "ask_0123456789abcdef0123456789abcdef";
 
 const resolveChannelInfoMock = vi.fn(async () => ({ id: "chan-1", type: "O" }));
+const dispatchInboundMock = vi.fn(async (_params: unknown) => {});
 
 function captureDispatcher(overrides?: {
   error?: (message: string) => void;
@@ -49,12 +52,31 @@ function captureDispatcher(overrides?: {
 }) {
   registerMattermostInteractions({
     monitor: {
-      account: { accountId: "main" },
+      account: { accountId: "main", config: {} },
       cfg: {},
       client: {},
-      core: { channel: { commands: { shouldHandleTextCommands: () => true } } },
+      core: {
+        channel: {
+          commands: { shouldHandleTextCommands: () => true },
+          inbound: { dispatch: dispatchInboundMock },
+          routing: {
+            resolveAgentRoute: () => ({
+              accountId: "main",
+              agentId: "main",
+              sessionKey: "agent:main:mattermost:channel:chan-1",
+            }),
+          },
+          text: {
+            resolveTextChunkLimit: () => 4000,
+            resolveMarkdownTableMode: () => "off",
+          },
+        },
+      },
       pairing: { readAllowFromStore: async () => [] },
-      resources: { resolveChannelInfo: resolveChannelInfoMock },
+      resources: {
+        resolveChannelInfo: resolveChannelInfoMock,
+        sendTypingIndicator: vi.fn(async () => {}),
+      },
       runtime: { error: overrides?.error ?? vi.fn(), log: vi.fn() },
       botUserId: "bot",
     },
@@ -102,13 +124,14 @@ const questionContext = {
   option_index: 1,
 };
 
-describe("mattermost question interactions", () => {
+describe("mattermost monitor interactions", () => {
   beforeEach(() => {
     resolveOptionMock.mockReset();
     resolveOptionMock.mockResolvedValue({ status: "answered" });
     authorizeMock.mockReset();
     authorizeMock.mockResolvedValue({ ok: true, roomLabel: "#town-square" });
     resolveChannelInfoMock.mockClear();
+    dispatchInboundMock.mockClear();
     createInteractionHandlerMock.mockClear();
   });
 
@@ -170,6 +193,42 @@ describe("mattermost question interactions", () => {
     expect(result.ok).toBe(false);
     expect(result.response?.ephemeral_text).toBe("OpenClaw ignored this action for #town-square.");
     expect(result.response?.update).toBeUndefined();
+  });
+
+  it("passes an authorized button click sender to the synthetic inbound turn", async () => {
+    captureDispatcher();
+    const callbacks = createInteractionHandlerMock.mock.calls[0]?.[0];
+    if (!callbacks?.authorizeButtonClick || !callbacks.dispatchButtonClick) {
+      throw new Error("registration did not supply button callbacks");
+    }
+    const post = { id: "post-1", channel_id: "chan-1", message: "Choose an option" };
+    const payload = { channel_id: "chan-1", user_id: "user-1", user_name: "ada" };
+    expect(await callbacks.authorizeButtonClick({ payload, post } as never)).toMatchObject({
+      ok: true,
+    });
+
+    await callbacks.dispatchButtonClick({
+      channelId: "chan-1",
+      userId: "user-1",
+      userName: "ada",
+      actionId: "approve",
+      actionName: "Approve",
+      postId: "post-1",
+      post,
+    } as never);
+
+    expect(dispatchInboundMock).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMock.mock.calls[0]?.[0]).toMatchObject({
+      ctxPayload: {
+        InboundAccessAuthorized: true,
+        ApprovalSource: {
+          channel: "mattermost",
+          senderId: "user-1",
+          senderName: "ada",
+          conversationKind: "channel",
+        },
+      },
+    });
   });
 
   it("refuses a click whose access is lost while the Gateway read is in flight", async () => {

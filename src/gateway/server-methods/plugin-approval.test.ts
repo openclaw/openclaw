@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
@@ -807,6 +808,60 @@ describe("createPluginApprovalHandlers", () => {
   });
 
   describe("plugin.approval.resolve", () => {
+    it("omits the original message from list and resolved public routes", async () => {
+      const source = {
+        channel: "slack",
+        senderId: "U123",
+        userMessageExcerpt: "private original message",
+      };
+      const record = manager.create(
+        { title: "Sensitive action", description: "Needs approval", approvalSource: source },
+        60_000,
+        "plugin:private",
+      );
+      await manager.register(record, 60_000);
+      const forwardResolved = vi.fn(async () => {});
+      const iosResolved = vi.fn(async () => {});
+      const webResolved = vi.fn(async () => {});
+      const handlers = createPluginApprovalHandlers(manager, {
+        forwarder: {
+          handlePluginApprovalResolved: forwardResolved,
+        } as unknown as ExecApprovalForwarder,
+        iosPushDelivery: { handleResolved: iosResolved },
+      });
+      const context = {
+        ...createApprovalContext(),
+        approvalWebPushDelivery: { handleResolved: webResolved },
+      } as unknown as GatewayRequestHandlerOptions["context"];
+      const listOpts = createMockOptions("plugin.approval.list", {}, { context });
+      await invokeHandler(handlers, listOpts);
+      const listed = requireRecord(
+        requireArray(responseCall(listOpts.respond).result, "list")[0],
+        "approval",
+      );
+      expect(requireRecord(listed.request, "request").approvalSource).toEqual({
+        channel: "slack",
+        senderId: "U123",
+      });
+      expect((await manager.getSnapshot(record.id))?.request.approvalSource).toEqual(source);
+
+      const resolveOpts = createMockOptions(
+        "plugin.approval.resolve",
+        { id: record.id, decision: "deny" },
+        { context },
+      );
+      await invokeHandler(handlers, resolveOpts);
+      const publicEvent = expect.objectContaining({
+        request: expect.objectContaining({
+          approvalSource: { channel: "slack", senderId: "U123" },
+        }),
+      });
+      expect(broadcastCall(resolveOpts).payload).toEqual(publicEvent);
+      expect(forwardResolved).toHaveBeenCalledWith(publicEvent);
+      expect(iosResolved).toHaveBeenCalledWith(publicEvent);
+      expect(webResolved).toHaveBeenCalledWith(publicEvent);
+    });
+
     it("rejects invalid decision", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = await registerApproval(manager);

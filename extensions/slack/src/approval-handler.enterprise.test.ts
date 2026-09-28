@@ -9,6 +9,13 @@ vi.mock("./send.js", () => ({
 
 const { slackApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
 
+const EXEC_REQUEST = {
+  id: "exec-approval",
+  request: { command: "echo hi" },
+  createdAtMs: 0,
+  expiresAtMs: 60_000,
+};
+
 describe("Slack Enterprise Grid approval delivery", () => {
   beforeEach(() => {
     sendMessageSlackMock.mockReset().mockResolvedValue({
@@ -64,6 +71,13 @@ describe("Slack Enterprise Grid approval delivery", () => {
       },
       accountId: "default",
       context,
+      request: EXEC_REQUEST,
+      approvalKind: "exec",
+      plannedTarget: {
+        surface: "origin",
+        reason: "preferred",
+        target: { to: "team:T123:channel:C123" },
+      },
       preparedTarget: {
         to: "channel:C123",
         teamId: "T123",
@@ -75,6 +89,7 @@ describe("Slack Enterprise Grid approval delivery", () => {
       channelId: "C123",
       messageTs: "1712345678.123456",
       teamId: "T123",
+      showMessageExcerpt: false,
     });
     expect(resolveClient).toHaveBeenCalledWith("T123");
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
@@ -121,6 +136,13 @@ describe("Slack Enterprise Grid approval delivery", () => {
           enterprise: { enterpriseId: "E123" },
           ...(resolveClient ? { resolveClient } : {}),
         },
+        request: EXEC_REQUEST,
+        approvalKind: "exec",
+        plannedTarget: {
+          surface: "origin",
+          reason: "preferred",
+          target: { to: "team:T123:channel:C123" },
+        },
         preparedTarget: {
           to: "channel:C123",
           teamId: "T123",
@@ -146,6 +168,13 @@ describe("Slack Enterprise Grid approval delivery", () => {
         config: {},
         enterprise: { enterpriseId: "E123" },
         resolveClient: () => teamClient,
+      },
+      request: EXEC_REQUEST,
+      approvalKind: "exec",
+      plannedTarget: {
+        surface: "approver-dm",
+        reason: "preferred",
+        target: { to: "team:T123:user:U123" },
       },
       preparedTarget: {
         to: "user:U123",

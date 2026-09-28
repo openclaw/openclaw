@@ -131,6 +131,10 @@ export async function prepareWorkerAgentRuntimeIdentity(
       turnSourceTo: turn.currentMessagingTarget ?? turn.currentChannelId,
       turnSourceAccountId: turn.agentAccountId,
       turnSourceThreadId: turn.currentThreadTs,
+      pluginApprovalOriginThreadId: turn.approvalSource
+        ? (turn.messageThreadId ?? null)
+        : undefined,
+      approvalSource: turn.approvalSource,
       gatewayUiCommandTarget: turn.gatewayUiCommandTarget,
       workerTurnClaim: owner.turnClaim,
       approvalAuthority: owner.delegatedAuthority,

@@ -109,6 +109,25 @@ describe("resolveInboundSupplementalSenderAllowed", () => {
 });
 
 describe("buildChannelInboundEventContext", () => {
+  it("captures admitted human sender facts for later approval notices", () => {
+    const human = buildTestInboundEventContext({
+      sender: { id: "u1", name: "User One" },
+      conversation: { kind: "direct", id: "dm-1" },
+    });
+    expect(human.ApprovalSource).toEqual({
+      channel: "test",
+      senderId: "u1",
+      senderName: "User One",
+      conversationKind: "direct",
+    });
+    expect(
+      buildTestInboundEventContext({ sender: { id: "u1", isBot: true } }).ApprovalSource,
+    ).toBeUndefined();
+    expect(
+      buildTestInboundEventContext({ sender: { id: "u1", isSelf: true } }).ApprovalSource,
+    ).toBeUndefined();
+  });
+
   it("does not claim authoritative route facts when the producer omits the route peer", () => {
     const ctx = buildTestInboundEventContext({
       conversation: { kind: "group", id: "room-1" },

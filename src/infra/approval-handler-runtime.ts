@@ -191,6 +191,9 @@ export function createChannelApprovalNativeRuntimeAdapter<
     ...(spec.resolveApprovalKind ? { resolveApprovalKind: spec.resolveApprovalKind } : {}),
     availability: {
       isConfigured: spec.availability.isConfigured,
+      ...(spec.availability.isOriginCurrent
+        ? { isOriginCurrent: spec.availability.isOriginCurrent }
+        : {}),
       shouldHandle: spec.availability.shouldHandle,
     },
     presentation: {
@@ -304,6 +307,7 @@ type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   /** @deprecated Trusted compatibility override; omit to derive ownership from the payload. */
   resolveApprovalKind?: (request: TRequest) => ChannelApprovalKind;
   isConfigured: () => boolean;
+  isOriginCurrent?: (request: TRequest, handoffConfig?: OpenClawConfig) => boolean;
   shouldHandle: (request: TRequest) => boolean;
   nowMs?: () => number;
 };
@@ -401,6 +405,9 @@ export function createChannelApprovalHandler<
       ? { resolveApprovalKind: adapter.runtime.resolveApprovalKind }
       : {}),
     isConfigured: adapter.runtime.isConfigured,
+    ...(adapter.runtime.isOriginCurrent
+      ? { isOriginCurrent: adapter.runtime.isOriginCurrent }
+      : {}),
     shouldHandle: adapter.runtime.shouldHandle,
     nowMs: adapter.runtime.nowMs,
     buildPendingContent: adapter.content.buildPendingContent,
@@ -525,6 +532,15 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         ? { resolveApprovalKind: nativeRuntime.resolveApprovalKind }
         : {}),
       isConfigured: () => nativeRuntime.availability.isConfigured(baseContext),
+      ...(nativeRuntime.availability.isOriginCurrent
+        ? {
+            isOriginCurrent: (request: ApprovalRequest, handoffConfig?: OpenClawConfig) =>
+              nativeRuntime.availability.isOriginCurrent?.(
+                { ...baseContext, request },
+                handoffConfig,
+              ) === true,
+          }
+        : {}),
       shouldHandle: (request) => {
         const approvalKind = resolveApprovalKind(request);
         return nativeRuntime.availability.shouldHandle({

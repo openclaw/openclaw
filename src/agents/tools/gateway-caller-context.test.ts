@@ -33,6 +33,30 @@ import {
 } from "./gateway-caller-context.js";
 
 describe("gateway caller context wrapper", () => {
+  it("keeps the admitted plugin origin separate from nested reply anchors", async () => {
+    const identity = { agentId: "main", sessionKey: "agent:main:slack:direct:u123" };
+    await withGatewayToolCallerIdentity(
+      {
+        ...identity,
+        operationalRunInstance: { instanceId: "slack-root", runId: "slack-root" },
+        turnSourceThreadId: "reply-anchor",
+        pluginApprovalOriginThreadId: null,
+      },
+      () =>
+        withGatewayToolCallerIdentity(
+          {
+            ...identity,
+            turnSourceThreadId: "nested-reply-anchor",
+            pluginApprovalOriginThreadId: "nested-thread",
+          },
+          () => {
+            expect(getGatewayToolCallerIdentity()?.turnSourceThreadId).toBe("reply-anchor");
+            expect(getGatewayToolCallerIdentity()?.pluginApprovalOriginThreadId).toBeNull();
+          },
+        ),
+    );
+  });
+
   it.each(["outer", "inner"])("retains the narrower %s approval lifetime", async (narrower) => {
     const run = { instanceId: `context-${narrower}`, runId: `context-${narrower}` };
     const root = claimAgentRunDelegatedAuthority(run);

@@ -800,6 +800,12 @@ async function handleSlashCommandAsync(params: {
     CommandAuthorized: commandAuthorized,
     InboundAccessAuthorized: true,
     CommandSource: "native" as const,
+    ApprovalSource: {
+      channel: "mattermost",
+      senderId,
+      senderName,
+      conversationKind: chatType,
+    },
     OriginatingChannel: "mattermost" as const,
     OriginatingTo: to,
   });
