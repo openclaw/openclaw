@@ -604,6 +604,31 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         expect(fs.readdirSync(directory).filter((name) => name.startsWith("child-"))).toHaveLength(
           nested ? 1 : 0,
         );
+        const owner = fs.readFileSync(path.join(directory, "owner.json"), "utf8");
+        const artifact = write(root, "dist/retained-artifact.txt", "previous generation");
+        const nextWriter = write(
+          root,
+          "next-writer.mts",
+          `
+        import fs from 'node:fs';
+        import { withDistArtifactOwnership } from ${JSON.stringify(moduleUrl)};
+        await withDistArtifactOwnership(process.cwd(), async () => {
+          fs.writeFileSync(${JSON.stringify(artifact)}, 'next generation');
+        });
+      `,
+        );
+        const denied = await start(root, nextWriter).done;
+        expect(denied.code, denied.output).toBe(1);
+        expect(denied.output).toContain("Could not acquire");
+        expect(fs.readFileSync(artifact, "utf8")).toBe("previous generation");
+        expect(fs.readFileSync(path.join(directory, "owner.json"), "utf8")).toBe(owner);
+
+        // Every fixture process has exited; the synthetic failure started no detached compiler.
+        fs.rmSync(directory, { recursive: true });
+        const recovered = await start(root, nextWriter).done;
+        expect(recovered.code, recovered.output).toBe(0);
+        expect(fs.readFileSync(artifact, "utf8")).toBe("next generation");
+        expect(fs.existsSync(path.join(directory, "owner.json"))).toBe(false);
       }, signal);
     },
   );
