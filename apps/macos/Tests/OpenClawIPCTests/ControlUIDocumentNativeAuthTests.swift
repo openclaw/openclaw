@@ -275,6 +275,8 @@ struct ControlUIDocumentNativeAuthTests {
         let defaults = try #require(UserDefaults(suiteName: defaultsName))
         defer { defaults.removePersistentDomain(forName: defaultsName) }
         try await DeviceIdentityStore.withStateDirectory(stateDir) {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            let helloIdentities = LockIsolated<[String]>([])
             let endpoint = GatewayConnection.EndpointSnapshot(
                 config: (server.websocketURL("/control/"), "accepted-profile-token", nil),
                 routeAuthority: 1, deviceAuthGatewayID: "profile-reconnect", revision: 1)
@@ -286,6 +288,13 @@ struct ControlUIDocumentNativeAuthTests {
                 }
                 return GatewayTestWebSocketTask(
                     sendHook: { task, message, sendIndex in
+                        if sendIndex == 0 {
+                            let params = try #require(GatewayWebSocketTestSupport.connectRequestParams(from: message))
+                            let device = try #require(params["device"] as? [String: Any])
+                            let deviceID = try #require(device["id"] as? String)
+                            helloIdentities.withValue { $0.append(deviceID) }
+                            return
+                        }
                         guard sendIndex > 0,
                               let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
                         task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
@@ -308,9 +317,18 @@ struct ControlUIDocumentNativeAuthTests {
             let target = DashboardGatewayTarget.profile("profile-reconnect")
             let manager = DashboardManager._testMake(
                 selection: MacGatewaySelectionPreferences(defaults: defaults),
-                connectionProvider: { _ in connection }, browserIdentityURLProvider: nil,
+                connectionProvider: { _ in connection },
+                browserIdentityURLProvider: { _, config in
+                    // Catalog notifications may arrive outside the test task.
+                    // Reconnect must still use this fixture's native identity.
+                    try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                        try await connection.controlUiBrowserIdentityURL(config: config)
+                    }
+                },
                 legacyCredentialsProvider: { _, endpoint in
-                    let credentials = try await connection.controlUiLegacyCredentials(endpoint: endpoint)
+                    let credentials = try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                        try await connection.controlUiLegacyCredentials(endpoint: endpoint)
+                    }
                     let lease = try #require(await connection.captureServerLease())
                     let isOriginal = originalLease.withValue { value in
                         if value == nil { value = lease }
@@ -372,9 +390,13 @@ struct ControlUIDocumentNativeAuthTests {
                 #expect(try await webView.evaluateJavaScript("window.unsavedDraft") as? String == "keep me")
                 #expect(retained.documentHost.hasCurrentNativeStartupCredentials)
                 #expect(retained.auth.legacyCredentials == ["token": "accepted-profile-token"])
+                #expect(helloIdentities.value == [identity.deviceId, identity.deviceId])
                 try scopeNativeDashboardIdentity(retained.documentHost, stateDirectory: stateDir)
+                let providerRevision = retained.documentHost.nativeGatewayAuthRevision
                 let response = try await Self.decodeReply(Self.challenge(in: webView))
-                let result = try #require(response["result"] as? [String: Any], "Native auth reply: \(response)")
+                let result = try #require(
+                    response["result"] as? [String: Any],
+                    "Native auth reply: \(response); provider revision \(providerRevision) -> \(retained.documentHost.nativeGatewayAuthRevision)")
                 #expect(result["scopes"] as? [String] == ["operator.read", "operator.write"])
                 #expect(session.snapshotMakeCount() == 2)
                 webView.reload()

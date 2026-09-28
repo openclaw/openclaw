@@ -338,7 +338,7 @@ final class DashboardManager {
                 controller.auth.gatewayUrl != auth.gatewayUrl
             let credentialChanged = controller.auth != auth
             if routeChanged || credentialChanged {
-                guard auth.hasCredential || auth.usesBrowserIdentity else {
+                guard auth.hasCredential || auth.hasAcceptedNativeBinding || auth.usesBrowserIdentity else {
                     self.replaceWithRouteFailure(controller)
                     continue
                 }
@@ -356,7 +356,7 @@ final class DashboardManager {
                 let updateBridgeEnabled = controller === self.controller && Self.updateBridgeEnabled(mode: mode)
                 if dashboardURL == controller.currentURL {
                     controller.setUpdateBridgeEnabled(updateBridgeEnabled)
-                } else if auth.hasCredential || auth.usesBrowserIdentity {
+                } else if auth.hasCredential || auth.hasAcceptedNativeBinding || auth.usesBrowserIdentity {
                     controller.update(url: dashboardURL, auth: auth, updateBridgeEnabled: updateBridgeEnabled)
                 }
                 self.displayedPrimaryRoutes[key] = (routeRevision, previousRoute?.authority)
