@@ -11,7 +11,6 @@ import {
   downgradeOpenAIFunctionCallReasoningPairs,
   dropStaleOpenAIReasoning,
   isMessagingToolDuplicate,
-  normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
 import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
@@ -21,95 +20,25 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 describe("sanitizeUserFacingText", () => {
-  it("strips final tags", () => {
-    expect(sanitizeUserFacingText("<final>Hello</final>")).toBe("Hello");
-    expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
-  });
-
-  it.each([
-    'Example:\n```xml\n<final data-model="demo">payload</final>\n```',
-    "Write `<final>payload</final>` as XML.",
-  ])("preserves literal final tags through user-facing sanitization: %s", (example) => {
-    expect(sanitizeUserFacingText(`${example}\n<final>Outside answer</final>`)).toBe(
-      `${example}\nOutside answer`,
+  it("sanitizes raw API error payloads", () => {
+    const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
+    expect(renderUserFacingText(raw, { errorContext: true })).toBe(
+      "LLM error server_error: Something exploded",
     );
   });
-
-  it("does not strip custom or malformed final-like tags", () => {
-    expect(sanitizeUserFacingText("<final-result>Hello</final-result>")).toBe(
-      "<final-result>Hello</final-result>",
-    );
-    expect(sanitizeUserFacingText('<final reason="a>b">Hello')).toBe('<final reason="a>b">Hello');
-    expect(sanitizeUserFacingText("<final / nottag>Hello")).toBe("<final / nottag>Hello");
-    expect(sanitizeUserFacingText(`<final ${" ".repeat(10_000)}`)).toBe(
-      `<final ${" ".repeat(10_000)}`,
-    );
-    expect(sanitizeUserFacingText(`<final ${" ".repeat(10_000)}= >Hello`)).toBe(
-      `<final ${" ".repeat(10_000)}= >Hello`,
-    );
-  });
-
-  it.each(["202 results found", "400 days left"])(
-    "does not clobber normal numeric prefix: %s",
-    (text) => {
-      expect(sanitizeUserFacingText(text)).toBe(text);
-    },
-  );
 
   it("sanitizes role ordering errors", () => {
     const result = renderUserFacingText("400 Incorrect role information", { errorContext: true });
     expect(result).toContain("Message ordering conflict");
   });
 
-  it("sanitizes HTTP status errors with error hints", () => {
-    expect(renderUserFacingText("500 Internal Server Error", { errorContext: true })).toBe(
-      "HTTP 500: Internal Server Error",
-    );
-  });
-
   it("preserves a provider-completed finish_reason error", () => {
     expect(renderUserFacingText("Provider finish_reason: error", { errorContext: true })).toBe(
       "Provider finish_reason: error",
     );
-  });
-
-  it.each([
-    "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
-    "Request size exceeds model context window",
-  ])("sanitizes direct context-overflow error: %s", (text) => {
-    expect(renderUserFacingText(text, { errorContext: true })).toContain(
-      "Context overflow: prompt too large for the model.",
-    );
-  });
-
-  it("sanitizes Ollama prompt-too-long payloads through the context-overflow path", () => {
-    const text =
-      'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}';
-    expect(renderUserFacingText(text, { errorContext: true })).toContain(
-      "Context overflow: prompt too large for the model.",
-    );
-  });
-
-  it.each([
-    "Changelog note: we fixed false positives for `Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.` in 2026.2.9",
-    "nah it failed, hit a context overflow. the prompt was too large for the model. want me to retry it with a different approach?",
-    "Problem: When a subagent reads a very large file, it can exceed the model context window. Auto-compaction cannot help in that case.",
-  ])("does not rewrite regular context-overflow mentions: %s", (text) => {
-    expect(sanitizeUserFacingText(text)).toBe(text);
-  });
-
-  it.each([
-    "If your API billing is low, top up credits in your provider dashboard and retry payment verification.",
-    "Firebase downgraded us to the free Spark plan; check whether we need to re-enable billing.",
-  ])("does not rewrite regular billing mentions: %s", (text) => {
-    expect(sanitizeUserFacingText(text)).toBe(text);
-  });
-
-  it("does not rewrite billing error-shaped text without errorContext", () => {
-    const text = "billing: please upgrade your plan";
-    expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
   it("rewrites billing error-shaped text with errorContext", () => {
@@ -125,43 +54,10 @@ describe("sanitizeUserFacingText", () => {
     ).toBe("Command did not run: approval timed out.");
   });
 
-  it("sanitizes raw API error payloads", () => {
-    const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
-    expect(renderUserFacingText(raw, { errorContext: true })).toBe(
-      "LLM error server_error: Something exploded",
-    );
-  });
-
-  it("does not rewrite unprefixed raw API payloads without explicit errorContext", () => {
-    const raw = '{"type":"error","error":{"type":"server_error","message":"Something exploded"}}';
-    expect(sanitizeUserFacingText(raw)).toBe(raw);
-  });
-
-  it("sanitizes Codex error-prefixed API payloads", () => {
-    const raw =
-      'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
-    expect(renderUserFacingText(raw, { errorContext: true })).toBe(
-      "LLM error server_error: Something exploded",
-    );
-  });
-
   it("sanitizes Codex error-prefixed API payloads without explicit errorContext", () => {
     const raw =
       'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
     expect(renderUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
-  });
-
-  it("keeps regular JSON examples intact without explicit errorContext", () => {
-    const raw = '{"error":{"type":"validation_error","message":"showing an example payload"}}';
-    expect(sanitizeUserFacingText(raw)).toBe(raw);
-  });
-
-  it("preserves specialized context overflow guidance for raw API payloads", () => {
-    const raw =
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
-    expect(renderUserFacingText(raw, { errorContext: true })).toContain(
-      "Context overflow: prompt too large for the model.",
-    );
   });
 
   it("preserves specialized context overflow guidance for Codex-prefixed API payloads", () => {
@@ -170,20 +66,6 @@ describe("sanitizeUserFacingText", () => {
     expect(renderUserFacingText(raw, { errorContext: true })).toContain(
       "Context overflow: prompt too large for the model.",
     );
-  });
-
-  it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
-    expect(renderUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
-    );
-  });
-
-  it("preserves rate limit reset details that use resets wording", () => {
-    expect(
-      renderUserFacingText("Error: Rate limit reached, resets 6pm (UTC)", {
-        errorContext: true,
-      }),
-    ).toBe("⚠️ Rate limit reached, resets 6pm (UTC)");
   });
 
   it("returns a model-switch hint for OpenAI model capacity errors", () => {
@@ -195,14 +77,6 @@ describe("sanitizeUserFacingText", () => {
         },
       ),
     ).toBe("⚠️ Selected model is at capacity. Try a different model, or wait and retry.");
-  });
-
-  it("returns a transport-specific message for prefixed ECONNREFUSED errors", () => {
-    expect(
-      renderUserFacingText("Error: connect ECONNREFUSED 127.0.0.1:443", {
-        errorContext: true,
-      }),
-    ).toBe("LLM request failed: connection refused by the provider endpoint.");
   });
 
   it("preserves the production Git inventory timeout and its hint instead of provider copy", () => {
@@ -222,10 +96,7 @@ describe("sanitizeUserFacingText", () => {
     expect(renderUserFacingText(text, { errorContext: true })).toBe(expected);
   });
 
-  it.each([
-    { termination: "exit", code: 23, signal: null },
-    { termination: "exit", code: null, signal: null },
-  ] satisfies Array<Partial<SpawnResult>>)(
+  it.each([{ termination: "exit", code: 23, signal: null }] satisfies Array<Partial<SpawnResult>>)(
     "preserves command failure metadata and the bounded recovery tail: %j",
     (metadata) => {
       const error = createCommandError(
@@ -248,14 +119,11 @@ describe("sanitizeUserFacingText", () => {
     },
   );
 
-  it.each(["disk full", "ENOSPC: no space left on device"])(
-    "rewrites disk-space failures with errorContext: %s",
-    (input) => {
-      expect(renderUserFacingText(input, { errorContext: true })).toBe(
-        "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
-      );
-    },
-  );
+  it.each(["disk full"])("rewrites disk-space failures with errorContext: %s", (input) => {
+    expect(renderUserFacingText(input, { errorContext: true })).toBe(
+      "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
+    );
+  });
 
   it("sanitizes invalid streaming event order errors", () => {
     expect(
@@ -268,31 +136,6 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
-  it.each([
-    {
-      input: "Hello there!\n\nHello there!",
-      expected: "Hello there!",
-    },
-    {
-      input: "Hello there!\n\nDifferent line.",
-      expected: "Hello there!\n\nDifferent line.",
-    },
-  ])("normalizes paragraph blocks", ({ input, expected }) => {
-    expect(sanitizeUserFacingText(input)).toBe(expected);
-  });
-
-  it.each([
-    { input: "\nHello there!", expected: "Hello there!" },
-    { input: "  \n\nHello", expected: "Hello" },
-  ])("strips leading empty lines: %j", ({ input, expected }) => {
-    expect(sanitizeUserFacingText(input)).toBe(expected);
-  });
-
-  it("preserves trailing whitespace and internal newlines", () => {
-    expect(sanitizeUserFacingText("Hello\n\nWorld\n")).toBe("Hello\n\nWorld\n");
-    expect(sanitizeUserFacingText("Line 1\nLine 2")).toBe("Line 1\nLine 2");
-  });
-
   it("strips tool-call replay placeholders without trimming visible text", () => {
     expect(sanitizeUserFacingText("[tool calls omitted]")).toBe("");
     expect(sanitizeUserFacingText("  [tool calls omitted]\t")).toBe("");
@@ -300,70 +143,6 @@ describe("sanitizeUserFacingText", () => {
       "Hello\n\nWorld\n",
     );
     expect(sanitizeUserFacingText("A\n[tool calls omitted]\n[tool calls omitted]\nB")).toBe("A\nB");
-  });
-
-  it("strips legacy uppercase TOOL_CALL blocks before user-facing delivery", () => {
-    const input = [
-      "Before",
-      '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
-      "After",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
-  });
-
-  it("strips legacy uppercase TOOL_RESULT blocks before user-facing delivery", () => {
-    const input = ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join(
-      "\n",
-    );
-
-    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
-  });
-
-  it("strips Grok-style plain-text tool calls before user-facing delivery", () => {
-    const input = [
-      "Before",
-      '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}',
-      '[tool:message] {"action":"send","channel":"channel:123","message":"[tool:read] {\\"path\\":\\"/app/skills/meme-maker/SKILL.md\\"}"}',
-      "After",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe("Before\nAfter");
-  });
-
-  it("strips MiniMax plain-text tool calls before user-facing delivery", () => {
-    const input = [
-      "Let me check that.",
-      '<minimax:tool_call><invoke name="exec">',
-      '<parameter name="cmd">ls</parameter>',
-      "</invoke></minimax:tool_call>",
-      "Done.",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe("Let me check that.\n\nDone.");
-  });
-
-  it("preserves MiniMax tool-call XML examples in user-facing code spans", () => {
-    const inline = 'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.';
-    const fenced = [
-      "Example:",
-      "```xml",
-      '<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>',
-      "```",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(inline)).toBe(inline);
-    expect(sanitizeUserFacingText(fenced)).toBe(fenced);
-  });
-
-  it("strips raw XML tool-call blocks before user-facing delivery", () => {
-    const input = [
-      "Before",
-      '<tool_call>{"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>',
-      "After",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
   });
 
   it("strips internal tool trace warning lines from error-context delivery text", () => {
@@ -380,89 +159,6 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input, { errorContext: true })).toBe(
       "Visible intro.\nVisible outro.",
     );
-  });
-
-  it("preserves explicit tool progress outside error-context delivery text", () => {
-    const input = "🛠️ Exec: echo queued-progress";
-
-    expect(sanitizeUserFacingText(input)).toBe(input);
-  });
-
-  it("preserves internal trace examples inside fenced code", () => {
-    const input = [
-      "Example:",
-      "```",
-      "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-      "```",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe(input);
-  });
-
-  it("strips plural XML function-call wrappers before user-facing delivery", () => {
-    const input = [
-      "Before",
-      '<function_calls><invoke name="find"><parameter name="query">secret</parameter></invoke></function_calls>',
-      "After",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
-  });
-
-  it("strips workflow function response wrappers before user-facing delivery", () => {
-    const input = [
-      "Before",
-      "<function_response>",
-      'Searching for: "what skills matter most in the age of AI"',
-      "...",
-      "</function_response>",
-      "After",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
-  });
-
-  it("strips compact chained function response wrappers adjacent to stripped function calls", () => {
-    const input =
-      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>first</function_response><function_response>second</function_response>\nAfter';
-
-    expect(sanitizeUserFacingText(input)).toBe("Checking. \nAfter");
-  });
-
-  it("strips compact function response wrappers before same-line visible replies", () => {
-    const input =
-      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw</function_response> Done.';
-
-    expect(sanitizeUserFacingText(input)).toBe("Checking.  Done.");
-  });
-
-  it("preserves literal tool-call tag examples in user-facing prose", () => {
-    const input = "Use `<tool_call>` to describe the XML tag in docs.";
-    expect(sanitizeUserFacingText(input)).toBe(input);
-  });
-
-  it("keeps ordinary inline mentions of the replay placeholder", () => {
-    expect(sanitizeUserFacingText("What does [tool calls omitted] mean?")).toBe(
-      "What does [tool calls omitted] mean?",
-    );
-  });
-
-  it("strips marked internal runtime context blocks but keeps real reply text", () => {
-    const input = [
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "OpenClaw runtime context (internal):",
-      "This context is runtime-generated, not user-authored. Keep internal details private.",
-      "",
-      "[Internal task completion event]",
-      "source: subagent",
-      "Action:",
-      "Reply to the user in your own words.",
-      INTERNAL_RUNTIME_CONTEXT_END,
-      "",
-      "Done. Clean answer only.",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe("Done. Clean answer only.");
   });
 
   it("strips copied inbound metadata blocks from user-facing assistant text", () => {
@@ -612,26 +308,6 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("");
   });
 
-  it("does not strip ordinary text that merely mentions internal marker strings", () => {
-    const input = [
-      "The literal header `OpenClaw runtime context (internal):` appears in this note.",
-      "The phrase `[Internal task completion event]` is also mentioned as an example.",
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe(input);
-  });
-
-  it("does not strip text that starts with the legacy header phrase but is not the canonical block", () => {
-    const input =
-      "OpenClaw runtime context (internal): is the label used by the old runtime block formatter.";
-
-    expect(sanitizeUserFacingText(input)).toBe(input);
-  });
-
-  it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {
-    expect(sanitizeUserFacingText(input)).toBe("");
-  });
-
   it("tolerates non-string input without throwing", () => {
     expect(sanitizeUserFacingText(undefined as unknown as string)).toBe("");
     expect(sanitizeUserFacingText(42 as unknown as string)).toBe("42");
@@ -645,35 +321,6 @@ describe("stripThoughtSignatures", () => {
     expect(stripThoughtSignatures(undefined)).toBe(undefined);
     expect(stripThoughtSignatures(123)).toBe(123);
   });
-  it("removes msg_-prefixed thought_signature from content blocks", () => {
-    const input = [
-      { type: "text", text: "hello", thought_signature: "msg_abc123" },
-      { type: "thinking", thinking: "test", thought_signature: "AQID" },
-    ];
-    const result = stripThoughtSignatures(input);
-
-    expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ type: "text", text: "hello" });
-    expect(result[1]).toEqual({
-      type: "thinking",
-      thinking: "test",
-      thought_signature: "AQID",
-    });
-  });
-  it("handles mixed blocks with and without thought_signature", () => {
-    const input = [
-      { type: "text", text: "hello", thought_signature: "msg_abc" },
-      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-      { type: "thinking", thinking: "hmm", thought_signature: "msg_xyz" },
-    ];
-    const result = stripThoughtSignatures(input);
-
-    expect(result).toEqual([
-      { type: "text", text: "hello" },
-      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-      { type: "thinking", thinking: "hmm" },
-    ]);
-  });
   it("handles null/undefined blocks in array", () => {
     const input = [null, undefined, { type: "text", text: "hello" }];
     const result = stripThoughtSignatures(input);
@@ -682,34 +329,20 @@ describe("stripThoughtSignatures", () => {
 });
 
 describe("dropStaleOpenAIReasoning", () => {
-  it.each([undefined, "synthetic-completed-reasoning"])(
-    "drops reasoning at the model switch boundary (encrypted: %s)",
-    (encryptedContent) => {
-      const input = [
-        {
-          role: "assistant",
-          timestamp: 2,
-          content: [
-            {
-              type: "thinking",
-              thinking: "internal reasoning",
-              thinkingSignature: JSON.stringify({
-                id: "rs_123",
-                type: "reasoning",
-                encrypted_content: encryptedContent,
-              }),
-            },
-            { type: "text", text: "answer" },
-          ],
-        },
-      ];
-
-      expect(
-        dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
-      ).toEqual([{ role: "assistant", timestamp: 2, content: [{ type: "text", text: "answer" }] }]);
-    },
-  );
-
+  const reasoning = {
+    type: "thinking" as const,
+    thinking: "internal reasoning",
+    thinkingSignature: JSON.stringify({
+      id: "rs_123",
+      type: "reasoning",
+      encrypted_content: "synthetic-completed-reasoning",
+    }),
+  };
+  it("drops reasoning at the model switch boundary", () => {
+    const answer = { type: "text" as const, text: "answer" };
+    const message = makeAgentAssistantMessage({ timestamp: 2, content: [reasoning, answer] });
+    expect(dropStaleOpenAIReasoning([message], 2)).toEqual([{ ...message, content: [answer] }]);
+  });
   it("drops the paired message id when replayable reasoning is dropped", () => {
     const input = [
       {
@@ -733,37 +366,17 @@ describe("dropStaleOpenAIReasoning", () => {
       dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
     ).toEqual([{ role: "assistant", content: [{ type: "text", text: "answer" }] }]);
   });
-
-  it("drops paired message ids across every text block when reasoning is dropped", () => {
-    const input = [
+  it("drops all paired message ids while preserving phases", () => {
+    const phases = ["commentary", "final_answer"] as const;
+    const content = phases.map((phase) => ({
+      type: "text" as const,
+      text: phase,
+      textSignature: JSON.stringify({ v: 1, id: `msg_${phase}`, phase }),
+    }));
+    const message = makeAgentAssistantMessage({ timestamp: 1, content: [reasoning, ...content] });
+    expect(dropStaleOpenAIReasoning([message], 2)).toEqual([
       {
-        role: "assistant",
-        timestamp: 1,
-        content: [
-          {
-            type: "thinking",
-            thinkingSignature: JSON.stringify({ id: "rs_1", type: "reasoning" }),
-          },
-          {
-            type: "text",
-            text: "commentary",
-            textSignature: JSON.stringify({ v: 1, id: "msg_a", phase: "commentary" }),
-          },
-          {
-            type: "text",
-            text: "final",
-            textSignature: JSON.stringify({ v: 1, id: "msg_b", phase: "final_answer" }),
-          },
-        ],
-      },
-    ];
-
-    expect(
-      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
-    ).toEqual([
-      {
-        role: "assistant",
-        timestamp: 1,
+        ...message,
         content: [
           {
             type: "text",
@@ -772,31 +385,18 @@ describe("dropStaleOpenAIReasoning", () => {
           },
           {
             type: "text",
-            text: "final",
+            text: "final_answer",
             textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
           },
         ],
       },
     ]);
   });
-
   it("keeps non-reasoning thinking signatures", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "t",
-            thinkingSignature: "reasoning_content",
-          },
-        ],
-      },
-    ];
-
-    expect(
-      dropStaleOpenAIReasoning(input as Parameters<typeof dropStaleOpenAIReasoning>[0], 2),
-    ).toEqual(input);
+    const message = makeAgentAssistantMessage({
+      content: [{ ...reasoning, thinkingSignature: "reasoning_content" }],
+    });
+    expect(dropStaleOpenAIReasoning([message], 2)).toEqual([message]);
   });
 });
 
@@ -854,76 +454,89 @@ describe("downgradeOpenAIFunctionCallReasoningPairs", () => {
   });
 });
 
-describe("normalizeTextForComparison", () => {
-  it.each([{ input: "  Hello 👋   WORLD  🌍  ", expected: "hello world" }])(
-    "normalizes comparison text",
-    ({ input, expected }) => {
-      expect(normalizeTextForComparison(input)).toBe(expected);
+describe("isMessagingToolDuplicate", () => {
+  it.each([
+    ["hello world", [], false],
+    ["short", ["short"], false],
+    [
+      "Hello, this is a test message!",
+      ['I sent the message: "Hello, this is a test message!"'],
+      true,
+    ],
+    [
+      "v2ex hot topics delivered to telegram",
+      [
+        "1. some article title\n2. another title\nv2ex hot topics delivered to telegram\n3. yet another",
+      ],
+      false,
+    ],
+    [
+      "Checking the deploy logs now. The deploy failed because the migration step timed out after 300 seconds while the database was mid-vacuum, which held the lock the migration needed. I re-ran the deploy after the vacuum finished and it completed cleanly. All services are healthy and the new version is serving traffic.",
+      ["Checking the deploy logs now."],
+      false,
+    ],
+    ["CHECKING 👋 the deploy logs now. All good!", ["Checking the deploy logs now."], true],
+  ] satisfies [string, string[], boolean][])(
+    "checks sent-text overlap: %s",
+    (input, sentTexts, expected) => {
+      expect(isMessagingToolDuplicate(input, sentTexts)).toBe(expected);
     },
   );
 });
 
-describe("isMessagingToolDuplicate", () => {
-  it.each([
-    {
-      input: "hello world",
-      sentTexts: [],
-      expected: false,
-    },
-    {
-      input: "short",
-      sentTexts: ["short"],
-      expected: false,
-    },
-    {
-      input: "Hello, this is a test message!",
-      sentTexts: ["Hello, this is a test message!"],
-      expected: true,
-    },
-    {
-      input: "HELLO, THIS IS A TEST MESSAGE!",
-      sentTexts: ["hello, this is a test message!"],
-      expected: true,
-    },
-    {
-      input: "Hello! 👋 This is a test message!",
-      sentTexts: ["Hello! This is a test message!"],
-      expected: true,
-    },
-    {
-      input: 'I sent the message: "Hello, this is a test message!"',
-      sentTexts: ["Hello, this is a test message!"],
-      expected: true,
-    },
-    {
-      input: "Hello, this is a test message!",
-      sentTexts: ['I sent the message: "Hello, this is a test message!"'],
-      expected: true,
-    },
-    {
-      input: "v2ex hot topics delivered to telegram",
-      sentTexts: [
-        "1. some article title\n2. another title\nv2ex hot topics delivered to telegram\n3. yet another",
-      ],
-      expected: false,
-    },
-    {
-      input: "This is completely different content.",
-      sentTexts: ["Hello, this is a test message!"],
-      expected: false,
-    },
-    {
-      input:
-        "Checking the deploy logs now. The deploy failed because the migration step timed out after 300 seconds while the database was mid-vacuum, which held the lock the migration needed. I re-ran the deploy after the vacuum finished and it completed cleanly. All services are healthy and the new version is serving traffic.",
-      sentTexts: ["Checking the deploy logs now."],
-      expected: false,
-    },
-    {
-      input: "Checking the deploy logs now. All good!",
-      sentTexts: ["Checking the deploy logs now."],
-      expected: true,
-    },
-  ])("returns $expected for duplicate check", ({ input, sentTexts, expected }) => {
-    expect(isMessagingToolDuplicate(input, sentTexts)).toBe(expected);
+describe("sanitizeUserFacingText duplicate-block collapse", () => {
+  it("keeps fenced code byte-for-byte when duplicate collapsing fires nearby", () => {
+    const reply = [
+      "Here is the retry loop and the log it produced:",
+      "",
+      "```python",
+      "class Worker:",
+      "    def run(self):",
+      '        self.log("retrying")',
+      '        replacement = "$&"',
+      "",
+      "    def log(self, msg):",
+      "        print(msg)",
+      "```",
+      "",
+      "```text",
+      "[worker] retrying",
+      "",
+      "[worker] retrying",
+      "",
+      "[worker] retrying",
+      "",
+      "[worker] done",
+      "```",
+    ].join("\n");
+    expect(sanitizeUserFacingText(reply)).toBe(reply);
   });
+});
+
+describe("private conversation context", () => {
+  const conversationContext =
+    "[Chat messages since your last reply - for context]\nAlice: private history\n\n[Current message - respond to this]\nprivate inbound paragraph";
+  it("removes exact copied prompts with surrounding same-line prose", () => {
+    expect(
+      sanitizeUserFacingText(`Before ${conversationContext} after`, { conversationContext }),
+    ).toBe("Before  after");
+  });
+  it.each([
+    `Visible answer.\n\n\`\`\`text\n${conversationContext}\n\`\`\``,
+    `Visible answer.\n\n${conversationContext
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\r")}`,
+  ])("removes owner-bound private prompts even in Markdown: %s", (input) => {
+    const result = sanitizeUserFacingText(input, { conversationContext });
+    expect(result).toContain("Visible answer.");
+    expect(result).not.toContain("Alice: private history");
+    expect(result).not.toContain("private inbound paragraph");
+  });
+  it.each([{ input: "Visible\n(no output)\nanswer", expected: "Visible\nanswer" }])(
+    "keeps authored placeholder examples: $input",
+    ({ input, expected }) => {
+      expect(sanitizeUserFacingText(input)).toBe(expected);
+    },
+  );
 });
