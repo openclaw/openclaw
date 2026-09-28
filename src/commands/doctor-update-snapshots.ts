@@ -3,6 +3,7 @@ import path from "node:path";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "../infra/update-npm-prefix.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
@@ -47,11 +48,22 @@ export async function collectUpdateSnapshotHealthFindings(
         directories.push(path.join(layout.globalRoot, entry.name));
       }
     }
-  } catch {
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return [];
+    }
     partial = true;
   }
   if (directories.length === 0) {
-    return [];
+    return partial
+      ? [
+          {
+            checkId: "core/doctor/update-snapshots",
+            severity: "warning",
+            message: `Inspection was incomplete; retained pre-migration database snapshots may remain. Manually list the npm global root ${layout.globalRoot}, including hidden entries, and check for .openclaw.package-backup-*.databases directories.`,
+          },
+        ]
+      : [];
   }
   directories.sort();
 

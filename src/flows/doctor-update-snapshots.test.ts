@@ -91,12 +91,39 @@ it("reports snapshot sizes and quoted removal commands without offering or perfo
 
 it("does not report a finding without snapshot directories or outside an npm global layout", async () => {
   expect(await check()?.detect(context)).toEqual([]);
+  vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(
+    path.join(globalRoot, "missing", "lib", "node_modules", "openclaw"),
+  );
+  expect(await check()?.detect(context)).toEqual([]);
   await snapshot("1-100", 1024);
   vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(
     path.join(globalRoot, "source", "openclaw"),
   );
   expect(await check()?.detect(context)).toEqual([]);
 });
+
+it.each(["budget", "read-error"])(
+  "warns when a %s interrupts inspection before any snapshot is found",
+  async (cause) => {
+    await snapshot("1-100", 1024);
+    if (cause === "budget") {
+      vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(201);
+    } else {
+      vi.spyOn(fs, "opendir").mockRejectedValueOnce(
+        Object.assign(new Error("cannot read global root"), { code: "EACCES" }),
+      );
+    }
+    const findings = await check()?.detect(context);
+    expect(findings).toHaveLength(1);
+    expect(findings?.[0]).toMatchObject({
+      checkId: "core/doctor/update-snapshots",
+      severity: "warning",
+    });
+    expect(findings?.[0]?.message).toContain("Inspection was incomplete");
+    expect(findings?.[0]?.message).toContain(globalRoot);
+    expect(findings?.[0]?.message).toContain(".openclaw.package-backup-*.databases");
+  },
+);
 
 it.each([
   "OPENCLAW_UPDATE_IN_PROGRESS",
