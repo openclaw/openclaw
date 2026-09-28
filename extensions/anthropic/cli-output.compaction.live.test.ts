@@ -13,8 +13,8 @@
  *     pnpm test:live -- extensions/anthropic/cli-output.compaction.live.test.ts
  */
 import { spawn } from "node:child_process";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 
 const LIVE =
