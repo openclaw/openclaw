@@ -218,8 +218,9 @@ export async function prepareNodeRuntimeUpdate(params: {
         }
         assertCurrent();
         if (manager === "bun") {
-          // Native staging copies an existing project; this generation starts empty.
-          await fs.mkdir(path.dirname(layout.globalRoot), { recursive: true });
+          // Native staging copies an existing project and probes from its
+          // node_modules; this generation starts empty.
+          await fs.mkdir(layout.globalRoot, { recursive: true });
           await fs.mkdir(layout.binDir, { recursive: true });
           assertCurrent();
         }

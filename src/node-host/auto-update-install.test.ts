@@ -138,7 +138,11 @@ describe("Bun private node runtime installation", () => {
     const stateDir = tempDirs.make("openclaw-node-bun-");
     serveManifest();
     mocks.command.mockImplementation(
-      async (argv: string[], options: { env: NodeJS.ProcessEnv }) => {
+      async (argv: string[], options: { env: NodeJS.ProcessEnv; cwd?: string }) => {
+        if (options.cwd) {
+          // A real spawn fails with ENOENT when its working directory is missing.
+          await fs.access(options.cwd);
+        }
         const { BUN_INSTALL_GLOBAL_DIR: project, BUN_INSTALL_BIN: bin } = options.env;
         if (argv.join(" ") === "bun pm bin -g") {
           return { code: 0, stdout: `${bin}\n`, stderr: "" };
