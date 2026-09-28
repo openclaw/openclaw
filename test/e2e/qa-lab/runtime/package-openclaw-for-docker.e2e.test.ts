@@ -36,7 +36,9 @@ import {
   hermeticEnv,
   readRequiredPersistedInstalledPluginIndex,
 } from "../../../../src/commands/doctor-plugin-registry.test-support.js";
+import { resolveInstalledPluginIndexStorePath } from "../../../../src/plugins/installed-plugin-index-store-path.js";
 import { writePersistedInstalledPluginIndex } from "../../../../src/plugins/installed-plugin-index-store-write.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { createDeferred } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -273,43 +275,50 @@ describe("package-openclaw-for-docker", () => {
       packageName: pluginPackage.name,
       version: pluginPackage.version,
     });
-    await writePersistedInstalledPluginIndex(
-      createCurrentIndexWithNpmRecord({
-        pluginId: "demo",
-        packageName: pluginPackage.name,
-        packageDir: managed.packageDir,
-        version: pluginPackage.version,
-      }),
-      { stateDir },
-    );
-    await maybeRepairPluginRegistryState({
-      stateDir,
-      env: hermeticEnv({ OPENCLAW_STATE_DIR: stateDir }),
-      config: { plugins: { allow: ["demo"], entries: { demo: { enabled: true } } } },
-      candidates: [
-        {
-          idHint: "demo",
-          rootDir: pluginRoot,
-          source: path.join(pluginRoot, "index.js"),
-          origin: "bundled",
-          packageName: packedPackage.name,
-          packageVersion: packedPackage.version,
-          packageManifest: packedPackage.openclaw,
-        },
-      ],
-      prompter: { shouldRepair: true },
-    });
-    const repaired = await readRequiredPersistedInstalledPluginIndex(stateDir);
-    expect(fs.existsSync(managed.packageDir)).toBe(false);
-    expect(repaired.installRecords.demo).toBeUndefined();
-    expect(repaired.plugins.find((plugin) => plugin.pluginId === "demo")).toMatchObject({
-      origin: "bundled",
-      rootDir: pluginRoot,
-      enabled: true,
-    });
-    expect(fs.readFileSync(path.join(sourceDir, "dist/extensions/demo/package.json"), "utf8")).toBe(
-      files["dist/extensions/demo/package.json"],
-    );
+    try {
+      await writePersistedInstalledPluginIndex(
+        createCurrentIndexWithNpmRecord({
+          pluginId: "demo",
+          packageName: pluginPackage.name,
+          packageDir: managed.packageDir,
+          version: pluginPackage.version,
+        }),
+        { stateDir },
+      );
+      await maybeRepairPluginRegistryState({
+        stateDir,
+        env: hermeticEnv({ OPENCLAW_STATE_DIR: stateDir }),
+        config: { plugins: { allow: ["demo"], entries: { demo: { enabled: true } } } },
+        candidates: [
+          {
+            idHint: "demo",
+            rootDir: pluginRoot,
+            source: path.join(pluginRoot, "index.js"),
+            origin: "bundled",
+            packageName: packedPackage.name,
+            packageVersion: packedPackage.version,
+            packageManifest: packedPackage.openclaw,
+          },
+        ],
+        prompter: { shouldRepair: true },
+      });
+      const repaired = await readRequiredPersistedInstalledPluginIndex(stateDir);
+      expect(fs.existsSync(managed.packageDir)).toBe(false);
+      expect(repaired.installRecords.demo).toBeUndefined();
+      expect(repaired.plugins.find((plugin) => plugin.pluginId === "demo")).toMatchObject({
+        origin: "bundled",
+        rootDir: pluginRoot,
+        enabled: true,
+      });
+      expect(
+        fs.readFileSync(path.join(sourceDir, "dist/extensions/demo/package.json"), "utf8"),
+      ).toBe(files["dist/extensions/demo/package.json"]);
+    } finally {
+      // Windows requires worker and native SQLite handles closed before directory cleanup.
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveInstalledPluginIndexStorePath({ stateDir }),
+      );
+    }
   });
 
   it.each([false, true])(
@@ -742,7 +751,8 @@ describe("package-openclaw-for-docker", () => {
         .mockImplementation(async (target, data, options) => {
           if (
             target === pluginPath &&
-            String(data) === files["dist/extensions/demo/package.json"]
+            Buffer.isBuffer(data) &&
+            data.equals(Buffer.from(files["dist/extensions/demo/package.json"]))
           ) {
             throw restoreError;
           }
