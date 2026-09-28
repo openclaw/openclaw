@@ -4,10 +4,9 @@
 extensions/acpx/src/codex-auth-bridge.ts	7
 extensions/acpx/src/codex-trust-config.ts	1
 extensions/acpx/src/pi-session-catalog-runtime.ts	1
-extensions/acpx/src/process-lease.ts	3
+extensions/acpx/src/process-lease.ts	1
 extensions/acpx/src/runtime.ts	2
 extensions/acpx/src/service.ts	1
-extensions/acpx/src/state.ts	1
 extensions/active-memory/config.ts	2
 extensions/active-memory/index.ts	3
 extensions/active-memory/query.ts	2
@@ -217,11 +216,11 @@ extensions/copilot/src/sdk-loader.ts	2
 extensions/copilot/src/tool-bridge.ts	4
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/cua-computer/src/commands.ts	2
-extensions/cua-computer/src/driver-artifact-verification.ts	2
+extensions/cua-computer/src/driver-artifact-verification.ts	1
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	10
-extensions/cua-computer/src/driver-result.ts	9
-extensions/cua-computer/src/mcp-driver-client.ts	4
+extensions/cua-computer/src/driver-result.ts	4
+extensions/cua-computer/src/mcp-driver-client.ts	3
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	2
 extensions/deepseek/provider-policy-api.ts	2
@@ -357,7 +356,6 @@ extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/exa/src/exa-web-search-provider.runtime.ts	5
 extensions/fal/image-generation-provider.ts	1
-extensions/fal/music-generation-provider.ts	2
 extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	4
 extensions/feishu/src/bitable.ts	1
@@ -506,16 +504,12 @@ extensions/line/src/webhook-spool.ts	2
 extensions/line/src/webhook-utils.ts	1
 extensions/litellm/onboard.ts	1
 extensions/llm-task/doctor-contract-api.ts	1
-extensions/llm-task/index.ts	1
-extensions/llm-task/src/llm-task-tool.ts	5
+extensions/llm-task/src/llm-task-tool.ts	2
 extensions/lmstudio/src/models.ts	2
 extensions/lmstudio/src/stream.ts	3
-extensions/lobster/index.ts	2
-extensions/lobster/src/lobster-runner.ts	4
+extensions/lobster/src/lobster-runner.ts	3
 extensions/logbook/index.ts	5
-extensions/logbook/src/analyze.ts	8
-extensions/logbook/src/config.ts	1
-extensions/logbook/src/node-host.ts	1
+extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	6
 extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-handler.runtime.ts	8
@@ -643,7 +637,6 @@ extensions/memory-core/src/short-term-promotion.ts	1
 extensions/memory-core/src/standing-intents-tool.ts	1
 extensions/memory-core/src/standing-intents.ts	2
 extensions/memory-core/src/tools.ts	2
-extensions/memory-lancedb/config.ts	4
 extensions/memory-lancedb/doctor-contract-api.ts	1
 extensions/memory-lancedb/embeddings.ts	2
 extensions/memory-lancedb/index.ts	8
@@ -669,7 +662,7 @@ extensions/migrate-hermes/apply.ts	1
 extensions/migrate-hermes/auth-config.ts	2
 extensions/migrate-hermes/auth.ts	1
 extensions/migrate-hermes/memory.ts	1
-extensions/migrate-hermes/model.ts	3
+extensions/migrate-hermes/model.ts	1
 extensions/minimax/model-definitions.ts	2
 extensions/minimax/music-generation-provider.ts	2
 extensions/minimax/oauth.ts	3
@@ -768,7 +761,6 @@ extensions/openrouter/usage.ts	2
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
 extensions/openshell/src/backend.ts	2
-extensions/openshell/src/fs-bridge.ts	1
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-web-search-provider.runtime.ts	1
 extensions/pixverse/video-generation-provider.ts	1
@@ -913,7 +905,6 @@ extensions/reef/src/setup.ts	3
 extensions/reef/src/state.ts	3
 extensions/reef/src/transport.ts	3
 extensions/searxng/src/config.ts	1
-extensions/searxng/src/searxng-client.ts	3
 extensions/signal/src/accounts.ts	3
 extensions/signal/src/approval-handler.runtime.ts	2
 extensions/signal/src/approval-reactions.ts	1
