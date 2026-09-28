@@ -563,6 +563,7 @@ export const validateUpdateRunChangedEvent = compile(S.UpdateRunChangedEventSche
 export const validateUpdateReportParams = compile(S.UpdateReportParamsSchema);
 export const validateUpdateReportResult = compile(S.UpdateReportResultSchema);
 export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
+export const validateLobsterdexCatalogParams = compile(S.LobsterdexCatalogParamsSchema);
 export const validateThemesListParams = compile(S.ThemesListParamsSchema);
 export const validateThemesGetParams = compile(S.ThemesGetParamsSchema);
 export const validateThemesSetParams = compile(S.ThemesSetParamsSchema);

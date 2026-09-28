@@ -1,0 +1,8 @@
+{
+  "id": "reef-lobsters",
+  "name": "Reef Lobsters",
+  "description": "Original Clawmojis shared by the LobsterDex and Control UI plugins.",
+  "categories": ["lobster-packs"],
+  "configSchema": { "type": "object", "additionalProperties": false },
+  "lobsterPacks": [{ "id": "reef", "source": "reef.json" }]
+}

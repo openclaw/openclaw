@@ -1,12 +1,9 @@
 import { html, nothing } from "lit";
+import type { ControlUiClawmoji } from "../../../../src/plugin-sdk/control-ui-lobsterdex.ts";
+import { BUILTIN_CLAWMOJIS } from "../../app/lobsterdex-catalog.ts";
+import { renderClawmoji } from "../../components/clawmoji.ts";
 import { icons } from "../../components/icons.ts";
-import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
-import {
-  canonicalLobsterLook,
-  lobsterLookStyle,
-  renderLobsterSvg,
-} from "../../components/lobster-pet-look.ts";
-import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
+import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { i18n, t } from "../../i18n/index.ts";
 // Page stars must override the shared mini-star rules loaded by lobster-pet-look.
@@ -21,13 +18,14 @@ type LobsterdexViewEntry = {
 type LobsterdexViewEntries = ReadonlyMap<string, LobsterdexViewEntry>;
 
 export type LobsterdexCopyFeedback = {
-  paletteId: LobsterPetPaletteId;
+  paletteId: string;
   status: "copied" | "error";
 };
 
 type LobsterdexViewProps = {
+  catalog?: readonly ControlUiClawmoji[];
   copyFeedback?: LobsterdexCopyFeedback | null;
-  onCopyLink?: (paletteId: LobsterPetPaletteId) => void;
+  onCopyLink?: (paletteId: string) => void;
 };
 
 function formatLobsterdexDate(timestamp: number): string {
@@ -61,12 +59,14 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
           : nothing
       }
       <section class="lobsterdex-page__grid" aria-label=${countLabel}>
-        ${LOBSTER_PET_PALETTES.map((palette) => {
-          const look = canonicalLobsterLook(palette);
+        ${BUILTIN_CLAWMOJIS.map((palette) => {
           const entry = entries.get(palette.id);
           const seen = entry !== undefined;
-          const name = seen ? (entry.name ?? lobsterPaletteName(palette.id)) : "?";
-          const lore = LOBSTER_PALETTE_LORE[palette.id];
+          const name = seen ? (entry.name ?? palette.name) : "?";
+          const lore =
+            LOBSTER_PALETTE_LORE[
+              LOBSTER_PET_PALETTES.find((candidate) => candidate.id === palette.id)!.id
+            ];
           const firstSeen =
             seen && entry.firstSeenAt !== null
               ? t("quickSettings.appearance.lobsterdexCardFirstVisited", {
@@ -103,9 +103,8 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
                 class="lobsterdex-page__sprite lobster-pet lobster-pet--palette-${palette.id} ${
                   seen ? "" : "lobsterdex__mini--unseen"
                 }"
-                style=${lobsterLookStyle(look)}
               >
-                ${renderLobsterSvg(look, { standalone: true })}
+                ${renderClawmoji({ entry: palette, size: 90, label: name })}
                 ${
                   entry?.shinySeenAt != null
                     ? html`<span
@@ -134,6 +133,68 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
           `;
         })}
       </section>
+      ${renderPackCollections(entries, props)}
     </section>
+  `;
+}
+
+function renderPackCollections(entries: LobsterdexViewEntries, props: LobsterdexViewProps) {
+  const packs = new Map<string, { name: string; characters: ControlUiClawmoji[] }>();
+  for (const character of props.catalog ?? []) {
+    if (character.source !== "plugin") {
+      continue;
+    }
+    const id = `${character.pluginId}/${character.packId}`;
+    const pack = packs.get(id) ?? { name: character.packName, characters: [] };
+    pack.characters.push(character);
+    packs.set(id, pack);
+  }
+  const available = new Set((props.catalog ?? BUILTIN_CLAWMOJIS).map((entry) => entry.id));
+  const unavailable = [...entries].filter(([id]) => id.includes("/") && !available.has(id));
+  return html`
+    ${[...packs].map(
+      ([id, pack]) => html` <section aria-label=${pack.name} data-lobster-pack=${id}>
+        <header class="lobsterdex-page__header">
+          <h2>${pack.name}</h2>
+          <span
+            >${t("quickSettings.appearance.lobsterdexSeen", {
+              seen: String(pack.characters.filter((entry) => entries.has(entry.id)).length),
+              total: String(pack.characters.length),
+            })}</span
+          >
+        </header>
+        <div class="lobsterdex-page__grid">
+          ${pack.characters.map((character) => {
+            const visit = entries.get(character.id);
+            return html`<article id=${`lobsterdex-${character.id}`} class="lobsterdex-page__card">
+              <button
+                type="button"
+                class="lobsterdex-page__copy-link"
+                aria-label=${t("quickSettings.appearance.lobsterdexCardCopyLink")}
+                @click=${() => props.onCopyLink?.(character.id)}
+              >
+                ${icons.link}
+              </button>
+              <div class="lobsterdex-page__sprite">
+                ${renderClawmoji({ entry: character, size: 90, label: character.name })}
+              </div>
+              <h3>${visit?.name ?? character.name}</h3>
+              <p class="lobsterdex-page__lore">${character.description ?? ""}</p>
+              <p>
+                ${visit?.firstSeenAt != null ? t("quickSettings.appearance.lobsterdexCardFirstVisited", { date: formatLobsterdexDate(visit.firstSeenAt) }) : t("quickSettings.appearance.lobsterdexPackPreview")}
+              </p>
+            </article>`;
+          })}
+        </div>
+      </section>`,
+    )}
+    ${
+      unavailable.length
+        ? html`<section>
+            <h2>${t("quickSettings.appearance.lobsterdexUnavailable")}</h2>
+            ${unavailable.map(([id, visit]) => html`<p>${visit.name ?? id}</p>`)}
+          </section>`
+        : nothing
+    }
   `;
 }

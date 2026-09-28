@@ -3,6 +3,13 @@ import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 /** Resource owners stay lazy until their authenticated image route is requested. */
 export const CONTROL_UI_IMAGE_HTTP_ROUTES = [
   [
+    ["pluginLobsterArt"],
+    createLazyRuntimeNamedExport(
+      () => import("./plugin-lobster-art-http.js"),
+      "handlePluginLobsterArtHttpRequest",
+    ),
+  ],
+  [
     ["pluginIcon", "pluginActivityIcon", "catalogIcon", "linkFavicon"],
     createLazyRuntimeNamedExport(
       () => import("./plugin-icon-http.js"),

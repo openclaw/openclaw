@@ -19,6 +19,7 @@ describe("@openclaw/plugin-package-contract", () => {
       "web",
       "computer-use",
       "media",
+      "lobster-packs",
       "security",
       "integrations",
       "developer-tools",

@@ -10,6 +10,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { PluginCandidate } from "./discovery.js";
 import { normalizeManifestCatalog } from "./manifest-capability-normalizers.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
+import { loadManifestLobsterDefinitions } from "./manifest-lobster-definitions.js";
 import type {
   BundledChannelConfigCollector,
   PluginManifestRecord,
@@ -447,6 +448,14 @@ export function buildPluginManifestRecord(params: {
     dashboard: params.manifest.dashboard,
     controlUi: params.manifest.controlUi,
     uiCapabilities: params.manifest.uiCapabilities,
+    lobsterPacks: params.manifest.lobsterPacks,
+    lobsterDefinitions: loadManifestLobsterDefinitions({
+      pluginId,
+      rootDir: params.candidate.rootDir,
+      lobsterPacks: params.manifest.lobsterPacks,
+      rejectHardlinks: params.rejectHardlinks,
+      diagnostics: params.diagnostics,
+    }),
     themes: params.manifest.themes,
     themeDefinitions: loadManifestThemeDefinitions({
       pluginId,

@@ -1,4 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
+import type { ControlUiClawmojiProps } from "./control-ui-lobsterdex.js";
 /** Semantic host components available to native Control UI plugins. */
 export type ControlUiComponentHandle<T> = {
   update: (props: T) => void;
@@ -84,6 +85,11 @@ export type ControlUiAppearancePickerProps = {
 };
 
 export type ControlUiComponents = {
+  /** Core renders built-in and installed custom characters consistently. */
+  mountClawmoji?: (
+    container: HTMLElement,
+    props: ControlUiClawmojiProps,
+  ) => ControlUiComponentHandle<ControlUiClawmojiProps>;
   /** Resolve a shared palette or custom hex color; invalid or cleared values return an empty string. */
   resolveAppearanceColor: (value: string | null | undefined) => string;
   mountAgentAvatar: (

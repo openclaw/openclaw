@@ -759,4 +759,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["presence.query", "presence", "operator.read", "2026.9"],
   ["users.merge", "users", "operator.admin", "2026.9"],
   ["gateway.stop.request", "restart", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["lobsterdex.catalog", "lobsterdex", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

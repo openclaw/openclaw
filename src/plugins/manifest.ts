@@ -11,6 +11,7 @@ import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-stat
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import { normalizeConfigGroups } from "./manifest-config-groups.js";
+import { normalizeManifestLobsterPacks } from "./manifest-lobster-packs.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
@@ -332,6 +333,14 @@ export function loadPluginManifest(
     });
   }
 
+  const lobsterPacksResult = normalizeManifestLobsterPacks(raw.lobsterPacks, id);
+  if (!lobsterPacksResult.ok) {
+    return {
+      ok: false,
+      error: `invalid plugin manifest lobsterPacks: ${lobsterPacksResult.error}`,
+      manifestPath,
+    };
+  }
   const themesResult = normalizeManifestThemes(raw.themes, id, file.contents.toString("utf8"));
   if (!themesResult.ok) {
     return cacheResult({
@@ -356,6 +365,7 @@ export function loadPluginManifest(
         ? { uiCapabilities: uiCapabilities.capabilities }
         : {}),
       themes: themesResult.themes,
+      lobsterPacks: lobsterPacksResult.lobsterPacks,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),
       skills: normalizeTrimmedStringList(raw.skills),
       name: normalizeOptionalString(raw.name),

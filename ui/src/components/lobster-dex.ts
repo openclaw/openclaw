@@ -6,6 +6,8 @@
 // cycle).
 import { getSafeLocalStorage } from "../local-storage.ts";
 
+export const LOBSTERDEX_CHANGED_EVENT = "openclaw-lobsterdex-changed";
+
 const LOBSTERDEX_KEY = "openclaw.control.lobsterdex.v1";
 const FAMILIARITY_KEY = "openclaw.control.lobsterpet.familiarity.v1";
 
@@ -60,6 +62,7 @@ function writeDex(entries: Map<string, LobsterdexEntry>): void {
     };
   }
   getSafeLocalStorage()?.setItem(LOBSTERDEX_KEY, JSON.stringify(persisted));
+  window.dispatchEvent(new Event(LOBSTERDEX_CHANGED_EVENT));
 }
 
 export function getLobsterdex(): ReadonlySet<string> {
@@ -176,4 +179,17 @@ export function isLobsterFirstVisitAnniversary(firstSeenAt: number | null, now: 
   }
   const first = new Date(firstSeenAt);
   return first.getMonth() === now.getMonth() && first.getDate() === now.getDate();
+}
+
+/** Observe local encounters and same-origin collection changes from another tab. */
+export function subscribeLobsterdex(listener: () => void): () => void {
+  const storage = (event: StorageEvent) => {
+    if (event.key === LOBSTERDEX_KEY || event.key === null) listener();
+  };
+  window.addEventListener(LOBSTERDEX_CHANGED_EVENT, listener);
+  window.addEventListener("storage", storage);
+  return () => {
+    window.removeEventListener(LOBSTERDEX_CHANGED_EVENT, listener);
+    window.removeEventListener("storage", storage);
+  };
 }

@@ -11,6 +11,7 @@ import type {
   EnvironmentsSessionExecParams,
 } from "./schema/environments.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
+import type { LobsterdexCatalogParams } from "./schema/lobsterdex.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
 import type { PresenceActivityParams, PresenceQueryParams } from "./schema/presence.js";
@@ -27,6 +28,7 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "lobsterdex.catalog": LobsterdexCatalogParams;
   "presence.activity": PresenceActivityParams;
   "cron.history": CronHistoryParams;
   "users.personalFile.get": UsersSchema.UsersPersonalFileGetParams;

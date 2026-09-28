@@ -12,6 +12,7 @@ import { redactToolPayloadText } from "../lib/browser-redact.ts";
 import { openPreferredApplicationSession } from "../lib/sessions/route-navigation.ts";
 import { normalizeSessionKeyForUiComparison } from "../lib/sessions/session-key.ts";
 import { createControlUiComponents } from "./control-ui-components.ts";
+import { createControlUiLobsterdex } from "./control-ui-lobsterdex.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 export function createControlUiPluginHost(
@@ -87,6 +88,7 @@ export function createControlUiPluginHost(
       return i18n.getLocale();
     },
     redact: redactToolPayloadText,
+    lobsterdex: createControlUiLobsterdex({ current, signal: owner.abort.signal }),
     components: createControlUiComponents({
       current,
       signal: owner.abort.signal,

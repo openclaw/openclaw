@@ -12,6 +12,13 @@ sidebarTitle: "Host surface fields"
 
 Manifest fields that contribute a concrete host surface: an icon, a command, a server, a panel, a widget, a runner, a channel, or a backup resource. Part of the [Plugin manifest](/plugins/manifest) reference; the [top-level field reference](/plugins/manifest#top-level-field-reference) lists every field.
 
+## Lobster Packs
+
+Declare `lobsterPacks: [{ "id": "reef", "source": "lobsters/reef.json" }]` to
+contribute custom Clawmojis. Enabled plugins contribute validated SVG artwork and
+animated PNG atlases to the core catalog and shared plugin renderer. See
+[Lobster Packs](/plugins/lobster-packs) for the format and inventory API.
+
 ## Plugin icon
 
 Place the portable plugin icon at `assets/icon.png`, relative to the plugin root. No manifest

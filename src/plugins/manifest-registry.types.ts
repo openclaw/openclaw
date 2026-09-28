@@ -1,3 +1,4 @@
+import type { LobsterPackDefinition } from "../../packages/gateway-protocol/src/lobsterdex.js";
 import type { ThemeDefinition } from "../../packages/gateway-protocol/src/theme.js";
 import type {
   PluginBundleFormat,
@@ -59,6 +60,11 @@ export type PluginThemeArtwork = {
 };
 
 export type PluginManifestRecord = PluginManifestRecordStatic & {
+  lobsterDefinitions?: Array<{
+    id: string;
+    definition: LobsterPackDefinition;
+    artwork: Record<string, { data: string; mimeType: string }>;
+  }>;
   /** Validated palettes and artwork captured by the immutable metadata generation. */
   themeDefinitions?: Array<{
     id: string;

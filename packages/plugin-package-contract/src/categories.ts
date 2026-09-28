@@ -9,6 +9,7 @@ export const PLUGIN_CATEGORY_SLUGS = [
   "web",
   "computer-use",
   "media",
+  "lobster-packs",
   "security",
   "integrations",
   "developer-tools",

@@ -19,6 +19,7 @@ const CONTROL_UI_RESOURCE_ROUTES = {
   linkFavicon: { prefix: "/__openclaw__/link-favicon", suffix: "" },
   pluginIcon: { prefix: "/__openclaw__/plugin-icon", suffix: "" },
   pluginActivityIcon: { prefix: "/__openclaw__/plugin-activity-icon", suffix: "" },
+  pluginLobsterArt: { prefix: "/__openclaw__/plugin-lobster-art", suffix: "" },
   pluginThemeArt: { prefix: "/__openclaw__/plugin-theme-art", suffix: "" },
   userAvatar: {
     prefix: CONTROL_UI_USER_AVATAR_PATH_PREFIX.slice(0, -1),
@@ -64,7 +65,10 @@ export function parseControlUiResourcePath(
   }
   const encoded = definition.suffix ? remainder.slice(0, -definition.suffix.length) : remainder;
   const parts = encoded.split("/");
-  if (parts.length !== (route === "pluginThemeArt" ? 4 : 1) || parts.some((part) => !part)) {
+  if (
+    parts.length !== (route === "pluginThemeArt" ? 4 : route === "pluginLobsterArt" ? 3 : 1) ||
+    parts.some((part) => !part)
+  ) {
     return { matched: true, value: null };
   }
   try {

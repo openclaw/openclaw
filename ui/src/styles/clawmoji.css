@@ -1,0 +1,82 @@
+openclaw-clawmoji {
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.clawmoji {
+  display: inline-flex;
+  align-items: end;
+  justify-content: center;
+  position: relative;
+}
+
+.clawmoji > .clawmoji__builtin {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  transform: none;
+  pointer-events: none;
+}
+
+.clawmoji__art {
+  display: block;
+  overflow: hidden;
+}
+
+.clawmoji__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.clawmoji__unavailable {
+  align-self: center;
+  color: var(--muted);
+}
+
+.clawmoji__art--busy {
+  animation: clawmoji-busy 0.8s ease-in-out infinite alternate;
+}
+
+.clawmoji__art--happy {
+  animation: clawmoji-happy 0.65s ease-in-out infinite alternate;
+}
+
+.clawmoji__art--sleeping {
+  animation: clawmoji-sleeping 3s ease-in-out infinite alternate;
+}
+
+@keyframes clawmoji-busy {
+  from {
+    transform: rotate(-4deg);
+  }
+  to {
+    transform: rotate(4deg);
+  }
+}
+
+@keyframes clawmoji-happy {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-8%);
+  }
+}
+
+@keyframes clawmoji-sleeping {
+  from {
+    transform: scaleY(1);
+  }
+  to {
+    transform: scaleY(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clawmoji__art {
+    animation: none;
+  }
+}

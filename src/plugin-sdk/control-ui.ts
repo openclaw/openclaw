@@ -6,6 +6,7 @@ import type {
   SessionsListParams,
 } from "@openclaw/gateway-protocol";
 import type { ControlUiComponents } from "./control-ui-components.js";
+import type { ControlUiLobsterdex } from "./control-ui-lobsterdex.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,
@@ -204,6 +205,8 @@ export type ControlUiHost = {
   redact: (text: string) => string;
   readonly connection: ControlUiConnection;
   readonly components: ControlUiComponents;
+  /** Shared browser-local collection and core character catalog. */
+  readonly lobsterdex?: ControlUiLobsterdex;
   /**
    * Native modules share the operator's authenticated Gateway authority.
    * The Gateway enforces connection scopes, not a per-plugin RPC allowlist.

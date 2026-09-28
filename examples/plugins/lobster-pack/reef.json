@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "name": "Reef Lobsters",
+  "clawmojis": [
+    {
+      "id": "coral",
+      "name": "Coral",
+      "description": "A reef explorer with a tiny sprout.",
+      "appearance": { "kind": "svg", "source": "assets/coral.svg", "anchor": { "x": 0.5, "y": 1 } }
+    },
+    {
+      "id": "tide",
+      "name": "Tide",
+      "description": "A little lobster made of pixels and seafoam.",
+      "appearance": {
+        "kind": "sprite-atlas",
+        "source": "assets/tide.png",
+        "frameWidth": 32,
+        "frameHeight": 32,
+        "animations": {
+          "idle": { "frames": [0, 1], "fps": 2, "loop": true },
+          "busy": { "frames": [0, 1, 2, 1], "fps": 8, "loop": true },
+          "happy": { "frames": [2, 1, 0], "fps": 4, "loop": false }
+        },
+        "reducedMotionFrame": 0
+      }
+    }
+  ]
+}

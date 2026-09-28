@@ -22,6 +22,8 @@ export type PluginConfigUiHint = {
 };
 
 /** Static, portable palettes; no plugin JavaScript or native UI activation is required. */
+export type PluginManifestLobsterPack = { id: string; source: string };
+
 export type PluginManifestTheme = {
   id: string;
   name: string;
@@ -510,6 +512,7 @@ export type PluginManifest = {
   /** Static UI contributions; omission is unspecified and an empty list declares none. */
   uiCapabilities?: PluginUiCapability[];
   themes?: PluginManifestTheme[];
+  lobsterPacks?: PluginManifestLobsterPack[];
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];

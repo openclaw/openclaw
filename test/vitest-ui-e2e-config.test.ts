@@ -130,6 +130,7 @@ const realGatewayFiles = [
   "device-alias-rename.real-gateway",
   "device-platform-family.real-gateway",
   "logs-lifecycle",
+  "lobsterdex-packs.real-gateway",
   "mcp-app-conformance",
   "model-api-keys.real-gateway",
   "model-catalog-partial-refresh.real-gateway",
@@ -634,6 +635,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/lobsterdex-packs.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,

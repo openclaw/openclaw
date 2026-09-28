@@ -4,6 +4,7 @@ import type {
   ControlUiComponents,
 } from "../../../src/plugin-sdk/control-ui-components.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { acquireLobsterdexCatalog, BUILTIN_CLAWMOJIS } from "../app/lobsterdex-catalog.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { icons } from "../components/icons.ts";
 
@@ -102,6 +103,36 @@ export function createControlUiComponents(options: {
       options.current();
       options.signal.throwIfAborted();
       return resolveAppearanceColor(value);
+    },
+    mountClawmoji(container, props) {
+      let catalog: ReturnType<typeof acquireLobsterdexCatalog> | undefined;
+      return mount(
+        container,
+        props,
+        async () => {
+          const { ClawmojiElement } = await import("../components/clawmoji.ts");
+          return new ClawmojiElement();
+        },
+        (element, next) => {
+          element.entry =
+            (catalog?.snapshot.entries ?? BUILTIN_CLAWMOJIS).find(
+              (entry) => entry.id === next.clawmojiId,
+            ) ?? null;
+          element.pose = next.pose ?? "idle";
+          element.size = next.size ?? 64;
+          element.label = next.label;
+        },
+        undefined,
+        (context, refresh) => {
+          catalog = acquireLobsterdexCatalog(context.gateway);
+          const stop = catalog.subscribe(refresh);
+          refresh();
+          return () => {
+            stop();
+            catalog?.release();
+          };
+        },
+      );
     },
     mountAgentAvatar: (container, props) =>
       mount(
