@@ -94,6 +94,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const reads = this.attachmentReads;
     const readSignal = reads.readSignal;
     return {
+      uploadConfig: state.uploadConfig,
       attachmentReads: reads,
       attachments: state.chatAttachments,
       attachmentLimits: state.hello?.policy?.attachments,

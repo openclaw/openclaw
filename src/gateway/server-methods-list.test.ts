@@ -246,6 +246,7 @@ describe("listGatewayMethods", () => {
       "presence.activity",
       "presence.query",
       "users.merge",
+      "gateway.stop.request",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -315,6 +316,7 @@ describe("listGatewayMethods", () => {
       "presence.activity",
       "presence.query",
       "users.merge",
+      "gateway.stop.request",
     ]);
   });
 
@@ -512,6 +514,7 @@ describe("listGatewayMethods", () => {
       "presence.activity",
       "presence.query",
       "users.merge",
+      "gateway.stop.request",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

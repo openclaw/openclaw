@@ -100,6 +100,7 @@ beforeEach(() => {
   originalExitCode = process.exitCode;
   process.exitCode = 0;
   vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
+  vi.stubEnv("OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE", "");
   vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "");
   vi.stubEnv("OPENCLAW_E2E_SKIP_BUILD", "");
   vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "");
@@ -566,6 +567,59 @@ describe("full-suite timing metadata", () => {
       }
     },
   );
+});
+
+describe("packed CI config continuation", () => {
+  const configs = ["test/vitest/vitest.logging.config.ts", "test/vitest/vitest.process.config.ts"];
+  it.each([
+    { name: "default failure", enabled: false, code: 1, expected: 1 },
+    { name: "requested ordinary failure", enabled: true, code: 1, expected: 2 },
+    { name: "unknown exit", enabled: true, code: null, expected: 1 },
+    { name: "timeout", enabled: true, code: 1, timeout: true, expected: 1 },
+    { name: "signal", enabled: true, code: 1, signaled: true, expected: 1 },
+    { name: "unjoined child", enabled: true, code: 1, unjoined: true, expected: 1 },
+    { name: "rejected child", enabled: true, code: 1, rejected: true, expected: 1 },
+  ])("preserves complete selection and failure status for $name", async (scenario) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("CI", "1");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "1");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
+    vi.stubEnv("OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE", scenario.enabled ? "1" : "");
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    const selected: string[] = [];
+    commands.reader.mockImplementation(({ pnpmArgs, onNoOutputTimeout }) => {
+      const first = selected.length === 0;
+      selected.push(pnpmArgs[pnpmArgs.indexOf("--config") + 1]);
+      if (first && scenario.timeout) {
+        onNoOutputTimeout();
+      }
+      return {
+        completion:
+          first && scenario.rejected
+            ? Promise.reject(new Error("child completion rejected"))
+            : Promise.resolve({
+                code: first ? scenario.code : 0,
+                signal: first && scenario.signaled ? "SIGTERM" : null,
+                groupJoined: !(first && scenario.unjoined),
+              }),
+        getForwardedSignal: () => undefined,
+      };
+    });
+    const exit = vi.fn(async () => {});
+    const running = runTestProjects(exit, configs);
+    if (scenario.rejected) {
+      await expect(running).rejects.toThrow("child completion rejected");
+    } else {
+      await running;
+    }
+    expect(selected).toEqual(configs.slice(0, scenario.expected));
+    if (scenario.signaled) {
+      expect(exit).toHaveBeenCalledWith("SIGTERM");
+    } else if (!scenario.rejected) {
+      expect(process.exitCode).toBe(1);
+    }
+  });
 });
 
 describe("automatic exact-target admission", () => {

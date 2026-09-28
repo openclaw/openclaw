@@ -314,19 +314,6 @@ function commandOwnerAllowFrom(params: {
   return params.command?.groupOwnerAllowFrom === "none" ? [] : params.configuredAllowFrom;
 }
 
-function commandGroupAllowFrom(params: {
-  command?: ChannelMessageIngressCommandInput;
-  isGroup: boolean;
-  effectiveCommandGroupAllowFrom: string[];
-}): Array<string | number> {
-  if (params.isGroup) {
-    return params.effectiveCommandGroupAllowFrom;
-  }
-  return params.command?.directGroupAllowFrom === "effective"
-    ? params.effectiveCommandGroupAllowFrom
-    : [];
-}
-
 function accessGroupMatchedEntry(params: ResolveChannelMessageIngressParams): string | null {
   const entry = params.accessGroupMatchedAllowFromEntry ?? params.subject.stableId;
   return entry == null ? null : String(entry);
@@ -445,11 +432,10 @@ async function resolveChannelMessageIngressForOwner(
         configuredAllowFrom: rawAllowFrom,
         effectiveAllowFrom: rawEffective.effectiveAllowFrom,
       }),
-      commandGroup: commandGroupAllowFrom({
-        command: params.command,
-        isGroup,
-        effectiveCommandGroupAllowFrom: rawCommandGroup.effectiveGroupAllowFrom,
-      }),
+      commandGroup:
+        isGroup || params.command?.directGroupAllowFrom === "effective"
+          ? rawCommandGroup.effectiveGroupAllowFrom
+          : [],
     },
   });
   const ingress = decideChannelIngress(state, policy);

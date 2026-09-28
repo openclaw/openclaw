@@ -103,12 +103,17 @@ auto-merge request, rejecting known failed required checks without admin bypass.
 GitHub waits for `openclaw/ci-gate` (CI plus applicable security review) and
 required reviews; a clean, mergeable PR lands immediately.
 
-Once GitHub accepts auto-merge, keep the task active until the merge and closeout
-are verified, the user pauses it, or a concrete blocker requires user input.
+Keep the landing task active through publication, review, CI waits, and any
+accepted auto-merge until merge and closeout are verified, the user pauses it,
+or a concrete blocker requires user input.
 Poll the exact PR head, required checks, and mergeability every two to three
 minutes with narrow JSON reads. Use one watcher or polling owner; avoid tight
 loops and repeated unchanged status messages. Reconcile through `merge-run`
-when the remote state changes, then use the existing closeout below.
+when the remote state changes, then use the existing closeout below. An internal
+watcher timeout ends that observation attempt, not the landing task. Collect its
+result, investigate any failure, and continue or arrange a supported successor
+under the same authority. Preserve explicit user time limits, pauses, and
+cancellations; do not replace them with an automatic retry.
 
 Investigate failed checks from the exact run and fetch failed logs once. Repair
 task-related defects and confirmed flakes, then rerun the affected proof; rerun
@@ -215,6 +220,10 @@ completed CI. Use the current retained outcome OID and explicitly reviewed head:
 ```bash
 scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery --replacement-head <HEAD_SHA>
 ```
+
+A replacement head repairing the same authorized scope needs fresh review and
+preparation, not renewed landing permission. Explicitly select its exact SHA;
+new scope or a different merge method still needs authorization.
 
 Replacement recovery requires completed ordinary gates, not `github_pending`.
 Use the completed-evidence preparation path above. Neither command deletes the

@@ -229,6 +229,8 @@ export type UiSettings = {
   sessionDeleteConfirm?: boolean;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
+  // Browser-local opt-in; absence preserves native panels and plugin readers.
+  openLinksExternally?: boolean;
 };
 
 export type UiPreferences = Omit<UiSettings, "token">;
@@ -582,6 +584,7 @@ export function loadUiPreferences(
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
+      ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
     // Scoped blobs from builds that persisted tokens durably get rewritten once
     // so the plaintext token leaves localStorage.
@@ -727,6 +730,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
     // External links keep host behavior unless the operator explicitly opts in.
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
+    openLinksExternally: next.openLinksExternally === true ? true : undefined,
   };
   const serialized = JSON.stringify(persisted);
   const { token: _token, ...preferences } = next;

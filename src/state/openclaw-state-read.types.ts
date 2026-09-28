@@ -37,6 +37,7 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type {
   WorkerPlacementConflictBinding,
+  WorkerPlacementRecoveryCandidate,
   WorkerSessionPlacementReadResult,
 } from "../gateway/worker-environments/placement-read-projection.types.js";
 import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-environments/placement-record.js";
@@ -203,6 +204,7 @@ export type OpenClawStateReadCommand =
   | { type: "sandboxRegistry.get"; containerName: string }
   | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
   | { type: "sandboxRegistry.browsers" }
+  | { type: "workers.placementRecoveryCandidates" }
   | {
       type: "workers.placementProjection";
       sessionIds: readonly string[];
@@ -438,6 +440,7 @@ export type OpenClawStateReadResult =
       type: "sandboxRegistry.browsers";
       entries: SandboxBrowserRegistryEntry[];
     }
+  | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
   | {
       type: "workers.placementProjection";
       result: WorkerSessionPlacementReadResult;

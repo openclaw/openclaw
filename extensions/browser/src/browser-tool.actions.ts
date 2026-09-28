@@ -79,24 +79,11 @@ function withLocalActTimeout(
   }
 }
 
-type BrowserTabLike = {
-  suggestedTargetId?: unknown;
-  tabId?: unknown;
-  webExtensionTabId?: unknown;
-  label?: unknown;
-  title?: unknown;
-  url?: unknown;
-  urlUnavailableReason?: unknown;
-  type?: unknown;
-  targetId?: unknown;
-  wsUrl?: unknown;
-};
-
 function formatAgentTab(tab: unknown): Record<string, unknown> {
   if (!tab || typeof tab !== "object") {
     return { value: tab };
   }
-  const source = tab as BrowserTabLike;
+  const source = tab as Record<string, unknown>;
   const targetId = readStringValue(source.targetId);
   const tabId = readStringValue(source.tabId);
   const webExtensionTabId =

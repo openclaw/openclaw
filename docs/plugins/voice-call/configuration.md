@@ -168,7 +168,7 @@ that Region. See
     - `streaming.sttModel` → `streaming.providers.openai.model`
     - `streaming.silenceDurationMs` → `streaming.providers.openai.silenceDurationMs`
     - `streaming.vadThreshold` → `streaming.providers.openai.vadThreshold`
-    - `realtime.agentContext.includeSystemPrompt` is removed. Realtime sessions always include agent-context guidance; `realtime.agentContext` controls optional configured identity and profile files through the shared core resolver. See [Agent voice context](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
+    - `realtime.agentContext.includeSystemPrompt` is removed. Hosts with the shared context resolver always include agent-context guidance; `realtime.agentContext` controls optional configured identity and profile files. Supported older hosts retain their optional, bounded context capsule. See [Agent voice context](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
 
   </Accordion>
 </AccordionGroup>

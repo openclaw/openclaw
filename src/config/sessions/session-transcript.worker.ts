@@ -420,6 +420,23 @@ serveOwnedWorkerTasks(
           return result.found ? result.value : [];
         });
       }
+      if (request.kind === "session-pending-input-receipts") {
+        const { listSessionPendingInputReceipts } =
+          await import("./session-accessor.sqlite-pending-input-receipts.js");
+        return await withHistoryDatabase(request.database, request.kind, () => ({
+          kind: "session-pending-input-receipts" as const,
+          receipts: listSessionPendingInputReceipts(
+            {
+              agentId: request.agentId,
+              sessionKey: request.sessionKey,
+              sessionId: request.sessionId,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.env),
+            },
+            { runIds: request.runIds },
+          ),
+        }));
+      }
       if (request.kind === "session-progress-card") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");

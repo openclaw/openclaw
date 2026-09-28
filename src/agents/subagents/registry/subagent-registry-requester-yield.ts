@@ -10,6 +10,7 @@ import { promoteRequesterFinalAttachment } from "../requester-final-attachment.j
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   recordLatestSubagentRun,
@@ -37,7 +38,7 @@ export type UnsettledRequesterChild = {
  * Lists this requester session's announcing children whose completion has not
  * reached the requester yet, regardless of which requester turn spawned them.
  * Children still bound to `excludeRequesterTurnRunId` belong to that turn's own
- * claim and are omitted.
+ * claim and are omitted, as is the settle-wake cohort already reaching that turn.
  */
 export function listUnsettledRequesterChildrenInRuns(params: {
   requesterSessionKey: string;
@@ -68,7 +69,15 @@ export function listUnsettledRequesterChildrenInRuns(params: {
     if (
       entry.collect === true ||
       entry.expectsCompletionMessage !== true ||
-      (excludedTurnRunId !== undefined && entry.requesterTurnRunId === excludedTurnRunId) ||
+      (excludedTurnRunId !== undefined &&
+        (entry.requesterTurnRunId === excludedTurnRunId ||
+          isRequesterSettleWakeForRun({
+            entry,
+            runId: excludedTurnRunId,
+            requesterSessionKey,
+            requesterAgentId: params.requesterAgentId,
+            runsById: params.runs,
+          }))) ||
       entry.killIntent ||
       entry.killReconciliation ||
       entry.suppressCompletionDelivery === true

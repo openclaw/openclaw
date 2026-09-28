@@ -404,7 +404,11 @@ Disable it:
 Tool Search code mode (`tool_search_code`) is retired. Run
 `openclaw doctor --fix` to migrate `tools.toolSearch.mode: "code"` to `"tools"`
 and remove `codeTimeoutMs`. The migration preserves whether Tool Search is
-enabled. `toolSearch: true` and objects without a mode now select structured
+enabled. `openclaw update` normally runs it for you; updates that defer
+Doctor config repair, such as older Git updaters, need `openclaw doctor --fix`
+afterward. A Gateway started on an unmigrated config exits and names the
+retired key and this command.
+`toolSearch: true` and objects without a mode now select structured
 search. Use [Code Mode](/tools/code-mode) and its `exec`/`wait` surface for
 JavaScript orchestration.
 
