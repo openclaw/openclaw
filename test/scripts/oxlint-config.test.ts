@@ -674,6 +674,8 @@ describe("oxlint config", () => {
         [
           path.resolve("scripts/run-oxlint.mts"),
           "--openclaw-focused-config",
+          "--config",
+          ".oxlintrc.json",
           "--threads=1",
           "--format",
           "json",
@@ -755,7 +757,13 @@ describe("oxlint config", () => {
       for (const github of [false, true]) {
         const result = spawnSync(
           process.execPath,
-          [path.resolve("scripts/run-oxlint.mts"), "--openclaw-focused-config", "fixture.ts"],
+          [
+            path.resolve("scripts/run-oxlint.mts"),
+            "--openclaw-focused-config",
+            "--config",
+            ".oxlintrc.json",
+            "fixture.ts",
+          ],
           {
             cwd: root,
             encoding: "utf8",

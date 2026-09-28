@@ -18,8 +18,13 @@ import {
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
-import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
+import {
+  createManagedCommandInvocation,
+  hasUnjoinedWork,
+  runManagedCommand,
+} from "./lib/managed-child-process.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
+import { runSemanticCheck } from "./lib/semantic-check-admission.mts";
 import { prepareExtensionPackageBoundaryArtifacts } from "./prepare-extension-package-boundary-artifacts.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
@@ -84,6 +89,53 @@ type OxlintRunResult = {
 
 const MAX_EVIDENCE_OUTPUT = 1024 * 1024;
 
+function hasFocusedConfigFlag(args: string[]) {
+  const end = args.indexOf("--");
+  const index = args.indexOf(OPENCLAW_FOCUSED_CONFIG_FLAG);
+  return index !== -1 && (end === -1 || index < end);
+}
+
+function assertSyntaxOnlyConfig(args: string[]) {
+  const end = args.indexOf("--");
+  const options = end === -1 ? args : args.slice(0, end);
+  const configs = options.filter((arg) => arg === "-c" || arg.startsWith("--config"));
+  const configPath = oxlintOption(options, "--config", "-c").value;
+  if (
+    configs.length !== 1 ||
+    !configPath ||
+    !/\.jsonc?$/u.test(configPath) ||
+    options.some((arg) =>
+      /^(?:--(?:type-aware|type-check|type-check-only|lsp)(?:=|$)|-c.+)/u.test(arg),
+    )
+  ) {
+    throw new Error(
+      "Focused lint requires one explicit JSON/JSONC --config and no semantic or LSP flags. Remove --openclaw-focused-config to use contained semantic lint.",
+    );
+  }
+  const config = JSON5.parse<OxlintConfig>(fs.readFileSync(configPath, "utf8"));
+  // Oxlint 1.83 explicit config disables nested discovery, but extends can
+  // still enable root semantic options. Do not recreate its inheritance loader.
+  const unreviewedPlugin = [config, ...(config.overrides ?? [])].some((scope) =>
+    scope.jsPlugins?.some(
+      (plugin) =>
+        typeof plugin !== "string" ||
+        !(plugin.startsWith("./") || plugin.startsWith("../") || path.isAbsolute(plugin)) ||
+        path.resolve(path.dirname(configPath), plugin) !==
+          fileURLToPath(new URL("./oxlint-boundary-guards.mjs", import.meta.url)),
+    ),
+  );
+  if (
+    config.extends !== undefined ||
+    config.options?.typeAware ||
+    config.options?.typeCheck ||
+    unreviewedPlugin
+  ) {
+    throw new Error(
+      "Focused lint config must not inherit config, enable semantic checks, or load unreviewed JavaScript plugins. Remove --openclaw-focused-config to use contained semantic lint.",
+    );
+  }
+}
+
 function oxlintOption(args: string[], name: string, short: string) {
   const end = args.indexOf("--");
   const index = args.findIndex(
@@ -141,7 +193,9 @@ async function runWithAdvisoryLimits(
   env: NodeJS.ProcessEnv,
   signal?: AbortSignal,
   killGraceMs?: number,
+  contained = true,
 ): Promise<OxlintRunResult> {
+  const execute = contained ? runSemanticCheck : runManagedCommand;
   const configOption = oxlintOption(args, "--config", "-c");
   const configPath = path.resolve(configOption.value ?? ".oxlintrc.json");
   const command = {
@@ -164,7 +218,7 @@ async function runWithAdvisoryLimits(
     args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg.replace(/[=][\s\S]*$/u, ""))) ||
     !fs.existsSync(configPath)
   ) {
-    return { status: await runManagedCommand(command) };
+    return { status: await execute(command) };
   }
   const config = JSON5.parse<OxlintConfig>(fs.readFileSync(configPath, "utf8"));
   const rootRules = advisoryLimitRules(config.rules);
@@ -178,7 +232,7 @@ async function runWithAdvisoryLimits(
   });
   enabled &&= limitsAreAdvisory(env);
   if (!enabled && !evidenceEnabled) {
-    return { status: await runManagedCommand(command) };
+    return { status: await execute(command) };
   }
 
   // CLI --warn cannot replace scoped severities and enables rules outside their file scopes.
@@ -205,13 +259,14 @@ async function runWithAdvisoryLimits(
       { flag: "wx" },
     );
   }
+  let joined = true;
   try {
     const configuredArgs = advisoryConfig ? configOption.replace(advisoryConfig) : args;
     const format = oxlintOption(configuredArgs, "--format", "-f");
     let output = "";
     let stderr = "";
     let overflow = false;
-    const status = await runManagedCommand({
+    const status = await execute({
       ...command,
       args: format.replace("json"),
       stdio: ["inherit", "pipe", evidenceEnabled ? "pipe" : "inherit"],
@@ -333,8 +388,12 @@ async function runWithAdvisoryLimits(
           }
         : {}),
     };
+  } catch (error) {
+    joined = !hasUnjoinedWork(error);
+    throw error;
   } finally {
-    if (advisoryConfig) {
+    // An uncertain native child may still read its config; its owner must retain the input.
+    if (advisoryConfig && joined) {
       fs.unlinkSync(advisoryConfig);
     }
   }
@@ -527,8 +586,12 @@ export async function runOxlint(
   killGraceMs?: number,
 ): Promise<OxlintRunResult> {
   signal?.throwIfAborted();
-  const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
-  const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
+  const focusedConfig = hasFocusedConfigFlag(argv);
+  const oxlintArgs = argv.slice();
+  if (focusedConfig) {
+    oxlintArgs.splice(oxlintArgs.indexOf(OPENCLAW_FOCUSED_CONFIG_FLAG), 1);
+    assertSyntaxOnlyConfig(oxlintArgs);
+  }
   const localEnv = resolveLocalCheckEnv(runtimeEnv);
   const memory = focusedConfig ? null : readProcessMemoryCapacity({});
   // Focused configs are syntax-only guards; keep wrapper process handling
@@ -578,6 +641,8 @@ export async function runOxlint(
     resolveOxlintToolchainEnv(oxlintPath, env),
     signal,
     killGraceMs,
+    !focusedConfig &&
+      !(argv.length === 1 && ["--help", "-h", "--version", "-V"].includes(argv[0]!)),
   );
 }
 
@@ -589,8 +654,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   process.exitCode = await runCancelableCommand(async (signal) => {
     const run = () => runOxlint(argv, process.env, signal);
     result =
-      !argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
-      shouldPrepareExtensionPackageBoundaryArtifacts(argv)
+      !hasFocusedConfigFlag(argv) && shouldPrepareExtensionPackageBoundaryArtifacts(argv)
         ? await withDistArtifactOwnership(process.cwd(), run, signal)
         : await run();
     signal.throwIfAborted();

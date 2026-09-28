@@ -29,9 +29,11 @@ import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mts";
+import { hasSemanticTestBackend } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const semanticBackend = hasSemanticTestBackend();
 const CONSTRAINED_HOST = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
 const ROOMY_HOST = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
 const RUN_OXLINT_SHARDS_URL = pathToFileURL(
@@ -188,7 +190,7 @@ describe("run-oxlint", () => {
     expect(shouldSerializeShards({ OPENCLAW_OXLINT_SHARDS_SERIAL: "0" }, ROOMY_HOST)).toBe(false);
   });
 
-  it.each([
+  it.runIf(semanticBackend).each([
     { extraArgs: [], bounded: true },
     { extraArgs: ["scripts/unmeasured.mts"], bounded: false },
   ])("passes batch admission to every child (bounded=$bounded)", ({ extraArgs, bounded }) => {
@@ -197,9 +199,11 @@ describe("run-oxlint", () => {
       mkdirSync(join(cwd, directory), { recursive: true });
     }
     writeOxlintFixture(cwd, [
-      "import { writeFileSync } from 'node:fs';",
+      "import { writeFileSync, readFileSync } from 'node:fs';",
+      "const group = readFileSync('/proc/self/cgroup', 'utf8').trim().split(':')[2];",
+      "const kernel = Object.fromEntries(['memory.max', 'memory.swap.max', 'memory.oom.group'].map(key => [key, readFileSync('/sys/fs/cgroup' + group + '/' + key, 'utf8').trim()]));",
       "const target = process.argv.find((arg) => arg === 'src/a' || arg === 'src/b');",
-      "writeFileSync(target + '/budget.json', JSON.stringify({ concurrency: process.env.OPENCLAW_OXLINT_BATCH_CONCURRENCY, boundedArgs: process.env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS }));",
+      "writeFileSync(target + '/budget.json', JSON.stringify({ concurrency: process.env.OPENCLAW_OXLINT_BATCH_CONCURRENCY, boundedArgs: process.env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS, kernel }));",
     ]);
     const result = spawnSync(
       process.execPath,
@@ -222,7 +226,8 @@ describe("run-oxlint", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     for (const target of ["a", "b"]) {
-      expect(JSON.parse(readFileSync(join(cwd, "src", target, "budget.json"), "utf8"))).toEqual({
+      const receipt = JSON.parse(readFileSync(join(cwd, "src", target, "budget.json"), "utf8"));
+      expect(receipt).toEqual({
         concurrency: "1",
         boundedArgs: bounded
           ? JSON.stringify([
@@ -232,45 +237,55 @@ describe("run-oxlint", () => {
               ...extraArgs,
             ])
           : "",
+        kernel: {
+          "memory.max": expect.any(String),
+          "memory.swap.max": "0",
+          "memory.oom.group": "1",
+        },
       });
+      expect(Number(receipt.kernel["memory.max"])).toBeGreaterThanOrEqual(512 * 1024 ** 2);
+      expect(Number(receipt.kernel["memory.max"])).toBeLessThanOrEqual(8 * 1024 ** 3);
     }
   });
 
-  it.each([1, 7, 137])("stops before later fix shards after exit %s", (exitCode) => {
-    const cwd = createTempDir("openclaw-oxlint-stop-");
-    for (const directory of ["src/a", "src/b", "scripts"]) {
-      mkdirSync(join(cwd, directory), { recursive: true });
-    }
-    writeOxlintFixture(cwd, [
-      "import { writeFileSync } from 'node:fs';",
-      "const target = process.argv.find((arg) => arg === 'src/a' || arg === 'src/b');",
-      "writeFileSync(target + '/visited', process.argv.includes('--fix') ? 'fix' : 'lint');",
-      `process.exit(${exitCode});`,
-    ]);
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `import { main } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)}; process.exitCode = await main(['--only=core:src:a', '--only=core:src:b', '--split-core', '--fix']);`,
-      ],
-      {
-        cwd,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_CI_STATIC_EVIDENCE: "1",
-          OPENCLAW_OXLINT_SHARDS_SERIAL: "0",
-          OPENCLAW_OXLINT_SHARD_CONCURRENCY: "16",
+  it.runIf(semanticBackend).each([1, 7, 137])(
+    "stops before later fix shards after exit %s",
+    (exitCode) => {
+      const cwd = createTempDir("openclaw-oxlint-stop-");
+      for (const directory of ["src/a", "src/b", "scripts"]) {
+        mkdirSync(join(cwd, directory), { recursive: true });
+      }
+      writeOxlintFixture(cwd, [
+        "import { writeFileSync } from 'node:fs';",
+        "const target = process.argv.find((arg) => arg === 'src/a' || arg === 'src/b');",
+        "writeFileSync(target + '/visited', process.argv.includes('--fix') ? 'fix' : 'lint');",
+        `process.exit(${exitCode});`,
+      ]);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { main } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)}; process.exitCode = await main(['--only=core:src:a', '--only=core:src:b', '--split-core', '--fix']);`,
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_CI_STATIC_EVIDENCE: "1",
+            OPENCLAW_OXLINT_SHARDS_SERIAL: "0",
+            OPENCLAW_OXLINT_SHARD_CONCURRENCY: "16",
+          },
         },
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(exitCode);
-    expect(readFileSync(join(cwd, "src/a/visited"), "utf8")).toBe("fix");
-    expect(existsSync(join(cwd, "src/b/visited"))).toBe(false);
-    expect(result.stdout).not.toContain("[ci-static:oxlint:completion]");
-  });
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(exitCode);
+      expect(readFileSync(join(cwd, "src/a/visited"), "utf8")).toBe("fix");
+      expect(existsSync(join(cwd, "src/b/visited"))).toBe(false);
+      expect(result.stdout).not.toContain("[ci-static:oxlint:completion]");
+    },
+  );
 
   it("uses a bounded oxlint shard heartbeat by default", () => {
     expect(resolveShardHeartbeatMs({})).toBe(30_000);
@@ -680,7 +695,7 @@ describe("run-oxlint", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.runIf(semanticBackend)(
     "partitions explicit extension stripes through the CLI on nonserial hosts",
     () => {
       const cwd = createTempDir("openclaw-oxlint-cli-stripes-");

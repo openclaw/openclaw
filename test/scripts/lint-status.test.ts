@@ -10,6 +10,7 @@ import { isProcessAlive, waitForFixtureFile } from "../helpers/process-wait.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import * as nodeScript from "../helpers/run-node-script.js";
 import { formatShimResult } from "./direct-run-entrypoints.test-support.js";
+import { hasSemanticTestBackend } from "./native-boundary-fixture.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
@@ -61,6 +62,7 @@ export function waitForFile(file) {
     "lib/ci-static-check-evidence.mjs",
     "lib/direct-run.mjs",
     "lib/cancelable-command.mts",
+    "lib/semantic-check-admission.mts",
     "lib/dist-artifact-ownership.mts",
     "lib/dist-artifact-lock.mts",
     "lib/record-shared.mjs",
@@ -68,11 +70,17 @@ export function waitForFile(file) {
     "lib/managed-child-process.mts",
     "lib/managed-memory.mts",
     "lib/managed-memory-entrypoint.mts",
+    "lib/managed-memory-launcher.mts",
     "lib/vitest-resource-ownership.mts",
     "lib/windows-taskkill.mjs",
     "lib/repo-root.mjs",
   ]) {
     let source = fs.readFileSync(path.resolve("scripts", file), "utf8");
+    if (file === "lib/semantic-check-admission.mts") {
+      // Injected unjoined failures deliberately retain admission. Give each disposable
+      // fixture its own account directory so those failures cannot block the real host.
+      source = source.replace("os.userInfo().homedir", "process.cwd()");
+    }
     if (file === "lib/managed-child-process.mts") {
       // Inject uncertainty only after the real leaf has joined; no process escapes the fixture.
       source = source.replace(
@@ -124,7 +132,12 @@ export async function runManagedCommand(options: RunManagedCommandOptions): Prom
       config: false,
       cwd: root,
       root,
-      entry: ["scripts/run-lint.mts", "scripts/run-oxlint.mts", "scripts/run-oxlint-shards.mts"],
+      entry: [
+        "scripts/run-lint.mts",
+        "scripts/run-oxlint.mts",
+        "scripts/run-oxlint-shards.mts",
+        "scripts/lib/managed-memory-launcher.mts",
+      ],
       outDir: root,
       unbundle: true,
       format: "esm",
@@ -411,7 +424,7 @@ async function runLintFixture(
   return { result, details, steps, trailers };
 }
 
-describe.skipIf(process.platform === "win32")("lint failure reporting boundary", () => {
+describe.runIf(hasSemanticTestBackend())("lint failure reporting boundary", () => {
   it.for(
     entries.flatMap((entry) => [
       { entry, githubActions: false },
