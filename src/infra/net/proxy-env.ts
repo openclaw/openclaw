@@ -17,14 +17,18 @@ export function hasProxyEnvConfigured(env: NodeJS.ProcessEnv = process.env): boo
   return readTrimmedStringAlias(env, PROXY_ENV_KEYS) !== undefined;
 }
 
-function normalizeProxyEnvValue(value: string | undefined): string | null | undefined {
+function readProxyEnvValue(
+  key: "http_proxy" | "https_proxy" | "all_proxy",
+  env: NodeJS.ProcessEnv,
+): string | undefined {
   // Empty lowercase env vars intentionally shadow uppercase values, matching
   // undici's EnvHttpProxyAgent precedence.
+  const lower = env[key];
+  const value = typeof lower === "string" ? lower : env[key.toUpperCase()];
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  return value.trim() || undefined;
 }
 
 /** Explicit proxy option shape accepted by undici EnvHttpProxyAgent. */
@@ -45,16 +49,9 @@ export function resolveEnvHttpProxyUrl(
   protocol: "http" | "https",
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const lowerHttpProxy = normalizeProxyEnvValue(env.http_proxy);
-  const lowerHttpsProxy = normalizeProxyEnvValue(env.https_proxy);
-  const httpProxy =
-    lowerHttpProxy !== undefined ? lowerHttpProxy : normalizeProxyEnvValue(env.HTTP_PROXY);
-  const httpsProxy =
-    lowerHttpsProxy !== undefined ? lowerHttpsProxy : normalizeProxyEnvValue(env.HTTPS_PROXY);
-  if (protocol === "https") {
-    return httpsProxy ?? httpProxy ?? undefined;
-  }
-  return httpProxy ?? undefined;
+  const httpProxy = readProxyEnvValue("http_proxy", env);
+  const httpsProxy = readProxyEnvValue("https_proxy", env);
+  return protocol === "https" ? (httpsProxy ?? httpProxy) : httpProxy;
 }
 
 /** Return whether EnvHttpProxyAgent-style HTTP/S proxy resolution finds a proxy URL. */
@@ -63,13 +60,6 @@ export function hasEnvHttpProxyConfigured(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
-}
-
-function resolveEnvAllProxyUrl(env: NodeJS.ProcessEnv): string | undefined {
-  const lowerAllProxy = normalizeProxyEnvValue(env.all_proxy);
-  const allProxy =
-    lowerAllProxy !== undefined ? lowerAllProxy : normalizeProxyEnvValue(env.ALL_PROXY);
-  return allProxy ?? undefined;
 }
 
 /**
@@ -82,7 +72,7 @@ function resolveEnvAllProxyUrl(env: NodeJS.ProcessEnv): string | undefined {
 export function resolveEnvHttpProxyAgentOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): EnvHttpProxyAgentProxyOptions | undefined {
-  const allProxy = resolveEnvAllProxyUrl(env);
+  const allProxy = readProxyEnvValue("all_proxy", env);
   const httpProxy = resolveEnvHttpProxyUrl("http", env) ?? allProxy;
   const httpsProxy = resolveEnvHttpProxyUrl("https", env) ?? httpProxy;
   const options: EnvHttpProxyAgentProxyOptions = {

@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { icons } from "../../components/icons.ts";
 import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/resizable-divider.ts";
@@ -137,7 +138,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
               ?disabled=${cancelDisabled}
               @click=${props.onRevisionCancel}
             >
-              ×
+              ${icons.x}
             </button>
           </openclaw-tooltip>
         </div>

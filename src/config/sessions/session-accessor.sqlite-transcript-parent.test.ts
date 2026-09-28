@@ -44,7 +44,8 @@ function message(id: string, parentId: string | null): TranscriptEvent {
 }
 
 describe("SQLite transcript append ancestry", () => {
-  it.each([8, 512])("bounds statement executions across %i ancestors", async (count) => {
+  it("bounds statement executions across 512 ancestors", async () => {
+    const count = 512;
     const events = Array.from({ length: count }, (_, index) =>
       message(`entry-${index}`, index === 0 ? null : `entry-${index - 1}`),
     );

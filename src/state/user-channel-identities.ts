@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Check } from "typebox/value";
 import { z } from "zod";
 import {
@@ -7,6 +10,7 @@ import {
   UserChannelIdentitySchema,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { GatewayConfig } from "../config/types.gateway.js";
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -16,7 +20,6 @@ import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.typ
 import { updateConfigMachineStateInDatabase } from "./config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -31,6 +34,7 @@ import { publishUserProfilesChange } from "./user-profile-list.js";
 import {
   requireResolvedUserProfileMetadataById,
   selectResolvedUserProfileMetadataById,
+  selectUserProfileEmails,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
@@ -46,9 +50,37 @@ import type {
 } from "./user-profiles.types.js";
 
 // The dot keeps administrator-attested channel links outside Tailscale login namespaces.
-const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
+export const CHANNEL_IDENTITY_PROVIDER = "channel.identity";
 const POLICY_KEY = "operator.channelPolicy";
 const referenceSchema = z.strictObject({ version: z.literal(1), id: z.uuid() });
+const configuredReferenceSchema = referenceSchema.extend({ version: z.literal(2) });
+const configuredPolicySchema = z.strictObject({
+  fingerprint: z.string().length(43),
+  id: z.uuid(),
+});
+const commandReferenceSchema = z.union([referenceSchema, configuredReferenceSchema]);
+export type CommandOwnerReference = Readonly<z.infer<typeof commandReferenceSchema>>;
+
+export function parseCommandOwnerReference(value: unknown) {
+  return commandReferenceSchema.safeParse(value).data;
+}
+
+export function configuredCommandOwnerPolicyFingerprint(owners?: readonly (string | number)[]) {
+  const entries = normalizeSortedUniqueStringEntries(owners);
+  return entries.length ? sha256Base64Url(JSON.stringify(entries)) : undefined;
+}
+
+function splitPolicy(value: unknown) {
+  const { configuredOwnerPolicy, ...policy } = isRecord(value) ? value : {};
+  return { policy, configured: configuredPolicySchema.safeParse(configuredOwnerPolicy).data };
+}
+
+export function readConfiguredCommandOwnerPolicy(value: unknown, fingerprint: string) {
+  const { configured } = splitPolicy(value);
+  return configured?.fingerprint === fingerprint
+    ? { version: 2 as const, id: configured.id }
+    : undefined;
+}
 const grantSchema = z
   .strictObject({ pluginId: z.string().min(1).max(128), grantId: z.uuid() })
   .nullable();
@@ -63,21 +95,26 @@ export function resolveUserChannelAuthorizationPolicy(
 }
 function matchesPolicy(db: DatabaseSync, policy: UserChannelAuthorizationPolicy): boolean {
   const row = readConfigMachineStateRowInDatabase(db, POLICY_KEY);
-  return row !== undefined && isDeepStrictEqual(JSON.parse(row.value_json), policy);
+  return (
+    row !== undefined && isDeepStrictEqual(splitPolicy(JSON.parse(row.value_json)).policy, policy)
+  );
 }
 
 /** Activation and rollback retire old references before their exact authorization policy is published. */
 export function publishUserChannelPolicyInDatabase(
   db: DatabaseSync,
   policy: UserChannelAuthorizationPolicy,
-): string[] {
+  configuredOwnersHash?: string,
+) {
   let profiles: string[] = [];
+  const channels: string[] = [];
   updateConfigMachineStateInDatabase(
     db,
     POLICY_KEY,
     (current: unknown) => {
+      const previous = splitPolicy(current);
       if (
-        !isDeepStrictEqual(current, policy) &&
+        !isDeepStrictEqual(previous.policy, policy) &&
         getAdmittedSqliteSchemaFacts(db)?.tables.has("user_profile_identities")
       ) {
         profiles = executeSqliteQuerySync(
@@ -90,11 +127,24 @@ export function publishUserChannelPolicyInDatabase(
         ).rows.map((row) => row.profile_id);
         publishUserProfileAuthorityChange(db, ...profiles);
       }
-      return policy;
+      const configured = configuredOwnersHash
+        ? {
+            fingerprint: configuredOwnersHash,
+            id:
+              previous.configured?.fingerprint === configuredOwnersHash
+                ? previous.configured.id
+                : generateSecureUuid(),
+          }
+        : undefined;
+      if (!isDeepStrictEqual(previous.configured, configured)) {
+        channels.push(POLICY_KEY);
+        publishUserChannelIdentityAuthorityChange(db, POLICY_KEY);
+      }
+      return { ...policy, ...(configured ? { configuredOwnerPolicy: configured } : {}) };
     },
     Date.now(),
   );
-  return profiles;
+  return { profiles, channels };
 }
 
 /** The reference names this uninterrupted channel link; it carries no permission by itself. */
@@ -183,12 +233,7 @@ export function userChannelIdentitySubject(identity: UserChannelIdentity): strin
 }
 
 function readIdentity(subject: string): UserChannelIdentity | undefined {
-  let tuple: unknown;
-  try {
-    tuple = JSON.parse(subject);
-  } catch {
-    return undefined;
-  }
+  const tuple = safeParseJson(subject);
   if (!Array.isArray(tuple) || tuple.length !== 3) {
     return undefined;
   }
@@ -293,7 +338,8 @@ export function unlinkUserChannelIdentity(
 }
 
 function hasIdentityTables(db: DatabaseSync): boolean {
-  return tableExists(db, "user_profiles") && tableExists(db, "user_profile_identities");
+  const tables = getAdmittedSqliteSchemaFacts(db)?.tables;
+  return tables?.has("user_profiles") === true && tables.has("user_profile_identities");
 }
 
 export function listUserChannelIdentitiesInDatabase(
@@ -346,14 +392,7 @@ export function resolveUserChannelIdentityInDatabase(
       return undefined;
     }
     const kysely = userProfilesDb(db);
-    const emails = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("user_profile_emails")
-        .select("email")
-        .where("profile_id", "=", profile.id)
-        .orderBy("email", "asc"),
-    ).rows.map(({ email }) => email);
+    const emails = selectUserProfileEmails(db, profile.id);
     const loginEmails = emails.filter((email) => {
       const login = classifyTailscaleLogin(email);
       // Legacy email-shaped GitHub aliases must not revive a renamed login's grant.
@@ -382,6 +421,7 @@ export function resolveUserChannelIdentityInDatabase(
     return {
       ...(authorization ? { authorization } : {}),
       profileId: profile.id,
+      displayName: profile.display_name,
       role: profile.role ?? null,
       emails,
       loginIdentities: [

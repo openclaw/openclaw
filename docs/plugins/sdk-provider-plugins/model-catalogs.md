@@ -84,6 +84,11 @@ separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
 to report successful acquisition and convert acquisition errors into outcomes.
 Returning provider configuration alone does not establish a live discovery outcome.
+For compatibility, nonempty rows returned by a legacy catalog hook without an
+outcome survive provider-wide failures under the same credentials. This does not
+establish a successful discovery origin or retain unrelated configured and
+supplemental rows. Empty legacy catalogs and profile-specific failures do not
+use that fallback; a successful replacement clears the previous row provenance.
 Keep metadata-feed fallback separate from account discovery; do not retry a rejected account request
 anonymously or substitute seed rows inside a strict builder.
 

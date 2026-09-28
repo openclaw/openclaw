@@ -83,6 +83,7 @@ function recordToRow(
     created_at: record.createdAt,
     last_active_at: record.lastActiveAt,
     removed_at: record.removedAt ?? null,
+    gc_protection_json: null,
     provisioned_paths_json:
       provisionedPaths === undefined ? null : JSON.stringify(provisionedPaths),
     run_end_cleanup_json:
@@ -429,70 +430,6 @@ export function deleteRegistryWorktree(
           .where("worktree_id", "=", id),
       );
       executeSqliteQuerySync(db, kyselyFor(db).deleteFrom("worktrees").where("id", "=", id));
-    },
-    { env },
-  );
-}
-
-export function admitWorktreeRunLeaseRow(
-  env: NodeJS.ProcessEnv,
-  params: {
-    worktreeId: string;
-    token: string;
-    pid: number;
-    startTime: number | null;
-    now: number;
-    checks?: RunLeaseOwnerChecks;
-    exclusive?: true;
-  },
-): void {
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      const db = database.db;
-      const k = kyselyLeaseFor(db);
-      const scope = worktreeRunLeaseScope(params.worktreeId);
-      const record = executeSqliteQuerySync(
-        db,
-        k
-          .selectFrom("worktrees")
-          .select(["path", "removed_at"])
-          .where("id", "=", params.worktreeId),
-      ).rows[0];
-      const worktreePath = record?.path ?? params.worktreeId;
-      if (!record || record.removed_at != null) {
-        throw new Error(`managed worktree was removed: ${worktreePath}`);
-      }
-      const { removingToken, liveCount, exclusive } = collectLiveRunLeases(
-        db,
-        k,
-        scope,
-        params.checks ?? {},
-      );
-      if (removingToken !== undefined) {
-        throw new Error(`managed worktree was removed: ${worktreePath}`);
-      }
-      if (exclusive || (params.exclusive && liveCount > 0)) {
-        throw new Error(
-          "The worktree is in use; wait for its current run or publication to finish.",
-        );
-      }
-      executeSqliteQuerySync(
-        db,
-        k.insertInto("state_leases").values({
-          scope,
-          lease_key: params.token,
-          owner: `${params.pid}:${params.startTime ?? ""}`,
-          expires_at: null,
-          heartbeat_at: null,
-          payload_json: JSON.stringify({
-            pid: params.pid,
-            starttime: params.startTime ?? undefined,
-            ...(params.exclusive ? { exclusive: true } : {}),
-          }),
-          created_at: params.now,
-          updated_at: params.now,
-        }),
-      );
     },
     { env },
   );

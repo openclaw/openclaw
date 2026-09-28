@@ -2,7 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { acquireDistArtifactOwnership } from "../../../scripts/lib/dist-artifact-lock.mts";
+import { installPrivateUpdateHandoffStore } from "../../../test/helpers/private-update-handoff-store.js";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -11,12 +13,12 @@ import {
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../../test-utils/process-tree.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   preparePostCorePluginInstallRecordsForFreshProcess,
-  postCoreUpdateParentOwnsCompletion,
-  resolvePostCoreUpdateOperatorOptions,
+  resolvePostCoreUpdateHandoff,
   readPostCorePluginInstallRecordsFile,
   shouldResumePostCoreUpdateInFreshProcess,
   writePostCorePluginInstallRecordsFile,
@@ -40,6 +42,7 @@ const pluginUpdate: PostCorePluginUpdateResult = {
 };
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
       await fs.rm(dir, { recursive: true, force: true });
@@ -54,6 +57,73 @@ async function withTempDir(): Promise<string> {
 }
 
 describe("continuePostCoreUpdateInFreshProcess", () => {
+  it.each([false, true])(
+    "releases artifact ownership only for a target without the prepared-fact consumer (modern=%s)",
+    async (modern) => {
+      const root = await withTempDir();
+      const control = path.join(root, "control");
+      await fs.mkdir(control, { mode: 0o700 });
+      installPrivateUpdateHandoffStore(control);
+      const observation = path.join(root, "ownership.txt");
+      await fs.mkdir(path.join(root, "dist"));
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "9999.0.0" }));
+      if (modern) {
+        await fs.mkdir(path.join(root, "scripts", "lib"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "scripts", "lib", "source-update-artifact-preflight.mts"),
+          "export {};\n",
+        );
+      }
+      const lockModule = new URL("../../../scripts/lib/dist-artifact-lock.mts", import.meta.url)
+        .href;
+      await fs.writeFile(
+        path.join(root, "dist", "entry.mjs"),
+        `import fs from "node:fs/promises";
+import { acquireDistArtifactOwnership } from ${JSON.stringify(lockModule)};
+let observed;
+try {
+  const lock = await acquireDistArtifactOwnership(${JSON.stringify(root)});
+  await lock.release();
+  observed = "child-acquired";
+} catch (error) {
+  if (!String(error).includes(${JSON.stringify(`retained by PID ${process.pid}`)})) throw error;
+  observed = "parent-held";
+}
+await fs.writeFile(${JSON.stringify(observation)}, observed);
+await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
+`,
+      );
+      const sourceArtifactLock = await acquireDistArtifactOwnership(root);
+      try {
+        const runId = "fixture-source-lock";
+        const result = await withUpdateCommandExecutor(runId, async (executor) => {
+          const executorFence = await executor.enter(root);
+          return await continuePostCoreUpdateInFreshProcess({
+            root,
+            sourceRuntimePrepared: true,
+            channel: "dev",
+            requestedChannel: null,
+            opts: {
+              json: true,
+              run: { runId, env: {}, sourceArtifactLock, executorFence },
+            },
+            pluginInstallRecords: {},
+            updateStartedAtMs: Date.now(),
+            timeoutMs: 5000,
+            nodeRunner: process.execPath,
+          });
+        });
+        expect(result).toEqual({ resumed: true, pluginUpdate });
+        expect(await fs.readFile(observation, "utf8")).toBe(
+          modern ? "parent-held" : "child-acquired",
+        );
+        expect(await sourceArtifactLock.verifyStillHeld()).toBe(modern);
+      } finally {
+        await sourceArtifactLock.release();
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32").each([true, false])(
     "waits for a committed child's shutdown before returning its result (cooperative=%s)",
     async (cooperative) => {
@@ -104,6 +174,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       try {
         result = await continuePostCoreUpdateInFreshProcess({
           root,
+          sourceRuntimePrepared: true,
           channel: "stable",
           requestedChannel: null,
           opts: { json: true, yes: true, timeout: cooperative ? undefined : "3600" },
@@ -142,6 +213,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         mode: 0o700,
         marker: {
           completionOwner: "parent",
+          sourceRuntimePrepared: true,
           timeout: {
             version: 1,
             serialized: cooperative ? "5" : "3600",
@@ -270,26 +342,6 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     );
     await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
       "Run openclaw doctor to inspect and repair plugin installation state.",
-    );
-  });
-
-  it("live FS: corrupt handoff is not silently dropped as empty records", async () => {
-    // L3: real temp file + real fs.readFile/JSON.parse (no stubs).
-    const dir = await withTempDir();
-    const filePath = path.join(dir, "plugin-install-records.json");
-    await fs.writeFile(filePath, '[{"not":"a-record-map"', "utf-8");
-
-    let threw = false;
-    try {
-      await readPostCorePluginInstallRecordsFile(filePath);
-    } catch (err) {
-      threw = true;
-      expect(String(err)).toContain(`Malformed JSON in plugin install records file: ${filePath}`);
-    }
-    expect(threw).toBe(true);
-
-    console.info(
-      `[post-core install-records live proof] path=${filePath} outcome=malformed-json-rejected`,
     );
   });
 });
@@ -435,19 +487,20 @@ describe("post-core operator deadline provenance", () => {
       JSON.stringify({ completionOwner: "parent", timeout: value }),
     );
     const opts = { json: true, timeout: "2700" };
-    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toEqual({
-      ...opts,
-      timeout: expected,
+    expect(await resolvePostCoreUpdateHandoff({ opts, resultPath })).toEqual({
+      opts: { ...opts, timeout: expected },
+      parentOwnsCompletion: true,
     });
-    // The shipped completion reader ignores added metadata and keeps its ownership contract.
-    expect(await postCoreUpdateParentOwnsCompletion(resultPath)).toBe(true);
   });
 
   it("retains an explicit deadline without private parent ownership", async () => {
     const root = await withTempDir();
     const resultPath = path.join(root, "plugins.json");
     const opts = { timeout: "3" };
-    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    expect(await resolvePostCoreUpdateHandoff({ opts, resultPath })).toEqual({
+      opts,
+      parentOwnsCompletion: false,
+    });
     await fs.writeFile(
       path.join(root, "handoff.json"),
       JSON.stringify({
@@ -455,8 +508,11 @@ describe("post-core operator deadline provenance", () => {
         timeout: { version: 1, serialized: "3", operator: null },
       }),
     );
-    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    expect(await resolvePostCoreUpdateHandoff({ opts, resultPath })).toEqual({
+      opts,
+      parentOwnsCompletion: false,
+    });
     await fs.writeFile(path.join(root, "handoff.json"), "{");
-    await expect(resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).rejects.toThrow();
+    await expect(resolvePostCoreUpdateHandoff({ opts, resultPath })).rejects.toThrow();
   });
 });

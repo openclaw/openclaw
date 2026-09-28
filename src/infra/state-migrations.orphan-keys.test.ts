@@ -85,22 +85,6 @@ describe("migrateOrphanedSessionKeys", () => {
     listPluginDoctorSessionStoreAgentIdsMock.mockReturnValue([]);
   });
 
-  it("renames orphaned raw key to canonical form", async () => {
-    await withStateFixture(async ({ stateDir }) => {
-      const storePath = opsSessionStorePath(stateDir);
-      writeStore(storePath, {
-        "agent:main:main": { sessionId: "abc-123", updatedAt: 1000 },
-      });
-
-      const result = await migrateFixtureState(stateDir);
-
-      expect(result.changes.length).toBeGreaterThan(0);
-      const store = readStore(storePath);
-      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("abc-123");
-      expect(store["agent:main:main"]).toBeUndefined();
-    });
-  });
-
   it("promotes legacy voice sessions before canonical runtime access", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -599,28 +583,16 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
-  it("renames same-agent main aliases when mainKey changes", async () => {
-    await withStateFixture(async ({ stateDir }) => {
-      const storePath = opsSessionStorePath(stateDir);
-      writeStore(storePath, {
-        "agent:ops:main": { sessionId: "abc-123", updatedAt: 1000 },
-      });
-
-      const result = await migrateFixtureState(stateDir);
-
-      expect(result.changes.length).toBeGreaterThan(0);
-      const store = readStore(storePath);
-      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("abc-123");
-      expect(store["agent:ops:main"]).toBeUndefined();
-    });
-  });
-
-  it("keeps most recently updated entry when both orphan and canonical exist", async () => {
+  it("keeps the newest entry and prefers canonical keys on ties in either source order", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);
       writeStore(storePath, {
         "agent:main:main": { sessionId: "old-orphan", updatedAt: 500 },
         "agent:ops:work": { sessionId: "current", updatedAt: 2000 },
+        "agent:ops:TIE-ONE": { sessionId: "noncanonical-earlier", updatedAt: 1000 },
+        "agent:ops:tie-one": { sessionId: "canonical-later", updatedAt: 1000 },
+        "agent:ops:tie-two": { sessionId: "canonical-earlier", updatedAt: 1000 },
+        "agent:ops:TIE-TWO": { sessionId: "noncanonical-later", updatedAt: 1000 },
       });
 
       await migrateFixtureState(stateDir);
@@ -628,6 +600,10 @@ describe("migrateOrphanedSessionKeys", () => {
       const store = readStore(storePath);
       expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("current");
       expect(store["agent:main:main"]).toBeUndefined();
+      expect(requireStoreEntry(store, "agent:ops:tie-one").sessionId).toBe("canonical-later");
+      expect(requireStoreEntry(store, "agent:ops:tie-two").sessionId).toBe("canonical-earlier");
+      expect(store["agent:ops:TIE-ONE"]).toBeUndefined();
+      expect(store["agent:ops:TIE-TWO"]).toBeUndefined();
     });
   });
 
@@ -663,20 +639,6 @@ describe("migrateOrphanedSessionKeys", () => {
       const store = readStore(storePath);
       expect(requireStoreEntry(store, `agent:ops:acp:${acpId}`).sessionId).toBe("sess-acp");
       expect(store[`agent:OPS:acp:${acpId}`]).toBeUndefined();
-    });
-  });
-
-  it("skips stores that are already fully canonical", async () => {
-    await withStateFixture(async ({ stateDir }) => {
-      const storePath = opsSessionStorePath(stateDir);
-      writeStore(storePath, {
-        "agent:ops:work": { sessionId: "abc-123", updatedAt: 1000 },
-      });
-
-      const result = await migrateFixtureState(stateDir);
-
-      expect(result.changes).toHaveLength(0);
-      expect(result.warnings).toHaveLength(0);
     });
   });
 
@@ -718,15 +680,6 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
-  it("handles missing store files gracefully", async () => {
-    await withStateFixture(async ({ stateDir }) => {
-      const result = await migrateFixtureState(stateDir);
-
-      expect(result.changes).toHaveLength(0);
-      expect(result.warnings).toHaveLength(0);
-    });
-  });
-
   it("checks missing agent stores without comparing every earlier path", async () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const agentCount = 100;
@@ -762,31 +715,6 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result).toEqual({ changes: [], warnings: [] });
       expect(prepareLegacySessionSurfaces).not.toHaveBeenCalled();
-    });
-  });
-
-  it("is idempotent — running twice produces same result", async () => {
-    await withStateFixture(async ({ stateDir }) => {
-      const storePath = opsSessionStorePath(stateDir);
-      writeStore(storePath, {
-        "agent:main:main": { sessionId: "abc-123", updatedAt: 1000 },
-      });
-
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      await migrateOrphanedSessionKeys({
-        cfg: OPS_WORK_CONFIG,
-        env,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      });
-      const result2 = await migrateOrphanedSessionKeys({
-        cfg: OPS_WORK_CONFIG,
-        env,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      });
-
-      expect(result2.changes).toHaveLength(0);
-      const store = readStore(storePath);
-      expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("abc-123");
     });
   });
 

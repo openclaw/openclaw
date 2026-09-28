@@ -23,7 +23,7 @@ import type {
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
-import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
+import { guardedJsonApiRequest, readProviderCallStatus } from "./shared/guarded-json-api.js";
 
 interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
@@ -172,10 +172,7 @@ export class PlivoProvider implements VoiceCallProvider {
   ): ProviderWebhookParseResult {
     const flow = normalizeOptionalString(ctx.query?.flow) ?? "";
 
-    const parsed = this.parseBody(ctx.rawBody);
-    if (!parsed) {
-      return { events: [], statusCode: 400 };
-    }
+    const parsed = new URLSearchParams(ctx.rawBody);
 
     // Keep providerCallId mapping for later call control.
     const callUuid = parsed.get("CallUUID") || undefined;
@@ -188,7 +185,7 @@ export class PlivoProvider implements VoiceCallProvider {
 
     // Special flows that exist only to return Plivo XML (no events).
     if (flow === "xml-speak") {
-      const callId = this.getCallIdFromQuery(ctx);
+      const callId = normalizeOptionalString(ctx.query?.callId);
       const pending = callId ? this.pendingSpeakByCallId.get(callId) : undefined;
       if (callId) {
         this.pendingSpeakByCallId.delete(callId);
@@ -216,7 +213,7 @@ export class PlivoProvider implements VoiceCallProvider {
     }
 
     if (flow === "xml-listen") {
-      const callId = this.getCallIdFromQuery(ctx);
+      const callId = normalizeOptionalString(ctx.query?.callId);
       const pending = callId ? this.pendingListenByCallId.get(callId) : undefined;
       if (callId) {
         this.pendingListenByCallId.delete(callId);
@@ -244,7 +241,7 @@ export class PlivoProvider implements VoiceCallProvider {
     }
 
     // Normal events.
-    const callIdFromQuery = this.getCallIdFromQuery(ctx);
+    const callIdFromQuery = normalizeOptionalString(ctx.query?.callId);
     const dedupeKey = options?.verifiedRequestKey ?? createPlivoRequestDedupeKey(ctx);
     const event = this.normalizeEvent(parsed, callIdFromQuery, dedupeKey);
 
@@ -322,17 +319,10 @@ export class PlivoProvider implements VoiceCallProvider {
       callStatus === "no-answer" ||
       callStatus === "failed"
     ) {
-      const event = {
+      const event: NormalizedEvent = {
         ...baseEvent,
-        type: "call.ended" as const,
-        reason:
-          callStatus === "completed"
-            ? ("completed" as const)
-            : callStatus === "busy"
-              ? ("busy" as const)
-              : callStatus === "no-answer"
-                ? ("no-answer" as const)
-                : ("failed" as const),
+        type: "call.ended",
+        reason: callStatus,
       };
       this.releaseCallState({
         callId: baseEvent.callId || undefined,
@@ -521,28 +511,24 @@ export class PlivoProvider implements VoiceCallProvider {
       "machine",
       "hangup",
     ]);
-    try {
-      const data = await guardedJsonApiRequest<{ call_status?: string }>({
-        url: `${this.baseUrl}/Call/${input.providerCallId}/`,
-        method: "GET",
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
-        },
-        allowNotFound: true,
-        allowedHostnames: [this.apiHost],
-        auditContext: "plivo-get-call-status",
-        errorPrefix: "Plivo get call status error",
-      });
-
-      if (!data) {
-        return { status: "not-found", isTerminal: true };
-      }
-
-      const status = data.call_status ?? "unknown";
-      return { status, isTerminal: terminalStatuses.has(status) };
-    } catch {
-      return { status: "error", isTerminal: false, isUnknown: true };
-    }
+    return readProviderCallStatus(
+      () =>
+        guardedJsonApiRequest<{ call_status?: string }>({
+          url: `${this.baseUrl}/Call/${input.providerCallId}/`,
+          method: "GET",
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
+          },
+          allowNotFound: true,
+          allowedHostnames: [this.apiHost],
+          auditContext: "plivo-get-call-status",
+          errorPrefix: "Plivo get call status error",
+        }),
+      (data) => {
+        const status = data.call_status ?? "unknown";
+        return { status, isTerminal: terminalStatuses.has(status) };
+      },
+    );
   }
 
   private static normalizeNumber(numberOrSip: string): string {
@@ -598,11 +584,6 @@ export class PlivoProvider implements VoiceCallProvider {
 </Response>`;
   }
 
-  private getCallIdFromQuery(ctx: WebhookContext): string | undefined {
-    const callId = normalizeOptionalString(ctx.query?.callId);
-    return callId || undefined;
-  }
-
   private buildActionUrl(
     ctx: WebhookContext,
     opts: { flow: string; callId?: string },
@@ -637,14 +618,6 @@ export class PlivoProvider implements VoiceCallProvider {
         }),
       );
       return `${u.origin}${u.pathname}`;
-    } catch {
-      return null;
-    }
-  }
-
-  private parseBody(rawBody: string): URLSearchParams | null {
-    try {
-      return new URLSearchParams(rawBody);
     } catch {
       return null;
     }

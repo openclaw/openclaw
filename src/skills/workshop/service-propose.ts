@@ -307,6 +307,7 @@ async function createPendingSkillProposal(
     ...(evidence ? { evidence } : {}),
   };
   const event = await writeSkillProposal({
+    assertCommitAllowed: input.assertCommitAllowed,
     record,
     content,
     supportFiles,

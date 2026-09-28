@@ -1,7 +1,3 @@
-/**
- * Implements sandboxed HTTP requests for Codex native tools by routing network
- * access through the active OpenClaw sandbox backend.
- */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -19,10 +15,8 @@ import type {
   OpenClawExecServer,
 } from "./types.js";
 
-/** Maximum JSON-line size accepted from the streaming HTTP helper process. */
 const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
 
-/** Handles one sandbox HTTP JSON-RPC request, optionally streaming response body deltas. */
 export async function httpRequest(
   execServer: OpenClawExecServer,
   notifications: CodexSandboxExecSessionNotifications,

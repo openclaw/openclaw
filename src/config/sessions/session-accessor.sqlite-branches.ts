@@ -38,6 +38,7 @@ const SESSION_BRANCH_CACHE_MAX_ENTRIES = 64;
 
 type SessionBranchCacheEntry = SessionTranscriptWatermark & {
   branches: SessionBranchSummary[];
+  appendSafe?: boolean;
   identity: OpenClawAgentDatabaseIdentity;
 };
 
@@ -68,31 +69,39 @@ function readCachedSessionBranchSummaries(
   database: OpenClawAgentReadOnlyDatabase,
   sessionId: string,
   watermark: SessionTranscriptWatermark,
-): SessionBranchSummary[] | undefined {
+  allowAppend = false,
+): SessionBranchCacheEntry | undefined {
   const cacheKey = sessionBranchCacheKey(database.path, sessionId);
   const cached = sessionBranchCache.get(cacheKey);
   if (
     !cached ||
     cached.identity !== readOpenClawAgentDatabaseIdentity(database).identity ||
     cached.generation !== watermark.generation ||
-    cached.maxSeq !== watermark.maxSeq
+    (cached.maxSeq !== watermark.maxSeq &&
+      !(
+        allowAppend &&
+        cached.maxSeq !== null &&
+        watermark.maxSeq !== null &&
+        cached.maxSeq < watermark.maxSeq
+      ))
   ) {
     return undefined;
   }
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, cached);
-  return cached.branches;
+  return cached;
 }
 
 function cacheSessionBranchSummaries(
   database: OpenClawAgentReadOnlyDatabase,
   sessionId: string,
-  snapshot: SessionTranscriptWatermark & { branches: SessionBranchSummary[] },
+  snapshot: SessionTranscriptWatermark & { branches: SessionBranchSummary[]; appendSafe?: boolean },
 ): void {
   const cacheKey = sessionBranchCacheKey(database.path, sessionId);
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, {
     branches: snapshot.branches,
+    appendSafe: snapshot.appendSafe,
     generation: snapshot.generation,
     maxSeq: snapshot.maxSeq,
     identity: readOpenClawAgentDatabaseIdentity(database).identity,
@@ -131,12 +140,24 @@ function readSessionBranchSnapshot(
       assertSessionTranscriptHot(database.db, expected.sessionId);
       // The watermark and rows must describe the same snapshot, even when a peer appends.
       const watermark = readSessionTranscriptHotWatermark(database, expected.sessionId);
-      const cached = readCachedSessionBranchSummaries(database, expected.sessionId, watermark);
-      const branches = cached ?? readSessionBranchSummaries(database, expected.sessionId);
-      if (!cached) {
-        cacheSessionBranchSummaries(database, expected.sessionId, { ...watermark, branches });
+      const cached = readCachedSessionBranchSummaries(
+        database,
+        expected.sessionId,
+        watermark,
+        true,
+      );
+      const summaries =
+        cached?.maxSeq === watermark.maxSeq
+          ? cached
+          : readSessionBranchSummaries(database, expected.sessionId, cached);
+      if (summaries !== cached) {
+        cacheSessionBranchSummaries(database, expected.sessionId, { ...watermark, ...summaries });
       }
-      return { status: "ok", ...watermark, branches: cloneSessionBranchSummaries(branches) };
+      return {
+        status: "ok",
+        ...watermark,
+        branches: cloneSessionBranchSummaries(summaries.branches),
+      };
     },
     { operationLabel: "session branch summaries read" },
   );
@@ -205,7 +226,7 @@ export async function listSessionBranches(
       const cached = readCachedSessionBranchSummaries(database, selected.sessionId, watermark);
       let snapshot: SessionBranchSummaryReadResult;
       if (cached) {
-        snapshot = { status: "ok", ...watermark, branches: cached };
+        snapshot = { status: "ok", ...watermark, branches: cached.branches };
       } else if (typeof claim.identity === "symbol") {
         // Incognito transcripts live only in this process's in-memory database.
         snapshot = readSessionBranchSnapshot(database, expected);

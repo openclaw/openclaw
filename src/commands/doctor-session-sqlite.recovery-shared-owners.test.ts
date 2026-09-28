@@ -6,7 +6,10 @@ import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mu
 import { loadSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { writeSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -74,12 +77,7 @@ describe("runDoctorSessionSqlite", () => {
       }
       expect(disappeared).toBe(true);
       closeOpenClawAgentDatabasesForTest();
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const retired = await retireRecovery(cfg, env);
       const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
       for (const original of originals) {
         const locations = [
@@ -135,7 +133,7 @@ describe("runDoctorSessionSqlite", () => {
         expect(entry.label).toBe(`Current ${owner} metadata`);
         current.push({ scope, entry: structuredClone(entry) });
       }
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync();
       const restored = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "restore" });
       expect(restored.targets.flatMap((target) => target.issues)).toEqual([]);
       for (const original of originals) {
@@ -153,12 +151,7 @@ describe("runDoctorSessionSqlite", () => {
         expect(loadSessionEntry(scope)).toEqual(entry);
       }
       closeOpenClawAgentDatabasesForTest();
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const retired = await retireRecovery(cfg, env);
       expect(retired.totals.removedFiles).toBe(separateIndexes ? 5 : 4);
     },
   );
@@ -234,12 +227,7 @@ describe("runDoctorSessionSqlite", () => {
       const indexBytes = fs.readFileSync(workIndex);
       const report = await runDoctorSessionSqlite({ cfg, env, agent: "main", mode: "import" });
       closeOpenClawAgentDatabasesForTest();
-      const cleanup = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const cleanup = await retireRecovery(cfg, env);
       expect(fs.existsSync(workSource)).toBe(true);
       expect(fs.readFileSync(workSource)).toEqual(original);
       expect(fs.readFileSync(workIndex)).toEqual(indexBytes);
@@ -260,12 +248,7 @@ describe("runDoctorSessionSqlite", () => {
         const retry = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
         expect(retry.targets.flatMap((target) => target.issues)).toEqual([]);
         closeOpenClawAgentDatabasesForTest();
-        const retired = await retireSessionSqliteRecovery({
-          env,
-          preview: inspectSessionSqliteRecovery({ cfg, env }),
-          readConfig: async () => cfg,
-          confirm: async () => true,
-        });
+        const retired = await retireRecovery(cfg, env);
         const current = readMigrationManifest(retry.migrationRun?.manifestPath);
         for (const move of current.targets
           .flatMap((target) => target.completedMoves)
@@ -292,6 +275,12 @@ describe("runDoctorSessionSqlite", () => {
       const fixture = createSharedRecoveryFixture({ separateIndexes, reverse });
       const { cfg, env, transcriptPath, indexes, independent } = fixture;
       const original = fs.readFileSync(transcriptPath);
+      const supportOriginals = new Map(
+        [independent.trajectoryPath, independent.unreferencedJsonlPath].map((source) => [
+          source,
+          fs.readFileSync(source),
+        ]),
+      );
       const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
       let injected = false;
       const spy = vi
@@ -325,12 +314,7 @@ describe("runDoctorSessionSqlite", () => {
         manifest.targets.find((target) => target.agentId === "work")?.validationBeforeArchive,
       ).toBe("failed");
       closeOpenClawAgentDatabasesForTest();
-      const cleanup = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const cleanup = await retireRecovery(cfg, env);
       const originalLocations = [
         transcriptPath,
         ...manifest.targets.flatMap((target) =>
@@ -363,18 +347,32 @@ describe("runDoctorSessionSqlite", () => {
       const retried = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
       expect(retried.targets.flatMap((target) => target.issues)).toEqual([]);
       closeOpenClawAgentDatabasesForTest();
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const retired = await retireRecovery(cfg, env);
       const latest = readMigrationManifest(retried.migrationRun?.manifestPath);
+      const protectedSources = new Set<string>();
       for (const move of latest.targets.flatMap((target) => target.completedMoves)) {
+        const supportBytes = supportOriginals.get(move.sourcePath);
+        if (supportBytes) {
+          expect(move).toMatchObject({
+            kind: "unreferenced-jsonl",
+            artifact: {
+              classification: "protected",
+              reason: "unreferenced-history",
+              disposal: { state: "retained" },
+            },
+          });
+          expect(retired.artifacts.find((item) => item.path === move.archivePath)?.outcome).toBe(
+            "protected",
+          );
+          expect(fs.readFileSync(move.archivePath)).toEqual(supportBytes);
+          protectedSources.add(move.sourcePath);
+          continue;
+        }
         expect(retired.artifacts.find((item) => item.path === move.archivePath)?.outcome).toBe(
           "removed",
         );
       }
+      expect([...protectedSources].toSorted()).toEqual([...supportOriginals.keys()].toSorted());
     },
   );
 
@@ -408,16 +406,23 @@ describe("runDoctorSessionSqlite", () => {
         );
       }
       closeOpenClawAgentDatabasesForTest();
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const retired = await retireRecovery(cfg, env);
       expect(retired.totals.removedFiles).toBe(6);
     },
   );
 });
+
+function retireRecovery(
+  cfg: ReturnType<typeof createSharedRecoveryFixture>["cfg"],
+  env: NodeJS.ProcessEnv,
+) {
+  return retireSessionSqliteRecovery({
+    env,
+    preview: inspectSessionSqliteRecovery({ cfg, env }),
+    readConfig: async () => cfg,
+    confirm: async () => true,
+  });
+}
 
 function createSharedRecoveryFixture(params: {
   separateIndexes: boolean;

@@ -33,14 +33,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function fixture(kind: "runtime" | "setup") {
+function fixture(kind: "runtime" | "setup", native = false) {
   const rootDir = temp.make("plugin-artifact-disposal-");
   const source = path.join(rootDir, "index.cjs");
   fs.writeFileSync(
     source,
-    'exports.filename = __filename; exports.read = () => require("./value.cjs");',
+    'exports.filename = __filename; exports.read = () => require("./value.cjs");' +
+      (native
+        ? 'exports.nativeFile = require("node:fs").realpathSync(require("node:path").join(__dirname, "native.so"));'
+        : ""),
   );
   fs.writeFileSync(path.join(rootDir, "value.cjs"), 'module.exports = "retained";');
+  if (native) {
+    fs.writeFileSync(path.join(rootDir, "native.so"), "retained native bytes");
+  }
   const cache = createPluginCache();
   const value = withPluginCache(cache, () => {
     if (kind === "runtime") {
@@ -62,13 +68,13 @@ function fixture(kind: "runtime" | "setup") {
     };
     const load = getPluginSetupModuleLoader(record, source, rootDir);
     return load.initialize(() => load(source));
-  }) as { filename: string; read(): string };
+  }) as { filename: string; nativeFile?: string; read(): string };
   const instance = expectDefined(getPluginValueInstance(value), "bound module owner");
   const retire = async () =>
     kind === "setup"
       ? (await retirePluginCache(cache)).failures.map((failure) => failure.error)
       : (await instance.dispose()).errors;
-  return { value, instance, retire };
+  return { value, instance, retire, cache };
 }
 
 function forcedRetirement(errors: readonly unknown[]) {
@@ -80,9 +86,10 @@ function forcedRetirement(errors: readonly unknown[]) {
   return timeout;
 }
 
-function gateRemoval(filename: string, events: string[], failure?: Error) {
+function gateRemoval(filename: string, events: string[], failure?: Error, nativeFile?: string) {
   const entered = createDeferredCore();
   const resume = createDeferredCore();
+  const nativeRemoved = createDeferredCore();
   const remove = fsPromises.rm;
   let directory: string | undefined;
   vi.spyOn(fsPromises, "rm").mockImplementation(async (...args) => {
@@ -95,22 +102,31 @@ function gateRemoval(filename: string, events: string[], failure?: Error) {
         throw failure;
       }
     }
-    return remove(...args);
+    await remove(...args);
+    if (nativeFile && typeof args[0] === "string" && nativeFile.startsWith(args[0] + path.sep)) {
+      nativeRemoved.resolve();
+    }
   });
-  return { entered: entered.promise, resume, directory: () => directory };
+  return {
+    entered: entered.promise,
+    resume,
+    nativeRemoved: nativeRemoved.promise,
+    directory: () => directory,
+  };
 }
 
 it.each(["runtime", "setup"] as const)(
   "joins %s artifact removal after consumers and callbacks without blocking foreground work",
   async (kind) => {
-    const { value, instance, retire } = fixture(kind);
+    const { value, instance, retire, cache } = fixture(kind, true);
+    const nativeFile = expectDefined(value.nativeFile, "captured native asset");
     const events: string[] = [];
     const consumer = instance.retainConsumer();
     const retained = consumer.wrap(value);
     instance.lifecycle.onDispose(() => {
       events.push("plugin");
     });
-    const gate = gateRemoval(value.filename, events);
+    const gate = gateRemoval(value.filename, events, undefined, nativeFile);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let settled = false;
     const retirement = retire().finally(() => {
@@ -133,13 +149,18 @@ it.each(["runtime", "setup"] as const)(
       expect(settled).toBe(true);
       const timeout = forcedRetirement(await retirement);
       expect(fs.existsSync(value.filename)).toBe(true);
+      expect(fs.readFileSync(nativeFile, "utf8")).toBe("retained native bytes");
       gate.resume.resolve();
       await expect(timeout.settled).resolves.toBeUndefined();
+      await retirePluginCache(cache);
+      await gate.nativeRemoved;
+      expect(fs.existsSync(nativeFile)).toBe(false);
       expect(fs.existsSync(expectDefined(gate.directory(), "retired artifact"))).toBe(false);
     } finally {
       consumer.release();
       gate.resume.resolve();
       await retirement;
+      await retirePluginCache(cache);
     }
   },
 );

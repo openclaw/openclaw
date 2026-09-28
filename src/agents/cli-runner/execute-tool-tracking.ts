@@ -10,7 +10,11 @@ import {
   normalizeAcceptedSessionSpawnResult,
   type AcceptedSessionSpawn,
 } from "../accepted-session-spawn.js";
-import type { CliOutput, CliToolUseStartDelta } from "../cli-output-contracts.js";
+import type {
+  CliOutput,
+  CliToolResultDelta,
+  CliToolUseStartDelta,
+} from "../cli-output-contracts.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
@@ -48,8 +52,8 @@ import {
   CLI_MESSAGING_EVIDENCE_MAX_CALLS,
   extractCliMessagingContent,
   extractCliMessagingTarget,
-  normalizeCliMessagingToolName,
 } from "./execute-messaging.js";
+import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
@@ -96,7 +100,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     toolArgs: Record<string, unknown>,
     call: McpLoopbackToolCallStart,
   ) =>
-    normalizeCliMessagingToolName(toolName) === call.toolName &&
+    stripOpenClawMcpToolPrefix(toolName) === call.toolName &&
     isDeepStrictEqual(toolArgs, call.args);
   const markCliLoopbackCallsAmbiguous = (
     calls: CliLoopbackCall[],
@@ -321,7 +325,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const isPreparedInternalSourceReply = async (call: McpLoopbackToolCallStart) => {
     if (
       context.params.sourceReplyDeliveryMode !== "message_tool_only" ||
-      normalizeCliMessagingToolName(call.toolName) !== "message" ||
+      stripOpenClawMcpToolPrefix(call.toolName) !== "message" ||
       call.args.action !== "send" ||
       !context.params.config
     ) {
@@ -354,10 +358,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     context.preparedBackend.mcpClientGrantCapture?.activate(captureKey, assertCurrent);
     gatewayCaptureKey = captureKey;
     const isPotentialDelivery = (toolName: string) =>
-      isMessagingTool(normalizeCliMessagingToolName(toolName));
+      isMessagingTool(stripOpenClawMcpToolPrefix(toolName));
     const isPreparedDelivery = (toolName: string, toolArgs: Record<string, unknown>) =>
       toolArgs.dryRun !== true &&
-      isMessagingToolDeliveryAction(normalizeCliMessagingToolName(toolName), toolArgs);
+      isMessagingToolDeliveryAction(stripOpenClawMcpToolPrefix(toolName), toolArgs);
     beginMcpLoopbackToolCallCapture({
       captureKey,
       onYield: (_message, acknowledgment) => {
@@ -403,7 +407,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         const candidate = candidates.at(0);
         if (candidates.length === 1 && candidate && !candidate.ambiguous) {
           candidate.current = current;
-          const toolName = normalizeCliMessagingToolName(current.toolName);
+          const toolName = stripOpenClawMcpToolPrefix(current.toolName);
           askUserDeadlines.update(candidate, toolName, current.args);
         } else if (candidates.length > 0) {
           markCliLoopbackCallsAmbiguous(candidates);
@@ -448,7 +452,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         } else if (candidates.length > 1) {
           markCliLoopbackCallsAmbiguous(candidates);
         }
-        const toolName = normalizeCliMessagingToolName(call.toolName);
+        const toolName = stripOpenClawMcpToolPrefix(call.toolName);
         const acceptedSessionSpawn =
           toolName === "sessions_spawn" && call.outcome === "completed" && "result" in call
             ? normalizeAcceptedSessionSpawnResult(call.result)
@@ -490,7 +494,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       };
       activeCliTools.set(event.toolCallId, activeTool);
       const admittedCall = {
-        toolName: normalizeCliMessagingToolName(event.name),
+        toolName: stripOpenClawMcpToolPrefix(event.name),
         args: event.args,
       };
       const pendingCandidates = cliLoopbackCalls.filter(
@@ -513,7 +517,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         bindCliLoopbackCall(pending, event.toolCallId, activeTool);
       }
     }
-    const toolName = normalizeCliMessagingToolName(event.name);
+    const toolName = stripOpenClawMcpToolPrefix(event.name);
     if (
       event.kind === "server_tool_use" ||
       gatewayCaptureKey ||
@@ -537,12 +541,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       target: extractCliMessagingTarget(context, toolName, event.args),
     });
   };
-  const handleCliToolResult = (event: {
-    toolCallId: string;
-    name: string;
-    isError: boolean;
-    result?: unknown;
-  }) => {
+  const handleCliToolResult = (event: CliToolResultDelta) => {
     const activeTool = activeCliTools.get(event.toolCallId);
     if (activeTool?.loopbackCall) {
       askUserDeadlines.clear(activeTool.loopbackCall);

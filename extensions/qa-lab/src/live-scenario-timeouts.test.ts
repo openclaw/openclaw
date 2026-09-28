@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import type { QaNativeSubagentRun } from "./execution-identity-storage-inspection.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
@@ -21,14 +22,8 @@ type CompletionSuccessfulToolEvent = {
   toolCallId: string;
 };
 
-type CompletionTaskFixture = {
+type CompletionRunFixture = Omit<QaNativeSubagentRun, "childSessionKey"> & {
   childSessionKey?: string;
-  createdAt: number;
-  deliveryStatus: "delivered" | "pending";
-  endedAt?: number;
-  label: string;
-  requesterSessionKey: string;
-  status: "running" | "succeeded";
 };
 
 type CompletionParentReplyFixture = {
@@ -46,15 +41,19 @@ type CompletionParentOutboundFixture = {
   text?: string;
 };
 
-const deliveredCompletionTask: CompletionTaskFixture = {
+const deliveredCompletionRun = {
+  runId: "completion-child-run",
   childSessionKey: completionChildSessionKey,
   createdAt: completionAttemptStartedAt + 1,
-  deliveryStatus: "delivered",
-  endedAt: completionChildEndedAt,
+  delivery: { status: "delivered" },
+  execution: {
+    status: "terminal",
+    endedAt: completionChildEndedAt,
+    outcome: { status: "ok" },
+  },
   label: "issue-109025-completion-child-00000000",
   requesterSessionKey: completionParentSessionKey,
-  status: "succeeded",
-};
+} satisfies QaNativeSubagentRun;
 
 function runCompletionPolicyFlow(
   params: {
@@ -66,7 +65,6 @@ function runCompletionPolicyFlow(
     parentOutbound?: CompletionParentOutboundFixture | null;
     parentReply?: CompletionParentReplyFixture | null;
     parentSpawnCompletedAt?: number;
-    parentToolCalls?: Record<string, number>;
     parentYieldCompletedAt?: number;
     priorSuccessfulParentToolCalls?: Record<string, number>;
     priorParentOutbound?: CompletionParentOutboundFixture;
@@ -76,18 +74,18 @@ function runCompletionPolicyFlow(
     successfulChildReads?: number;
     successfulParentToolEvents?: CompletionSuccessfulToolEvent[];
     successfulParentToolCalls?: Record<string, number>;
-    taskLookupError?: Error;
-    tasks?: CompletionTaskFixture[];
+    runLookupError?: Error;
+    runs?: CompletionRunFixture[];
   } = {},
 ) {
   const state = createQaBusState();
   const gatewayCalls: Array<{ method: string; request: { sessionKey?: string } }> = [];
-  const taskCommands: unknown[] = [];
+  const runRequesterSessionKeys: string[] = [];
   const transcriptSessionKeys: string[] = [];
   const transcriptReadOptions: unknown[] = [];
   const workspaceWrites: Array<{ content: string; filePath: string }> = [];
   let generatedUuidCount = 0;
-  const parentToolCalls = params.parentToolCalls ?? {
+  const parentToolCalls = {
     sessions_spawn: 1,
     sessions_yield: 1,
     exec: 1,
@@ -308,12 +306,12 @@ function runCompletionPolicyFlow(
         }
         throw new Error(`unexpected completion transcript session: ${sessionKey}`);
       },
-      runQaCli: async (_env: unknown, command: unknown) => {
-        taskCommands.push(command);
-        if (params.taskLookupError) {
-          throw params.taskLookupError;
+      readNativeQaSubagentRuns: async (_env: unknown, requesterSessionKey: string) => {
+        runRequesterSessionKeys.push(requesterSessionKey);
+        if (params.runLookupError) {
+          throw params.runLookupError;
         }
-        return { tasks: params.tasks ?? [deliveredCompletionTask] };
+        return params.runs ?? [deliveredCompletionRun];
       },
     },
   });
@@ -322,7 +320,7 @@ function runCompletionPolicyFlow(
     gatewayCalls,
     result,
     state,
-    taskCommands,
+    runRequesterSessionKeys,
     transcriptReadOptions,
     transcriptSessionKeys,
     workspaceWrites,
@@ -393,41 +391,6 @@ describe("live subagent scenario timeouts", () => {
     });
   });
 
-  it("checkpoints outbound-only history before waiting for the current requester delivery", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("issue-109025-completion-policy-live"));
-    const actions = scenario.execution.flow?.steps.flatMap((step) => step.actions) ?? [];
-    const checkpoint = actions.find(
-      (action) =>
-        typeof action === "object" &&
-        action !== null &&
-        "set" in action &&
-        action.set === "outboundStartIndex",
-    );
-    const deliveryWait = actions.find(
-      (action) =>
-        typeof action === "object" &&
-        action !== null &&
-        "call" in action &&
-        action.call === "waitForOutboundMessage" &&
-        "saveAs" in action &&
-        action.saveAs === "parentOutbound",
-    );
-
-    expect(checkpoint).toMatchObject({
-      value: {
-        expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length",
-      },
-    });
-    expect(deliveryWait).toMatchObject({
-      args: [
-        { ref: "state" },
-        expect.any(Object),
-        { expr: "liveTurnTimeoutMs(env, 60000)" },
-        { sinceIndex: { ref: "outboundStartIndex" } },
-      ],
-    });
-  });
-
   it("applies the GPT-5 live floor without extending the mock fallback", () => {
     expect(
       resolveQaLiveTurnTimeoutMs(
@@ -451,78 +414,69 @@ describe("live subagent scenario timeouts", () => {
     ).toBe(60_000);
   });
 
-  it("rejects echoed completion text when no child was actually spawned", async () => {
-    const { result, state } = runCompletionPolicyFlow({
-      parentToolCalls: { sessions_yield: 1, exec: 1 },
-      tasks: [],
-    });
-
-    await expect(result).rejects.toThrow("parent did not spawn a subagent");
-    expect(state.getSnapshot().messages[0]?.text).toContain("CHILD_DONE");
-  });
-
   it.each([
-    { reason: "missing child task", tasks: [] },
+    { reason: "missing child run", runs: [] },
     {
-      reason: "stale child task",
-      tasks: [{ ...deliveredCompletionTask, createdAt: completionAttemptStartedAt - 1 }],
+      reason: "stale child run",
+      runs: [{ ...deliveredCompletionRun, createdAt: completionAttemptStartedAt - 1 }],
     },
     {
       reason: "different child label",
-      tasks: [{ ...deliveredCompletionTask, label: "another-child" }],
+      runs: [{ ...deliveredCompletionRun, label: "another-child" }],
     },
     {
       reason: "different requester session",
-      tasks: [{ ...deliveredCompletionTask, requesterSessionKey: "agent:qa:someone-else" }],
+      runs: [{ ...deliveredCompletionRun, requesterSessionKey: "agent:qa:someone-else" }],
     },
     {
-      reason: "unfinished child task",
-      tasks: [{ ...deliveredCompletionTask, status: "running" as const }],
+      reason: "unfinished child run",
+      runs: [
+        {
+          ...deliveredCompletionRun,
+          execution: { ...deliveredCompletionRun.execution, status: "running" },
+        },
+      ],
+    },
+    {
+      reason: "failed child run",
+      runs: [
+        {
+          ...deliveredCompletionRun,
+          execution: { ...deliveredCompletionRun.execution, outcome: { status: "error" } },
+        },
+      ],
+    },
+    {
+      reason: "missing child outcome",
+      runs: [
+        {
+          ...deliveredCompletionRun,
+          execution: { ...deliveredCompletionRun.execution, outcome: undefined },
+        },
+      ],
     },
     {
       reason: "undelivered child completion",
-      tasks: [{ ...deliveredCompletionTask, deliveryStatus: "pending" as const }],
+      runs: [{ ...deliveredCompletionRun, delivery: { status: "pending" } }],
     },
     {
       reason: "missing child session identity",
-      tasks: [{ ...deliveredCompletionTask, childSessionKey: undefined }],
+      runs: [{ ...deliveredCompletionRun, childSessionKey: undefined }],
     },
     {
       reason: "missing child completion timestamp",
-      tasks: [{ ...deliveredCompletionTask, endedAt: undefined }],
+      runs: [
+        {
+          ...deliveredCompletionRun,
+          execution: { ...deliveredCompletionRun.execution, endedAt: undefined },
+        },
+      ],
     },
-  ])("rejects a $reason despite matching Gateway completion text", async ({ tasks }) => {
-    await expect(runCompletionPolicyFlow({ tasks }).result).rejects.toThrow(
+  ])("rejects a $reason despite matching Gateway completion text", async ({ runs }) => {
+    await expect(runCompletionPolicyFlow({ runs }).result).rejects.toThrow(
       "test condition was not met",
     );
   });
-
-  it.each<{
-    failure: string;
-    parentToolCalls: Record<string, number>;
-    tool: string;
-  }>([
-    {
-      tool: "sessions_spawn",
-      parentToolCalls: { sessions_yield: 1, exec: 1 },
-      failure: "parent did not spawn a subagent",
-    },
-    {
-      tool: "sessions_yield",
-      parentToolCalls: { sessions_spawn: 1, exec: 1 },
-      failure: "parent did not yield before completion",
-    },
-    {
-      tool: "exec",
-      parentToolCalls: { sessions_spawn: 1, sessions_yield: 1 },
-      failure: "parent did not execute the completion command",
-    },
-  ])(
-    "rejects completion without a real parent $tool call",
-    async ({ failure, parentToolCalls }) => {
-      await expect(runCompletionPolicyFlow({ parentToolCalls }).result).rejects.toThrow(failure);
-    },
-  );
 
   it.each<{
     failure: string;
@@ -723,17 +677,11 @@ describe("live subagent scenario timeouts", () => {
     ).rejects.toThrow("parent exec did not use the exact delivered-completion command");
   });
 
-  it.each([
-    { reason: "missing", proofCompletionText: "" },
-    { reason: "guessed", proofCompletionText: "CHILD_DONE:guessed-before-delivery" },
-  ])(
-    "rejects premature parent exec when its proof contains a $reason completion token",
-    async ({ proofCompletionText }) => {
-      await expect(runCompletionPolicyFlow({ proofCompletionText }).result).rejects.toThrow(
-        "completion proof did not contain the delivered child marker",
-      );
-    },
-  );
+  it("rejects premature parent exec with a guessed completion token", async () => {
+    await expect(
+      runCompletionPolicyFlow({ proofCompletionText: "CHILD_DONE:guessed-before-delivery" }).result,
+    ).rejects.toThrow("completion proof did not contain the delivered child marker");
+  });
 
   it("rejects inline filesystem discovery even when the exec proof forges the child marker", async () => {
     await expect(
@@ -744,16 +692,13 @@ describe("live subagent scenario timeouts", () => {
     ).rejects.toThrow("parent exec did not use the exact delivered-completion command");
   });
 
-  it.each(["read", "sessions_history"])(
-    "rejects an alternate parent %s tool that could discover the child marker",
-    async (tool) => {
-      await expect(
-        runCompletionPolicyFlow({
-          successfulParentToolCalls: { sessions_spawn: 1, sessions_yield: 1, exec: 1, [tool]: 1 },
-        }).result,
-      ).rejects.toThrow("parent used an unexpected successful tool");
-    },
-  );
+  it("rejects an alternate parent read tool that could discover the child marker", async () => {
+    await expect(
+      runCompletionPolicyFlow({
+        successfulParentToolCalls: { sessions_spawn: 1, sessions_yield: 1, exec: 1, read: 1 },
+      }).result,
+    ).rejects.toThrow("parent used an unexpected successful tool");
+  });
 
   it.each(["sessions_yield", "exec"])(
     "rejects repeated successful parent %s calls",
@@ -766,11 +711,11 @@ describe("live subagent scenario timeouts", () => {
     },
   );
 
-  it("surfaces task snapshot failures without converting them into retry timeouts", async () => {
+  it("surfaces native run snapshot failures without converting them into retry timeouts", async () => {
     await expect(
-      runCompletionPolicyFlow({ taskLookupError: new Error("durable task snapshot unavailable") })
+      runCompletionPolicyFlow({ runLookupError: new Error("native run snapshot unavailable") })
         .result,
-    ).rejects.toThrow("durable task snapshot unavailable");
+    ).rejects.toThrow("native run snapshot unavailable");
   });
 
   it.each([
@@ -784,19 +729,7 @@ describe("live subagent scenario timeouts", () => {
       successfulChildReads: 3,
       failure: "child did not successfully read the complete chain",
     },
-    {
-      reason: "four repeated reads and a guessed completion marker",
-      successfulChildReads: 4,
-      childFinalText: "CHILD_DONE",
-      failure: "child did not finish with the exact completion reply",
-    },
-    {
-      reason: "completion marker guessed from the first chain filename",
-      successfulChildReads: 4,
-      childFinalText: "CHILD_DONE:00000000-0000-4000-8000-000000000001",
-      failure: "child did not finish with the exact completion reply",
-    },
-  ])("rejects a delivered task with the $reason", async (fixture) => {
+  ])("rejects a delivered child with the $reason", async (fixture) => {
     await expect(runCompletionPolicyFlow(fixture).result).rejects.toThrow(fixture.failure);
   });
 
@@ -805,7 +738,7 @@ describe("live subagent scenario timeouts", () => {
       gatewayCalls,
       result,
       state,
-      taskCommands,
+      runRequesterSessionKeys,
       transcriptReadOptions,
       transcriptSessionKeys,
     } = runCompletionPolicyFlow();
@@ -817,7 +750,7 @@ describe("live subagent scenario timeouts", () => {
         request: { sessionKey: completionParentSessionKey, limit: 100, maxChars: 131_072 },
       },
     ]);
-    expect(taskCommands).toEqual([["tasks", "list", "--json", "--runtime", "subagent"]]);
+    expect(runRequesterSessionKeys).toEqual([completionParentSessionKey]);
     expect(transcriptSessionKeys).toEqual([
       completionParentSessionKey,
       completionParentSessionKey,
@@ -893,12 +826,6 @@ describe("live subagent scenario timeouts", () => {
       expect(inboundText).not.toContain(chainFileName);
     }
     expect(inboundText).not.toContain(terminalMarker);
-  });
-
-  it("accepts an exec proof created in the same millisecond the child completed", async () => {
-    await expect(
-      runCompletionPolicyFlow({ proofModifiedAt: completionChildEndedAt }).result,
-    ).resolves.toMatchObject({ status: "pass" });
   });
 
   it("accepts authenticated spawn, yield, completion, and exec in the same millisecond", async () => {

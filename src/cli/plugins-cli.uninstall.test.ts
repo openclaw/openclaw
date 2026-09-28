@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Plugins CLI uninstall tests cover plugin removal selection and uninstall output.
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,6 +7,7 @@ import { persistClawPackageRef } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { installedPluginRoot } from "../plugin-sdk/test-helpers/bundled-plugin-paths.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -30,6 +30,7 @@ import {
   runtimeErrors,
   pluginsCliRuntimeLogs,
   setInstalledPluginIndexInstallRecords,
+  setPersistedPluginConfig,
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
@@ -55,6 +56,25 @@ function expectInstallRecordsWrittenWithLease(records: unknown, config: unknown)
   );
 }
 
+function configureAlphaInstall(source: "path" | "npm" = "path") {
+  const installRecords = {
+    alpha:
+      source === "path"
+        ? { source, sourcePath: alphaInstallPath, installPath: alphaInstallPath }
+        : { source, spec: "alpha@1.0.0", installPath: alphaInstallPath },
+  };
+  const baseConfig: OpenClawConfig = {
+    plugins: { entries: { alpha: { enabled: true } }, installs: installRecords },
+  };
+  pluginCliConfigMock.mockReturnValue(baseConfig);
+  setInstalledPluginIndexInstallRecords(installRecords);
+  buildPluginSnapshotReportMock.mockReturnValue({
+    plugins: [{ id: "alpha", name: "alpha" }],
+    diagnostics: [],
+  });
+  return { baseConfig, installRecords };
+}
+
 describe("plugins cli uninstall", () => {
   beforeEach(async () => {
     resetPluginsCliTestState();
@@ -68,10 +88,8 @@ describe("plugins cli uninstall", () => {
     planPluginUninstallMock.mockImplementation((params) =>
       actual.planPluginUninstall(params as Parameters<typeof actual.planPluginUninstall>[0]),
     );
-    applyPluginUninstallDirectoryRemovalMock.mockImplementation((removal) =>
-      actual.applyPluginUninstallDirectoryRemoval(
-        removal as Parameters<typeof actual.applyPluginUninstallDirectoryRemoval>[0],
-      ),
+    applyPluginUninstallDirectoryRemovalMock.mockImplementation(
+      actual.applyPluginUninstallDirectoryRemoval,
     );
     configWriteMock.mockImplementation(async (config) => {
       pluginCliConfigMock.mockReturnValue(config as OpenClawConfig);
@@ -177,27 +195,7 @@ describe("plugins cli uninstall", () => {
   ])(
     "uninstalls with --force and $keepFilesFlag without prompting (inherited lease=$inheritedLease)",
     async ({ keepFilesFlag, inheritedLease }) => {
-      const baseConfig = {
-        plugins: {
-          entries: {
-            alpha: { enabled: true },
-          },
-          installs: {
-            alpha: {
-              source: "path",
-              sourcePath: alphaInstallPath,
-              installPath: alphaInstallPath,
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      pluginCliConfigMock.mockReturnValue(baseConfig);
-      setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
-      buildPluginSnapshotReportMock.mockReturnValue({
-        plugins: [{ id: "alpha", name: "alpha" }],
-        diagnostics: [],
-      });
+      configureAlphaInstall();
 
       const uninstall = () =>
         runPluginsCommand(["plugins", "uninstall", "alpha", "--force", keepFilesFlag]);
@@ -210,6 +208,9 @@ describe("plugins cli uninstall", () => {
         await withPluginLifecycleLease({ path: databasePath }, async (lease) => {
           await uninstall();
           lease.assertOwned();
+          expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
+            expect.objectContaining({ filePath: databasePath }),
+          );
           expect(readInstallRecords()).toEqual({});
           expect(pluginCliConfigMock().plugins?.entries?.alpha).toEqual({ enabled: false });
           expect(
@@ -403,26 +404,7 @@ describe("plugins cli uninstall", () => {
   it.each(["closed", "declined", "accepted after config edit"])(
     "handles confirmation that is %s without stale mutations",
     async (confirmation) => {
-      const baseConfig = {
-        plugins: {
-          entries: {
-            alpha: { enabled: true },
-          },
-          installs: {
-            alpha: {
-              source: "path",
-              sourcePath: alphaInstallPath,
-              installPath: alphaInstallPath,
-            },
-          },
-        },
-      } as OpenClawConfig;
-      pluginCliConfigMock.mockReturnValue(baseConfig);
-      setInstalledPluginIndexInstallRecords(baseConfig.plugins?.installs ?? {});
-      buildPluginSnapshotReportMock.mockReturnValue({
-        plugins: [{ id: "alpha", name: "alpha" }],
-        diagnostics: [],
-      });
+      const { baseConfig } = configureAlphaInstall();
 
       if (confirmation === "closed") {
         promptYesNoMock.mockRejectedValueOnce(new PromptInputClosedError());
@@ -461,33 +443,13 @@ describe("plugins cli uninstall", () => {
   );
 
   it("restores install records when the config write rejects during uninstall", async () => {
-    const installRecords = {
-      alpha: {
-        source: "path",
-        sourcePath: alphaInstallPath,
-        installPath: alphaInstallPath,
-      },
-    } as const;
-    const baseConfig = {
-      plugins: {
-        entries: {
-          alpha: { enabled: true },
-        },
-        installs: installRecords,
-      },
-    } as OpenClawConfig;
+    const { installRecords } = configureAlphaInstall();
     const previousPersistedIndex = createTestInstalledPluginIndex({
       policyHash: "previous-policy",
       installRecords,
     });
 
-    pluginCliConfigMock.mockReturnValue(baseConfig);
-    setInstalledPluginIndexInstallRecords(installRecords);
     readPersistedInstalledPluginIndexMock.mockResolvedValue(previousPersistedIndex);
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [{ id: "alpha", name: "alpha" }],
-      diagnostics: [],
-    });
 
     replaceConfigFileMock.mockRejectedValueOnce(new Error("config changed"));
 
@@ -512,33 +474,12 @@ describe("plugins cli uninstall", () => {
   });
 
   it("disables and retains tracking before file removal, then commits and refreshes", async () => {
-    const installRecords = {
-      alpha: {
-        source: "npm",
-        spec: "alpha@1.0.0",
-        installPath: alphaInstallPath,
-      },
-    } as const;
-    const baseConfig = {
-      plugins: {
-        entries: {
-          alpha: { enabled: true },
-        },
-        installs: installRecords,
-      },
-    } as OpenClawConfig;
-
-    pluginCliConfigMock.mockReturnValue(baseConfig);
-    setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [{ id: "alpha", name: "alpha" }],
-      diagnostics: [],
-    });
+    const { installRecords } = configureAlphaInstall("npm");
 
     const actual =
       await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
     let observedRemoval = false;
-    applyPluginUninstallDirectoryRemovalMock.mockImplementation(async (removal) => {
+    applyPluginUninstallDirectoryRemovalMock.mockImplementation(async (removal, assertCurrent) => {
       expect(pluginCliConfigMock().plugins?.entries?.alpha).toEqual({ enabled: false });
       expect(readInstallRecords()).toEqual(installRecords);
       expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
@@ -546,9 +487,7 @@ describe("plugins cli uninstall", () => {
         "owned plugin files",
       );
       observedRemoval = true;
-      return actual.applyPluginUninstallDirectoryRemoval(
-        removal as Parameters<typeof actual.applyPluginUninstallDirectoryRemoval>[0],
-      );
+      return actual.applyPluginUninstallDirectoryRemoval(removal, assertCurrent);
     });
     refreshPluginRegistryMock.mockImplementation(async () => {
       expect(readInstallRecords()).toEqual({});
@@ -565,28 +504,7 @@ describe("plugins cli uninstall", () => {
   });
 
   it("keeps the install tracked and disabled when directory removal fails", async () => {
-    const installPath = alphaInstallPath;
-    const installRecords = {
-      alpha: {
-        source: "npm",
-        spec: "alpha@1.0.0",
-        installPath,
-      },
-    } as const;
-    const baseConfig = {
-      plugins: {
-        entries: {
-          alpha: { enabled: true },
-        },
-        installs: installRecords,
-      },
-    } as OpenClawConfig;
-    pluginCliConfigMock.mockReturnValue(baseConfig);
-    setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [{ id: "alpha", name: "alpha" }],
-      diagnostics: [],
-    });
+    const { installRecords } = configureAlphaInstall("npm");
 
     applyPluginUninstallDirectoryRemovalMock.mockResolvedValue({
       directoryRemoved: false,
@@ -632,13 +550,13 @@ describe("plugins cli uninstall", () => {
       let removed = false;
       const actual =
         await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
-      applyPluginUninstallDirectoryRemovalMock.mockImplementation(async (removal) => {
-        const result = await actual.applyPluginUninstallDirectoryRemoval(
-          removal as Parameters<typeof actual.applyPluginUninstallDirectoryRemoval>[0],
-        );
-        removed = result.directoryRemoved;
-        return result;
-      });
+      applyPluginUninstallDirectoryRemovalMock.mockImplementation(
+        async (removal, assertCurrent) => {
+          const result = await actual.applyPluginUninstallDirectoryRemoval(removal, assertCurrent);
+          removed = result.directoryRemoved;
+          return result;
+        },
+      );
       const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
       await expect(
         runPluginUninstallCommand(["alpha"], {
@@ -716,22 +634,25 @@ describe("plugins cli uninstall", () => {
       const actual =
         await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
       let failRemoval = retry;
-      applyPluginUninstallDirectoryRemovalMock.mockImplementation(async (removal) => {
-        expect(currentConfig.plugins?.load?.paths).toEqual([unrelatedPath]);
-        if (failRemoval) {
-          failRemoval = false;
-          return { directoryRemoved: false, warnings: ["simulated removal failure"] };
-        }
-        const result = await actual.applyPluginUninstallDirectoryRemoval(
-          removal as Parameters<typeof actual.applyPluginUninstallDirectoryRemoval>[0],
-        );
-        currentConfig = {
-          ...currentConfig,
-          logging: { level: "debug" },
-          plugins: { ...currentConfig.plugins, load: { paths: [unrelatedPath, addedPath] } },
-        };
-        return result;
-      });
+      const { readConfigFileSnapshotForWrite } = await import("../config/config.js");
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      applyPluginUninstallDirectoryRemovalMock.mockImplementation(
+        async (removal, assertCurrent) => {
+          expect(currentConfig.plugins?.load?.paths).toEqual([unrelatedPath]);
+          if (failRemoval) {
+            failRemoval = false;
+            return { directoryRemoved: false, warnings: ["simulated removal failure"] };
+          }
+          const result = await actual.applyPluginUninstallDirectoryRemoval(removal, assertCurrent);
+          currentConfig = {
+            ...currentConfig,
+            logging: { level: "debug" },
+            plugins: { ...currentConfig.plugins, load: { paths: [unrelatedPath, addedPath] } },
+          };
+          setPersistedPluginConfig(snapshot.path, currentConfig);
+          return result;
+        },
+      );
       if (retry) {
         await expect(
           runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]),

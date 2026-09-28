@@ -1,4 +1,3 @@
-// Codex plugin module implements auth behavior.
 import { createHash } from "node:crypto";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -187,19 +186,6 @@ function replaceConfigDraft(draft: OpenClawConfig, next: OpenClawConfig): void {
   Object.assign(draft, next);
 }
 
-function existingAuthProfileConfigIsCompatible(
-  existing: NonNullable<NonNullable<OpenClawConfig["auth"]>["profiles"]>[string],
-  profile: CodexAuthProfileConfig,
-): boolean {
-  if (existing.provider !== profile.provider || existing.mode !== profile.mode) {
-    return false;
-  }
-  if (existing.email && profile.email && existing.email !== profile.email) {
-    return false;
-  }
-  return true;
-}
-
 function hasAuthProfileConfigConflict(
   config: OpenClawConfig,
   profile: CodexAuthProfileConfig,
@@ -209,7 +195,12 @@ function hasAuthProfileConfigConflict(
     return false;
   }
   const existing = config.auth?.profiles?.[profile.profileId];
-  return Boolean(existing && !existingAuthProfileConfigIsCompatible(existing, profile));
+  return Boolean(
+    existing &&
+    (existing.provider !== profile.provider ||
+      existing.mode !== profile.mode ||
+      (existing.email && profile.email && existing.email !== profile.email)),
+  );
 }
 
 function hasCurrentAuthProfileConfigConflict(
@@ -308,12 +299,10 @@ async function applyCodexAuthProfileConfig(
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate(draft) {
-        const current = draft;
-        if (hasAuthProfileConfigConflict(current, profile, Boolean(ctx.overwrite))) {
+        if (hasAuthProfileConfigConflict(draft, profile, Boolean(ctx.overwrite))) {
           throw new CodexAuthConfigConflict();
         }
-        const next = applyConfig(current);
-        replaceConfigDraft(draft, next);
+        replaceConfigDraft(draft, applyConfig(draft));
       },
     });
     return "configured";
@@ -500,10 +489,10 @@ async function applyCodexAuthItem(
       candidate.kind === credentialKind &&
       (!sourceProfileId || candidate.profileId === sourceProfileId),
   );
-  if (!credential) {
-    return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
-  }
-  if (item.details?.sourceCredentialFingerprint !== sourceCredentialFingerprint(credential)) {
+  if (
+    !credential ||
+    item.details?.sourceCredentialFingerprint !== sourceCredentialFingerprint(credential)
+  ) {
     return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
   }
   if (
@@ -616,38 +605,32 @@ function buildCodexAuthConfigPatchItems(
   profileId: string,
 ): MigrationItem[] {
   const next = applyCredentialConfig(ctx.config, credential, profileId);
-  const items: MigrationItem[] = [];
-  if (next.auth) {
-    items.push(
-      createMigrationItem({
-        id: `${item.id}:config:auth`,
-        kind: "config",
-        action: "merge",
-        status: "migrated",
-        target: "auth",
-        message: "Configure imported Codex auth profile.",
-        details: {
-          path: ["auth"],
-          value: next.auth,
-        },
-      }),
-    );
-  }
-  if (next.agents?.defaults) {
-    items.push(
-      createMigrationItem({
-        id: `${item.id}:config:agents-defaults`,
-        kind: "config",
-        action: "merge",
-        status: "migrated",
-        target: "agents.defaults",
-        message: "Configure imported Codex models.",
-        details: {
-          path: ["agents", "defaults"],
-          value: next.agents.defaults,
-        },
-      }),
-    );
-  }
-  return items;
+  return [
+    {
+      suffix: "auth",
+      path: ["auth"],
+      value: next.auth,
+      message: "Configure imported Codex auth profile.",
+    },
+    {
+      suffix: "agents-defaults",
+      path: ["agents", "defaults"],
+      value: next.agents?.defaults,
+      message: "Configure imported Codex models.",
+    },
+  ].flatMap(({ suffix, path, value, message }) =>
+    value
+      ? [
+          createMigrationItem({
+            id: `${item.id}:config:${suffix}`,
+            kind: "config",
+            action: "merge",
+            status: "migrated",
+            target: path.join("."),
+            message,
+            details: { path, value },
+          }),
+        ]
+      : [],
+  );
 }

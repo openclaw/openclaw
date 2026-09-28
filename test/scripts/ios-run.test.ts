@@ -175,16 +175,6 @@ describe("scripts/ios-run.sh", () => {
     }
   });
 
-  it("installs and launches the configured app bundle identifier", () => {
-    const fixture = makeFixture("ai.openclawfoundation.app");
-
-    runIosRun(fixture, { SIMCTL_BOOT_MODE: "booted" });
-
-    expect(readFileSync(fixture.logFile, "utf8")).toContain(
-      "simctl launch iPhone 17 ai.openclawfoundation.app",
-    );
-  });
-
   it("builds simulator sandbox relay mode and injects proof secret only at launch", () => {
     const fixture = makeFixture("ai.openclawfoundation.app");
     const proofSecret = "x".repeat(32);

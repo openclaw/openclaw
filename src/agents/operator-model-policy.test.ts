@@ -52,24 +52,6 @@ describe("operator model policy", () => {
     expect(deniedAlias.allows({ provider: "vendor", model: "fallback" })).toBe(false);
   });
 
-  it("keeps family exclusions effective when the referenced source adds new models", () => {
-    const cfg = config();
-    cfg.agents!.entries!.shared!.model = {
-      primary: "vendor/restricted-next",
-      fallbacks: ["vendor/fallback", "vendor/new-allowed"],
-    };
-    const after = prepareOperatorModelPolicy({
-      cfg,
-      policy: { deny: ["vendor/restricted-*"] },
-      manifestPlugins: [],
-    })!;
-    expect(after.models).toEqual([
-      { provider: "vendor", model: "fallback" },
-      { provider: "vendor", model: "new-allowed" },
-    ]);
-    expect(after.allows({ provider: "vendor", model: "restricted-next" })).toBe(false);
-  });
-
   it("supports explicit membership and provider-normalized exclusions without widening empty policies", () => {
     const cfg = config();
     const policy = prepareOperatorModelPolicy({

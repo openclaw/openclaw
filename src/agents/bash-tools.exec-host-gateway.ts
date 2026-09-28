@@ -70,7 +70,6 @@ import {
   formatExecApprovalContinuationSourceOutput,
 } from "./bash-tools.exec-approval-output.js";
 import {
-  buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
@@ -1104,10 +1103,8 @@ export async function processGatewayAllowlist(
         ...unavailableDecisionRequestParams,
         commandHighlighting: params.commandHighlighting,
         warningText: params.warnings.join("\n").trim() || undefined,
-        ...buildExecApprovalRequesterContext({
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        }),
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         runId: params.runId,
         toolCallId: params.toolCallId,

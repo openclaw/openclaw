@@ -129,6 +129,7 @@ describe("tool-catalog", () => {
       "memory_search",
       "memory_get",
       "personal_instructions",
+      "presence",
       "sessions",
       "sessions_list",
       "sessions_history",
@@ -174,6 +175,7 @@ describe("tool-catalog", () => {
       "decision_evaluate",
       "secrets",
       "personal_instructions",
+      "presence",
       "sessions",
       "sessions_list",
       "sessions_history",
@@ -192,7 +194,7 @@ describe("tool-catalog", () => {
       "ask_user",
       "bundle-mcp",
     ]);
-    expect(requirePolicyAllow("minimal")).toEqual(["session_status", "gateway"]);
+    expect(requirePolicyAllow("minimal")).toEqual(["presence", "session_status", "gateway"]);
   });
 
   it("treats pdf as a known media core tool, not a plugin id", () => {

@@ -1,17 +1,9 @@
 import path from "node:path";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import type { PreparedSqliteReadOnlyLocation } from "../../infra/sqlite-readonly-location.types.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
-import { prepareSqliteReadOnlyLocation } from "../../infra/sqlite-snapshot-source.js";
-import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import {
-  prepareStateDatabaseSourceExclusion,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../../infra/state-database-coordinator.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
@@ -81,7 +73,6 @@ export function prepareAgentAuthProfileRowsRead(options: {
   const captured: Result<
     {
       root: ReturnType<typeof captureOpenClawStateWorkerContext>;
-      exclusion?: () => void;
     },
     unknown
   > = (() => {
@@ -90,7 +81,6 @@ export function prepareAgentAuthProfileRowsRead(options: {
         ok: true,
         value: {
           root: captureOpenClawStateWorkerContext({ env }),
-          exclusion: prepareStateDatabaseSourceExclusion(databasePath),
         },
       };
     } catch (error) {
@@ -99,7 +89,6 @@ export function prepareAgentAuthProfileRowsRead(options: {
   })();
   const controller = new AbortController();
   const pending = new Set<Promise<AuthProfileRowRead>>();
-  const snapshots = new Set<PreparedSqliteReadOnlyLocation>();
   let closed = false;
   let revoked = false;
   let closing: Promise<void> | undefined;
@@ -118,7 +107,6 @@ export function prepareAgentAuthProfileRowsRead(options: {
     }
     captured.value.root.admission.assertCurrent();
     captured.value.root.maintenanceScope?.assertAdmission();
-    captured.value.exclusion?.();
     if (identity && inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key) {
       throw new Error("Auth profile database file identity changed during its read");
     }
@@ -127,28 +115,11 @@ export function prepareAgentAuthProfileRowsRead(options: {
       register();
     }
   };
-  const cleanSnapshot = async (snapshot: PreparedSqliteReadOnlyLocation) => {
-    if (!(await snapshot.cleanupAsync())) {
-      throw new Error(
-        `SQLite read-only worker snapshot cleanup failed: ${snapshot.cleanupRoot ?? path.dirname(snapshot.location)}`,
-      );
-    }
-    snapshots.delete(snapshot);
-  };
   const dispose = (): Promise<void> => {
     closed = true;
     controller.abort(new Error("Auth profile read owner closed"));
     closing ??= (async () => {
       await Promise.allSettled(pending);
-      const cleanup = await Promise.allSettled([...snapshots].map(cleanSnapshot));
-      const errors = cleanup.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length > 0) {
-        throw new AggregateError(errors, "Auth profile snapshot cleanup failed", {
-          cause: errors[0],
-        });
-      }
       unregisterRoot?.();
       unregisterAgent?.();
     })().catch((error: unknown) => {
@@ -209,65 +180,19 @@ export function prepareAgentAuthProfileRowsRead(options: {
       if (!captured.ok) {
         throw captured.error;
       }
-      const { root, exclusion } = captured.value;
-      return withStateDatabaseCoordinatorRuntimeDirectory(root.coordinatorRuntime, async () => {
-        let snapshot: PreparedSqliteReadOnlyLocation | undefined;
-        let result: Result<AuthProfileRowRead, unknown>;
-        try {
-          if (exclusion) {
-            assertCurrent();
-            snapshot = await prepareSqliteReadOnlyLocation(databasePath, {
-              preserveSourceArtifacts: true,
-              signal: controller.signal,
-            });
-            snapshots.add(snapshot);
-          }
-          controller.signal.throwIfAborted();
-          assertCurrent();
-          const sourcePath = snapshot?.location ?? databasePath;
-          const sourceIdentity = snapshot ? inspectDatabasePathIdentitySync(sourcePath) : identity;
-          if (!sourceIdentity?.key.startsWith("file:")) {
-            throw new Error("Auth profile read source no longer identifies its file");
-          }
-          const rows = await runSqliteReadOnlyWorker(sourcePath, {
-            mode: "auth-profile-rows",
-            source: snapshot ? "snapshot" : "canonical",
-            expectedIdentity: sourceIdentity.key,
-            env,
-            coordinatorRuntime: root.coordinatorRuntime,
-            signal: controller.signal,
-          });
-          controller.signal.throwIfAborted();
-          assertCurrent();
-          if (!isInspection(rows.store) || !isInspection(rows.state)) {
-            throw new Error("Auth profile reader returned invalid inspection rows");
-          }
-          result = {
-            ok: true,
-            value: { store: rows.store, state: rows.state, cacheable: rows.cacheable },
-          };
-        } catch (error) {
-          result = { ok: false, error };
-        }
-        try {
-          if (snapshot) {
-            await cleanSnapshot(snapshot);
-          }
-        } catch (cleanupError) {
-          throw result.ok
-            ? cleanupError
-            : withSqliteWorkerCleanupFailure(
-                toErrorObject(result.error, "Auth profile read failed"),
-                cleanupError,
-              );
-        }
-        if (!result.ok) {
-          throw result.error;
-        }
-        controller.signal.throwIfAborted();
-        assertCurrent();
-        return result.value;
+      const rows = await runSqliteReadOnlyWorker(databasePath, {
+        mode: "auth-profile-rows",
+        source: "canonical",
+        expectedIdentity: identity.key,
+        env,
+        signal: controller.signal,
       });
+      controller.signal.throwIfAborted();
+      assertCurrent();
+      if (!isInspection(rows.store) || !isInspection(rows.state)) {
+        throw new Error("Auth profile reader returned invalid inspection rows");
+      }
+      return { store: rows.store, state: rows.state, cacheable: rows.cacheable };
     })();
     pending.add(operation);
     void operation.finally(() => pending.delete(operation)).catch(() => undefined);

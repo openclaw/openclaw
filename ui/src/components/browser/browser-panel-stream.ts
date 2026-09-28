@@ -288,7 +288,7 @@ export class BrowserPanelStream {
     if (attempt && this.current(attempt) && !attempt.decoding) {
       void this.decodeFrames(attempt);
     }
-    this.restartAfterResize();
+    this.resize();
   }
 
   private async decodeFrames(attempt: Attempt): Promise<void> {
@@ -367,15 +367,11 @@ export class BrowserPanelStream {
     }
   }
 
-  resize(): void {
-    this.restartAfterResize();
-  }
-
   private resized(attempt: Attempt): boolean {
     return Math.abs(this.dimensions().width - attempt.width) / attempt.width > 0.3;
   }
 
-  private restartAfterResize(): void {
+  resize(): void {
     const attempt = this.attempt;
     if (!attempt || !this.current(attempt) || !this.resized(attempt)) {
       return;

@@ -80,7 +80,7 @@ reference for commands rather than redispatching the release parent.
 ## Phase
 
 - conceptual phase: `<beta-publish | postpublish-confidence | stable-publish>`
-- current input mapping: `<beta + no soak (stable needs approved waiver) | published package + soak/focused groups | explicit stable/full>`
+- current input mapping: `<beta + no soak (cannot qualify stable) | published package + soak/focused groups | explicit stable/full>`
 - completed: `<phases that stay complete>`
 - current: `<one phase>`
 - next action: `<one concrete action>`
@@ -94,9 +94,9 @@ reference for commands rather than redispatching the release parent.
   path, publish bytes, or another required gate proven by diagnosis): fix the
   release branch, freeze a new Code SHA, and invalidate downstream product
   evidence; any other failure keeps the Code SHA
-- advisory test failure or diagnosed flaky lane: record actual results and
-  investigate the owner in parallel, without holding publication for green;
-  an untouched test or passing replay alone establishes neither a flake nor a fix
+- selected test failure or diagnosed flaky lane: block publication, record actual
+  results, and investigate the owner; rerun after the failure is resolved.
+  An untouched test or passing replay alone establishes neither a flake nor a fix
 - regular changelog-only failure before tagging: change the selected release entry and only
   its permitted record/index paths, freeze a new Release SHA, and reuse green
   Code SHA evidence after `split-changelog-release-v1` delta proof

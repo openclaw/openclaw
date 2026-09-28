@@ -60,6 +60,7 @@ async function mount(
     automaticallyFetchFavicons: false,
     communityInvite: false,
     terminalEnabled: false,
+    uploadsEnabled: true,
     pluginAssetsRequireAuth: true,
     pluginFrameGrants: [
       { pluginId: descriptor.pluginId, path: "/plugins/example", match: "prefix" },
@@ -143,12 +144,25 @@ function dispatch(
 
 async function installClickDocument(frame: HTMLIFrameElement) {
   let ready = false;
+  const startedAt = performance.now();
+  const timeline: Array<{ phase: string; elapsedMs: number; sourceMatches?: boolean }> = [];
+  const record = (phase: string, sourceMatches?: boolean) => {
+    if (timeline.length < 16) {
+      timeline.push({ phase, elapsedMs: performance.now() - startedAt, sourceMatches });
+    }
+  };
+  const onLoad = () => record("frame-load");
   const onReady = (event: MessageEvent<unknown>) => {
+    if (event.data === "test-click-ready") {
+      record("ready-message", event.source === frame.contentWindow);
+    }
     if (event.source === frame.contentWindow && event.data === "test-click-ready") {
       ready = true;
     }
   };
+  frame.addEventListener("load", onLoad);
   window.addEventListener("message", onReady);
+  record("assign-srcdoc");
   frame.srcdoc = `<button id="open">Open work session</button><script>
     document.getElementById("open").onclick = () => parent.postMessage(${JSON.stringify(message)}, ${JSON.stringify(window.location.origin)});
     addEventListener("message", event => {
@@ -158,7 +172,24 @@ async function installClickDocument(frame: HTMLIFrameElement) {
   </script>`;
   try {
     await expect.poll(() => ready).toBe(true);
+  } catch (error) {
+    record("readiness-failed");
+    console.error(
+      "Plugin frame readiness diagnostics",
+      JSON.stringify({
+        timeline,
+        connected: frame.isConnected,
+        source: frame.getAttribute("src"),
+        hasSrcdoc: frame.hasAttribute("srcdoc"),
+        sandbox: frame.getAttribute("sandbox"),
+        visibility: document.visibilityState,
+        focused: document.hasFocus(),
+        bounds: frame.getBoundingClientRect().toJSON(),
+      }),
+    );
+    throw error;
   } finally {
+    frame.removeEventListener("load", onLoad);
     window.removeEventListener("message", onReady);
   }
   frame.contentWindow!.postMessage("test-click", "*");

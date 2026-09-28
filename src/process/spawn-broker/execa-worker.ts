@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { Socket } from "node:net";
 import type { Transform } from "node:stream";
 import { execa } from "execa";
+import { setProcessTimeout } from "../process-deadline.js";
 import { createExecaOutput } from "./execa-output.js";
 import {
   serializeExecaError,
@@ -46,7 +47,7 @@ export async function startBrokerExeca(
       }
     }
     assertCurrent();
-    const { encoding, ...processOptions } = options;
+    const { encoding, executionDeadlineMs, ...processOptions } = options;
     const spawnOptions = {
       ...processOptions,
       ...(outputs.has(1)
@@ -80,22 +81,48 @@ export async function startBrokerExeca(
       }
       return stream;
     });
-    const result = subprocess.then(serializeResult, (error: unknown) => {
-      // Execa's promise rejects with the same result fields when reject:true.
-      if (error instanceof Error && "failed" in error && error.failed === true) {
-        // SAFETY: This rejection comes directly from execa, whose failed errors carry its result fields.
-        return serializeResult(error as Awaited<typeof subprocess>);
-      }
-      throw error;
-    });
+    let executionTimedOut = false;
+    const deadline =
+      executionDeadlineMs === undefined
+        ? undefined
+        : setProcessTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) {
+              executionTimedOut = true;
+              subprocess.kill();
+            }
+          }, executionDeadlineMs);
+    const clearDeadline = () => deadline?.clear();
+    child.once("exit", clearDeadline);
+    const result = subprocess
+      .then(
+        (value) => serializeResult(value, executionTimedOut),
+        (error: unknown) => {
+          // Execa's promise rejects with the same result fields when reject:true.
+          if (error instanceof Error && "failed" in error && error.failed === true) {
+            // SAFETY: This rejection comes directly from execa, whose failed errors carry its result fields.
+            return serializeResult(error as Awaited<typeof subprocess>, executionTimedOut);
+          }
+          throw error;
+        },
+      )
+      .finally(() => {
+        clearDeadline();
+        child.removeListener("exit", clearDeadline);
+      });
     // Result delivery is attached by the broker after handing off every descriptor.
     void result.catch(() => {});
     return {
       child,
       stdio,
       result,
-      cancel: () => controller.abort(),
-      kill: (signal) => subprocess.kill(signal),
+      cancel() {
+        clearDeadline();
+        controller.abort();
+      },
+      kill(signal) {
+        clearDeadline();
+        return subprocess.kill(signal);
+      },
       outputDrained(fd, error) {
         const output = outputs.get(fd);
         if (output) {
@@ -122,17 +149,26 @@ export async function startBrokerExeca(
   }
 }
 
-function serializeResult(result: Awaited<ReturnType<typeof execa>>): BrokerExecaResult {
+function serializeResult(
+  result: Awaited<ReturnType<typeof execa>>,
+  executionTimedOut: boolean,
+): BrokerExecaResult {
   const output = {
     stdout: byteOrTextOutput(result.stdout),
     stderr: byteOrTextOutput(result.stderr),
   };
+  const error =
+    result instanceof Error
+      ? result
+      : executionTimedOut
+        ? new Error("Command timed out")
+        : undefined;
   return {
     ...output,
     exitCode: result.exitCode,
     signal: result.signal,
-    failed: result.failed,
-    timedOut: result.timedOut,
+    failed: result.failed || executionTimedOut,
+    timedOut: result.timedOut || executionTimedOut,
     isCanceled: result.isCanceled,
     isGracefullyCanceled: result.isGracefullyCanceled,
     isMaxBuffer: result.isMaxBuffer,
@@ -146,7 +182,7 @@ function serializeResult(result: Awaited<ReturnType<typeof execa>>): BrokerExeca
     cwd: result.cwd,
     durationMs: result.durationMs,
     signalDescription: result.signalDescription,
-    ...(result instanceof Error ? { error: serializeExecaError(result, output) } : {}),
+    ...(error ? { error: serializeExecaError(error, output) } : {}),
   };
 }
 

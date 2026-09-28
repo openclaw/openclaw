@@ -20,9 +20,9 @@ import {
   listUserProfileAuthLinks,
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
+import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
 import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {
   registerGatewayModelCatalogPrivateAccess,
@@ -263,9 +263,9 @@ describe("direct session model catalogs", () => {
     "selected patch",
     "selected reset",
     "store close",
-    "access change",
+    "profile alias change",
     "catalog owner",
-  ] as const)("replies with retryable unavailability after %s", async (change) => {
+  ] as const)("revalidates the selected model catalog after %s", async (change) => {
     await withOpenClawTestState(isolated, async (state) => {
       const f = fixture();
       await state.writeConfig(f.config);
@@ -298,8 +298,8 @@ describe("direct session model catalogs", () => {
           });
         } else if (change === "store close") {
           closeOpenClawAgentDatabaseByPath(openOpenClawAgentDatabase(scope).path);
-        } else if (change === "access change") {
-          bumpGatewayAccessRevision();
+        } else if (change === "profile alias change") {
+          publishUserProfileAliasChange();
         } else {
           f.invalidateSnapshot();
         }
@@ -307,22 +307,38 @@ describe("direct session model catalogs", () => {
         release.resolve();
       }
       const respond = await pending;
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringMatching(/changed|current/),
-          retryable: true,
-          retryAfterMs: 0,
-        }),
-      );
+      if (change === "selected patch") {
+        expect(loadSessionEntry(scope)?.label).toBe("changed");
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({
+            models: [expect.objectContaining({ id: "gpt-5.6-luna", available: true })],
+            accountSelection: expect.objectContaining({
+              kind: "personal",
+              authProfileId: f.authProfileId,
+              source: "user",
+            }),
+          }),
+          undefined,
+        );
+      } else {
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "UNAVAILABLE",
+            message: expect.stringMatching(/changed|current/),
+            retryable: true,
+            retryAfterMs: 0,
+          }),
+        );
+      }
       expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   });
 
   it.each([false, true])(
-    "revalidates chat.metadata immediately before response (selected changed: %s)",
+    "revalidates chat.metadata before response (selected model changed: %s)",
     async (changeSelected) => {
       await withOpenClawTestState(isolated, async (state) => {
         const f = fixture();
@@ -359,7 +375,9 @@ describe("direct session model catalogs", () => {
         void pending.catch(() => {});
         try {
           await Promise.race([entered.promise, pending]);
-          await upsertSessionEntryCore(changeSelected ? selected : other, { label: "changed" });
+          await upsertSessionEntryCore(changeSelected ? selected : other, {
+            modelOverride: "replacement",
+          });
         } finally {
           release.resolve();
         }

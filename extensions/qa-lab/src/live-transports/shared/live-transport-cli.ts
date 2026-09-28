@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import {
+  createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration as createQaRunnerCliRegistration,
   type LiveTransportQaCommandOptions as QaRunnerCommandOptions,
   type LiveTransportQaCliRegistrationOptions as QaRunnerCliRegistrationOptions,
@@ -29,13 +30,7 @@ type LiveTransportQaCliRegistrationOptions = Omit<
   run: (options: LiveTransportQaCommandOptions) => Promise<void>;
 };
 
-export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
-  let promise: Promise<T> | null = null;
-  return async () => {
-    promise ??= load();
-    return await promise;
-  };
-}
+export { createLazyCliRuntimeLoader };
 
 // All dedicated commands share one memoized import of the consolidated suite host.
 export const loadLiveTransportQaSuiteRuntime = createLazyCliRuntimeLoader<

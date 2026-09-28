@@ -3,8 +3,11 @@ import {
   isInternalDiagnosticEventMetadata,
   normalizeDiagnosticValue,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { positiveFiniteNumber } from "./service-genai-attributes.js";
 import {
   assignOtelToolContentAttributes,

@@ -1,5 +1,6 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
+import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import type { MSTeamsCloudName } from "./cloud.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
@@ -20,7 +21,6 @@ type MSTeamsHttpServerAdapter =
  */
 type MSTeamsRoutes = import("@microsoft/teams.apps/dist/routes/index.js").IRoutes;
 
-/** Adaptive-card action response shape, re-exported for typed `card.action` handlers. */
 export type MSTeamsCardActionResponse =
   import("@microsoft/teams.api/dist/models/adaptive-card/adaptive-card-action-response.js").AdaptiveCardActionResponse;
 
@@ -64,14 +64,6 @@ export type MSTeamsApp = {
       };
     };
   };
-};
-
-/**
- * Token provider compatible with the existing codebase, wrapping the Teams
- * SDK App's public token provider.
- */
-type MSTeamsTokenProvider = {
-  getAccessToken: (scope: string) => Promise<string>;
 };
 
 type AzureAccessToken = {
@@ -121,9 +113,6 @@ export async function createMSTeamsExpressAdapter(
   return new ExpressAdapter(serverOrApp);
 }
 
-/**
- * Options for creating a Teams SDK App instance.
- */
 type CreateMSTeamsAppOptions = {
   /**
    * HTTP server adapter to use. When an Express app is available (monitor
@@ -284,13 +273,9 @@ function createCertificateApp(
   } as unknown as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp;
 }
 
-/**
- * Build a token provider that uses the Teams SDK App's public token provider
- * for token acquisition.
- */
 export function createMSTeamsTokenProvider(
   app: Pick<MSTeamsApp, "tokenProvider" | "credentials" | "cloud">,
-): MSTeamsTokenProvider {
+): MSTeamsAccessTokenProvider {
   return {
     async getAccessToken(scope: string): Promise<string> {
       if (

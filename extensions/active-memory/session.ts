@@ -9,11 +9,10 @@ import {
   ACTIVE_MEMORY_STATUS_PREFIX,
   type ActiveMemorySearchDebug,
   type ActiveRecallResult,
-  type PluginDebugEntry,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
-function resolveCanonicalSessionKeyFromSessionId(params: {
+export function resolveCanonicalSessionKeyFromSessionId(params: {
   api: OpenClawPluginApi;
   agentId: string;
   sessionId?: string;
@@ -47,7 +46,7 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
   }
 }
 
-function resolveRecallRunChannelContext(params: {
+export function resolveRecallRunChannelContext(params: {
   api: OpenClawPluginApi;
   agentId: string;
   sessionKey?: string;
@@ -105,7 +104,7 @@ function resolveRecallRunChannelContext(params: {
   return { messageChannel: channel, messageProvider: channel };
 }
 
-function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?: string }): string {
+export function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?: string }): string {
   const explicit = ctx.agentId?.trim();
   if (explicit) {
     return explicit;
@@ -129,7 +128,7 @@ function formatElapsedMsCompact(elapsedMs: number): string {
   return `${Math.round(elapsedMs)}ms`;
 }
 
-function buildPluginStatusLine(params: {
+export function buildPluginStatusLine(params: {
   result: ActiveRecallResult;
   config: ResolvedActiveRecallPluginConfig;
 }): string {
@@ -145,7 +144,7 @@ function buildPluginStatusLine(params: {
   return parts.join(" ");
 }
 
-function buildPersistedDebugSummary(result: ActiveRecallResult): string | null {
+export function buildPersistedDebugSummary(result: ActiveRecallResult): string | null {
   if (result.status === "timeout_partial") {
     return `timeout_partial: ${String(result.summary.length)} chars recovered (not persisted)`;
   }
@@ -202,7 +201,7 @@ function sanitizeDebugText(text: string): string {
   return sanitized.replace(/\s+/g, " ").trim();
 }
 
-async function persistPluginStatusLines(params: {
+export async function persistPluginStatusLines(params: {
   api: OpenClawPluginApi;
   agentId: string;
   sessionKey?: string;
@@ -244,7 +243,7 @@ async function persistPluginStatusLines(params: {
           ? existing.pluginDebugEntries
           : [];
         const nextEntries = previousEntries.filter(
-          (entry): entry is PluginDebugEntry =>
+          (entry) =>
             Boolean(entry) &&
             typeof entry === "object" &&
             typeof entry.pluginId === "string" &&
@@ -274,12 +273,3 @@ async function persistPluginStatusLines(params: {
     );
   }
 }
-
-export {
-  buildPersistedDebugSummary,
-  buildPluginStatusLine,
-  persistPluginStatusLines,
-  resolveCanonicalSessionKeyFromSessionId,
-  resolveRecallRunChannelContext,
-  resolveStatusUpdateAgentId,
-};

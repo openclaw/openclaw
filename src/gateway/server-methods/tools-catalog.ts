@@ -1,4 +1,5 @@
 // Gateway RPC handler for the tool catalog shown by clients and Control UI.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type ToolsCatalogResult,
@@ -25,26 +26,29 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type ToolCatalogEntry = {
-  id: string;
-  label: string;
-  description: string;
-  fullDescription?: string;
-  source: "core" | "plugin";
-  pluginId?: string;
-  optional?: boolean;
-  risk?: "low" | "medium" | "high";
-  tags?: string[];
-  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
-};
+type ToolCatalogGroup = ToolsCatalogResult["groups"][number];
 
-type ToolCatalogGroup = {
-  id: string;
-  label: string;
-  source: "core" | "plugin";
-  pluginId?: string;
-  tools: ToolCatalogEntry[];
-};
+function summarizeToolParameters(schema: unknown): ToolCatalogGroup["tools"][number]["parameters"] {
+  if (!isRecord(schema) || schema.type !== "object" || !isRecord(schema.properties)) {
+    return undefined;
+  }
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  return Object.entries(schema.properties)
+    .filter(([name]) => name.length > 0)
+    .map(([name, property]) => {
+      const parameter: NonNullable<ToolCatalogGroup["tools"][number]["parameters"]>[number] = {
+        name,
+        required: required.has(name),
+      };
+      if (isRecord(property)) {
+        parameter.type = normalizeOptionalString(property.type);
+        if (typeof property.description === "string") {
+          parameter.description = property.description;
+        }
+      }
+      return parameter;
+    });
+}
 
 function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
@@ -113,18 +117,17 @@ function buildPluginGroups(params: {
     const meta = getPluginToolMeta(tool);
     const pluginId = meta?.pluginId ?? "plugin";
     const groupId = `plugin:${pluginId}`;
-    const existing =
-      groups.get(groupId) ??
-      ({
-        id: groupId,
-        label: pluginId,
-        source: "plugin",
-        pluginId,
-        tools: [],
-      } as ToolCatalogGroup);
+    const existing: ToolCatalogGroup = groups.get(groupId) ?? {
+      id: groupId,
+      label: pluginId,
+      source: "plugin",
+      pluginId,
+      tools: [],
+    };
     const ownedMetadata = meta?.pluginId
       ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
       : undefined;
+    const parameters = summarizeToolParameters(tool.parameters);
     existing.tools.push({
       id: tool.name,
       label:
@@ -140,6 +143,7 @@ function buildPluginGroups(params: {
       fullDescription:
         ownedMetadata?.description ??
         (typeof tool.description === "string" ? tool.description : undefined),
+      ...(parameters?.length ? { parameters } : {}),
       source: "plugin",
       pluginId,
       optional: meta?.optional,
@@ -159,15 +163,13 @@ function buildPluginGroups(params: {
       const groupId = `plugin:${entry.pluginId}`;
       // Declared-but-unresolved plugin tools still appear so operators can see
       // optional capabilities that may need config before they bind at runtime.
-      const existing =
-        groups.get(groupId) ??
-        ({
-          id: groupId,
-          label: entry.pluginName ?? entry.pluginId,
-          source: "plugin",
-          pluginId: entry.pluginId,
-          tools: [],
-        } as ToolCatalogGroup);
+      const existing: ToolCatalogGroup = groups.get(groupId) ?? {
+        id: groupId,
+        label: entry.pluginName ?? entry.pluginId,
+        source: "plugin",
+        pluginId: entry.pluginId,
+        tools: [],
+      };
       const ownedMetadata = pluginToolMetadata.get(
         buildPluginToolMetadataKey(entry.pluginId, name),
       );

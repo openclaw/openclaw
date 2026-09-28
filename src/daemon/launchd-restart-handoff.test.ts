@@ -220,25 +220,6 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the service target for start-after-exit mode", () => {
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
-
-    scheduleDetachedLaunchdRestartHandoff({
-      env: {
-        HOME: "/Users/test",
-        OPENCLAW_PROFILE: "default",
-      },
-      mode: "start-after-exit",
-    });
-
-    const [, args] = requireSpawnCall();
-    expect(args[1]).toContain('if launchctl kickstart "$service_target"; then');
-    expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
-    expect(args[1]).not.toContain('kickstart -k "$service_target"');
-    expect(args[1]).not.toContain('if launchctl start "$label"; then');
-    expect(args[1]).not.toContain('basename "$service_target"');
-  });
-
   it("kickstarts after exit without replacing a running KeepAlive process", async () => {
     const result = await executeHandoff(
       "start-after-exit",

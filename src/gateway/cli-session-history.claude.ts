@@ -68,7 +68,11 @@ type ReseedImportState = {
 };
 
 export function decodeClaudeCliProjectEntry(line: string): ClaudeCliProjectEntry {
-  return JSON.parse(line) as ClaudeCliProjectEntry;
+  const entry: unknown = JSON.parse(line);
+  if (!isRecord(entry)) {
+    throw new Error("Claude history row must be an object");
+  }
+  return entry;
 }
 
 export function redactClaudeCliHistoryMessage(

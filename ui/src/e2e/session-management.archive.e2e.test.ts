@@ -16,6 +16,7 @@ import {
   waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -76,16 +77,12 @@ suite.define(() => {
       await captureUiProof(suite, page, "agent-archive-after.png");
 
       await page.getByRole("button", { name: "Filter & sort" }).click();
-      await page
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Archived" })
-        .click();
+      await chooseSidebarMenuOption(page, "Status", "Archived");
+      await closeSidebarMenu(page);
       await row.waitFor({ state: "visible" });
       await page.getByRole("button", { name: "Filter & sort" }).click();
-      await page
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Active", exact: true })
-        .click();
+      await chooseSidebarMenuOption(page, "Status", "Active");
+      await closeSidebarMenu(page);
       await row.waitFor({ state: "detached" });
 
       await gateway.setSessionsListResponse(sessionsListResponse([main, target]));
@@ -125,10 +122,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByRole("button", { name: "Filter & sort" }).click();
-      await page
-        .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Archived" })
-        .click();
+      await chooseSidebarMenuOption(page, "Status", "Archived");
+      await closeSidebarMenu(page);
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const archivedRow = sidebar.locator(`[data-session-key="${archived.key}"]`);

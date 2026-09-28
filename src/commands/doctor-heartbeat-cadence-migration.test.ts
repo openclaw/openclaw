@@ -135,8 +135,20 @@ describe("heartbeat cadence cron migration", () => {
     ).resolves.toEqual([]);
   });
 
-  it("preserves a disabled heartbeat as a disabled monitor row", async () => {
+  it.each(["Create", "Update"])("reports %s of a disabled heartbeat monitor", async (action) => {
     const fixture = await createFixture("0m");
+    if (action === "Update") {
+      await maybeMigrateHeartbeatCadenceToCron({
+        cfg: {
+          ...fixture.cfg,
+          agents: { ...fixture.cfg.agents, defaults: { heartbeat: { every: "15m" } } },
+        },
+        shouldRepair: true,
+        env: fixture.env,
+      });
+    }
+
+    const findings = await collectHeartbeatCadenceMigrationFindings(fixture.cfg, fixture.env);
 
     const result = await maybeMigrateHeartbeatCadenceToCron({
       cfg: fixture.cfg,
@@ -148,6 +160,9 @@ describe("heartbeat cadence cron migration", () => {
     expect(await loadMainMonitor(fixture.storePath)).toEqual(
       expect.objectContaining({ enabled: false, payload: { kind: "heartbeat" } }),
     );
+    const message = `${action} heartbeat monitor for agent "main" as disabled.`;
+    expect(result.changes).toEqual([message]);
+    expect(findings).toEqual([expect.objectContaining({ message })]);
   });
 
   it("keeps ownerless multi-agent updates scoped to their declared monitors", async () => {

@@ -104,6 +104,13 @@ export default definePluginEntry({
   list operation below closes. Prepare the facts needed by late host mapping
   before that boundary.
 
+  `sessionEntries.revision`, when present, is an opaque token for immutable local
+  entry facts, including configuration and selection scope. Providers may weakly
+  cache derived metadata by that token, together with their own query and config
+  inputs. A new token invalidates those facts; an absent token requires reading
+  the entries again. Do not retain the snapshot or entry objects after listing,
+  or use this token as current authorization or as a revision of native host data.
+
   Providers with a multi-step fill can implement the optional
   `SessionCatalogProvider.createListOperation(params)` hook. Its synchronous
   factory returns `{ next, close }` without starting source work. The Gateway

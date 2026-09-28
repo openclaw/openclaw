@@ -1,7 +1,3 @@
-/**
- * Model resolution, scoping, and initial selection
- */
-
 import { modelsAreEqual } from "@openclaw/ai/internal/runtime";
 import { MODEL_CATALOG_THINKING_LEVELS } from "@openclaw/model-catalog-core/model-catalog-types";
 import chalk from "chalk";

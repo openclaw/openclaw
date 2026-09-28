@@ -31,7 +31,11 @@ import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
-import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnly,
+  loadSessionEntry,
+  resolveGatewaySessionStoreTarget,
+} from "../session-utils.js";
 import { prepareSessionWorkerPlacementRetirement } from "../worker-environments/session-placement-lifecycle.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -44,7 +48,6 @@ import {
   loadSessionsRuntimeModule,
   isAgentMainSessionKey,
   requireSessionKey,
-  resolveGatewaySessionTargetFromKey,
 } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -76,9 +79,8 @@ export async function deleteGatewaySession({
     return { ok: false, error: requestedAgent.error };
   }
   const requestedAgentId = requestedAgent.agentId;
-  const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
-    agentId: requestedAgentId,
-  });
+  const target = resolveGatewaySessionStoreTarget({ cfg, key, agentId: requestedAgentId });
+  const { storePath } = target;
   const compatibilityDefaultAgentId = tryResolveAgentOperationAgentId(cfg);
   const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, key);
   const protectedGlobalAgentId =

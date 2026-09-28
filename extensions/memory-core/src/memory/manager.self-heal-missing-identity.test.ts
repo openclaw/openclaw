@@ -92,21 +92,16 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
   async function createManager(
     params: {
       provider?: string;
-      vectorEnabled?: boolean;
       purpose?: "default" | "status" | "cli";
     } = {},
   ): Promise<MemoryIndexManager> {
-    const store =
-      params.vectorEnabled === undefined
-        ? undefined
-        : { vector: { enabled: params.vectorEnabled } };
     const cfg = isolateMemoryManagerTestConfig({
       memory: {
         backend: "builtin",
         search: {
           provider: params.provider ?? "auto",
           model: "",
-          store,
+          store: { vector: { enabled: false } },
           cache: { enabled: false },
         },
       },
@@ -142,7 +137,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
 
   it("self-heals missing identity on non-forced gateway sync when all chunks are FTS-only and provider is unavailable", async () => {
     seedChunksWithNoMeta();
-    const memoryManager = await createManager({ vectorEnabled: false });
+    const memoryManager = await createManager();
 
     expect(indexIdentityStatus(memoryManager)).toBe("missing");
 
@@ -157,7 +152,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
 
   it("does not rebuild missing-identity semantic chunks when the provider is unavailable", async () => {
     seedChunksWithNoMeta("text-embedding-3-small");
-    const memoryManager = await createManager({ vectorEnabled: false });
+    const memoryManager = await createManager();
 
     await memoryManager.sync();
 
@@ -168,7 +163,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
   });
 
   it("observes a separate CLI reindex without reopening the live gateway manager", async () => {
-    const liveManager = await createManager({ provider: "none", vectorEnabled: false });
+    const liveManager = await createManager({ provider: "none" });
     await liveManager.sync({ reason: "test", force: true });
     (
       liveManager as unknown as {
@@ -183,7 +178,6 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     );
     const cliManager = await createManager({
       provider: "none",
-      vectorEnabled: false,
       purpose: "cli",
     });
     await cliManager.sync({ reason: "cli", force: true });

@@ -15,6 +15,7 @@
     "write": {"emoji":"✍️","title":"Write","detailKeys":["path"]},
     "edit": {"emoji":"📝","title":"Edit","detailKeys":["path"]},
     "personal_instructions": {"emoji":"📝","title":"Personal Instructions","detailKeys":["action","agentId"],"actions":{"get":{"label":"read","detailKeys":["agentId"]},"set":{"label":"save","detailKeys":["agentId"]}}},
+    "presence": {"emoji":"🧩","title":"Presence"},
     "attach": {"emoji":"📎","title":"Attach","detailKeys":["path","url","fileName"]},
     "api": {"emoji":"🌐","title":"API","detailKeys":["url","endpoint","path","method","name"]},
     "browser": {"emoji":"🌐","title":"Browser","actions":{"status":{"label":"status"},"start":{"label":"start"},"stop":{"label":"stop"},"tabs":{"label":"tabs"},"open":{"label":"open","detailKeys":["targetUrl"]},"focus":{"label":"focus","detailKeys":["targetId"]},"close":{"label":"close","detailKeys":["targetId"]},"snapshot":{"label":"snapshot","detailKeys":["targetUrl","targetId","ref","element","format"]},"screenshot":{"label":"screenshot","detailKeys":["targetUrl","targetId","ref","element"]},"navigate":{"label":"navigate","detailKeys":["targetUrl","targetId"]},"console":{"label":"console","detailKeys":["level","targetId"]},"pdf":{"label":"pdf","detailKeys":["targetId"]},"upload":{"label":"upload","detailKeys":["paths","ref","inputRef","element","targetId"]},"dialog":{"label":"dialog","detailKeys":["accept","promptText","targetId"]},"act":{"label":"act","detailKeys":["request.kind","request.ref","request.selector","request.text","request.value"]}}},

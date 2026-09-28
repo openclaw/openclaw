@@ -1,14 +1,15 @@
 // Plugin Index SQLite tests cover shared E2E install-index readers.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { withEnvAsync } from "../../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const MODULE_URL = pathToFileURL(path.resolve("scripts/e2e/lib/plugin-index-sqlite.mjs")).href;
 let importCounter = 0;
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 async function loadPluginIndex(env: Record<string, string> = {}) {
   return await withEnvAsync(env, async () => {
@@ -149,131 +150,91 @@ function readTableNames(root: string) {
 
 describe("plugin index SQLite E2E helpers", () => {
   it("reads legacy install records when SQLite index state is absent", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      writeLegacyIndex(
-        root,
-        JSON.stringify({ records: { demo: { installPath: "/tmp/demo", source: "npm" } } }),
-      );
+    const root = tempRoots.make("openclaw-plugin-index-");
+    writeLegacyIndex(
+      root,
+      JSON.stringify({ records: { demo: { installPath: "/tmp/demo", source: "npm" } } }),
+    );
 
-      const { readPluginInstallRecords } = await loadPluginIndex();
+    const { readPluginInstallRecords } = await loadPluginIndex();
 
-      expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({
-        demo: { installPath: "/tmp/demo", source: "npm" },
-      });
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({
+      demo: { installPath: "/tmp/demo", source: "npm" },
+    });
   });
 
   it("keeps malformed legacy install JSON as an empty fallback", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      writeLegacyIndex(root, "{not-json");
+    const root = tempRoots.make("openclaw-plugin-index-");
+    writeLegacyIndex(root, "{not-json");
 
-      const { readPluginInstallRecords } = await loadPluginIndex();
+    const { readPluginInstallRecords } = await loadPluginIndex();
 
-      expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual(
-        {},
-      );
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({});
   });
 
   it("rejects oversized legacy install JSON before parsing it", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      writeLegacyIndex(root, JSON.stringify({ records: {}, filler: "x".repeat(128) }));
+    const root = tempRoots.make("openclaw-plugin-index-");
+    writeLegacyIndex(root, JSON.stringify({ records: {}, filler: "x".repeat(128) }));
 
-      const { readPluginInstallRecords } = await loadPluginIndex({
-        OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64",
-      });
+    const { readPluginInstallRecords } = await loadPluginIndex({
+      OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64",
+    });
 
-      expect(() =>
-        readPluginInstallRecords({ stateDir: root, configPath: configPath(root) }),
-      ).toThrow("plugin index JSON artifact exceeded 64 bytes");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(() =>
+      readPluginInstallRecords({ stateDir: root, configPath: configPath(root) }),
+    ).toThrow("plugin index JSON artifact exceeded 64 bytes");
   });
 
   it("reads the current index for schema v13", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      writeCurrentSqliteIndex(root, currentValueJson({ current: { source: "npm" } }));
+    const root = tempRoots.make("openclaw-plugin-index-");
+    writeCurrentSqliteIndex(root, currentValueJson({ current: { source: "npm" } }));
 
-      const { readPluginInstallRecords } = await loadPluginIndex();
+    const { readPluginInstallRecords } = await loadPluginIndex();
 
-      expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({
-        current: { source: "npm" },
-      });
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({
+      current: { source: "npm" },
+    });
   });
 
   it("reads the retired index for pre-v13 schemas", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      writePreV13SqliteIndex(root, JSON.stringify({ legacy: { source: "npm" } }));
+    const root = tempRoots.make("openclaw-plugin-index-");
+    writePreV13SqliteIndex(root, JSON.stringify({ legacy: { source: "npm" } }));
 
-      const { readPluginInstallIndex } = await loadPluginIndex();
+    const { readPluginInstallIndex } = await loadPluginIndex();
 
-      expect(
-        readPluginInstallIndex({ stateDir: root, configPath: configPath(root) }),
-      ).toMatchObject({
-        installRecords: { legacy: { source: "npm" } },
-      });
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(readPluginInstallIndex({ stateDir: root, configPath: configPath(root) })).toMatchObject({
+      installRecords: { legacy: { source: "npm" } },
+    });
   });
 
   it("prefers current state for unversioned databases", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      writePreV13SqliteIndex(root, JSON.stringify({ stale: { source: "npm" } }), 0);
-      writeCurrentSqliteIndex(root, currentValueJson({ current: { source: "npm" } }), 0);
+    const root = tempRoots.make("openclaw-plugin-index-");
+    writePreV13SqliteIndex(root, JSON.stringify({ stale: { source: "npm" } }), 0);
+    writeCurrentSqliteIndex(root, currentValueJson({ current: { source: "npm" } }), 0);
 
-      const { readPluginInstallRecords } = await loadPluginIndex();
+    const { readPluginInstallRecords } = await loadPluginIndex();
 
-      expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({
-        current: { source: "npm" },
-      });
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({
+      current: { source: "npm" },
+    });
   });
 
   it("does not fall back to a retired row for schema v13", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      writePreV13SqliteIndex(root, JSON.stringify({ stale: { source: "npm" } }), 13);
+    const root = tempRoots.make("openclaw-plugin-index-");
+    writePreV13SqliteIndex(root, JSON.stringify({ stale: { source: "npm" } }), 13);
 
-      const { readPluginInstallRecords } = await loadPluginIndex();
+    const { readPluginInstallRecords } = await loadPluginIndex();
 
-      expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual(
-        {},
-      );
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({});
   });
 
   it("does not read current state for pre-v13 schemas", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      writeCurrentSqliteIndex(root, currentValueJson({ future: { source: "npm" } }), 12);
+    const root = tempRoots.make("openclaw-plugin-index-");
+    writeCurrentSqliteIndex(root, currentValueJson({ future: { source: "npm" } }), 12);
 
-      const { readPluginInstallRecords } = await loadPluginIndex();
+    const { readPluginInstallRecords } = await loadPluginIndex();
 
-      expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual(
-        {},
-      );
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({});
   });
 
   it.each([
@@ -286,18 +247,12 @@ describe("plugin index SQLite E2E helpers", () => {
       write: (root: string) => writePreV13SqliteIndex(root, "{not-json"),
     },
   ])("keeps malformed $name SQLite state as an empty fallback", async ({ write }) => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      write(root);
+    const root = tempRoots.make("openclaw-plugin-index-");
+    write(root);
 
-      const { readPluginInstallRecords } = await loadPluginIndex();
+    const { readPluginInstallRecords } = await loadPluginIndex();
 
-      expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual(
-        {},
-      );
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(readPluginInstallRecords({ stateDir: root, configPath: configPath(root) })).toEqual({});
   });
 
   it.each([
@@ -314,20 +269,16 @@ describe("plugin index SQLite E2E helpers", () => {
         writePreV13SqliteIndex(root, JSON.stringify({ filler: "x".repeat(128) })),
     },
   ])("rejects oversized $name SQLite state before parsing it", async ({ expected, write }) => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      write(root);
+    const root = tempRoots.make("openclaw-plugin-index-");
+    write(root);
 
-      const { readPluginInstallIndex } = await loadPluginIndex({
-        OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64",
-      });
+    const { readPluginInstallIndex } = await loadPluginIndex({
+      OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES: "64",
+    });
 
-      expect(() =>
-        readPluginInstallIndex({ stateDir: root, configPath: configPath(root) }),
-      ).toThrow(expected);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(() => readPluginInstallIndex({ stateDir: root, configPath: configPath(root) })).toThrow(
+      expected,
+    );
   });
 
   it.each([
@@ -355,40 +306,32 @@ describe("plugin index SQLite E2E helpers", () => {
   ])(
     "writes only the $mode storage contract",
     async ({ absentTable, expectedTable, options, schemaVersion }) => {
-      const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-      try {
-        const db = openSqlite(root);
-        db.exec(`PRAGMA user_version = ${schemaVersion}`);
-        db.close();
-        const { readPluginInstallRecords, writePluginInstallIndexForE2E } = await loadPluginIndex();
+      const root = tempRoots.make("openclaw-plugin-index-");
+      const db = openSqlite(root);
+      db.exec(`PRAGMA user_version = ${schemaVersion}`);
+      db.close();
+      const { readPluginInstallRecords, writePluginInstallIndexForE2E } = await loadPluginIndex();
 
-        writePluginInstallIndexForE2E(
-          { installRecords: { demo: { source: "npm" } } },
-          { stateDir: root, ...options },
-        );
+      writePluginInstallIndexForE2E(
+        { installRecords: { demo: { source: "npm" } } },
+        { stateDir: root, ...options },
+      );
 
-        expect(readTableNames(root)).toContain(expectedTable);
-        expect(readTableNames(root)).not.toContain(absentTable);
-        expect(readPluginInstallRecords({ stateDir: root })).toEqual({ demo: { source: "npm" } });
-      } finally {
-        rmSync(root, { force: true, recursive: true });
-      }
+      expect(readTableNames(root)).toContain(expectedTable);
+      expect(readTableNames(root)).not.toContain(absentTable);
+      expect(readPluginInstallRecords({ stateDir: root })).toEqual({ demo: { source: "npm" } });
     },
   );
 
   it("rejects unknown writer storage modes", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      const { writePluginInstallIndexForE2E } = await loadPluginIndex();
+    const root = tempRoots.make("openclaw-plugin-index-");
+    const { writePluginInstallIndexForE2E } = await loadPluginIndex();
 
-      expect(() =>
-        writePluginInstallIndexForE2E(
-          { installRecords: {} },
-          { stateDir: root, storageMode: "future" },
-        ),
-      ).toThrow("Unknown plugin index storage mode: future");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(() =>
+      writePluginInstallIndexForE2E(
+        { installRecords: {} },
+        { stateDir: root, storageMode: "future" },
+      ),
+    ).toThrow("Unknown plugin index storage mode: future");
   });
 });

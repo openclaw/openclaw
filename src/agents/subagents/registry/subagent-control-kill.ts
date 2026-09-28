@@ -7,23 +7,14 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
-import {
-  captureTaskCancellationControl,
-  type TaskCancellationControl,
-} from "../../../tasks/task-cancellation-context.js";
-import type {
-  SubagentAdminKillResult,
-  SubagentAdminKillParams,
-} from "../../../tasks/task-registry-control.types.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
   killSubagentRun,
   persistSubagentAbortedLastRun,
-  resolveSubagentKillTargetState,
   resolveSubagentKillSession,
+  resolveSubagentKillTargetState,
 } from "./subagent-control-kill-runtime.js";
 import {
   ensureSubagentControllerOwnsRun,
@@ -32,6 +23,12 @@ import {
   isSameSubagentRunGeneration,
   type ResolvedSubagentController,
 } from "./subagent-control-scope.js";
+import type {
+  SubagentAdminKillParams,
+  SubagentAdminKillResult,
+  SubagentCancellationControl,
+} from "./subagent-control.types.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   listSubagentRunsForController,
@@ -59,12 +56,13 @@ type KillSelection = {
   cfg: OpenClawConfig;
   runs: Iterable<SubagentRunRecord>;
   assertCurrent?: () => void;
+  prepareRead?: () => Promise<void> | undefined;
   ownsRoot?: (entry: SubagentRunRecord) => boolean;
   controller?: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
 };
 
 type KillScope = {
-  cancellationControl: TaskCancellationControl | undefined;
+  cancellationControl: SubagentCancellationControl | undefined;
   refresh: () => number;
 };
 
@@ -80,16 +78,12 @@ async function withSubagentKillScope<T>(
   preparePublication?: KillPublicationPreparation,
 ): Promise<T> {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const taskControl = captureTaskCancellationControl();
   const cancellationControl = params.assertCurrent
     ? {
-        prepareRead: taskControl?.prepareRead,
-        assertCurrent: () => {
-          taskControl?.assertCurrent();
-          params.assertCurrent?.();
-        },
+        prepareRead: params.prepareRead,
+        assertCurrent: params.assertCurrent,
       }
-    : taskControl;
+    : undefined;
   const selected = new Set<string>();
   const releaseRetirements: Array<() => void> = [];
   const completeRetirementPublications: Array<() => void> = [];
@@ -547,6 +541,7 @@ export async function killSubagentRunAdmin(
   params: SubagentAdminKillParams,
   control?: {
     assertCurrent: () => void;
+    prepareRead?: () => Promise<void> | undefined;
     beforeSessionKill?: () => boolean;
     preparePublication?: KillPublicationPreparation;
   },
@@ -583,7 +578,12 @@ export async function killSubagentRunAdmin(
 
   let rootStopSuperseded = false;
   return withSubagentKillScope<SubagentAdminKillResult>(
-    { cfg: params.cfg, runs: [entry], assertCurrent: control?.assertCurrent },
+    {
+      cfg: params.cfg,
+      runs: [entry],
+      assertCurrent: control?.assertCurrent,
+      prepareRead: control?.prepareRead,
+    },
     async (scope, [tree]) => {
       if (!tree) {
         return { found: false as const, killed: false as const };

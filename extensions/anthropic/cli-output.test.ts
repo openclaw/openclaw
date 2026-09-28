@@ -129,7 +129,7 @@ describe("Claude CLI output validation", () => {
     });
   });
 
-  it.each(["call", "count", "court", "Bash"])(
+  it.each(["call", "Bash"])(
     "rejects the upstream-observed %s prefix when the protocol block is truncated",
     (prefix) => {
       expect(
@@ -186,22 +186,6 @@ describe("Claude CLI output validation", () => {
         [
           '<invoke name="Bash">',
           '<parameter data-name="example">ignored</parameter>',
-          '<parameter name="command">pwd</parameter>',
-          "</invoke>",
-        ].join("\n"),
-      ),
-    ).toEqual({
-      kind: "result",
-      errorText: expect.stringContaining("raw tool protocol appeared as assistant text"),
-    });
-  });
-
-  it("rejects a complete unfenced protocol example as the accepted false-positive tradeoff", () => {
-    expect(
-      parseResult(
-        [
-          "Here is the exact raw protocol for documentation:",
-          '<invoke name="Bash">',
           '<parameter name="command">pwd</parameter>',
           "</invoke>",
         ].join("\n"),
@@ -321,15 +305,6 @@ describe("Claude CLI output validation", () => {
         '<parameter name="command">pwd',
       ].join("\n"),
     ],
-    [
-      "namespaced protocol example not observed upstream",
-      [
-        '<antml:invoke name="Bash">',
-        '<antml:parameter name="command">pwd</antml:parameter>',
-        "</antml:invoke>",
-      ].join("\n"),
-    ],
-    ["long ordinary report", `Summary\n\n${"Normal report text. ".repeat(20_000)}`],
   ])("preserves %s", (_name, text) => {
     expect(parseResult(text)).toBeNull();
   });

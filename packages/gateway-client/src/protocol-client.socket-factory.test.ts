@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient } from "./client.js";
 import {
   GatewayProtocolClient,
@@ -56,6 +56,10 @@ function createSocketFactoryHarness(options?: {
   return { client, createSocket, onConnectError };
 }
 
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -91,31 +95,42 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     client.stop();
   });
 
-  it("uses the canonical exponential reconnect schedule for consecutive failures", async () => {
-    vi.useFakeTimers();
-    const { client, createSocket, onConnectError } = createSocketFactoryHarness({
-      initialFailures: 3,
-      retryFactoryError: () => true,
-    });
+  it.each([
+    { draw: 0, delays: [10, 20, 40, 80, 84, 84], resetDelay: 25 },
+    { draw: 0.5, delays: [11, 22, 44, 88, 92, 92], resetDelay: 28 },
+    { draw: 0.999, delays: [12, 24, 48, 96, 100, 100], resetDelay: 30 },
+  ])(
+    "spreads exponential retries through the cap and reset ($draw)",
+    async ({ draw, delays, resetDelay }) => {
+      vi.useFakeTimers();
+      vi.mocked(Math.random).mockReturnValue(draw);
+      const { client, createSocket, onConnectError } = createSocketFactoryHarness({
+        initialFailures: delays.length,
+        retryFactoryError: () => true,
+      });
 
-    client.start();
-    await vi.advanceTimersByTimeAsync(10);
-    expect(createSocket).toHaveBeenCalledTimes(2);
+      try {
+        client.start();
+        for (const [index, delay] of delays.entries()) {
+          await vi.advanceTimersByTimeAsync(delay - 1);
+          expect(createSocket).toHaveBeenCalledTimes(index + 1);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(createSocket).toHaveBeenCalledTimes(index + 2);
+        }
+        expect(onConnectError).toHaveBeenCalledTimes(delays.length);
+        expect(client.connected).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(19);
-    expect(createSocket).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(createSocket).toHaveBeenCalledTimes(3);
-
-    await vi.advanceTimersByTimeAsync(39);
-    expect(createSocket).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(createSocket).toHaveBeenCalledTimes(4);
-    expect(onConnectError).toHaveBeenCalledTimes(3);
-    expect(client.connected).toBe(true);
-
-    client.stop();
-  });
+        client.resetReconnectBackoff(25);
+        createSocket.mock.calls.at(-1)?.[0].close(1012, "service restart");
+        await vi.advanceTimersByTimeAsync(resetDelay - 1);
+        expect(createSocket).toHaveBeenCalledTimes(delays.length + 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(createSocket).toHaveBeenCalledTimes(delays.length + 2);
+      } finally {
+        client.stop();
+      }
+    },
+  );
 
   it("cancels a pending factory retry when the client is stopped", async () => {
     vi.useFakeTimers();

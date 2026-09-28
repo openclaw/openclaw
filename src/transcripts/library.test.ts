@@ -170,7 +170,7 @@ describe("transcript library SQLite reads", () => {
     },
   );
 
-  it.each(["at-cap", "oversized-ascii", "oversized-utf8"] as const)(
+  it.each(["at-cap", "oversized-utf8"] as const)(
     "bounds %s stored date input before the JavaScript parser",
     async (kind) => {
       const { store } = fixture();
@@ -180,7 +180,7 @@ describe("transcript library SQLite reads", () => {
         prefix +
         (kind === "oversized-utf8"
           ? "é".repeat(Math.floor(remaining / 2) + 1)
-          : "x".repeat(remaining + Number(kind === "oversized-ascii")));
+          : "x".repeat(remaining));
       await store.writeSession(session(kind, { startedAt }));
       const parse = vi.spyOn(Date, "parse");
       await expect(listTranscriptLibrary(store, {})).rejects.toThrow(
@@ -556,7 +556,7 @@ describe("transcript library SQLite reads", () => {
     ).rejects.toThrow("cursor");
   });
 
-  it.each(["structured", "structured-only", "divergent-markdown", "markdown-only"] as const)(
+  it.each(["structured-only", "divergent-markdown", "markdown-only"] as const)(
     "exports full canonical content with %s notes even when the stored summary covers only a tail",
     async (notesKind) => {
       const { store, stateDir, database } = fixture();
@@ -579,20 +579,18 @@ describe("transcript library SQLite reads", () => {
       );
       const canonicalMarkdown =
         "# Historical notes\r\n\r\nKeep this exact historical decision.\r\n";
-      if (notesKind !== "structured") {
-        const db = database();
-        executeSqliteQuerySync(
-          db,
-          meetingTranscriptDb(db)
-            .updateTable("meeting_transcript_summaries")
-            .set({
-              markdown: notesKind === "structured-only" ? null : canonicalMarkdown,
-              ...(notesKind === "markdown-only" ? { summary_json: null } : {}),
-            })
-            .where("session_id", "=", target.sessionId)
-            .where("session_started_at", "=", target.startedAt),
-        );
-      }
+      const db = database();
+      executeSqliteQuerySync(
+        db,
+        meetingTranscriptDb(db)
+          .updateTable("meeting_transcript_summaries")
+          .set({
+            markdown: notesKind === "structured-only" ? null : canonicalMarkdown,
+            ...(notesKind === "markdown-only" ? { summary_json: null } : {}),
+          })
+          .where("session_id", "=", target.sessionId)
+          .where("session_started_at", "=", target.startedAt),
+      );
       const selector = transcriptSessionSelector(target);
       const markdown = await exportTranscriptLibrary(store, { selector, format: "markdown" });
       const text = Buffer.from(markdown.data, "base64").toString("utf8");

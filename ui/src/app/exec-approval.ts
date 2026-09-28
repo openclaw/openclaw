@@ -440,11 +440,11 @@ export async function refreshPendingApprovalQueue(
       client.request("openclaw.approval.list", {}),
     ]);
     const refreshed = mergeRefreshedApprovalQueue(
-      sortApprovalsOldestFirst([
+      [
         ...readRefreshedApprovals(execResult, "exec", state.execApprovalQueue),
         ...readRefreshedApprovals(pluginResult, "plugin", state.execApprovalQueue),
         ...readRefreshedApprovals(systemAgentResult, "system-agent", state.execApprovalQueue),
-      ]),
+      ],
       refreshStartedWith,
       state.execApprovalQueue,
       refresh.removedIds,

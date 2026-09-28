@@ -9,6 +9,7 @@ import {
   findMaintainerApproval,
   finishGuard,
   openGuard,
+  securityReviewContracts,
   withApprovalRequest,
 } from "./guard-review.mjs";
 import {
@@ -29,8 +30,8 @@ import { loadSecurityReviewPolicy } from "./security-review-policy.mjs";
 
 /** Marker used to identify dependency guard comments. */
 const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
-const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
-const dependencyApprovalCommand = "/allow-dependencies-change";
+const dependencyGraphGuardMarker = securityReviewContracts.dependency.commentMarker;
+const dependencyApprovalCommand = securityReviewContracts.dependency.approvalCommand;
 export const dependencyChangedLabel = "dependencies-changed";
 export {
   GITHUB_API_REQUEST_TIMEOUT_MS,
@@ -395,19 +396,8 @@ function decodeContentFile(payload) {
   return Buffer.from(payload.content, payload.encoding ?? "base64").toString("utf8");
 }
 
-async function readJsonFileAtRef(api, { owner, repo, path, ref }) {
-  if (!ref) {
-    return null;
-  }
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-  const payload = await api
-    .request(`/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`)
-    .catch((error) => {
-      if (error?.status === 404) {
-        return null;
-      }
-      throw error;
-    });
+async function readJsonFileAtRef(api, options) {
+  const payload = await readContentFileMetadataAtRef(api, options);
   const text = decodeContentFile(payload);
   return text ? JSON.parse(text) : null;
 }
@@ -594,14 +584,7 @@ export async function reviewDependencyChanges(
   prepared,
   mode = process.env.OPENCLAW_DEPENDENCY_GUARD_MODE ?? "enforce",
 ) {
-  const guard = await openGuard(
-    {
-      context: "openclaw/dependency-review",
-      commentMarker: dependencyGraphGuardMarker,
-      approvalCommand: dependencyApprovalCommand,
-    },
-    prepared,
-  );
+  const guard = await openGuard(securityReviewContracts.dependency, prepared);
   if (!guard) {
     return true;
   }
@@ -699,7 +682,7 @@ export async function reviewDependencyChanges(
     }
     await writeSummary("## Dependency Guard\n\nNo dependency-related file changes detected.");
     if (mode === "enforce") {
-      return await finishGuard(guard, { description: "No dependency changes require review." });
+      return await finishGuard(guard, securityReviewContracts.dependency.success.clear);
     }
     return true;
   }
@@ -778,12 +761,10 @@ export async function reviewDependencyChanges(
   }
 
   if (mode === "enforce") {
-    const allowed = await finishGuard(guard, {
-      description: removalOnly
-        ? "Dependency removals are informational."
-        : "Dependency review requirements satisfied.",
-      requiresApproval: !removalOnly,
-    });
+    const allowed = await finishGuard(
+      guard,
+      securityReviewContracts.dependency.success[removalOnly ? "removals" : "approved"],
+    );
     if (allowed) {
       const body = removalOnly
         ? renderRemovalOnlyDependencyComment({

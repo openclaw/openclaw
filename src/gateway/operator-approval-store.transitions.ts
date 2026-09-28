@@ -236,39 +236,27 @@ export function expireDueOperatorApprovalsInDatabase(
     if (dueRows.length === 0) {
       return { affected: 0, records: [] };
     }
+    const terminalFields = {
+      status: "expired",
+      decision: "deny",
+      terminal_reason: "timeout",
+      resolved_at_ms: nowMs,
+      resolver_kind: "system",
+      resolver_id: null,
+      updated_at_ms: nowMs,
+    } satisfies Partial<OperatorApprovalRow>;
     const result = executeSqliteQuerySync(
       database.db,
       stateDb
         .updateTable("operator_approvals")
-        .set({
-          status: "expired",
-          decision: "deny",
-          terminal_reason: "timeout",
-          resolved_at_ms: nowMs,
-          resolver_kind: "system",
-          resolver_id: null,
-          updated_at_ms: nowMs,
-        })
+        .set(terminalFields)
         .where("status", "=", "pending")
         .where("expires_at_ms", "<=", nowMs),
     );
-    const terminalRows: OperatorApprovalRow[] = [];
-    for (const row of dueRows) {
-      terminalRows.push({
-        ...row,
-        status: "expired",
-        decision: "deny",
-        terminal_reason: "timeout",
-        resolved_at_ms: nowMs,
-        resolver_kind: "system",
-        resolver_id: null,
-        updated_at_ms: nowMs,
-      });
-    }
     return {
       affected: Number(result.numAffectedRows ?? 0n),
-      records: terminalRows
-        .map((row) => decodeOperatorApprovalRow(row))
+      records: dueRows
+        .map((row) => decodeOperatorApprovalRow({ ...row, ...terminalFields }))
         .filter((record): record is OperatorApprovalRecord => record !== null),
     };
   }, params.databaseOptions);
@@ -300,35 +288,27 @@ export function closeOrphanedOperatorApprovals(params: {
     const terminalRows: OperatorApprovalRow[] = [];
     for (const row of orphanRows) {
       const auditTimestampMs = clampAuditTimestamp(nowMs, row.created_at_ms);
+      const terminalFields = {
+        status: "cancelled",
+        decision: "deny",
+        terminal_reason: "gateway-restart",
+        resolved_at_ms: auditTimestampMs,
+        resolver_kind: "system",
+        resolver_id: null,
+        updated_at_ms: auditTimestampMs,
+      } satisfies Partial<OperatorApprovalRow>;
       const result = executeSqliteQuerySync(
         database.db,
         stateDb
           .updateTable("operator_approvals")
-          .set({
-            status: "cancelled",
-            decision: "deny",
-            terminal_reason: "gateway-restart",
-            resolved_at_ms: auditTimestampMs,
-            resolver_kind: "system",
-            resolver_id: null,
-            updated_at_ms: auditTimestampMs,
-          })
+          .set(terminalFields)
           .where("approval_id", "=", row.approval_id)
           .where("status", "=", "pending"),
       );
       const rowAffected = Number(result.numAffectedRows ?? 0n);
       affected += rowAffected;
       if (rowAffected === 1) {
-        terminalRows.push({
-          ...row,
-          status: "cancelled",
-          decision: "deny",
-          terminal_reason: "gateway-restart",
-          resolved_at_ms: auditTimestampMs,
-          resolver_kind: "system",
-          resolver_id: null,
-          updated_at_ms: auditTimestampMs,
-        });
+        terminalRows.push({ ...row, ...terminalFields });
       }
     }
     return {

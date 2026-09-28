@@ -38,15 +38,6 @@ struct DashboardNotificationsSnapshot: Encodable, Equatable {
     let test: TestNotificationOutcome?
 }
 
-@MainActor
-final class DashboardNotificationsMessageHandler: NSObject, WKScriptMessageHandler {
-    weak var owner: DashboardWindowController?
-
-    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
-        self.owner?.receiveNotificationsMessage(message)
-    }
-}
-
 extension DashboardWindowController {
     static let notificationsMessageHandlerName = "openclawNotifications"
 
@@ -79,7 +70,7 @@ extension DashboardWindowController {
         guard message.name == Self.notificationsMessageHandlerName,
               message.webView === self.webView,
               message.frameInfo.isMainFrame,
-              Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
+              ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
         else {
             return
         }
@@ -146,7 +137,7 @@ extension DashboardWindowController {
               let json = String(data: data, encoding: .utf8)
         else { return }
         // Keep a global snapshot so late subscribers can read status without a bridge round-trip.
-        _ = try? await self.webView.evaluateJavaScript(Self.scopedDashboardScript(
+        _ = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
             """
             window.__OPENCLAW_NATIVE_NOTIFICATIONS__ = \(json);
             window.dispatchEvent(new CustomEvent('openclaw:native-notifications-status', \

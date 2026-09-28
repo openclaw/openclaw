@@ -232,12 +232,17 @@ describe("tsdown config", () => {
     const handoffGraph = configs.find((config) =>
       entryKeys(config).includes("managed-handoff-runtime"),
     );
+    const activationGraph = configs.find((config) =>
+      entryKeys(config).includes("package-update-activation-recovery"),
+    );
     const executableGraphs = new Set([
       unifiedGraph,
       expectDefined(workerGraph, "deploy worker graph"),
+      requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
+      expectDefined(activationGraph, "package activation graph"),
       requireNativeHookRelayGraph(),
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
       requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
@@ -245,6 +250,9 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("process/supervisor/service-child-relay"),
+      requireStandaloneRuntimeGraph("process/supervisor/service-child-group-anchor"),
+      requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),
     ]);
 
     for (const config of configs) {
@@ -286,7 +294,6 @@ describe("tsdown config", () => {
       "state/openclaw-database-verify.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
-      "task-registry-control.runtime",
       "link-understanding/apply.runtime",
       "media-understanding/apply.runtime",
       "index",

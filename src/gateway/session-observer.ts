@@ -268,11 +268,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     isCurrent: modelStateIsCurrent,
   });
 
-  const schedule = (
-    state: SessionObserverState,
-    run: (state: SessionObserverState, final: boolean) => void,
-    observedAudience?: ObservedAudience,
-  ) => {
+  const schedule = (state: SessionObserverState, observedAudience?: ObservedAudience) => {
     const currentAudience = observedAudience ?? audience.classify(state.sessionKey, state.agentId);
     if (!audienceLifecycle.stateIsCurrent(state, currentAudience)) {
       retireInactiveState(state);
@@ -291,12 +287,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     const delay = Math.max(0, MIN_DIGEST_INTERVAL_MS - (now() - state.lastRunAt));
     if (delay === 0) {
-      run(state, false);
+      runDigest(state, false);
       return;
     }
     state.timer = setTimeoutFn(() => {
       state.timer = undefined;
-      run(state, false);
+      runDigest(state, false);
     }, delay);
   };
 
@@ -328,7 +324,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       return;
     }
     if (!final && now() - state.lastRunAt < MIN_DIGEST_INTERVAL_MS) {
-      schedule(state, runDigest);
+      schedule(state);
       return;
     }
     if (state.timer) {
@@ -347,6 +343,16 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       !modelStateIsCurrent(state) ||
       !modelSlots.requestIsCurrent(state, requestGeneration) ||
       (!final && state.terminalHealth !== undefined);
+    const acceptDigestPublication = () => {
+      if (digestIsStale()) {
+        retireSelectedNotes();
+        if (final && lifecycle.isTracked(state)) {
+          retireTerminalState(state);
+        }
+        return false;
+      }
+      return lifecycle.acceptPublication(state);
+    };
     state.digestCount += 1;
     void (async () => {
       try {
@@ -354,14 +360,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           state,
           selectedNotes.map((note) => note.text),
         );
-        if (digestIsStale()) {
-          retireSelectedNotes();
-          if (final && lifecycle.isTracked(state)) {
-            retireTerminalState(state);
-          }
-          return;
-        }
-        if (!lifecycle.acceptPublication(state)) {
+        if (!acceptDigestPublication()) {
           return;
         }
         preamblePublisher.clear(state);
@@ -399,14 +398,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           dormantRuns.delete(state.runId);
         }
       } catch (error) {
-        if (digestIsStale()) {
-          retireSelectedNotes();
-          if (final && lifecycle.isTracked(state)) {
-            retireTerminalState(state);
-          }
-          return;
-        }
-        if (!lifecycle.acceptPublication(state)) {
+        if (!acceptDigestPublication()) {
           return;
         }
         state.consecutiveFailures += 1;
@@ -435,7 +427,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           } else if (final) {
             lifecycle.dropState(state);
           } else {
-            schedule(state, runDigest);
+            schedule(state);
           }
         }
       }
@@ -677,7 +669,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       runDigest(state, true);
       return;
     }
-    schedule(state, runDigest, currentAudience);
+    schedule(state, currentAudience);
   };
 
   return {

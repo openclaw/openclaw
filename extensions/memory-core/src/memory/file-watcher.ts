@@ -134,14 +134,30 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
       if (this.closed) {
         return;
       }
-      if (watchPath && stats && !stats.isDirectory?.()) {
+      if (watchPath) {
+        if (shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal)) {
+          return;
+        }
         const normalizedWatchPath = path.resolve(watchPath);
-        const matchingEntries = isPathInside(memoryDir, normalizedWatchPath)
+        const isDefaultPath =
+          isPathInside(memoryDir, normalizedWatchPath) ||
+          normalizedWatchPath === path.join(this.workspaceDir, "MEMORY.md") ||
+          normalizedWatchPath === path.join(this.workspaceDir, "USER.md");
+        const matchingEntries = isDefaultPath
           ? []
           : additionalPaths.filter((entry) => isPathInside(entry.path, normalizedWatchPath));
+        const couldBeFile =
+          !stats?.isDirectory?.() &&
+          !shouldIgnoreMemoryWatchPath(watchPath, stats ?? {}, this.settings.multimodal);
+        const couldBeDirectory = !stats || stats.isDirectory?.();
         if (
           matchingEntries.length > 0 &&
-          !matchingEntries.some((entry) => matchesExtraMemoryPathEntry(entry, normalizedWatchPath))
+          !matchingEntries.some(
+            (entry) =>
+              (couldBeFile && matchesExtraMemoryPathEntry(entry, normalizedWatchPath)) ||
+              (couldBeDirectory &&
+                matchesExtraMemoryPathEntry(entry, normalizedWatchPath, { directory: true })),
+          )
         ) {
           return;
         }
@@ -230,9 +246,6 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
               stats = undefined;
             }
             if (this.closed || pair.main !== mainWatcher) {
-              return;
-            }
-            if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
               return;
             }
             // Pass stats so the watch-settle queue can debounce rapid
@@ -408,11 +421,7 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
         }
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`memory ${label} parent watcher error on ${path.dirname(dir)}: ${message}`);
-        try {
-          attachedParent.close();
-        } catch {
-          // ignore
-        }
+        this.closeNativeMemoryWatcher(attachedParent);
         pair.parent = null;
         if (!pair.main) {
           this.closeNativeMemoryWatchPair(pair);
@@ -490,11 +499,7 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
         if (entryDir !== watchDir && !entryDir.startsWith(watchDirPrefix)) {
           continue;
         }
-        try {
-          entry.watcher.close();
-        } catch {
-          // ignore close failures
-        }
+        this.closeNativeMemoryWatcher(entry.watcher);
         treeWatchers.delete(entryDir);
       }
     };
@@ -567,9 +572,6 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
                   );
                   return;
                 }
-              }
-              if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
-                return;
               }
               markDirty(full, stats);
             }),
@@ -758,8 +760,10 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
     this.watcher = watcher;
     watcher.on("add", markDirty);
     watcher.on("change", markDirty);
-    watcher.on("unlink", markDirty);
-    watcher.on("unlinkDir", markDirty);
+    // Chokidar retains the removed entry's kind even though lstat cannot. Native
+    // events without stats must still allow paths that could have been directories.
+    watcher.on("unlink", (watchPath) => markDirty(watchPath, { isDirectory: () => false }));
+    watcher.on("unlinkDir", (watchPath) => markDirty(watchPath, { isDirectory: () => true }));
     watcher.on("error", (err) => {
       if (this.degradeMemoryWatchCapacity("chokidar", err, markDirty)) {
         return;

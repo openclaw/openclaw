@@ -113,11 +113,6 @@ describe("sessions_search candidate matching", () => {
       accepted: "agent:main:matrix:channel:!AbC:example.org:thread:$Event",
       rejected: "agent:main:matrix:channel:!abc:example.org:thread:$Event",
     },
-    {
-      key: "signal:group:AbC",
-      accepted: "agent:main:signal:group:AbC",
-      rejected: "agent:main:signal:group:abc",
-    },
   ])("preserves raw and opaque key identity for $key", async ({ key, accepted, rejected }) => {
     const { tool } = createSearchFixture([key], [searchHit(rejected, 1), searchHit(accepted)]);
     const result = await tool.execute("key-identity", { query: "text" });

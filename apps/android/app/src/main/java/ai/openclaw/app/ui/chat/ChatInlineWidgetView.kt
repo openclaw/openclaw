@@ -70,7 +70,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 private const val INLINE_WIDGET_PROFILE_PREFIX = "openclaw-inline-widget-"
-private const val INLINE_WIDGET_DOCUMENT_MAX_BYTES = 2L * 1024 * 1024
+private const val INLINE_WIDGET_DOCUMENT_MAX_BYTES = 10L * 1024 * 1024
 private const val INLINE_WIDGET_FETCH_TIMEOUT_SECONDS = 8L
 private const val HTTP_HEADER_ACCEPT = "Accept"
 private const val HTTP_HEADER_CACHE_CONTROL = "Cache-Control"

@@ -126,6 +126,36 @@ and `/reset` start a fresh session on the next message. Reset and local session
 deletion retire the binding; the Agents API retains the remote history and
 workspace, which can be managed through its API.
 
+When creating a session, OpenClaw uses the same workspace preparation as Codex
+to supply bounded `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, shared `USER.md`, and
+the selected person's `users/<profile-id>/USER.md` overlay. Eligible
+`BOOTSTRAP.md`, `MEMORY.md`, and bootstrap-hook files are included as supporting
+context. Existing bootstrap budgets, session privacy rules, and lightweight
+mode still apply. When enabled memory tools target the configured workspace,
+OpenClaw supplies memory references and the active memory plugin's recall
+guidance instead of embedding root `MEMORY.md` contents.
+
+These are instruction snapshots from the Gateway, not files copied into the
+hosted VM. Follow-up turns retain them. Use `/new` or `/reset` to pick up edits,
+changed personal-user selection, or this behavior in an existing session.
+Preparation failure occurs before remote session creation and binding so the
+next attempt can retry.
+
+The harness reuses OpenClaw's tool-aware delegation, Skill Workshop, UI,
+credential, Git coauthor, and extra system guidance where applicable. Each turn
+also receives current date/timezone, active-computer, visible-reply, permission
+notice, and watched-session context through the existing input carrier.
+Lightweight cron input stays unchanged.
+
+The MVP client has no per-turn developer instruction carrier or instruction
+refresh operation. Workspace/persona refresh, Gateway skill-file access and
+skill catalog delivery, plugin command prompt registration for this harness,
+prompt-building hooks and context-engine assembly, and native fork preparation
+remain unimplemented. Native Codex project discovery, collaboration, and
+deferred-tool-search instructions are not applicable to the hosted harness.
+Hosted files remain separate from the Gateway workspace; attachment upload and
+output transfer are supported independently.
+
 If the event stream closes, the harness subscribes again and reconciles saved
 turns, saved items, and input receipts before accepting completion. It does not
 resubmit the user's message. Completion requires a terminal root turn and an
@@ -169,11 +199,33 @@ approval or hook events are not provided by this harness.
 New Agents API sessions enable built-in web search in live mode. Sessions
 created before web search was enabled need `/new` or `/reset` to pick it up.
 
-This MVP supports text, built-in web search, and native hosted-workspace commands. Apps, connectors,
-OpenClaw dynamic tools, file transfer, image generation, custom context engines,
-and self-hosted executors are outside its scope. Admitted turns are marked
-unsafe for replay because hosted commands may already have run. OpenClaw can
-continue the existing session after a transient provider failure.
+The harness supports text, built-in web search, native hosted-workspace commands, and host-authorized
+OpenClaw and plugin functions. Gateway functions retain the normal tool policy,
+hooks, current-run authority, and delivery receipts; shell and file operations
+remain in the hosted VM. Tools such as memory search are available when their
+existing plugin and configuration enable them.
+OpenClaw records host function calls, arguments, results, and error status in
+its normal transcript before acknowledging the result to the native session.
+
+Admitted file attachments are copied into `/workspace/inputs` in the hosted VM.
+Follow-up attachments upload into the same connected environment. Completed
+native artifacts under `/workspace/outputs` are copied into OpenClaw's managed
+outbound media and attached to the final reply. Limits are 5 MiB per file,
+10 MiB total, and 50 files per turn in each direction. Model text cannot select a
+Gateway file path for transfer.
+
+File transfer in this MVP supports the hosted Linux VM with a Linux Gateway
+using native Linux state storage or a Docker-managed state volume. macOS host
+bind-mounted Gateway state and Windows Gateways are outside this support scope.
+If a returned attachment is missing, check the Gateway logs and storage setup;
+on macOS, use a Docker-managed state volume. Completed assistant text is retained
+when output transfer fails, but it may still claim that a file was attached.
+Confirm that the attachment is present before treating the transfer as complete.
+
+Apps, connectors, image generation, custom context engines, and self-hosted
+executors are outside this prototype's scope. Admitted turns are marked unsafe
+for replay because hosted commands or Gateway functions may already have run.
+OpenClaw can continue the existing session after a transient provider failure.
 
 ## Native Codex app-server auth
 

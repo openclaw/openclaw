@@ -13,6 +13,7 @@ import type { TranscriptEntryAnchor } from "openclaw/plugin-sdk/session-transcri
 import type { OnAssistantDeltaPayload } from "./event-bridge.js";
 import type { CopilotHooksConfig } from "./hooks-bridge.js";
 import type { CopilotPermissionPolicy } from "./permission-bridge.js";
+import type { CopilotModelProviderInput as ModelRef } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
 export const BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS = 5_000;
@@ -121,22 +122,7 @@ export function assertCopilotAttemptHostCapabilities(
     throw new Error("[copilot-attempt] ordinary attempts require host capabilities");
   }
 }
-export type ModelRef = {
-  api?: string;
-  id: string;
-  provider: string;
-  baseUrl?: string;
-  azureApiVersion?: string;
-  headers?: Record<string, string | null | undefined>;
-  authHeader?: boolean;
-  requestAuthMode?: string;
-  requestProxy?: unknown;
-  requestTls?: unknown;
-  requestAllowPrivateNetwork?: unknown;
-  contextTokens?: number;
-  contextWindow?: number;
-  maxTokens?: number;
-};
+export type { ModelRef };
 export type ModelRefInputObject = {
   api?: unknown;
   id?: unknown;

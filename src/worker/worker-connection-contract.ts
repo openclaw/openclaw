@@ -1,7 +1,10 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ClientOptions, WebSocket } from "ws";
 import { z } from "zod";
+import type {
+  GatewayWebSocketClientOptions,
+  WebSocket,
+} from "../../packages/gateway-client/src/websocket.js";
 import type {
   WorkerConnectParams,
   WorkerHeartbeatParams,
@@ -48,7 +51,7 @@ export type WorkerConnectionOptions = {
   admissionTimeoutMs?: number;
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
-  createSocket?: (url: string, options: ClientOptions) => WebSocket;
+  createSocket?: (url: string, options: GatewayWebSocketClientOptions) => WebSocket;
   heartbeatStatus?: () => WorkerHeartbeatParams["status"];
   /** The connect frame was written; this does not establish admission. */
   onAdmissionRequestSent?: () => void;
@@ -126,10 +129,6 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
   return value;
 }
 
-export function toWorkerConnectionError(error: unknown): Error {
-  return toStructuredErrorObject(error);
-}
-
 export function formatWorkerConnectionFailure(
   options: WorkerConnectionOptions,
   error: unknown,
@@ -144,7 +143,7 @@ export function formatWorkerConnectionFailure(
     address = endpoint.socketPath;
   }
   const target = truncateUtf16Safe(address, 128);
-  let detail = toWorkerConnectionError(error).message;
+  let detail = toStructuredErrorObject(error).message;
   const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
   const credentials = [
     options.connectParams.admission.credential,

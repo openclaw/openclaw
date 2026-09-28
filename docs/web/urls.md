@@ -489,7 +489,6 @@ no route-specific URL parameters.
 | Plugins             | `/plugins`                                     | -                         | -                                                                                 |
 | Plugin settings     | `/settings/plugins`                            | -                         | `?tab=advanced`, `/settings/plugins/<pluginId>`                                   |
 | Automations         | `/automations`                                 | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                                        |
-| Tasks               | `/tasks`                                       | -                         | -                                                                                 |
 | Devices             | `/settings/devices`                            | `/nodes`                  | Shared settings parameters below                                                  |
 | Plugin tab host     | `/<slug>` when advertised; `/plugin` otherwise | -                         | Generic host: `?plugin=<pluginId>&id=<tabId>`; tab parameters: `?p.<key>=<value>` |
 

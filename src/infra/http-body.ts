@@ -68,13 +68,7 @@ export function isRequestBodyLimitError(
   error: unknown,
   code?: RequestBodyLimitErrorCode,
 ): error is RequestBodyLimitError {
-  if (!(error instanceof RequestBodyLimitError)) {
-    return false;
-  }
-  if (!code) {
-    return true;
-  }
-  return error.code === code;
+  return error instanceof RequestBodyLimitError && (!code || error.code === code);
 }
 
 export function requestBodyErrorToText(code: RequestBodyLimitErrorCode): string {
@@ -114,10 +108,7 @@ function resolveRequestBodyLimitValues(options: {
   const maxBytes = Number.isFinite(options.maxBytes)
     ? Math.max(1, Math.floor(options.maxBytes))
     : 1;
-  const timeoutMs =
-    options.timeoutMs === undefined
-      ? DEFAULT_WEBHOOK_BODY_TIMEOUT_MS
-      : resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_WEBHOOK_BODY_TIMEOUT_MS);
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_WEBHOOK_BODY_TIMEOUT_MS);
   return { maxBytes, timeoutMs };
 }
 
@@ -164,7 +155,7 @@ export async function readRequestBodyWithLimit(
     const cleanup = () => {
       req.removeListener("data", onData);
       req.removeListener("end", onEnd);
-      req.removeListener("error", onError);
+      req.removeListener("error", fail);
       req.removeListener("close", onClose);
       clearNodeTimeout(timer);
     };
@@ -178,7 +169,7 @@ export async function readRequestBodyWithLimit(
       cb();
     };
 
-    const fail = (error: RequestBodyLimitError | Error) => {
+    const fail = (error: Error) => {
       finish(() => reject(error));
     };
 
@@ -217,20 +208,13 @@ export async function readRequestBodyWithLimit(
       );
     };
 
-    const onError = (error: Error) => {
-      if (done) {
-        return;
-      }
-      fail(error);
-    };
-
     const onClose = () => {
       fail(new RequestBodyLimitError({ code: "CONNECTION_CLOSED" }));
     };
 
     req.on("data", onData);
     req.on("end", onEnd);
-    req.on("error", onError);
+    req.on("error", fail);
     req.on("close", onClose);
     if (req.destroyed && !req.readableEnded) {
       onClose();
