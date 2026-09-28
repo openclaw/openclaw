@@ -319,6 +319,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     currentAgentId: props.currentAgentId,
     queue: props.queue,
     displayQueue: props.displayQueue,
+    savedInputs: props.savedInputs,
+    renderSavedInput: props.renderSavedInput,
     offline: props.offline,
     canAbort: showAbortableUi,
     canRemoveServerQueued: props.connected && props.canSend && !props.submitDisabledReason,

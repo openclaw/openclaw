@@ -182,6 +182,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
   displayQueue?: ChatQueueDisplayItem[];
+  savedInputs?: import("../chat-saved-inputs.ts").ChatSavedInputs;
+  renderSavedInput?: (input: import("../chat-saved-inputs.ts").SavedChatInput) => unknown;
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
   goalRecovery?: ChatGoalRecovery;

@@ -17,6 +17,17 @@ import { PluginIconController } from "../../plugins/plugin-icon-controller.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
 import "../../../styles/chat/clawhub-card.css";
 
+/** Saved inspection never mounts the catalog-status or navigation owner. */
+export function renderReadOnlyClawHubCard(card: ClawHubRecommendation) {
+  return html`<div class="card chat-clawhub-card" data-clawhub-id=${card.id}>
+    <div class="chat-clawhub-card__identity">
+      <strong>${card.name}</strong>
+      <div class="card-sub">${card.description}</div>
+      <code>${card.id}</code>
+    </div>
+  </div>`;
+}
+
 /** The transcript identifies the listing; its current catalog owner supplies status and actions. */
 class ChatClawHubCard extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })

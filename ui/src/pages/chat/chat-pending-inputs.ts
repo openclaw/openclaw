@@ -6,6 +6,7 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { sameSelfUserIdentity } from "../../app/user-profile.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
@@ -30,6 +31,7 @@ import type { PendingInputStatus } from "./system-notice-kinds.ts";
 type PendingInputRequest = {
   before?: number;
   kind: "navigation" | "refresh" | "discovery";
+  viewer: ChatState["selfUser"];
   client: NonNullable<ChatState["client"]>;
   connectionEpoch: number;
   done: Promise<void>;
@@ -41,6 +43,10 @@ type PendingInputView = {
   sessionId: string | null;
   agentId: string | undefined;
   page: ChatPendingInputsPage;
+  /** Scope that published this page, not a request currently refreshing it. */
+  pageClient: ChatState["client"];
+  pageEpoch: number;
+  pageViewer: ChatState["selfUser"];
   /** Active-input snapshots keep the queue independent of retained-history pagination. */
   activeInputs: ChatPendingInputsPage["items"];
   receiptRunIds: string[];
@@ -55,6 +61,24 @@ type PendingInputView = {
   request?: PendingInputRequest;
 };
 const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
+
+/** Inactive saved attempts are not transcript turns or executable queue rows. */
+export function isSavedChatInput(
+  input: ChatPendingInputsPage["items"][number],
+  queue: readonly ChatQueueItem[],
+): boolean {
+  return (
+    input.state === "cancelled" ||
+    (input.state === "interrupted" &&
+      !queue.some(
+        (item) =>
+          input.runId &&
+          item.sendRunId === input.runId &&
+          item.sendState !== "failed" &&
+          item.sendState !== "held",
+      ))
+  );
+}
 
 export function buildPendingInputQueueItems(
   inputs: ChatPendingInputsPage["items"],
@@ -105,6 +129,9 @@ export function buildPendingInputItems(
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
   for (const input of inputs) {
+    if (isSavedChatInput(input, browserInputs)) {
+      continue;
+    }
     if (
       searchQuery?.trim() &&
       !messageMatchesSearchQuery(input.message, searchQuery, messageRecovery)
@@ -273,6 +300,7 @@ function ownsPendingInputRequest(
     getChatPendingInputs(state) === view &&
     view.request === request &&
     state.client === request.client &&
+    sameSelfUserIdentity(state.selfUser, request.viewer) &&
     state.connected &&
     state.connectionEpoch === request.connectionEpoch
   );
@@ -346,6 +374,9 @@ export function applyChatPendingInputs(
       sessionId: state.currentSessionId ?? null,
       agentId: resolveUiSelectedSessionAgentId(state),
       page: displayPage,
+      pageClient: state.client,
+      pageEpoch: state.connectionEpoch,
+      pageViewer: state.selfUser,
       activeInputs: [],
       queueSnapshot: [],
       legacyQueue: false,
@@ -363,6 +394,9 @@ export function applyChatPendingInputs(
     }
     if (view.before === undefined) {
       view.page = displayPage;
+      view.pageClient = state.client;
+      view.pageEpoch = state.connectionEpoch;
+      view.pageViewer = state.selfUser;
       view.error = undefined;
     }
     // Latest custody updates ownership immediately, but cannot take over browsing.
@@ -402,6 +436,7 @@ async function requestPendingInputPage(
     kind,
     client,
     connectionEpoch: state.connectionEpoch,
+    viewer: state.selfUser,
     done,
   };
   view.request = request;
@@ -457,6 +492,9 @@ async function requestPendingInputPage(
       // Active-only discovery also reads the selected retained page. Legacy scans do not.
       if (!legacyDiscovery) {
         view.page = page;
+        view.pageClient = client;
+        view.pageEpoch = request.connectionEpoch;
+        view.pageViewer = request.viewer;
         request.refreshRetained = false;
       }
       const legacyNavigation =

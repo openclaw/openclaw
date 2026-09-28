@@ -92,11 +92,13 @@ describe("server-owned pending input display", () => {
           sendState,
         },
       ]);
-      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
+      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
         sendState === "waiting-reconnect"
-          ? "Interrupted by a Gateway restart. This saved message will resume when the session is ready."
-          : "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
-      ]);
+          ? [
+              "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
+            ]
+          : [],
+      );
     },
   );
 
@@ -135,9 +137,9 @@ describe("server-owned pending input display", () => {
       const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], [], true);
 
       expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
-        notice ? [notice] : [],
+        state === "queued" && notice ? [notice] : [],
       );
-      expect(items.some((item) => item.kind === "message")).toBe(true);
+      expect(items.some((item) => item.kind === "message")).toBe(state === "queued");
     },
   );
 
@@ -965,7 +967,7 @@ describe("server-owned pending input display", () => {
         item.kind === "group" ? item.messages.map((entry) => entry.message) : [],
       );
       expect(displayed).toContain(canonical);
-      expect(displayed.filter((message) => message === input.message)).toHaveLength(1);
+      expect(displayed.filter((message) => message === input.message)).toHaveLength(0);
     },
   );
 });

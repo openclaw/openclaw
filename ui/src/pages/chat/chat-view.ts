@@ -31,12 +31,9 @@ import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import {
-  buildPendingInputQueueItems,
-  getChatPendingInputs,
-  loadChatPendingInputs,
-} from "./chat-pending-inputs.ts";
+import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
+import { createChatSavedInputs } from "./chat-saved-inputs.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
@@ -44,8 +41,8 @@ import {
   renderChatComposerNotices,
   renderChatTopbarNotices,
 } from "./chat-view-notices.ts";
-import "./components/chat-comment-controller.ts";
 import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
+import "./components/chat-comment-controller.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import { resolveChatCommentAnchor } from "./components/chat-comment-anchor.ts";
 import {
@@ -57,6 +54,7 @@ import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
+import { renderSavedInputDetails } from "./components/chat-saved-input-details.ts";
 import { renderChatSelectionAnnotations } from "./components/chat-selection-annotations.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
@@ -325,42 +323,6 @@ export function renderChat(props: ChatProps) {
     props.presented ?? true,
   );
   const footerContent = html`${
-      pendingInputs &&
-      (pendingInputs.error ||
-        pendingInputs.page.nextBefore !== undefined ||
-        pendingInputs.before !== undefined)
-        ? html`<div class="chat-pending-inputs" role="status">
-            ${pendingInputs.error ? html`<span>${pendingInputs.error}</span>` : nothing}
-            ${
-              pendingInputs.page.nextBefore !== undefined
-                ? html`<button
-                    class="btn btn--sm"
-                    type="button"
-                    ?disabled=${pendingInputs.loading}
-                    @click=${() =>
-                      props.historyState &&
-                      loadChatPendingInputs(props.historyState, pendingInputs.page.nextBefore)}
-                  >
-                    ${t("chat.pendingInputs.earlier")}
-                  </button>`
-                : nothing
-            }
-            ${
-              pendingInputs.before !== undefined
-                ? html`<button
-                    class="btn btn--sm"
-                    type="button"
-                    ?disabled=${pendingInputs.loading}
-                    @click=${() => props.historyState && loadChatPendingInputs(props.historyState)}
-                  >
-                    ${t("chat.pendingInputs.latest")}
-                  </button>`
-                : nothing
-            }
-          </div>`
-        : nothing
-    }
-    ${
       props.inlineApproval && props.onApprovalDecision
         ? html`<div class="chat-inline-approval">
             ${renderExecApprovalCard({
@@ -413,9 +375,20 @@ export function renderChat(props: ChatProps) {
     props.queue,
     displayedPendingInputs ?? [],
   );
+  const savedInputs = createChatSavedInputs(props);
   const defaultComposer = renderChatComposer({
     ...props,
     asyncQuestions,
+    savedInputs,
+    renderSavedInput: savedInputs
+      ? (input) =>
+          renderSavedInputDetails(
+            input,
+            savedInputs.inspections.get(input.id)?.state,
+            props,
+            requestUpdate,
+          )
+      : undefined,
     displayQueue: [
       ...buildPendingInputQueueItems(inputDisplay.queuedInputs),
       ...inputDisplay.queue,

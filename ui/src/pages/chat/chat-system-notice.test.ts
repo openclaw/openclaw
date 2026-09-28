@@ -51,7 +51,7 @@ afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
   it.each(["interrupted", "cancelled"] as const)(
-    "shows one accurate recovery notice when the request is %s before starting",
+    "keeps %s recovery in the saved tray until canonical promotion",
     (state) => {
       const message = {
         ...baseMessage,
@@ -60,14 +60,7 @@ describe("system notices through pending-to-history promotion", () => {
       expect(render([], pending(message))).toMatchObject([
         { kind: "notice", label: "System · restart recovery" },
       ]);
-      expect(render([], pending(message, state))).toMatchObject([
-        {
-          kind: "notice",
-          label: "System · restart recovery",
-          text: `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`,
-          startsTurn: true,
-        },
-      ]);
+      expect(render([], pending(message, state))).toEqual([]);
       expect(render([message], pending(message, state))).toMatchObject([
         {
           kind: "notice",

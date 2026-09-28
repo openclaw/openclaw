@@ -185,7 +185,7 @@ describe("live terminal continuity with pending collaborators", () => {
     expect(visibleMessages).toEqual([...history, stale.message]);
   });
   it.each(["interrupted", "cancelled"] as const)(
-    "keeps earlier %s automation before a newly submitted message and its canonical receipt",
+    "keeps saved %s automation outside a newly submitted turn and its canonical receipt",
     (state) => {
       const automation = {
         ...pending,
@@ -213,11 +213,7 @@ describe("live terminal continuity with pending collaborators", () => {
         sendSubmittedAtMs: 40,
         sendState: "submitting" as const,
       };
-      const disposition =
-        state === "interrupted"
-          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
-          : "Cancelled before the agent started it. It will not run automatically; copy it and send again.";
-      const originalRows = ["earlier", "active", "Earlier scheduled maintenance", disposition];
+      const originalRows = ["earlier", "active"];
       for (const { overrides, expected } of [
         { overrides: {}, expected: originalRows },
         {

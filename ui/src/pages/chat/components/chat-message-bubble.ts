@@ -30,11 +30,11 @@ import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/too
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
-import "./chat-clawhub-card.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import { renderReadOnlyClawHubCard } from "./chat-clawhub-card.ts";
 import { renderOmittedMedia } from "./chat-message-attachment-status.ts";
 import {
   hasUserFileAttachments,
@@ -175,6 +175,7 @@ export function renderGroupedMessage(
   messageKey: string,
   opts: {
     isStreaming: boolean;
+    readOnly?: boolean;
     isForwarded?: boolean;
     sessionKey?: string;
     presented?: boolean;
@@ -235,16 +236,18 @@ export function renderGroupedMessage(
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const sourceRole = normalizeRoleForGrouping(role);
-  const asyncQuestions = opts.asyncQuestions?.submit ? readAsyncQuestions(message) : null;
+  const asyncQuestions =
+    !opts.readOnly && opts.asyncQuestions?.submit ? readAsyncQuestions(message) : null;
   const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
   const workspaceConflict = workspaceResultConflictFromTranscript(message);
   if (workspaceConflict) {
     return renderWorkspaceConflictTranscriptMessage(workspaceConflict, messageKey, opts.entryId);
   }
   const isToolShell = normalizedRole === "tool";
-  const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
+  const isStandaloneToolMessage = !opts.readOnly && isStandaloneToolMessageForDisplay(message);
 
-  const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
+  const toolCards =
+    !opts.readOnly && (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
   // Nested cards moved under their parent must not leave empty message shells.
   const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== nothing);
   const {
@@ -322,16 +325,16 @@ export function renderGroupedMessage(
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
-    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
-    fileLinks: true,
+    codeBlockInteraction: !opts.readOnly && role === "assistant" ? "interactive" : "static",
+    fileLinks: !opts.readOnly,
     githubRepo: role === "assistant" ? (opts.githubRepo ?? null) : null,
     humanMentions: markdown === displayMarkdown ? humanMentions : undefined,
     ...(role === "assistant" && opts.githubRepositories
       ? { githubRepositories: opts.githubRepositories }
       : {}),
     interactiveImages: opts.onOpenImage !== undefined,
-    sessionLinks: true,
-    tableInteractions: "enabled",
+    sessionLinks: !opts.readOnly,
+    tableInteractions: opts.readOnly ? "none" : "enabled",
     linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
   };
 
@@ -446,7 +449,7 @@ export function renderGroupedMessage(
       })
     : icons.zap;
   const assistantViewContent =
-    sourceRole === "assistant" && assistantViewBlocks.length > 0
+    !opts.readOnly && sourceRole === "assistant" && assistantViewBlocks.length > 0
       ? html`${assistantViewBlocks.map(
           (block) => html`<div class="chat-tool-card__widget-host">
             ${renderToolPreview(block.preview, "chat_message", {
@@ -546,14 +549,17 @@ export function renderGroupedMessage(
   const renderBody = () => html`
     ${
       sourceRole === "assistant"
-        ? clawHubCards.map(
-            (card) => html`<openclaw-chat-clawhub-card
-              .recommendation=${card}
-              .agentId=${opts.agentId}
-            ></openclaw-chat-clawhub-card>`,
+        ? clawHubCards.map((card) =>
+            opts.readOnly
+              ? renderReadOnlyClawHubCard(card)
+              : html`<openclaw-chat-clawhub-card
+                  .recommendation=${card}
+                  .agentId=${opts.agentId}
+                ></openclaw-chat-clawhub-card>`,
           )
         : nothing
     }
+    ${opts.readOnly ? assistantViewBlocks.map((block) => (block.rawText ? renderRawOutputToggle(block.rawText) : nothing)) : nothing}
     ${renderPairingQrExpiryNotices(expiredPairingQrCount)}
     ${renderMessageImages(
       renderInOrder ? supplementalImages : images,
@@ -580,7 +586,7 @@ export function renderGroupedMessage(
         ? html`<div class="chat-thinking">
             ${unsafeHTML(
               toSanitizedMarkdownHtml(reasoningMarkdown, {
-                codeBlockInteraction: "interactive",
+                codeBlockInteraction: opts.readOnly ? "static" : "interactive",
               }),
             )}
           </div>`

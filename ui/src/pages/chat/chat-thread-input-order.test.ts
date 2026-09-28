@@ -71,6 +71,52 @@ function visibleRows(
 }
 
 describe("transcript input order", () => {
+  it("keeps inactive custody outside canonical turns and their grouping boundaries", () => {
+    const messages = [
+      {
+        role: "user",
+        content: "Current question",
+        timestamp: 100,
+        __openclaw: { id: "question", seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: "Current answer",
+        timestamp: 200,
+        __openclaw: { id: "answer", seq: 2 },
+      },
+      {
+        role: "assistant",
+        content: "Answer continuation",
+        timestamp: 300,
+        __openclaw: { id: "continuation", seq: 3 },
+      },
+    ];
+    const pendingInputs = [
+      acceptedInput("Old stopped prompt", 250, "interrupted"),
+      acceptedInput("Old cancelled prompt", 400, "cancelled"),
+    ];
+    expect(visibleRows({ messages, pendingInputs })).toEqual([
+      "Current question",
+      "Current answer",
+      "Answer continuation",
+    ]);
+    const groups = buildChatItems({
+      paneId: "saved-order",
+      sessionKey: "agent:main:saved-order",
+      messages,
+      pendingInputs,
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    }).filter((item) => item.kind === "group");
+    expect(
+      groups.map((group) => group.messages.map(({ message }) => extractTextCached(message))),
+    ).toEqual([["Current question"], ["Current answer", "Answer continuation"]]);
+  });
+
   it.each(["steer", "interrupt"] as const)(
     "keeps consecutive sends in submission order while a %s ACK is pending",
     (queueMode) => {
@@ -140,17 +186,10 @@ describe("transcript input order", () => {
       ].map((clock) => ({ state, label: clock.label, timestamps: clock.timestamps })),
     ),
   )(
-    "preserves server $state input order and attached notices with $label timestamps",
+    "preserves live server order without saved $state rows with $label timestamps",
     ({ state, timestamps }) => {
-      const notice =
-        state === "interrupted"
-          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
-          : state === "cancelled"
-            ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
-            : null;
-      const expectedInputs = ["First accepted input", "Second accepted input"].flatMap((text) =>
-        notice ? [text, notice] : [text],
-      );
+      const expectedInputs =
+        state === "queued" ? ["First accepted input", "Second accepted input"] : [];
 
       expect(
         visibleRows({

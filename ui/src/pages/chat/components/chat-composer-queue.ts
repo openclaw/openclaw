@@ -19,8 +19,11 @@ import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
+import { renderChatSavedInputsRows, renderChatSavedInputsFooter } from "./chat-saved-inputs.ts";
 
 type ChatQueueProps = {
+  savedInputs?: import("../chat-saved-inputs.ts").ChatSavedInputs;
+  renderSavedInput?: (input: import("../chat-saved-inputs.ts").SavedChatInput) => unknown;
   currentAgentId?: string;
   queue: ChatQueueItem[];
   displayQueue?: ChatQueueDisplayItem[];
@@ -186,9 +189,12 @@ export function renderChatQueue(props: ChatQueueProps) {
   ) {
     visibleQueue.push(props.editingSource);
   }
-  if (!visibleQueue.length) {
+  if (!visibleQueue.length && !props.savedInputs) {
     return nothing;
   }
+  const scrollable =
+    visibleQueue.length + (props.savedInputs?.items.length ?? 0) > 3 ||
+    Boolean(props.savedInputs?.inspections.size);
   // Hidden and edited rows retain their delivery positions and split the
   // offered segments even though they may not appear in this tray.
   const visibleIds = new Set(visibleQueue.map((item) => item.id));
@@ -228,10 +234,10 @@ export function renderChatQueue(props: ChatQueueProps) {
           : nothing
       }
       <div
-        class="chat-queue__scroll"
-        data-scrollable=${visibleQueue.length > 3 ? "true" : "false"}
+        class="chat-queue__scroll ${props.savedInputs?.inspections.size ? "chat-queue__scroll--inspecting" : ""}"
+        data-scrollable=${scrollable ? "true" : "false"}
         data-at-start="true"
-        data-at-end=${visibleQueue.length > 3 ? "false" : "true"}
+        data-at-end=${scrollable ? "false" : "true"}
         @dragover=${(event: DragEvent) => {
           if (!event.dataTransfer?.types.includes(DRAG_MIME)) {
             return;
@@ -268,7 +274,9 @@ export function renderChatQueue(props: ChatQueueProps) {
           (item) => item.id,
           (item) => renderChatQueueItem(item, props, reorder),
         )}
+        ${renderChatSavedInputsRows(props.savedInputs, props.renderSavedInput ?? (() => nothing))}
       </div>
+      ${renderChatSavedInputsFooter(props.savedInputs)}
     </div>
   `;
 }

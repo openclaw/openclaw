@@ -23,6 +23,11 @@ export class ChatTranscriptController implements ReactiveController {
     host.addController(this);
   }
 
+  /** Current transcript recovery, shared with explicit loaded-content search. */
+  get messageRecovery() {
+    return this.sessionVirtualizer?.expandedAssistantMessages;
+  }
+
   get renderedSessionKey(): string | null {
     return this.activeSessionKey;
   }

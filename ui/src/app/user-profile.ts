@@ -3,13 +3,19 @@ import type { PresenceEntry } from "../api/types.ts";
 export type AuthenticatedUser = NonNullable<PresenceEntry["user"]>;
 export type PresencePayload = { presence: readonly PresenceEntry[] };
 
+export function sameSelfUserIdentity(
+  left: AuthenticatedUser | null | undefined,
+  right: AuthenticatedUser | null | undefined,
+): boolean {
+  return left?.id === right?.id && left?.identity?.id === right?.identity?.id;
+}
+
 export function sameSelfUser(
   left: AuthenticatedUser | null | undefined,
   right: AuthenticatedUser | null | undefined,
 ): boolean {
   return (
-    left?.id === right?.id &&
-    left?.identity?.id === right?.identity?.id &&
+    sameSelfUserIdentity(left, right) &&
     left?.email === right?.email &&
     left?.name === right?.name &&
     left?.avatarUrl === right?.avatarUrl

@@ -1397,7 +1397,7 @@ describe("retained input navigation", () => {
     });
     const earlier = expectDefined(
       [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-        button.textContent?.includes(t("chat.pendingInputs.earlier")),
+        button.textContent?.includes(t("chat.savedInputs.earlier")),
       ),
       "earlier pending-input navigation",
     );

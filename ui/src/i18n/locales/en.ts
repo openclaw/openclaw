@@ -3853,6 +3853,16 @@ export const en: TranslationMap & {
       positionMarkerHint:
         "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
     },
+    savedInputs: {
+      earlier: "Earlier",
+      latest: "Latest",
+      inspect: "Inspect saved attempt",
+      interruptedStatus: "Interrupted · saved",
+      cancelledStatus: "Cancelled · saved",
+      attachmentOnly: "Saved attachment",
+      loading: "Loading the complete saved input…",
+      readFailed: "Could not load the complete saved input.",
+    },
     pendingInputs: {
       waitingForWorkspaceSync: "Received · waiting for workspace sync",
       waitingForWorkerSetup: "Received · waiting for worker setup",
@@ -3862,8 +3872,6 @@ export const en: TranslationMap & {
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
         "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
-      earlier: "Show earlier messages",
-      latest: "Show latest messages",
       paginationError: "Could not finish loading queued messages. Reload to retry.",
     },
     pairingQrExpired: {

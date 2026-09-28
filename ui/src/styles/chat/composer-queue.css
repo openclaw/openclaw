@@ -512,3 +512,50 @@
     -webkit-line-clamp: 1;
   }
 }
+
+/* Saved attempts share the tray, but never its delivery/action slots. */
+.chat-queue__saved-row {
+  border-bottom: 1px solid var(--chat-queue-divider);
+}
+.chat-queue__saved-row:last-child {
+  border-bottom: 0;
+}
+.chat-queue__saved-row > summary {
+  list-style: none;
+  border-bottom: 0;
+}
+.chat-queue__saved-row > summary::-webkit-details-marker {
+  display: none;
+}
+.chat-queue__saved-row[open] .chat-queue__leading {
+  transform: rotate(90deg);
+}
+.chat-queue__saved-meta {
+  color: var(--muted);
+  font-size: 10px;
+}
+.chat-queue__saved-detail {
+  padding: 8px 14px 12px;
+  overflow-wrap: anywhere;
+}
+.chat-queue__saved-detail .chat-bubble {
+  max-width: 100%;
+}
+.chat-queue__saved-detail .chat-clawhub-card {
+  margin: 0;
+}
+.chat-queue__saved-paging {
+  display: flex;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--chat-queue-divider);
+}
+.chat-queue__saved-error {
+  padding: 6px 12px;
+  color: var(--danger);
+}
+
+.chat-queue__scroll.chat-queue__scroll--inspecting {
+  height: auto;
+  max-height: min(360px, 40vh);
+}

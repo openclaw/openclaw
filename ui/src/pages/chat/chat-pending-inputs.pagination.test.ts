@@ -513,7 +513,9 @@ function forwardedInput(
 
 function queuedTexts(host: Parameters<typeof getChatPendingInputs>[0]) {
   return Array.from(
-    renderChatView({ historyState: host, sessionKey }).querySelectorAll(".chat-queue__text"),
+    renderChatView({ historyState: host, sessionKey }).querySelectorAll(
+      "[data-chat-queue-item] .chat-queue__text",
+    ),
     (row) => row.textContent,
   );
 }
@@ -834,7 +836,7 @@ it.each([true, false])(
     expect(getChatPendingInputs(host)?.page.items).toEqual([recovered]);
     expect(queuedTexts(host)).toEqual(["Keep my accepted input", newest.id]);
     const rendered = renderChatView({ historyState: host, sessionKey });
-    expect(rendered.querySelectorAll(".chat-queue__item")).toHaveLength(2);
+    expect(rendered.querySelectorAll("[data-chat-queue-item]")).toHaveLength(2);
     expect(rendered.querySelectorAll(".chat-group")).toHaveLength(0);
   },
 );
@@ -844,7 +846,7 @@ it("prefers active custody over an interrupted retained copy of the same input",
   const recovered = { ...input, state: "queued", queued: true as const };
   applyChatPendingInputs(host, { items: [input], total: 21, queue: { items: [recovered] } });
   const rendered = renderChatView({ historyState: host, sessionKey });
-  expect(rendered.querySelectorAll(".chat-queue__item")).toHaveLength(1);
+  expect(rendered.querySelectorAll("[data-chat-queue-item]")).toHaveLength(1);
   expect(rendered.querySelectorAll(".chat-group")).toHaveLength(0);
 });
 
@@ -864,7 +866,7 @@ it.each(["retained", "queue-only"])(
       },
     );
     const rendered = renderChatView({ historyState: host, sessionKey });
-    expect(rendered.querySelectorAll(".chat-queue__item")).toHaveLength(0);
+    expect(rendered.querySelectorAll("[data-chat-queue-item]")).toHaveLength(0);
     expect(rendered.querySelectorAll(".chat-group.user")).toHaveLength(1);
     expect(rendered.querySelector(".chat-group.user")?.textContent).toContain(
       "Keep my accepted input",
