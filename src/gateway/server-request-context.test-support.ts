@@ -161,6 +161,7 @@ export function makeContextParams(
     configRevisionProjector: {
       projectRawHash: (hash) => hash,
       projectResolvedHash: (hash) => hash,
+      hashResponseSessionBearer: () => "unused-test-scope",
     },
   };
 }
