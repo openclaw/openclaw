@@ -2416,7 +2416,12 @@ class ChatController internal constructor(
       } ?: return false
       if (lease == null) throw GatewayRequestNotEnqueued("not connected")
       val inheritParent =
-        worktree && synchronized(gatewayScopeApplyLock) { !_sessionId.value.isNullOrBlank() }
+        synchronized(gatewayScopeApplyLock) {
+          // Plain New starts independently of a native thread. Explicit worktree
+          // requests retain their parent so the creation guard can reject them.
+          !_sessionId.value.isNullOrBlank() &&
+            (worktree || !isSessionModelSelectionLocked(sessionSettingsKey(parentKey, createGatewayScope, ownerAgentId)))
+        }
       val params =
         buildJsonObject {
           put("agentId", JsonPrimitive(ownerAgentId))
