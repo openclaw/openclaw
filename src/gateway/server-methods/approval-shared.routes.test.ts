@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { type ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { ExecApprovalRecord } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { handlePendingApprovalRequest } from "./approval-shared.js";
 import type { GatewayRequestContext } from "./types.js";

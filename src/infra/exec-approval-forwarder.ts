@@ -597,7 +597,7 @@ function createApprovalHandlers<
         beforeDeliver: async (target, payload) => {
           const channel = normalizeMessageChannel(target.channel) ?? target.channel;
           if (!channel) {
-            return;
+            return undefined;
           }
           await getLoadedChannelPlugin(channel)?.outbound?.beforeDeliverPayload?.({
             cfg,

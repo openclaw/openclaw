@@ -26,7 +26,7 @@ describe("plugin approval forwarding", () => {
     setActivePluginRegistry(emptyRegistry);
   });
 
-  const cfg = {
+  const telegramCfg = {
     approvals: { exec: { enabled: true, mode: "session" } },
     channels: {
       telegram: { execApprovals: { enabled: true, approvers: ["123"], target: "channel" } },
@@ -56,7 +56,7 @@ describe("plugin approval forwarding", () => {
     async ({ nativeRoutes, forwarded }) => {
       vi.useFakeTimers();
       const { deliver, forwarder } = createForwarder({
-        cfg: { ...cfg, approvals: { plugin: { enabled: true, mode: "session" } } },
+        cfg: { ...telegramCfg, approvals: { plugin: { enabled: true, mode: "session" } } },
         resolveSessionTarget,
         nativeRoutes,
       });
@@ -223,8 +223,8 @@ describe("plugin approval forwarding", () => {
   });
 
   it("drops queued generic plugin cards and terminal notices after reviewer policy changes", async () => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const beforeDeliverPayload = vi.fn(async () => {
       entered.resolve();
       await release.promise;
@@ -282,8 +282,8 @@ describe("plugin approval forwarding", () => {
   });
 
   it("fences a generic plugin card at platform dispatch after outbound delivery starts", async () => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const posts: string[] = [];
     let rejection: unknown;
     const shouldBlockForwardingFallback = vi.fn(
