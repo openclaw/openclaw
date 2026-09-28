@@ -240,9 +240,13 @@ different workspace do not receive approval DMs. An explicit empty list denies
 Slack decisions at that level. If the default `approvers` field is omitted,
 requests with a known selected owner and no matching override retain the existing
 Slack account `allowFrom` or `defaultTo` authorization. A missing selected owner
-denies Slack decisions when plugin overrides exist. These lists control Slack
-buttons and `/approve`, while authenticated Gateway approval clients still use
-their own scopes. A tool override requires an exact selected tool match; the
+denies Slack decisions when plugin overrides exist. These lists authorize Slack
+card buttons and `/approve`, while authenticated Gateway approval clients still
+use their own scopes. The card buttons work for a listed reviewer even without
+ordinary bot DM access; typed `/approve` still requires that access. A reviewer
+card may show a bounded excerpt of the original request even when its reviewer
+cannot read the source DM or private channel, so choose reviewers with that
+visibility in mind. A tool override requires an exact selected tool match; the
 request cannot inherit a broader reviewer list when that identity is unavailable.
 An effective nonempty reviewer list enables native Slack delivery for that
 request, independently of native exec approvals and plugin forwarding. Native
