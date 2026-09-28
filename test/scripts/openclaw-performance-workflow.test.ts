@@ -1386,9 +1386,9 @@ printf '%s\\n' \
     expect(prepare.with?.["semantic-checks"]).toBe("${{ matrix.managed_service }}");
     expect(provision).toContain("set -euo pipefail");
     expect(provision).toContain('test "$(ps -p 1 -o comm= | xargs)" = systemd');
-    expect(provision).toContain("sudo systemctl is-active --quiet systemd-logind.service");
-    expect(provision).toContain('sudo loginctl enable-linger "$user"');
-    expect(provision).toContain('sudo systemctl start "user@${uid}.service"');
+    expect(provision).toContain("sudo -n systemctl is-active --quiet systemd-logind.service");
+    expect(provision).toContain('sudo -n loginctl enable-linger "$user"');
+    expect(provision).toContain('sudo -n systemctl start "user@${uid}.service"');
     expect(provision).toContain(
       'runtime_dir="$(loginctl show-user "$user" --property=RuntimePath --value)"',
     );

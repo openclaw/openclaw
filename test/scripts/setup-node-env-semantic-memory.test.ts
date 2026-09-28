@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
@@ -52,4 +53,25 @@ it("keeps privileged provisioning in opted-in Linux CI setup", () => {
   expect(setup.run).toContain('test "$(cat "/sys/fs/cgroup$group/memory.max")" = 67108864');
   expect(setup.run).toContain('test "$(cat "/sys/fs/cgroup$group/memory.swap.max")" = 0');
   expect(setup.run).toContain('test "$(cat "/sys/fs/cgroup$group/memory.oom.group")" = 1');
+});
+
+it.runIf(process.platform !== "win32")("rejects an unsupported runner with setup guidance", () => {
+  const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+  const setup = action.runs.steps.find((step: { run?: string }) =>
+    step.run?.includes("systemd-run --user --scope"),
+  );
+  const script = [
+    "ps() { printf 'not-systemd\\n'; }",
+    "sudo() { echo 'unexpected sudo' >&2; return 99; }",
+    setup.run,
+  ].join("\n");
+  const result = spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("::error::Semantic checks require systemd");
+  expect(result.stderr).toContain("https://docs.openclaw.ai/ci");
+  expect(result.stderr).not.toContain("unexpected sudo");
 });
