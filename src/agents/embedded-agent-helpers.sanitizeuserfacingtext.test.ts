@@ -161,17 +161,40 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
-  it("removes tool wrappers through the user-facing filter composition", () => {
-    const input = [
-      '[TOOL_CALL]{tool => "read", args => {"path":"secret.md"}}[/TOOL_CALL]',
+  it.each([
+    [
+      "legacy tool call",
+      '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+      "Before\n\nAfter",
+    ],
+    [
+      "legacy tool result",
       '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]',
-      '[tool:read] {"path":"secret.md"}',
-      '<minimax:tool_call><invoke name="exec"><parameter name="cmd">secret</parameter></invoke></minimax:tool_call>',
+      "Before\n\nAfter",
+    ],
+    ["plain tool call", '[tool:read] {"path":"secret.md"}', "Before\nAfter"],
+    [
+      "MiniMax tool call",
+      '<minimax:tool_call><invoke name="exec">\n<parameter name="cmd">ls</parameter>\n</invoke></minimax:tool_call>',
+      "Before\n\nAfter",
+    ],
+    [
+      "XML tool call",
       '<tool_call>{"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>',
-      '<function_calls><invoke name="exec">secret</invoke></function_calls><function_response>secret result</function_response>',
-    ].join("\n");
-
-    expect(sanitizeUserFacingText(input)).toBe("");
+      "Before\n\nAfter",
+    ],
+    [
+      "function call",
+      '<function_calls><invoke name="find"><parameter name="query">secret</parameter></invoke></function_calls>',
+      "Before\n\nAfter",
+    ],
+    [
+      "function response",
+      "<function_response>\nsecret result\n</function_response>",
+      "Before\n\nAfter",
+    ],
+  ])("removes %s wrappers at user-facing delivery", (_name, wrapper, expected) => {
+    expect(sanitizeUserFacingText(["Before", wrapper, "After"].join("\n"))).toBe(expected);
   });
 
   it("strips copied inbound metadata blocks from user-facing assistant text", () => {
