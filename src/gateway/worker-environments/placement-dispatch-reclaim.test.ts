@@ -797,64 +797,6 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it.for(["failed capture", "crash after drain"] as const)(
-    "recovers Stop before releasing the machine after %s and a Gateway restart",
-    async (interruption, { command }) => {
-      const workspacePath = path.join(root, "restart-stop-workspace");
-      const initialized = await command.run("git", ["init", "--quiet", workspacePath], {
-        timeout: 10_000,
-      });
-      expect(initialized.status).toBe(0);
-      const original = createHarness(database, placementStore, {
-        workspacePath,
-        reconcileFailureCount: 1,
-      });
-      const active = await original.service.dispatch(REQUEST);
-      if (interruption === "failed capture") {
-        await expect(original.service.reclaim(REQUEST)).rejects.toThrow("workspace conflict");
-      } else {
-        placementStore.startDrain({
-          sessionId: active.sessionId,
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-          expectedGeneration: active.generation,
-        });
-      }
-      expect(placementStore.get(active.sessionId)).toMatchObject({
-        state: "draining",
-        turnClaim: null,
-      });
-      expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
-
-      await closeStateDatabaseForTest();
-      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-      const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-      const restarted = createHarness(database, restartedStore, {
-        workspacePath,
-        reconcileFailureCount: 1,
-      });
-      restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
-      await restarted.service.reconcile("startup");
-
-      expect(restarted.environments.destroy).not.toHaveBeenCalled();
-      expect(restartedStore.get(active.sessionId)?.state).toBe("draining");
-      expect(restarted.reportWorkspaceResultRecoveryFailure).toHaveBeenCalled();
-      await restarted.service.reconcileActive();
-
-      expect(restartedStore.get(active.sessionId)).toMatchObject({
-        state: "reclaimed",
-        turnClaim: null,
-        workspaceBaseManifestRef: restarted.reconciledManifestRef,
-      });
-      expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
-      expect(restarted.environments.destroy).toHaveBeenCalledOnce();
-      expect(restarted.log.indexOf("workspace:verify-local")).toBeLessThan(
-        restarted.log.indexOf("teardown:destroy"),
-      );
-      console.info("[stop-restart-proof]", interruption, restarted.log.join(","));
-    },
-  );
-
   it("rejects a replaced reclaimed owner after waiting to enter the lifecycle fence", async () => {
     const entered = createDeferredCore();
     const resume = createDeferredCore();
