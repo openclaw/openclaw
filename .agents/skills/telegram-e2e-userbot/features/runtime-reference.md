@@ -127,6 +127,10 @@ A send confirmation failure stops later scenario actions in both the recorder
 and Node runner. The uncertain send is never retried. Passive Telegram recording
 continues to the original deadline, preserving late updates and the failed
 action in the evidence; the run exits unsuccessfully even if a reply arrives.
+The recorder publishes its failure receipt atomically inside the runner-owned
+scenario barrier directory. The Node runner reads that receipt before admitting
+later actions and when collecting the final result; it does not require native
+directory watching or access to shared temporary-directory ancestor metadata.
 
 Keep one TDLib client per restored state directory. Run custom TDLib inspection
 before the recorder starts or after it exits, under the same live lease. Bot API

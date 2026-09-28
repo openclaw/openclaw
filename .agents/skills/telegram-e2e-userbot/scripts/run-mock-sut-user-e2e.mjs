@@ -1058,6 +1058,8 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
     fs.mkdirSync(scenarioBarrierDir, { recursive: true, mode: 0o700 });
   }
   // Fence scenario mutations, not the lease: the recorder must keep observing.
+  // Read its durable failure receipt at each admission check. fs.watch needs
+  // shared ancestor metadata on macOS even when this directory is runner-owned.
   const actionFailurePath = args.scenario
     ? path.join(scenarioBarrierDir, "action-failure.json")
     : "";
@@ -1076,10 +1078,8 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
 
   let mock;
   let gateway;
-  let scenarioWatcher;
   try {
     leaseHealth.assertHealthy();
-    if (args.scenario) scenarioWatcher = fs.watch(scenarioBarrierDir, readActionFailure);
     if (args.backend === "mock") {
       fs.writeFileSync(requestLog, "");
       mock = spawnProcess(
@@ -1570,7 +1570,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       },
     };
   } finally {
-    scenarioWatcher?.close();
     await stopChild(gateway);
     await stopChild(mock);
   }
