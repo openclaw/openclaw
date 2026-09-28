@@ -42,7 +42,10 @@ import {
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
 import { createPackageSwapResults } from "./package-update-swap-results.js";
-import { retireVerifiedPackageSwap } from "./package-update-swap-retirement.js";
+import {
+  retireRefusedPackageSwap,
+  retireVerifiedPackageSwap,
+} from "./package-update-swap-retirement.js";
 import { resolveStagedPackageSwapTarget } from "./package-update-swap-target.js";
 import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
 import {
@@ -707,7 +710,12 @@ export async function swapStagedPackageInstall(
       error instanceof PackageUpdateActivationError ||
       error instanceof FreeBsdPkgOwnershipError
     ) {
-      if (!activation && !preparationCustody) {
+      if (activation && !retained && !liveMutationStarted) {
+        await retireRefusedPackageSwap(
+          activation,
+          error instanceof PackageUpdateActivationError ? error.cause : error,
+        );
+      } else if (!activation && !preparationCustody) {
         await discardPackageLauncherBackup(launchers, targetLayout.globalRoot);
       }
       throw error instanceof PackageUpdateActivationError
