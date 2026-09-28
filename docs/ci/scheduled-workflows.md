@@ -165,25 +165,40 @@ cost savings or strict completion interval is claimed.
 
 ## Nightly Full Release Validation
 
-`Full Release Validation Nightly` (`full-release-validation-nightly.yml`) runs at
-04:00 UTC with the `stable` profile, soak and blocking performance,
+`Full Release Validation Nightly` (`full-release-validation-nightly.yml`) runs
+every 3 hours at minute 7 UTC (`7 */3 * * *`) so release readiness stays current
+as commits land, with the `stable` profile, soak and blocking performance,
 `reuse_evidence=true`, `rerun_group=all`, and `main-qualification` purpose.
-Both `ref` and `expected_sha` carry the scheduler's exact main SHA, so a main
-push after the event cannot move the target. A still-active parent for the same
-SHA shares the SHA-specific Full Release Validation concurrency group and queues
-this dispatch; a completed one is validated again and adopts its own
-exact-target evidence through reuse. The parent automatically
-uses `OPENCLAW_RELEASE_RUNNER_GROUP` when configured; the five-minute dispatcher
-stays on ordinary `ubuntu-24.04` runners.
+It checks out the scheduler's exact main SHA and runs the SHA-pinned helper
+(`pnpm ci:full-release --sha <sha> --workflow-sha <sha>`), which uses that SHA as
+both Validation and Tooling SHA and dispatches from an immutable
+`release-ci/<sha12>-<id>` transport ref. A raw dispatch from `main` fails once
+`main` moves, because the parent refuses to dispatch children from a moved
+workflow ref. A still-active parent for the same SHA shares the SHA-specific
+Full Release Validation concurrency group and queues this dispatch; a completed
+one is validated again and adopts its own exact-target evidence through reuse.
+The parent automatically uses `OPENCLAW_RELEASE_RUNNER_GROUP` when configured;
+the nightly job stays on an ordinary `ubuntu-24.04` runner.
 
-Find the parent for the SHA shown in the dispatcher summary:
+The job watches the parent through its Release Decision and evidence
+verification, so its conclusion is the validation result. One concurrency group
+covers scheduled and manual runs without cancellation: while a job still watches
+its parent, the next trigger waits, and GitHub keeps only the newest pending run,
+so runs never overlap and the latest waiting trigger's SHA runs next.
+Child reuse is exact-target: when `main` has not moved since the previous run,
+`reuse_evidence=true` lets each child adopt that run's receipt instead of running
+again, while a new SHA dispatches fresh children. The job log prints the
+parent run URL; the uploaded `full-release-validation-nightly-request` artifact
+holds the helper's request record for
+`node scripts/full-release-validation-at-sha.mjs --reconcile-request <path>`.
+After a failure the helper keeps both transport refs for reruns and diagnosis.
+To list nightly parents, filter on the transport branch:
 
 ```bash
-gh run list --workflow full-release-validation.yml --branch main --event workflow_dispatch
+gh run list --workflow full-release-validation.yml --event workflow_dispatch \
+  --json databaseId,headBranch,headSha,status,conclusion \
+  --jq '.[] | select(.headBranch | startswith("release-ci/"))'
 ```
-
-**A successful dispatcher is not a passing validation result**; inspect the
-Full Release Validation parent and its evidence.
 
 ## OpenClaw Performance
 
