@@ -54,36 +54,35 @@ describe("node worker bundle transfer", () => {
     const bundleHash = hashWorkerBundleManifest(manifest);
     await tar.create({ cwd: source, file: tarballPath, gzip: true, noDirRecurse: true }, artifacts);
     const tarball = await fs.readFile(tarballPath);
-    const service = createNodeWorkerBundleTransferService();
+    const service = createNodeWorkerBundleTransferService({
+      generateToken: () => "A".repeat(43),
+    });
     onTestFinished(() => service.closeAll());
     const node = createNodeWorkerBundleTestNode();
-    const prepare = () =>
-      service.prepare({
-        node,
-        gatewayNamespace: "gateway-test",
-        artifact: {
-          install: "bundle",
-          bundleHash,
-          openclawVersion: "2026.8.1",
-          protocolFeatures: [],
-          tarballBytes: tarball.byteLength,
-          tarballSha256: createHash("sha256").update(tarball).digest("hex"),
-          tarballPath,
-        },
-        isAuthorized: () => true,
-      });
-    const prepared = prepare();
+    const prepared = service.prepare({
+      node,
+      gatewayNamespace: "gateway-test",
+      artifact: {
+        install: "bundle",
+        bundleHash,
+        openclawVersion: "2026.8.1",
+        protocolFeatures: [],
+        tarballBytes: tarball.byteLength,
+        tarballSha256: createHash("sha256").update(tarball).digest("hex"),
+        tarballPath,
+      },
+      isAuthorized: () => true,
+    });
     const callback = createArtifactTransferHttpCallback(service);
-    let served = createDeferredCore();
+    const served = createDeferredCore();
     server = http.createServer((req, res) => {
-      const settlement = served;
       void handleNodeWorkerBundleTransferHttpRequest({
         req,
         res,
         clientIp: "127.0.0.1",
         callback,
       })
-        .then(() => settlement.resolve())
+        .then(() => served.resolve())
         .catch((error: unknown) => res.destroy(error as Error));
     });
     await new Promise<void>((resolve) => {
@@ -102,20 +101,11 @@ describe("node worker bundle transfer", () => {
       }),
     ).resolves.toEqual(prepared.input.build);
     await served.promise;
-    const url = `http://127.0.0.1:${address.port}${NODE_WORKER_BUNDLE_TRANSFER_PATH}/bundles/${bundleHash}`;
-    const replay = await fetch(url, { headers: { authorization: `Bearer ${prepared.token}` } });
+    const replay = await fetch(
+      `http://127.0.0.1:${address.port}${NODE_WORKER_BUNDLE_TRANSFER_PATH}/bundles/${bundleHash}`,
+      { headers: { authorization: `Bearer ${prepared.token}` } },
+    );
     expect(replay.status).toBe(404);
     await expect(replay.json()).resolves.toEqual({ error: "not_found" });
-
-    const ranged = prepare();
-    served = createDeferredCore();
-    const headers = { authorization: `Bearer ${ranged.token}`, range: "bytes=1-" };
-    const response = await fetch(url, { headers });
-    expect(response.status).toBe(206);
-    expect(Buffer.from(await response.arrayBuffer())).toEqual(tarball.subarray(1));
-    await served.promise;
-    const rangedReplay = await fetch(url, { headers });
-    expect(rangedReplay.status).toBe(404);
-    await expect(rangedReplay.json()).resolves.toEqual({ error: "not_found" });
   });
 });

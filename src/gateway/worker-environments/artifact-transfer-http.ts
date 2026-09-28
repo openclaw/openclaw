@@ -150,7 +150,7 @@ export function createArtifactTransferHttpCallback(
           }
           const range = req.headers.range;
           const start = range === undefined ? 0 : Number(/^bytes=(\d+)-$/u.exec(range)?.[1]);
-          if (!Number.isSafeInteger(start) || start >= file.bytes) {
+          if (range !== undefined && (!Number.isSafeInteger(start) || start >= file.bytes)) {
             res.setHeader("Content-Range", `bytes */${file.bytes}`);
             sendJson(res, 416, { error: "range_not_satisfiable" });
             return;
