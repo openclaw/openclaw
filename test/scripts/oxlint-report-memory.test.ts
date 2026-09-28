@@ -1,4 +1,4 @@
-import type { ChildProcess } from "node:child_process";
+import { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -48,7 +48,7 @@ it.for([false, true].flatMap((evidence) => [0, 1].map((status) => ({ evidence, s
       const stdout = new PassThrough();
       const stderr = new PassThrough();
       const finished = once(stdout, "end");
-      options.onReady?.({ stdout, stderr } as ChildProcess);
+      options.onReady?.(Object.assign(new ChildProcess(), { stdout, stderr }));
       for (const chunk of chunks) {
         stdout.write(chunk);
       }
