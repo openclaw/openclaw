@@ -179,6 +179,13 @@ const CLAWIE_STARDUST_BOLT = svg`
   </g>
 `;
 
+// Direct claw paths inherit the existing size transform as well as wave/snip.
+export const TAYLOR_PINCH_MICROPHONE = svg`
+  <path class="lob-taylorpinch__mic" d="M106 32 L112 34 L106 56 Q105 58 103 57 Q101 56 102 54 Z" fill="#343747" />
+  <path class="lob-taylorpinch__mic" d="M103 27 A7 7 0 1 1 117 27 A7 7 0 1 1 103 27 Z" fill="#666a80" />
+  <path class="lob-taylorpinch__mic" d="M106 23 L114 25 M105 27 L113 29" fill="none" stroke="#e7e7f0" stroke-width="1.5" stroke-linecap="round" />
+`;
+
 const TAYLOR_PINCH_SPARKLES = svg`
   <g class="lob-taylorpinch">
     <path d="M51 44 Q56 40 60 43 Q64 40 69 44 Q60 54 51 44 Z" fill="#c92e48" />

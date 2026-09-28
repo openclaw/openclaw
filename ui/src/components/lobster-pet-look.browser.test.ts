@@ -1,11 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, expect, it } from "vitest";
-import { canonicalLobsterLook, renderLobsterSvg } from "./lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle, renderLobsterSvg } from "./lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 const container = document.createElement("div");
-afterEach(() => container.remove());
+afterEach(() => {
+  container.remove();
+  container.removeAttribute("class");
+  container.removeAttribute("style");
+});
 
 function sampleOutline(path: SVGPathElement, steps: number): DOMPoint[] {
   const length = path.getTotalLength();
@@ -57,4 +61,49 @@ it("wraps Clawnstantine's sash to the shell edge with the highlight inset", () =
       expect(sash.isPointInFill(new DOMPoint(point.x + dx, point.y + dy))).toBe(true);
     }
   }
+});
+
+it("keeps Taylor’s microphone attached through claw sizes and wave poses", () => {
+  const palette = expectDefined(
+    LOBSTER_PET_PALETTES.find((entry) => entry.id === "taylorpinch"),
+    "Taylor palette",
+  );
+  document.body.append(container);
+  container.className = "lobster-pet lobster-pet--palette-taylorpinch lobster-pet--act-wave";
+  for (const clawSize of ["dainty", "regular", "mighty"] as const) {
+    const look = { ...canonicalLobsterLook(palette), clawSize };
+    container.style.cssText = lobsterLookStyle(look);
+    render(renderLobsterSvg(look), container);
+    const claw = expectDefined(container.querySelector<SVGGElement>(".lob-claw--r"), "right claw");
+    const hand = expectDefined(
+      claw.querySelector<SVGPathElement>("path:not(.lob-taylorpinch__mic)"),
+      "hand",
+    );
+    const microphone = container.querySelectorAll<SVGPathElement>(".lob-taylorpinch__mic");
+    expect(microphone.length).toBeGreaterThan(0);
+    const wave = expectDefined(
+      claw
+        .getAnimations()
+        .find((animation) => (animation as CSSAnimation).animationName === "lobster-pet-wave"),
+      "wave animation",
+    );
+    wave.pause();
+    const poses = new Set<string>();
+    for (const time of [0, 280, 560, 840]) {
+      wave.currentTime = time;
+      const matrix = expectDefined(hand.getCTM(), "hand transform");
+      const transform = [matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f];
+      poses.add(transform.join(","));
+      for (const part of microphone) {
+        expect(part.parentElement).toBe(claw);
+        const attached = expectDefined(part.getCTM(), "microphone transform");
+        expect([attached.a, attached.b, attached.c, attached.d, attached.e, attached.f]).toEqual(
+          transform,
+        );
+      }
+    }
+    expect(poses.size).toBeGreaterThan(1);
+  }
+  render(renderLobsterSvg(canonicalLobsterLook(palette), { shell: true }), container);
+  expect(container.querySelector(".lob-taylorpinch__mic")).toBeNull();
 });

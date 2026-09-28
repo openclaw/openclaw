@@ -41,6 +41,7 @@ import {
   SELENE_MOON,
   SPLIT_HALF,
   TAIL_FAN,
+  TAYLOR_PINCH_MICROPHONE,
 } from "./lobster-pet-sprites.ts";
 
 const RETRO_GEOMETRY_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set(["retro", "goldenretro"]);
@@ -345,7 +346,12 @@ export function renderLobsterSvg(
               ${
                 hasRetroGeometry
                   ? nothing
-                  : svg`<g class="lob-claw lob-claw--r"><path d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" fill="var(--lob-claw)" /></g>`
+                  : svg`
+                      <g class="lob-claw lob-claw--r">
+                        ${look.palette.id === "taylorpinch" && !options.shell ? TAYLOR_PINCH_MICROPHONE : nothing}
+                        <path d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" fill="var(--lob-claw)" />
+                      </g>
+                    `
               }
               ${look.palette.id === "heisenbug" ? GLITCH_GHOSTS : nothing}
               <path class="lob-standard-dome" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" fill="var(--lob-shell)" />
