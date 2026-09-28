@@ -2066,6 +2066,14 @@ select.input {
   background-size: 5px 5px;
 }
 
+@media (forced-colors: active) {
+  .field select {
+    appearance: auto;
+    padding-inline-end: 10px;
+    background-image: none;
+  }
+}
+
 .field textarea {
   font-family: var(--mono);
   min-height: 160px;

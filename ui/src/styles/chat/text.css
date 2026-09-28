@@ -566,6 +566,32 @@
   transform: rotate(0deg);
 }
 
+@media (forced-colors: active) {
+  :is(.chat-text, .chat-thinking) :where(details > summary)::before {
+    background-image: none;
+    background-position: initial;
+    background-size: auto;
+    border-inline-end: 2px solid ButtonText;
+    border-block-end: 2px solid ButtonText;
+    inline-size: 7px;
+    block-size: 7px;
+    inset-inline-start: 3px;
+    transform: rotate(-45deg);
+  }
+
+  :is(.chat-text, .chat-thinking) :where(details[open] > summary)::before {
+    transform: rotate(45deg);
+  }
+
+  :is(.chat-text, .chat-thinking) :where(details > summary):dir(rtl)::before {
+    transform: rotate(45deg);
+  }
+
+  :is(.chat-text, .chat-thinking) :where(details[open] > summary):dir(rtl)::before {
+    transform: rotate(-45deg);
+  }
+}
+
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
   appearance: none;
   position: absolute;
@@ -593,6 +619,18 @@
   background: currentColor;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
     center / 13px no-repeat;
+}
+
+@media (forced-colors: active) {
+  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
+    appearance: auto;
+    background: none;
+    border: initial;
+  }
+
+  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
+    content: none;
+  }
 }
 
 :is(.chat-text, .chat-thinking) :where(details[open] > summary) {

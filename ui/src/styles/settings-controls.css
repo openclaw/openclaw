@@ -283,6 +283,14 @@ select.settings-select:not([multiple]) {
   background-size: 5px 5px;
 }
 
+@media (forced-colors: active) {
+  select.settings-select:not([multiple]) {
+    appearance: auto;
+    padding-inline-end: 10px;
+    background-image: none;
+  }
+}
+
 .settings-input::placeholder {
   color: var(--muted);
 }
