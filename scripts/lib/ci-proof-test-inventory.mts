@@ -4925,7 +4925,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/agents/worktrees/service.orphans.test.ts",
   "src/agents/worktrees/service.removal-safety.test.ts",
   "src/agents/worktrees/service.remove-lease.test.ts",
-  "src/agents/worktrees/service.run-end-cleanup.test.ts",
   "src/agents/worktrees/service.snapshot-index.test.ts",
   "src/agents/worktrees/service.sparse-isolation.test.ts",
   "src/audit/audit-event-store.message.test.ts",

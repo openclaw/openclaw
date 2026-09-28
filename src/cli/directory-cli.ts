@@ -13,6 +13,7 @@ import {
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../commands/channels/channel-selector.js";
@@ -181,47 +182,57 @@ export function registerDirectoryCli(program: Command) {
 
   const runDirectoryList = async (params: {
     opts: {
-      channel?: unknown;
-      account?: unknown;
-      query?: unknown;
+      channel?: string;
+      account?: string;
+      query?: string;
       limit?: unknown;
       json?: unknown;
     };
-    action: "listPeers" | "listGroups";
+    action: "listPeers" | "listGroups" | "listGroupMembers";
+    groupId?: unknown;
     unsupported: string;
     title: string;
     emptyMessage: string;
   }) => {
     const limit = parseLimit(params.opts.limit);
-    const resolved = await resolve({
-      channel: params.opts.channel as string | undefined,
-      account: params.opts.account as string | undefined,
-    });
+    const groupId = normalizeStringifiedOptionalString(params.groupId) ?? "";
+    if (params.action === "listGroupMembers" && !groupId) {
+      throw new Error("Missing --group-id");
+    }
+    const resolved = await resolve(params.opts);
     if (!resolved) {
       return;
     }
     const { cfg, channelId, accountId, plugin } = resolved;
-    const fn =
-      params.action === "listPeers"
-        ? (plugin.directory?.listPeersLive ?? plugin.directory?.listPeers)
-        : (plugin.directory?.listGroupsLive ?? plugin.directory?.listGroups);
-    if (!fn) {
-      throw new Error(`Channel ${channelId} does not support directory ${params.unsupported}`);
+    const lookupOptions = { cfg, accountId, limit, runtime: defaultRuntime };
+    let result: ChannelDirectoryEntry[];
+    if (params.action === "listGroupMembers") {
+      const fn = plugin.directory?.listGroupMembers;
+      if (!fn) {
+        throw new Error(`Channel ${channelId} does not support ${params.unsupported}`);
+      }
+      result = await fn({ ...lookupOptions, groupId });
+    } else {
+      const fn =
+        params.action === "listPeers"
+          ? (plugin.directory?.listPeersLive ?? plugin.directory?.listPeers)
+          : (plugin.directory?.listGroupsLive ?? plugin.directory?.listGroups);
+      if (!fn) {
+        throw new Error(`Channel ${channelId} does not support ${params.unsupported}`);
+      }
+      result = await fn({ ...lookupOptions, query: params.opts.query ?? null });
     }
-    const result = await fn({
-      cfg,
-      accountId,
-      query: (params.opts.query as string | undefined) ?? null,
-      limit,
-      runtime: defaultRuntime,
-    });
     if (params.opts.json) {
       defaultRuntime.writeJson(result);
       return;
     }
     printDirectoryList({
       title: params.title,
-      emptyMessage: `${params.emptyMessage} for ${formatDirectoryScope(channelId, accountId)}.`,
+      emptyMessage: `${params.emptyMessage} for ${
+        params.action === "listGroupMembers"
+          ? `group ${JSON.stringify(sanitizeTerminalText(groupId))}, `
+          : ""
+      }${formatDirectoryScope(channelId, accountId)}.`,
       entries: result,
     });
   };
@@ -300,7 +311,7 @@ export function registerDirectoryCli(program: Command) {
           runDirectoryList({
             opts,
             action,
-            unsupported: kind,
+            unsupported: `directory ${kind}`,
             title,
             emptyMessage: `No ${kind} found`,
           }),
@@ -316,40 +327,15 @@ export function registerDirectoryCli(program: Command) {
   )
     .option("--limit <n>", "Limit results")
     .action((opts) =>
-      runDirectoryAction(opts, async () => {
-        const limit = parseLimit(opts.limit);
-        const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
-        if (!groupId) {
-          throw new Error("Missing --group-id");
-        }
-        const resolved = await resolve({
-          channel: opts.channel as string | undefined,
-          account: opts.account as string | undefined,
-        });
-        if (!resolved) {
-          return;
-        }
-        const { cfg, channelId, accountId, plugin } = resolved;
-        const fn = plugin.directory?.listGroupMembers;
-        if (!fn) {
-          throw new Error(`Channel ${channelId} does not support group members listing`);
-        }
-        const result = await fn({
-          cfg,
-          accountId,
-          groupId,
-          limit,
-          runtime: defaultRuntime,
-        });
-        if (opts.json) {
-          defaultRuntime.writeJson(result);
-          return;
-        }
-        printDirectoryList({
+      runDirectoryAction(opts, () =>
+        runDirectoryList({
+          opts,
+          action: "listGroupMembers",
+          groupId: opts.groupId,
+          unsupported: "group members listing",
           title: "Group Members",
-          emptyMessage: `No group members found for group ${JSON.stringify(sanitizeTerminalText(groupId))}, ${formatDirectoryScope(channelId, accountId)}.`,
-          entries: result,
-        });
-      }),
+          emptyMessage: "No group members found",
+        }),
+      ),
     );
 }

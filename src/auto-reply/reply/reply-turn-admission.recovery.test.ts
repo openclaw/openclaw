@@ -50,15 +50,26 @@ describe("reply turn recovery admission", () => {
   });
 
   it("keeps deferred owner release retries from retaining a successor", async () => {
-    // Keep repair pending: successor admission must not depend on its execution.
+    const deferredReleases: Promise<void>[] = [];
+    const schedule = recoveryLifecycle.scheduleMainSessionRecoveryMutation;
     const scheduled = vi
       .spyOn(recoveryLifecycle, "scheduleMainSessionRecoveryMutation")
-      .mockImplementation(() => {});
+      .mockImplementation((params) => {
+        const settled = createDeferred();
+        deferredReleases.push(settled.promise);
+        schedule({
+          ...params,
+          onSuccess: async (result) => {
+            await params.onSuccess(result);
+            settled.resolve();
+          },
+        });
+      });
     const pendingTarget = vi
       .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
       .mockImplementation(() => {});
     let restoreAccessor: (() => void) | undefined;
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const sessionKey = "agent:main:telegram:topic:deferred-recovery-release";
       const sessionId = "interrupted-session";
@@ -86,12 +97,15 @@ describe("reply turn recovery admission", () => {
         return;
       }
       const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+      const failedWrites = Array.from({ length: 3 }, () => createDeferred());
       let failures = 0;
       const accessorSpy = vi
         .spyOn(sessionAccessor, "applySessionEntryReplacements")
         .mockImplementation(async (params) => {
-          if (failures < 3) {
+          const failedWrite = failedWrites[failures];
+          if (failedWrite) {
             failures += 1;
+            failedWrite.resolve();
             throw new Error("SQLite session entry changed before replacement");
           }
           return await applySessionEntryReplacements(params);
@@ -109,12 +123,17 @@ describe("reply turn recovery admission", () => {
       void successor.then(() => {
         successorSettled = true;
       });
-      await vi.advanceTimersByTimeAsync(100);
+      for (const [index, failedWrite] of failedWrites.entries()) {
+        await failedWrite.promise;
+        if (index < failedWrites.length - 1) {
+          await vi.advanceTimersByTimeAsync(25 * 2 ** index);
+        }
+      }
       // Worker I/O settles on real turns, not fake-clock advancement. No later
       // retry timer is advanced while joining the successor admission.
       const admitted = await successor;
       expect(successorSettled).toBe(true);
-      expect(scheduled).toHaveBeenCalledOnce();
+      expect(deferredReleases).toHaveLength(1);
       accessorSpy.mockRestore();
       expect(admitted.status).toBe("owned");
       if (admitted.status === "owned") {
@@ -127,10 +146,16 @@ describe("reply turn recovery admission", () => {
         await released;
       }
     } finally {
-      vi.useRealTimers();
-      restoreAccessor?.();
-      scheduled.mockRestore();
-      pendingTarget.mockRestore();
+      try {
+        restoreAccessor?.();
+        // Start the deferred repair without firing unrelated database lease deadlines.
+        await vi.advanceTimersByTimeAsync(1_000);
+        await Promise.all(deferredReleases);
+      } finally {
+        scheduled.mockRestore();
+        pendingTarget.mockRestore();
+        vi.useRealTimers();
+      }
     }
   });
 

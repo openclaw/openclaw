@@ -118,25 +118,9 @@ private func resolveWizardGatewayEndpoint(opts: WizardCliOptions, config: Gatewa
     guard let url = URL(string: raw) else { throw WizardCliError.invalidUrl(raw) }
     return GatewayEndpoint(
         url: url,
-        token: resolvedToken(opts: opts, config: config),
-        password: resolvedPassword(opts: opts, config: config),
+        token: resolvedCredential(opts.token, mode: mode, local: config.token, remote: config.remoteToken),
+        password: resolvedCredential(opts.password, mode: mode, local: config.password, remote: config.remotePassword),
         mode: mode)
-}
-
-private func resolvedToken(opts: WizardCliOptions, config: GatewayConfig) -> String? {
-    if let token = opts.token, !token.isEmpty { return token }
-    if (config.mode ?? "local").lowercased() == "remote" {
-        return config.remoteToken
-    }
-    return config.token
-}
-
-private func resolvedPassword(opts: WizardCliOptions, config: GatewayConfig) -> String? {
-    if let password = opts.password, !password.isEmpty { return password }
-    if (config.mode ?? "local").lowercased() == "remote" {
-        return config.remotePassword
-    }
-    return config.password
 }
 
 actor GatewayWizardClient {
