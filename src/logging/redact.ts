@@ -598,6 +598,29 @@ function isEmptyShellParameterExpansionTail(token: string): boolean {
   return /^[-=?+]\}$/.test(token);
 }
 
+// Language-level environment references (e.g. `process.env.FOO`, `os.getenv("FOO")`) are not
+// secrets. Masking them corrupts source and config content (`const token = process.env.FOO`
+// becomes `const token = proces…OKEN`) without protecting a credential, so assignment-family
+// patterns leave the captured reference intact.
+const ENV_REFERENCE_VALUE_RE =
+  /^(?:process\.env\.[A-Za-z_$][\w$]*|process\.env\[\s*["'][^"']+["']\s*\]|(?:os\.)?environ\[\s*["'][^"']+["']\s*\]|(?:os\.)?environ\.get\(\s*["'][^"']+["']|(?:os\.)?getenv\(\s*["'][^"']+["'])/;
+
+function isNonSecretReferenceValue(input: string, start: number): boolean {
+  // Anchor on the raw input from the capture start: bracket/quote forms can be truncated by the
+  // capturing pattern (e.g. `process.env["FOO"]` is captured only up to the opening quote).
+  return ENV_REFERENCE_VALUE_RE.test(input.slice(start));
+}
+
+// Assignment-family patterns capture a scalar value after a secret-looking key. Only they may
+// treat a captured reference as a non-secret; vendor-token and header patterns keep masking.
+function isAssignmentFamilyPattern(pattern: ResolvedRedactPattern): boolean {
+  return (
+    shellReferencePreservingPatterns.has(pattern) ||
+    sourceAssignmentPatterns.has(pattern) ||
+    formAwareEqualsAssignmentPatterns.has(pattern)
+  );
+}
+
 function prepareRedactionCapture(
   { match, groups, input, offset, replacement: policyReplacement }: RedactMatch,
   pattern: ResolvedRedactPattern,
@@ -632,6 +655,9 @@ function prepareRedactionCapture(
     value: selected.value,
     redact: (target) => {
       const token = target.value;
+      if (isAssignmentFamilyPattern(pattern) && isNonSecretReferenceValue(input, target.start)) {
+        return undefined;
+      }
       if (
         sourceAssignmentPatterns.has(pattern) &&
         preserveSourceAssignment?.(
