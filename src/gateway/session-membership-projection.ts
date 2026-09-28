@@ -4,6 +4,7 @@ import type {
   SessionParticipantProjection,
 } from "../config/sessions/session-membership-facts.types.js";
 import { withPreparedSessionParticipants } from "../config/sessions/session-participant-prepared-read.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
@@ -122,6 +123,9 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
       return;
     }
     if ("all" in change) {
+      if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {
+        return;
+      }
       if (typeof change.scope === "string") {
         // Config/catalog/profile/model publications do not change compact facts.
         // updateTargets admits config changes to physical store identity or birthtime.
@@ -138,7 +142,10 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
       }
     } else {
       const facts = change.facts;
-      if (!change.factsInvalidated && (!facts || facts.kind === "unchanged")) {
+      if (
+        !change.factsInvalidated &&
+        (!facts || facts.kind === "unchanged" || facts.kind === "owner")
+      ) {
         return;
       }
       for (const store of matching(change)) {
@@ -148,7 +155,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
           store.dirty.add(change.sessionKey);
           continue;
         }
-        if (!facts || facts.kind === "unchanged") {
+        if (!facts || facts.kind === "unchanged" || facts.kind === "owner") {
           continue;
         }
         if (facts.kind === "removed") {
@@ -284,6 +291,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
               groups = undefined;
             }
           },
+          projectionLane,
         );
       } finally {
         for (const continuation of continuations.toReversed()) {

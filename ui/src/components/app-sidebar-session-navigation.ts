@@ -241,10 +241,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return this.sidebarMenus.dismissTransientMenus();
   }
 
-  protected closeAgentMenu(options?: { restoreFocus?: boolean }): void {
-    this.sidebarMenus.closeAgentMenu(options);
-  }
-
   promoteCreatedSession(sessionKey: string) {
     if (this.sessionProjection.promoteCreatedSession(sessionKey)) {
       this.requestUpdate();
@@ -362,7 +358,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return this.getSessionNavigationState().selectedAgentId;
   }
 
-  private sessionNavigationAgentId(session: Pick<SidebarRecentSession, "key" | "agentId">): string {
+  sessionNavigationAgentId(session: Pick<SidebarRecentSession, "key" | "agentId">): string {
     if (this.sidebarAgentsMode !== "roster") {
       return this.selectedAgentIdForSessions();
     }
@@ -430,16 +426,12 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   ): SidebarVisibleSections {
     const grouping = this.effectiveSessionsGrouping();
     const roster = this.groupedSessionSource;
-    const sections = roster?.agentIds.flatMap((agentId) => {
-      const agentRows = rows.filter((row) => this.sessionNavigationAgentId(row) === agentId);
-      return [true, false].map((pinned) => ({
-        id: `agent:${agentId}:${pinned ? "pinned" : "recent"}` as const,
-        rows: agentRows.filter((row) => row.pinned === pinned),
-      }));
-    });
+    const sections = roster?.agentIds.map((agentId) => ({
+      id: `agent:${agentId}:recent` as const,
+      rows: rows.filter((row) => !row.pinned && this.sessionNavigationAgentId(row) === agentId),
+    }));
     const collapsedSections = new Set(this.collapsedSessionSections);
     for (const agentId of roster?.collapsedAgentIds ?? []) {
-      collapsedSections.add(`agent:${agentId}:pinned`);
       collapsedSections.add(`agent:${agentId}:recent`);
     }
     return this.sessionProjection.project({
@@ -507,7 +499,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       const row = entry.type === "session" ? sessionRows.get(entry.key) : undefined;
       return row ? [row] : [];
     });
-    return this.groupedSessionSource ? visibleRows : [...pinnedRows, ...visibleRows];
+    return [...pinnedRows, ...visibleRows];
   }
 
   selectedVisibleSessions(): SidebarRecentSession[] {
@@ -621,7 +613,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   switchChipAgent(agentId: string) {
-    this.closeAgentMenu();
+    this.sidebarMenus.closeAgentMenu();
     this.expandAgent(agentId);
     // Skills uses the shared agent selection in place; opening chat would
     // discard the discovery page instead of updating its workspace scope.
@@ -631,7 +623,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   askAgentCapabilities(agentId: string) {
-    this.closeAgentMenu();
+    this.sidebarMenus.closeAgentMenu();
     if (!this.connected) {
       return;
     }

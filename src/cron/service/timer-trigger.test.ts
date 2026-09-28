@@ -1,5 +1,6 @@
 // Retry-decision tests preserve provider classifications before cron message matching.
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import { createCronServiceState } from "./state.js";
@@ -23,6 +24,7 @@ describe("resolveTransientCronRetryDecision", () => {
         state: { runningAtMs: startedAt, nextRunAtMs: startedAt },
       });
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath: `/tmp/cron-incidental-${scheduleKind}.json`,
         cronEnabled: true,
         log: createNoopLogger(),
@@ -73,6 +75,7 @@ describe("resolveTransientCronRetryDecision", () => {
         state: { runningAtMs: startedAt, nextRunAtMs: startedAt },
       });
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath: "/tmp/cron-provider-overload.json",
         cronEnabled: true,
         log: createNoopLogger(),

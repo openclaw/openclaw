@@ -190,10 +190,6 @@ import WatchKit
         self.appCommandStatus?.localizedText()
     }
 
-    func persistVoiceTurnState() {
-        self.persistState()
-    }
-
     init(
         defaults: UserDefaults = .standard,
         requestNotificationAuthorization: Bool = true,
@@ -396,13 +392,9 @@ import WatchKit
         }
         let nowMs = Self.nowMs()
         self.pruneExpiredExecApprovals(nowMs: nowMs)
-        if let expiresAtMs = message.approval.expiresAtMs, expiresAtMs <= nowMs {
-            self.removeExecApprovalNotifications(approvals: [message.approval])
-            self.markExecApprovalReviewLoaded()
-            self.persistState()
-            return
-        }
-        if self.isExecApprovalPromptSupersededBySnapshot(message) {
+        if WatchDeferredPayloadOrdering.isExpired(expiresAtMs: message.approval.expiresAtMs, nowMs: nowMs)
+            || self.isExecApprovalPromptSupersededBySnapshot(message)
+        {
             self.removeExecApprovalNotifications(approvals: [message.approval])
             self.markExecApprovalReviewLoaded()
             self.persistState()

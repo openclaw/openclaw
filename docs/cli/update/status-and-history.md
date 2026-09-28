@@ -35,6 +35,12 @@ It describes the preferred selection for the observed configured channel, not ca
 An explicit update invocation can select a different target or install method.
 Older installed status commands cannot acquire this observation from candidate code.
 
+For Git installs, `update status --json` can include `update.git.artifacts`.
+`ready: true` includes the installed artifact `version` and immutable `buildId` after the native verifier checks the observed source commit, build stamps, runtime entry, and Control UI assets.
+`ready: false` means that verification failed; an absent field means artifact readiness is unknown.
+This observation does not establish remote target freshness, candidate validation, or the identity or health of the running Gateway, and does not authorize state recovery.
+The version prefers recorded build metadata and falls back to the package version when the build has no version, following the CLI's version precedence.
+
 If an update hands work to a background helper, the command has not finished the
 update. Follow its final `openclaw update status` command to check progress and the
 outcome. `openclaw gateway status --deep` checks Gateway health, not update progress.

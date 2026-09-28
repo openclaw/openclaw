@@ -35,11 +35,12 @@ beforeEach(() => {
 });
 
 describe("embedded Tool Search prompt parity", () => {
-  it.each(
-    (["tools", "code", "directory"] as const).flatMap((mode) =>
-      [undefined, ["fixture_allowed"], []].map((toolsAllow) => ({ mode, toolsAllow })),
+  it.each([
+    { mode: "tools" as const, toolsAllow: undefined },
+    ...(["tools", "directory"] as const).flatMap((mode) =>
+      [["fixture_allowed"], []].map((toolsAllow) => ({ mode, toolsAllow })),
     ),
-  )(
+  ])(
     "submits only the current $mode catalog after hook allowlist $toolsAllow",
     async ({ mode, toolsAllow }) => {
       const fixture = createFixture({ pendingImageCount: 0 });

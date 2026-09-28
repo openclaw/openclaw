@@ -9,7 +9,6 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
@@ -57,17 +56,6 @@ beforeEach(() => {
   vi.stubEnv("XDG_CACHE_HOME", tempDirs.make("openclaw-preflight-lifecycle-cache-"));
 });
 
-function expectReadLeaseHeld(databasePath: string) {
-  let exclusion: ReturnType<typeof acquireStateDatabaseHandleExclusion> | undefined;
-  try {
-    expect(() => {
-      exclusion = acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 });
-    }).toThrow(/state-handles/);
-  } finally {
-    exclusion?.release();
-  }
-}
-
 function createPreflightState(stateDir: string) {
   const env = { OPENCLAW_STATE_DIR: stateDir };
   // Reader lifecycle fixtures need known empty deletion history; missing history holds stores.
@@ -98,7 +86,7 @@ it.each([
     owner: "scope" as const,
   })),
 ])(
-  "joins all $source children and releases their leases before $outcome settlement (owner=$owner)",
+  "joins all $source children and closes their readers before $outcome settlement (owner=$owner)",
   async ({ source, outcome, owner }) => {
     const root = tempDirs.make("openclaw-preflight-reader-lifecycle-");
     const initializedEnv = { OPENCLAW_STATE_DIR: path.join(root, "initialized") };
@@ -265,7 +253,6 @@ it.each([
       }
       for (const pathname of readLocations.slice(0, 2)) {
         expect(fs.existsSync(pathname)).toBe(true);
-        expectReadLeaseHeld(pathname);
       }
 
       const children = vi
@@ -297,7 +284,6 @@ it.each([
           expect(closedChildren).toBe(0);
           expect(cleanedSnapshots.size).toBe(0);
           expect(fs.existsSync(firstReadLocation)).toBe(true);
-          expectReadLeaseHeld(firstReadLocation);
           fs.writeFileSync(marker("exit-release"), "resume");
         }
         if (outcome === "failure" || outcome === "close-failure") {
@@ -312,7 +298,6 @@ it.each([
           // Drain the first child's result before checking the still-owned peer.
           await setImmediate();
           expect(settled).toBe(false);
-          expectReadLeaseHeld(secondReadLocation);
           if (source === "snapshot") {
             expect(cleanedSnapshots).toEqual(new Set([0]));
             expect(fs.existsSync(secondReadLocation)).toBe(true);
@@ -346,7 +331,6 @@ it.each([
         for (const suffix of ["-wal", "-shm", "-journal"]) {
           expect(fs.existsSync(databasePath + suffix)).toBe(false);
         }
-        acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 }).release();
       }
     } finally {
       fs.writeFileSync(marker("release-0"), "resume");
@@ -456,7 +440,6 @@ it.each(["header", "shape", "startup"])(
       for (const suffix of ["-wal", "-shm", "-journal"]) {
         expect(fs.existsSync(pathname + suffix)).toBe(false);
       }
-      acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
     }
   },
 );

@@ -8,11 +8,9 @@ import {
   type MarkdownTableCell,
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fitsLineFlexBubble, toFlexMessage } from "./flex-templates/message.js";
 import { createReceiptCard } from "./flex-templates/schedule-cards.js";
 import type { FlexBubble } from "./flex-templates/types.js";
-export { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 
 type FlexMessage = messagingApi.FlexMessage;
 type FlexComponent = messagingApi.FlexComponent;
@@ -31,7 +29,7 @@ export interface ProcessedLineMessage {
 
 type LineMessageSegment = NonNullable<ProcessedLineMessage["segments"]>[number];
 
-export interface CodeBlock {
+interface CodeBlock {
   language?: string;
   code: string;
 }
@@ -390,12 +388,8 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
 }
 
 /** Convert a code block to a LINE Flex Message bubble. */
-export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
+function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
   const titleText = block.language ? `Code (${block.language})` : "Code";
-  const displayCode =
-    block.code.length > LINE_FLEX_CODE_CARD_MAX_CHARS
-      ? `${truncateUtf16Safe(block.code, LINE_FLEX_CODE_CARD_MAX_CHARS)}\n...`
-      : block.code;
 
   return {
     type: "bubble",
@@ -416,7 +410,7 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
           contents: [
             {
               type: "text",
-              text: displayCode,
+              text: block.code,
               size: "xs",
               color: "#333333",
               wrap: true,
@@ -481,16 +475,4 @@ export function processLineMessage(text: string): ProcessedLineMessage {
     flexMessages: segments.flatMap((segment) => (segment.type === "flex" ? [segment.message] : [])),
     ...(plainTextInsertions.length > 0 ? { segments } : {}),
   };
-}
-
-/** Check if text contains markdown that needs conversion. */
-export function hasMarkdownToConvert(text: string): boolean {
-  const { ir, tables } = parseLineMarkdown(text);
-  return (
-    tables.length > 0 ||
-    ir.styles.length > 0 ||
-    ir.links.length > 0 ||
-    /<\/?u>/i.test(ir.text) ||
-    ir.text !== text.trimEnd()
-  );
 }

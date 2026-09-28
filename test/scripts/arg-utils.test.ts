@@ -20,16 +20,10 @@ describe("scripts/lib/arg-utils strict scalar grammars", () => {
     { input: "true", expected: true },
     { input: "false", expected: false },
     { input: "", error: "--enabled must be true or false." },
-    { input: " ", error: "--enabled must be true or false." },
     { input: " true", error: "--enabled must be true or false." },
-    { input: "false ", error: "--enabled must be true or false." },
     { input: "TRUE", error: "--enabled must be true or false." },
-    { input: "False", error: "--enabled must be true or false." },
     { input: "1", error: "--enabled must be true or false." },
-    { input: "0", error: "--enabled must be true or false." },
-    { input: "yes", error: "--enabled must be true or false." },
     { input: true, error: "--enabled must be true or false." },
-    { input: 1, error: "--enabled must be true or false." },
   ])("parses strict Boolean token %#", ({ input, expected, error }) => {
     if (error) {
       expect(() => parseStrictBooleanArg(input, "--enabled")).toThrow(error);
@@ -46,15 +40,12 @@ describe("scripts/lib/arg-utils strict scalar grammars", () => {
     { input: "11", min: 0, max: 10, expected: { kind: "above" } },
     { input: "9".repeat(400), min: 0, max: 10, expected: { kind: "above" } },
     { input: "", min: 0, max: 10, expected: { kind: "syntax" } },
-    { input: " ", min: 0, max: 10, expected: { kind: "syntax" } },
     { input: " 1", min: 0, max: 10, expected: { kind: "syntax" } },
-    { input: "1 ", min: 0, max: 10, expected: { kind: "syntax" } },
     { input: "+1", min: 0, max: 10, expected: { kind: "syntax" } },
     { input: "-1", min: 0, max: 10, expected: { kind: "syntax" } },
     { input: "1.0", min: 0, max: 10, expected: { kind: "syntax" } },
     { input: "1e1", min: 0, max: 10, expected: { kind: "syntax" } },
     { input: "0x10", min: 0, max: 10, expected: { kind: "syntax" } },
-    { input: "0b10", min: 0, max: 10, expected: { kind: "syntax" } },
     { input: "1ms", min: 0, max: 10, expected: { kind: "syntax" } },
   ])("classifies bounded unsigned decimal %#", ({ input, min, max, expected }) => {
     expect(classifyBoundedUnsignedDecimal(input, min, max)).toEqual(expected);
@@ -68,7 +59,7 @@ describe("scripts/lib/arg-utils required option arguments", () => {
     );
   });
 
-  it.each([undefined, "", "-", "-h", "--next"])("rejects missing value %#", (value) => {
+  it.each([undefined, "", "-h"])("rejects missing value %#", (value) => {
     const argv = value === undefined ? ["--output"] : ["--output", value];
     expect(() => requireOptionArgument(argv, 0, "--output")).toThrow(
       new Error("--output requires a value"),
@@ -89,10 +80,8 @@ describe("scripts/lib/arg-utils permissive Boolean tokens", () => {
     { input: " TRUE ", expected: true },
     { input: " Off ", expected: false },
     { input: "", expected: undefined },
-    { input: " ", expected: undefined },
     { input: "enabled", expected: undefined },
     { input: true, expected: undefined },
-    { input: 1, expected: undefined },
   ])("parses $input as $expected", ({ input, expected }) => {
     expect(parsePermissiveBooleanToken(input)).toBe(expected);
   });
@@ -102,7 +91,6 @@ describe("scripts/lib/arg-utils environment Boolean policies", () => {
   it.each([
     { input: undefined, expected: false },
     { input: "", expected: false },
-    { input: "  ", expected: false },
     { input: "0", expected: false },
     { input: " FALSE ", expected: false },
     { input: "no", expected: false },

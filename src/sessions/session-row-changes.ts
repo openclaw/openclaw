@@ -18,6 +18,12 @@ export type SessionRowFacts =
     }
   | { kind: "member"; sessionId: string; identityId: string; present: boolean }
   | {
+      kind: "owner";
+      sessionId: string;
+      lifecycleRevision: string | null;
+      owner: SessionEntry["owner"];
+    }
+  | {
       kind: "participants";
       /** Participant history belongs to the logical key, across transcript replacements. */
       projection?: Pick<SessionEntry, "participants" | "participantCount">;
@@ -38,9 +44,18 @@ export type SessionRowChange =
     }
   | {
       all: true;
-      scope: string | { agentId?: string; storePath?: string };
+      scope: string | { agentId?: string; storePath?: string; topology?: true };
       factsInvalidated?: true;
     };
+
+/** Store discovery fences also apply to agent-scoped topology publications. */
+export function isSessionStoreTopologyChange(change: SessionRowChange): boolean {
+  return (
+    "all" in change &&
+    (change.scope === "stores" ||
+      (typeof change.scope === "object" && change.scope.topology === true))
+  );
+}
 
 type SessionRowNotification =
   | Omit<Extract<SessionRowChange, { sessionKey: string }>, "facts" | "factsInvalidated">

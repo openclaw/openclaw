@@ -74,16 +74,6 @@ export function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv 
     changed = true;
   };
 
-  const removePath = (value: string) => {
-    const normalized = resolveUserPath(value, env);
-    if (!resolved.has(normalized)) {
-      return;
-    }
-    paths = paths.filter((entry) => resolveUserPath(entry, env) !== normalized);
-    resolved = resolveSet();
-    changed = true;
-  };
-
   const removeMatching = (predicate: (value: string) => boolean) => {
     const next = paths.filter((entry) => !predicate(entry));
     if (next.length === paths.length) {
@@ -96,7 +86,12 @@ export function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv 
 
   return {
     addPath,
-    removePath,
+    removePath(value: string) {
+      const normalized = resolveUserPath(value, env);
+      if (resolved.has(normalized)) {
+        removeMatching((entry) => resolveUserPath(entry, env) === normalized);
+      }
+    },
     removeMatching,
     get changed() {
       return changed;
@@ -239,10 +234,7 @@ export function isExternalizedBundledPluginEnabled(params: {
       return true;
     }
   }
-  if (isBridgeChannelEnabledByConfig(params)) {
-    return true;
-  }
-  return false;
+  return isBridgeChannelEnabledByConfig(params);
 }
 
 function replacePluginIdInList(
@@ -277,16 +269,11 @@ export function migratePluginConfigId(
   const installs = plugins.installs;
   if (installs && Object.hasOwn(installs, fromId)) {
     const record = installs[fromId];
-    const nextInstalls = { ...installs };
-    if (record && !Object.hasOwn(installs, toId)) {
-      // Plugin ids are record keys; define data properties so "__proto__" cannot invoke its setter.
-      Object.defineProperty(nextInstalls, toId, {
-        configurable: true,
-        enumerable: true,
-        value: record,
-        writable: true,
-      });
-    }
+    // Computed properties keep plugin ids such as "__proto__" as ordinary data keys.
+    const nextInstalls = {
+      ...installs,
+      ...(record && !Object.hasOwn(installs, toId) ? { [toId]: record } : {}),
+    };
     delete nextInstalls[fromId];
     ensureNextPlugins().installs = nextInstalls;
   }
@@ -295,20 +282,10 @@ export function migratePluginConfigId(
   if (entries && Object.hasOwn(entries, fromId)) {
     const entry = entries[fromId];
     const existingEntry = Object.hasOwn(entries, toId) ? entries[toId] : undefined;
-    const nextEntries = { ...entries };
-    if (entry) {
-      Object.defineProperty(nextEntries, toId, {
-        configurable: true,
-        enumerable: true,
-        value: existingEntry
-          ? {
-              ...entry,
-              ...existingEntry,
-            }
-          : entry,
-        writable: true,
-      });
-    }
+    const nextEntries = {
+      ...entries,
+      ...(entry ? { [toId]: existingEntry ? { ...entry, ...existingEntry } : entry } : {}),
+    };
     delete nextEntries[fromId];
     ensureNextPlugins().entries = nextEntries;
   }

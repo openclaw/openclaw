@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
@@ -11,7 +11,7 @@ import { writeRegistryPackagePlugin } from "./test-helpers/plugin-registry-snaps
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
-it("keeps persisted package plugins when file hashes match", () => {
+it("keeps persisted package plugins when file hashes match", async () => {
   const tempRoot = tempDirs.make("openclaw-plugin-registry-receipts-");
   const rootDir = path.join(tempRoot, "workspace");
   const stateDir = path.join(tempRoot, "state");
@@ -47,7 +47,7 @@ it("keeps persisted package plugins when file hashes match", () => {
       nativeNamespaces: {},
     },
   };
-  writePersistedInstalledPluginIndexSync(index, { stateDir });
+  await writePersistedInstalledPluginIndex(index, { stateDir });
 
   const result = loadPluginRegistrySnapshotWithMetadata({
     config,

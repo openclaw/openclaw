@@ -328,7 +328,13 @@ async function runCatalogRequest(
       env: value.input.env,
       workspaceDir: value.input.workspaceDir,
       pluginMetadataSnapshot,
-      providerDiscoveryProviderIds: exactAgentFacts.providerIds,
+      providerDiscoveryProviderIds: [
+        ...new Set([
+          ...value.providerIds,
+          ...Object.keys(credentials),
+          ...exactAgentFacts.providerIds,
+        ]),
+      ],
     });
     const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
     const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>

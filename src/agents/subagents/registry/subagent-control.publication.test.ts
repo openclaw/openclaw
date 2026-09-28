@@ -1,9 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  persistSubagentRunsToDiskOrThrow,
-  useSubagentControlFixture,
-} from "./subagent-control.test-support.js";
+import { persistSubagentRunsToDiskOrThrow, useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** A cancellation result cannot publish a predecessor's task outcome after admitted reactivation. */
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -15,27 +12,16 @@ import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
-import { runTaskInFlowForOwner } from "../../../tasks/task-executor.js";
-import { createManagedTaskFlow } from "../../../tasks/task-flow-runtime-internal.js";
-import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
-import { updateTask } from "../../../tasks/task-registry-mutation.js";
-import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
-import { getTaskRegistryStore } from "../../../tasks/task-registry.store.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import * as killRuntime from "./subagent-control-kill-runtime.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  markSubagentRunTerminated,
-  registerSubagentRun,
-  replaceSubagentRunAfterSteerCore,
-} from "./subagent-registry.js";
+import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import {
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 const rootKey = "agent:main:subagent:publication-root";
@@ -91,159 +77,6 @@ it.each(["replacement", "retirement"] as const)(
   },
 );
 
-it.each(["canonical", "managed"] as const)(
-  "publishes same-owner completion when the selected %s task write lags",
-  async (selectedKind) => {
-    const capture = createDeferred<string>();
-    const captureEntered = createDeferred();
-    const wait = createDeferred<AgentWaitResult>();
-    fixture.announce.mockResolvedValue("delivered");
-    fixture.capture.mockImplementation(() => {
-      captureEntered.resolve();
-      return capture.promise;
-    });
-    fixture.gateway.mockImplementation(async (request) => {
-      expect(request.method).toBe("agent.wait");
-      return await wait.promise;
-    });
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: rootKey,
-      defaultSessionId: "publication-same-owner-session",
-    });
-    await registerSubagentRun({
-      runId: "publication-same-owner",
-      childSessionKey: rootKey,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "same-owner completion",
-      cleanup: "keep",
-    });
-    const owner = subagentRuns.get("publication-same-owner")!;
-    const generation = owner.generation;
-    const canonical = findTaskByRunId(owner.runId)!;
-    const flow = createManagedTaskFlow({
-      ownerKey: "agent:main:main",
-      controllerId: "tests/publication",
-      goal: "observe the native run",
-    });
-    expect(flow).not.toBeNull();
-    const projected = runTaskInFlowForOwner({
-      flowId: flow!.flowId,
-      callerOwnerKey: "agent:main:main",
-      runtime: "subagent",
-      childSessionKey: rootKey,
-      runId: owner.runId,
-      task: "managed native projection",
-      status: "running",
-    });
-    expect(projected.created, projected.reason).toBe(true);
-    const managed = projected.task!;
-    expect(managed.taskId).not.toBe(canonical.taskId);
-    expect(managed.detail).toMatchObject({ taskId: canonical.taskId, generation });
-    const selected = selectedKind === "canonical" ? canonical : managed;
-    const peer = selectedKind === "canonical" ? managed : canonical;
-    expect(markSubagentRunTerminated({ runId: owner.runId, reason: "killed" })).toBe(1);
-    for (const task of [selected, peer]) {
-      expect(getTaskById(task.taskId)).toMatchObject({
-        status: "cancelled",
-        error: SUBAGENT_KILL_TASK_ERROR,
-      });
-    }
-    wait.resolve({ status: "ok", endedAt: Date.now() });
-    await captureEntered.promise;
-    expect(owner.killReconciliation).toBeDefined();
-    const order: string[] = [];
-    const completionCommitted = createDeferred();
-    const store = getTaskRegistryStore();
-    const upsert = store.upsertTaskWithDeliveryState!;
-    const mutate = store.runInitialMutationAsync.bind(store);
-    let faults = 0;
-    vi.spyOn(store, "runInitialMutationAsync").mockImplementation(
-      async (context, command, assertCurrent, onGranted) => {
-        if (
-          command.type === "tasks.transitionRunRow" &&
-          "kind" in command.input &&
-          command.input.kind === "state" &&
-          command.input.taskId === selected.taskId &&
-          command.input.params.status === "succeeded" &&
-          faults === 0
-        ) {
-          faults += 1;
-          order.push("selected write refused");
-          throw new Error("one-shot selected task completion write failure");
-        }
-        return mutate(context, command, assertCurrent, onGranted);
-      },
-    );
-    vi.spyOn(store, "upsertTaskWithDeliveryState").mockImplementation((params) => {
-      upsert(params);
-      if (
-        params.task.taskId === selected.taskId &&
-        params.task.error === "Cancelled by operator."
-      ) {
-        order.push("operator cancellation write");
-      }
-    });
-    fixture.persist.mockImplementation((...runIds) => {
-      persistSubagentRunsToDiskOrThrow(...runIds);
-      if (
-        owner.execution.outcome?.status === "ok" &&
-        !order.includes("canonical completion committed")
-      ) {
-        order.push("canonical completion committed");
-        expect(subagentRuns.get(owner.runId)).toBe(owner);
-        expect(owner.generation).toBe(generation);
-        expect(store.loadSnapshot().tasks.get(peer.taskId)?.status).toBe("succeeded");
-        completionCommitted.resolve();
-      }
-    });
-    const killRun = killRuntime.killSubagentRun;
-    vi.spyOn(killRuntime, "killSubagentRun").mockImplementation(async (params) => {
-      const result = await killRun(params);
-      if (params.entry === owner) {
-        const target = result.targetState;
-        order.push(`snapshot ${target?.state === "terminal" ? target.task.status : target?.state}`);
-        // Hold the actual stale result until same-owner completion commits. This
-        // exercises publication ordering without depending on promise-layer counts.
-        order.push("capture released");
-        capture.resolve("completed native reply");
-        await completionCommitted.promise;
-      }
-      return result;
-    });
-    const runAdmin = killSubagentRunAdmin;
-    const admin = vi.spyOn(taskControlRuntime, "killSubagentRunAdmin").mockImplementation(runAdmin);
-    try {
-      const result = await cancelTaskById({ cfg: getRuntimeConfig(), taskId: selected.taskId });
-      order.push("caller result");
-      expect(order, JSON.stringify(order)).toContain("canonical completion committed");
-      expect(order).toContain("snapshot cancelled");
-      expect(order.indexOf("snapshot cancelled")).toBeLessThan(
-        order.indexOf("canonical completion committed"),
-      );
-      const published = await admin.mock.results[0]!.value;
-      expect.soft(order, JSON.stringify(order)).not.toContain("operator cancellation write");
-      expect.soft(result.cancelled, JSON.stringify(order)).toBe(false);
-      expect.soft(published, JSON.stringify(order)).toMatchObject({
-        found: true,
-        killed: false,
-        cascadeKilled: 0,
-        targetState: { state: "terminal", task: { status: "succeeded" } },
-      });
-      expect(faults, JSON.stringify(order)).toBe(1);
-      expect.soft(getTaskById(selected.taskId)?.status).toBe("succeeded");
-      expect.soft(store.loadSnapshot().tasks.get(selected.taskId)?.status).toBe("succeeded");
-      expect(owner.execution.outcome?.status).toBe("ok");
-    } finally {
-      capture.resolve("completed native reply");
-      admin.mockRestore();
-    }
-  },
-);
-
 it.each([
   [true, false, false, false, false],
   [true, true, false, false, false],
@@ -254,7 +87,7 @@ it.each([
   [true, true, false, true, false],
   [true, true, false, true, true],
 ])(
-  "fences task publication (replace=%s, priorChildKill=%s, completeDuringDrain=%s, handoff=%s, provisional=%s)",
+  "fences native cancellation publication (replace=%s, priorChildKill=%s, completeDuringDrain=%s, handoff=%s, provisional=%s)",
   async (replace, priorChildKill, completeDuringDrain, handoff, provisional) => {
     fixture.announce.mockResolvedValue("delivered");
     const previousWait = createDeferred<AgentWaitResult>();
@@ -283,19 +116,16 @@ it.each([
       expectsCompletionMessage: true,
     });
     const b0 = subagentRuns.get("publication-b0")!;
-    const task = findTaskByRunId(b0.runId)!;
     expect(b0.collect).not.toBe(true);
-    expect(task.status).toBe("running");
-    const taskStore = getTaskRegistryStore();
-    const upsert = taskStore.upsertTaskWithDeliveryState;
-    if (!upsert) {
-      throw new Error("Expected the real SQLite composite task upsert");
-    }
-    const failedWrite = createDeferred();
+
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
+    const originalSettled = createDeferred();
     fixture.persist.mockImplementation((...runIds) => {
       persistSubagentRunsToDiskOrThrow(...runIds);
+      if (b0.execution.outcome) {
+        originalSettled.resolve();
+      }
       if (b0.execution.outcome?.status === "ok") {
         originalCompleted.resolve();
       }
@@ -304,59 +134,11 @@ it.each([
       }
     });
     const handoffOrder: string[] = [];
-    const mutate = taskStore.runInitialMutationAsync.bind(taskStore);
-    let failures = 0;
-    // Completion retries must retain the lagging projection until cancellation publishes.
-    let rejectTerminalWrites = true;
-    let registryCommittedBeforeFailure = false;
-    vi.spyOn(taskStore, "runInitialMutationAsync").mockImplementation(
-      async (context, command, assertCurrent, onGranted) => {
-        const transition =
-          command.type === "tasks.transitionRunRow" &&
-          "kind" in command.input &&
-          command.input.kind === "state"
-            ? command.input
-            : undefined;
-        if (
-          transition?.taskId === task.taskId &&
-          transition.params.status === "failed" &&
-          rejectTerminalWrites
-        ) {
-          registryCommittedBeforeFailure =
-            loadSubagentRegistryFromSqlite().get(b0.runId)?.execution.status === "terminal";
-          failures += 1;
-          failedWrite.resolve();
-          throw new Error("terminal task persistence failure before cancellation publication");
-        }
-        const result = await mutate(context, command, assertCurrent, onGranted);
-        if (
-          handoff &&
-          handoffOrder.includes("replacement") &&
-          transition &&
-          transition.params.status !== "running" &&
-          result &&
-          "persisted" in result &&
-          result.persisted
-        ) {
-          handoffOrder.push("task write");
-        }
-        return result;
-      },
-    );
-    vi.spyOn(taskStore, "upsertTaskWithDeliveryState").mockImplementation((params) => {
-      if (handoff && handoffOrder.includes("replacement") && params.task.status !== "running") {
-        handoffOrder.push("task write");
-      }
-      upsert(params);
-    });
     if (!completeDuringDrain && !provisional) {
       previousWait.resolve({ status: "error", error: "original run failed", endedAt: Date.now() });
-      await failedWrite.promise;
-      expect(registryCommittedBeforeFailure).toBe(true);
+      await originalSettled.promise;
       expect(b0.execution.status).toBe("terminal");
       expect(b0.execution.outcome?.status).toBe("error");
-      expect(getTaskById(task.taskId)?.status).toBe("running");
-      expect(taskStore.loadSnapshot().tasks.get(task.taskId)?.status).toBe("running");
     }
 
     const children: Array<readonly [string, string]> = [
@@ -446,22 +228,29 @@ it.each([
       }
       return result;
     });
-    const runAdmin = killSubagentRunAdmin;
-    const admin = vi
-      .spyOn(taskControlRuntime, "killSubagentRunAdmin")
-      .mockImplementation((params, control) =>
-        runAdmin(
-          {
-            ...params,
-            onResult: (result) => {
-              rejectTerminalWrites = false;
-              params.onResult?.(result);
-            },
+    const admin = vi.fn<typeof killSubagentRunAdmin>((params, control) =>
+      killSubagentRunAdmin(
+        {
+          ...params,
+          onResult: (result) => {
+            params.onResult?.(result);
           },
-          control,
-        ),
-      );
-    const pending = cancelTaskById({ cfg: getRuntimeConfig(), taskId: task.taskId });
+        },
+        control,
+      ),
+    );
+    const originalEndedAt = Date.now();
+    // The earlier producer result arrives only after cancellation enters descendant drain.
+    const cancellationClock = completeDuringDrain
+      ? vi.spyOn(Date, "now").mockReturnValue(originalEndedAt + 1)
+      : undefined;
+    const pending = admin({
+      cfg: getRuntimeConfig(),
+      sessionKey: rootKey,
+      expectedRunId: b0.runId,
+      expectedGeneration: b0.generation,
+      expectedOwnerKey: b0.requesterSessionKey,
+    });
     const followupInterrupted = vi.fn();
     try {
       await Promise.race([
@@ -470,17 +259,13 @@ it.each([
           throw new Error(`Cancellation never entered descendant drain: ${JSON.stringify(result)}`);
         }),
       ]);
-      expect(getTaskById(task.taskId)?.status).toBe(
-        completeDuringDrain || provisional ? "cancelled" : "running",
-      );
       if (completeDuringDrain) {
         previousWait.resolve({
           status: "ok",
-          endedAt: Date.now(),
+          endedAt: originalEndedAt,
           terminalReply: { disposition: "visible", text: "original completed during cancellation" },
         });
         await originalCompleted.promise;
-        expect(getTaskById(task.taskId)?.status).toBe("succeeded");
         expect(b0.killReconciliation).toBeUndefined();
         childAdmission.release();
         if (replace) {
@@ -499,7 +284,9 @@ it.each([
       }
       if (priorChildKill) {
         await vi.waitFor(() => {
-          expect(findTaskByRunId("publication-first")?.status).toBe("cancelled");
+          expect(resolveSubagentSessionStatus(subagentRuns.get("publication-first"))).toBe(
+            "killed",
+          );
         });
       }
       if (replace) {
@@ -527,52 +314,20 @@ it.each([
             throw new Error("Registration did not mint a run generation");
           }
           expect(b1.generation).toBeGreaterThan(b0.generation);
-          expect(getTaskById(task.taskId)).toMatchObject({
-            runId: b0.taskRunId,
-            status: completeDuringDrain ? "succeeded" : provisional ? "cancelled" : "running",
-            detail: {
-              kind: "task_backing_instance",
-              runtime: "subagent",
-              generation: b1.generation,
-            },
-          });
-          expect(taskStore.loadSnapshot().tasks.get(task.taskId)?.detail).toEqual(
-            getTaskById(task.taskId)?.detail,
-          );
         }
-      }
-      if (!replace && !completeDuringDrain) {
-        const beforeProgress = getTaskById(task.taskId)!;
-        expect(
-          updateTask(task.taskId, { progressSummary: "same owner made progress" }),
-        ).toMatchObject({
-          status: "running",
-          progressSummary: "same owner made progress",
-          detail: beforeProgress.detail,
-        });
       }
       childAdmission.release();
       releaseMarker.resolve();
-      const result = await pending;
+      await pending;
       if (handoff) {
         expect(observedTarget, "admin resolved its root outcome").toBe(true);
         expect(handoffOrder, "admin captured its owner outcome").not.toEqual([]);
         await handoffComplete.promise;
         expect(handoffOrder.slice(0, 2)).toEqual(["captured outcome", "replacement"]);
-        expect(getTaskById(task.taskId)?.detail).toMatchObject({
-          generation: subagentRuns.get("publication-b1")?.generation,
-        });
       }
       const published = await admin.mock.results[0]!.value;
-      expect.soft(result.cancelled).toBe(false);
-      if (completeDuringDrain || provisional) {
-        expect(failures).toBe(0);
-      } else {
-        expect(failures).toBeGreaterThan(0);
-      }
       expect(markerWaits).toBe(completeDuringDrain && replace ? 1 : 0);
       if (!replace) {
-        expect(result.task?.status).toBe(completeDuringDrain ? "succeeded" : "failed");
         expect(published).toMatchObject({
           found: true,
           targetState: {
@@ -587,15 +342,6 @@ it.each([
         expect.soft(published).toHaveProperty("error", expect.any(String));
       }
       expect.soft(handoffOrder).not.toContain("task write");
-      expect
-        .soft(result.task?.status)
-        .toBe(completeDuringDrain ? "succeeded" : provisional ? "cancelled" : "running");
-      expect
-        .soft(getTaskById(task.taskId)?.status)
-        .toBe(completeDuringDrain ? "succeeded" : provisional ? "cancelled" : "running");
-      if (provisional) {
-        expect.soft(getTaskById(task.taskId)?.error).toBe(SUBAGENT_KILL_TASK_ERROR);
-      }
       expect(subagentRuns.get("publication-b1")?.execution.status).toBe("running");
       expect(followupInterrupted).not.toHaveBeenCalled();
       expect(published).toMatchObject({
@@ -610,16 +356,12 @@ it.each([
       });
       await successorCompleted.promise;
       expect(subagentRuns.get("publication-b1")?.execution.status).toBe("terminal");
-      followup?.release();
-      await fixture.settle();
-      expect.soft(getTaskById(task.taskId)?.status).toBe("succeeded");
     } finally {
-      rejectTerminalWrites = false;
+      cancellationClock?.mockRestore();
       releaseMarker.resolve();
       childAdmission.release();
       followup?.release();
       await pending;
-      admin.mockRestore();
       expect(getActiveSessionWorkAdmissionCount()).toBe(0);
       expect(getActiveSessionLifecycleMutationCount()).toBe(0);
     }

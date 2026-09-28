@@ -185,21 +185,7 @@ describe("remote model catalog v2", () => {
   it("keeps native ids distinct by provider and unknown prices distinct from free", () => {
     const bundle = parseRemoteModelCatalogBundleV2(validBundleV2);
     expect(bundle.providers).toEqual(validBundleV2.providers);
-    expect(bundle.models.map(({ id, provider, pricing }) => ({ id, provider, pricing }))).toEqual([
-      {
-        id: "vendor/model",
-        provider: "first",
-        pricing: {
-          status: "known",
-          currency: "USD",
-          unit: "million_tokens",
-          source: "native-feed",
-          input: 0,
-          output: 0,
-        },
-      },
-      { id: "vendor/model", provider: "second", pricing: { status: "unknown" } },
-    ]);
+    expect(bundle.models).toEqual(validBundleV2.models);
   });
 
   it("preserves partial rates, context tiers, and authoritative unavailable prices", () => {

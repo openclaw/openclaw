@@ -8,9 +8,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/agent-hooks/compaction-safeguard.ts": Symbol.for(
     "openclaw.compactionSafeguardTestApi",
   ),
-  "src/agents/agent-tools.before-tool-call.wrapper.ts": Symbol.for(
-    "openclaw.beforeToolCallBlockedErrorTestApi",
-  ),
   "src/agents/apply-patch.ts": Symbol.for("openclaw.applyPatchTestApi"),
   "src/agents/auth-profiles/external-auth.ts": Symbol.for("openclaw.externalAuthTestApi"),
   "src/agents/auth-profiles/oauth.ts": Symbol.for("openclaw.oauthTestApi"),
@@ -47,7 +44,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.subagentRegistryTestApi",
   ),
   "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
-  "src/agents/tool-search.ts": Symbol.for("openclaw.toolSearchTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
@@ -97,12 +93,6 @@ const publications: Record<string, string | symbol> = {
   "src/system-agent/agent-turn.ts": Symbol.for("openclaw.systemAgentTurnTestApi"),
   "src/talk/client-voice-confirmation.ts": Symbol.for("openclaw.clientVoiceConfirmationTestApi"),
   "src/talk/client-voice-session.ts": Symbol.for("openclaw.clientVoiceSessionTestApi"),
-  "src/tasks/generated-media-task-activity.ts": Symbol.for(
-    "openclaw.generatedMediaTaskActivityTestApi",
-  ),
-  "src/tasks/task-flow-registry.store.ts": Symbol.for("openclaw.taskFlowRegistryStoreTestApi"),
-  "src/tasks/task-flow-registry.ts": Symbol.for("openclaw.taskFlowRegistryTestApi"),
-  "src/tasks/task-registry.ts": Symbol.for("openclaw.taskRegistryTestApi"),
 };
 
 // Vite's EvaluatedModuleNode.file is a normalized, query-free filesystem path.

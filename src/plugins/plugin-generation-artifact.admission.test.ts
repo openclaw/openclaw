@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type MockInstance } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -16,11 +16,15 @@ import {
   preparePluginNativeAdmissions,
   settlePluginNativeAdmissions,
 } from "./plugin-native-admission-state.js";
-import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
+import {
+  auditOpenClawPeerDependenciesInManagedNpmRoot,
+  linkOpenClawPeerDependencies,
+  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+} from "./plugin-peer-link.js";
 
 const nativeSize = 2 * 1024 * 1024;
 
-function createFixture(directory: string, managed: boolean) {
+function createFixture(directory: string, managed: boolean, source: "npm" | "clawhub" = "npm") {
   const installRoot = managed
     ? path.join(directory, "project", "node_modules", "fixture-package")
     : directory;
@@ -60,9 +64,7 @@ function createFixture(directory: string, managed: boolean) {
     migrationVersion: 1,
     policyHash: "fixture-policy",
     generatedAtMs: 1,
-    installRecords: managed
-      ? { "fixture-package": { source: "npm", installPath: installRoot } }
-      : {},
+    installRecords: managed ? { "fixture-package": { source, installPath: installRoot } } : {},
     plugins: [
       recordInstalledPluginIndexInstallOwner<InstalledPluginIndex["plugins"][number]>(
         {
@@ -70,9 +72,7 @@ function createFixture(directory: string, managed: boolean) {
           manifestPath,
           manifestHash: createHash("sha256").update(manifest).digest("hex"),
           source: entry,
-          ...(managed
-            ? { installRecordHash: hashJson({ source: "npm", installPath: installRoot }) }
-            : {}),
+          ...(managed ? { installRecordHash: hashJson({ source, installPath: installRoot }) } : {}),
           rootDir: root,
           origin: "global",
           enabled: true,
@@ -239,186 +239,505 @@ it("shares first native admission across private inspections and publishes after
   });
 });
 
-it("admits managed native bytes once across captures and a fresh cache reading persisted receipts", async () => {
-  await withOpenClawTestState({ label: "native-admission-managed" }, async (state) => {
-    const fixture = createFixture(state.path("installed"), true);
-    fs.writeFileSync(
-      path.join(fixture.root, "child.cjs"),
-      "module.exports = require('openclaw/plugin-sdk/identity');\n",
-    );
-    fs.writeFileSync(path.join(fixture.root, "sidecar.txt"), "native companion");
-    const hosts = ["first", "second"].map((identity) => {
-      const host = state.path(`host-${identity}`);
-      fs.mkdirSync(host);
+it.each(["npm", "clawhub"] as const)(
+  "admits %s native bytes once across captures and a fresh cache reading persisted receipts",
+  async (source) => {
+    await withOpenClawTestState({ label: "native-admission-managed" }, async (state) => {
+      const fixture = createFixture(state.path("installed"), true, source);
+      const dependencyRoot = path.join(fixture.installRoot, "node_modules", "native-addon");
+      const dependencyManifest = path.join(dependencyRoot, "package.json");
+      const dependencyNative = path.join(dependencyRoot, "addon.node");
+      fs.mkdirSync(dependencyRoot, { recursive: true });
       fs.writeFileSync(
-        path.join(host, "package.json"),
+        dependencyManifest,
+        JSON.stringify({ name: "native-addon", version: "1.0.0", main: "addon.node" }),
+      );
+      fs.writeFileSync(dependencyNative, "native dependency fixture");
+      const packageFile = path.join(fixture.root, "package.json");
+      fs.writeFileSync(
+        packageFile,
         JSON.stringify({
-          name: "openclaw",
-          exports: { "./plugin-sdk/identity": "./identity.cjs" },
+          ...JSON.parse(fs.readFileSync(packageFile, "utf8")),
+          dependencies: { "native-addon": "1.0.0" },
         }),
       );
       fs.writeFileSync(
-        path.join(host, "identity.cjs"),
-        `module.exports = ${JSON.stringify(identity)};`,
+        path.join(fixture.root, "child.cjs"),
+        "module.exports = require('openclaw/plugin-sdk/identity');\n",
       );
-      return host;
+      fs.writeFileSync(path.join(fixture.root, "sidecar.txt"), "native companion");
+      const hosts = ["first", "second"].map((identity) => {
+        const host = state.path(`host-${identity}`);
+        fs.mkdirSync(host);
+        fs.writeFileSync(
+          path.join(host, "package.json"),
+          JSON.stringify({
+            name: "openclaw",
+            exports: { "./plugin-sdk/identity": "./identity.cjs" },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(host, "identity.cjs"),
+          `module.exports = ${JSON.stringify(identity)};`,
+        );
+        return host;
+      });
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const caches = [createPluginCache()];
+      const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+      const observer = observeNativeIo(fixture.filename);
+      const capture = (cache: ReturnType<typeof createPluginCache>, host = hosts[0]!) =>
+        observer.measure(() => {
+          const artifact = withPluginCache(cache, () =>
+            capturePluginGenerationArtifact(fixture.root),
+          );
+          artifacts.push(artifact);
+          artifact.linkHost(host);
+          artifact.assertSourceCurrent();
+          return artifact;
+        });
+      const assertDependencyCapture = async (
+        artifact: ReturnType<typeof capturePluginGenerationArtifact>,
+      ) => {
+        const capturedDependency = artifact.sourceAliases[fs.realpathSync(dependencyRoot)];
+        expect(capturedDependency).toBeDefined();
+        const retainedNative = fs.realpathSync(path.join(capturedDependency!, "addon.node"));
+        const retainedManifest = path.join(path.dirname(retainedNative), "package.json");
+        const installed = fs.statSync(dependencyManifest);
+        const retained = fs.statSync(retainedManifest);
+        expect(installed.nlink).toBe(1);
+        expect(retained.nlink).toBe(1);
+        expect([retained.dev, retained.ino]).not.toEqual([installed.dev, installed.ino]);
+        expect(fs.readFileSync(retainedManifest, "utf8")).toBe(
+          fs.readFileSync(dependencyManifest, "utf8"),
+        );
+        const native = fs.statSync(dependencyNative);
+        expect(fs.statSync(retainedNative)).toMatchObject({ dev: native.dev, ino: native.ino });
+        const onPackageReadError = vi.fn();
+        await auditOpenClawPeerDependenciesInManagedNpmRoot({
+          npmRoot: fixture.installRoot,
+          onPackageReadError,
+        });
+        await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+          npmRoot: fixture.installRoot,
+          logger: {},
+          onPackageReadError,
+        });
+        expect(onPackageReadError).not.toHaveBeenCalled();
+      };
+      try {
+        const firstCache = caches[0]!;
+        preparePluginNativeAdmissions(fixture.index, firstCache);
+        const first = capture(firstCache);
+        const retainedNativePath = fs.realpathSync(first.value.resolve(fixture.filename));
+        expect(first.io).toMatchObject({
+          originalBytes: nativeSize,
+          capturedBytes: 0,
+          copies: 0,
+          wholeFileReads: 0,
+        });
+        expect(first.io.largestBuffer).toBeLessThanOrEqual(1024 * 1024);
+        await assertDependencyCapture(first.value);
+        for (let registration = 0; registration < 2; registration++) {
+          const next = capture(firstCache);
+          expectNoNativeIo(next.io);
+          expect(next.value.sourceDigest).toBe(first.value.sourceDigest);
+          expect(fs.realpathSync(next.value.resolve(fixture.filename))).toBe(retainedNativePath);
+        }
+        for (const artifact of artifacts.splice(0)) {
+          await artifact.disposeAsync();
+        }
+        await retirePluginCache(firstCache);
+
+        const freshCache = createPluginCache();
+        caches.push(freshCache);
+        const persisted = await withPluginCache(freshCache, () =>
+          readPersistedInstalledPluginIndex({ stateDir: state.stateDir }),
+        );
+        if (!persisted) {
+          throw new Error("Native admission did not persist its installed index");
+        }
+        const receipts = Object.values(persisted.plugins[0]!.sourceAdmissions ?? {});
+        expect(receipts).toHaveLength(1);
+        expect(receipts[0]!.nativeArtifacts[fixture.filename]?.contentHash).toBe(
+          createHash("sha256").update(fixture.bytes).digest("hex"),
+        );
+        preparePluginNativeAdmissions(persisted, freshCache);
+        const warm = capture(freshCache);
+        expectNoNativeIo(warm.io);
+        await assertDependencyCapture(warm.value);
+        expect(warm.value.sourceDigest).toBe(first.value.sourceDigest);
+        expect(fs.realpathSync(warm.value.resolve(fixture.filename))).toBe(retainedNativePath);
+        expect(fs.readFileSync(warm.value.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
+          true,
+        );
+        // A native executable resolves a sibling helper from its real installed image path.
+        const readChildSdk = (artifact: ReturnType<typeof capturePluginGenerationArtifact>) => {
+          const native = fs.realpathSync(artifact.resolve(fixture.filename));
+          return createRequire(native)(path.join(path.dirname(native), "child.cjs"));
+        };
+        expect(readChildSdk(warm.value)).toBe("first");
+        for (const companion of ["child.cjs", "sidecar.txt"]) {
+          const installedPath = path.join(fixture.root, companion);
+          const retainedPath = path.join(
+            path.dirname(fs.realpathSync(warm.value.resolve(fixture.filename))),
+            companion,
+          );
+          const installed = fs.statSync(installedPath);
+          const retained = fs.statSync(retainedPath);
+          if (companion === "child.cjs") {
+            // Public-surface files retain the existing independent-copy safety contract.
+            expect(installed.nlink).toBe(1);
+            expect([retained.dev, retained.ino]).not.toEqual([installed.dev, installed.ino]);
+          } else {
+            expect(retained).toMatchObject({ dev: installed.dev, ino: installed.ino });
+          }
+          expect(fs.readFileSync(retainedPath, "utf8")).toBe(
+            fs.readFileSync(installedPath, "utf8"),
+          );
+        }
+        const { loadPluginRegistryHandle } = await import("./loader.js");
+        const { resolvePluginMetadataSnapshotAsync } =
+          await import("./plugin-metadata-snapshot.js");
+        const config = {
+          plugins: {
+            allow: ["fixture"],
+            load: { paths: [fixture.root] },
+            entries: { fixture: { enabled: true } },
+            slots: { memory: "none" },
+          },
+        };
+        const loadRuntime = (
+          cache: ReturnType<typeof createPluginCache>,
+          index: InstalledPluginIndex,
+        ) =>
+          observer.measure(() =>
+            withPluginCache(cache, () =>
+              loadPluginRegistryHandle({
+                config,
+                installRecords: index.installRecords,
+                onlyPluginIds: ["fixture"],
+              }),
+            ),
+          );
+        const successor = capture(freshCache, hosts[1]);
+        expect(successor.io).toMatchObject({
+          originalBytes: nativeSize,
+          capturedBytes: 0,
+          copies: 0,
+          wholeFileReads: 0,
+        });
+        expect(successor.value.sourceDigest).toBe(warm.value.sourceDigest);
+        await assertDependencyCapture(successor.value);
+        expect(readChildSdk(successor.value)).toBe("second");
+        expect(readChildSdk(warm.value)).toBe("first");
+        expect(
+          fs.realpathSync(
+            path.join(
+              receipts[0]!.nativeNamespaces[
+                receipts[0]!.nativeArtifacts[fixture.filename]!.namespace
+              ]!.capturedRoot,
+              "node_modules",
+              "openclaw",
+            ),
+          ),
+        ).toBe(fs.realpathSync(hosts[0]!));
+        expect(() => warm.value.assertSourceCurrent()).not.toThrow();
+
+        // Real discovery keeps the manifest and executable-entry hardlink policy intact.
+        expect(loadRuntime(freshCache, persisted).value.plugins).toContainEqual(
+          expect.objectContaining({ id: "fixture", status: "loaded", source: fixture.entry }),
+        );
+        for (const artifact of artifacts.splice(0)) {
+          await artifact.disposeAsync();
+        }
+        await retirePluginCache(freshCache);
+        const runtimeCache = createPluginCache();
+        caches.push(runtimeCache);
+        // Cold startup must recover receipts through metadata even when policy is re-derived.
+        const runtime = await observer.measureAsync(() =>
+          withPluginCache(runtimeCache, async () => {
+            const snapshot = await resolvePluginMetadataSnapshotAsync({
+              config,
+              env: state.env,
+              stateDir: state.stateDir,
+            });
+            return loadPluginRegistryHandle({
+              config,
+              manifestRegistry: snapshot.manifestRegistry,
+              installRecords: snapshot.index.installRecords,
+              onlyPluginIds: ["fixture"],
+            });
+          }),
+        );
+        expect(runtime.value.plugins).toContainEqual(
+          expect.objectContaining({ id: "fixture", status: "loaded", source: fixture.entry }),
+        );
+        expectNoNativeIo(runtime.io);
+      } finally {
+        observer.restore();
+        for (const artifact of artifacts) {
+          await artifact.disposeAsync();
+        }
+        for (const cache of caches) {
+          await retirePluginCache(cache);
+        }
+      }
     });
-    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
-    const caches = [createPluginCache()];
-    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
-    const observer = observeNativeIo(fixture.filename);
-    const capture = (cache: ReturnType<typeof createPluginCache>, host = hosts[0]!) =>
-      observer.measure(() => {
-        const artifact = withPluginCache(cache, () =>
+  },
+);
+
+it.each([false, true])(
+  "admits native source with an unavailable persisted capture (unrelated=%s)",
+  async (unrelated) => {
+    await withOpenClawTestState({ label: "native-admission-missing-capture" }, async (state) => {
+      const fixture = createFixture(state.path("installed"), true);
+      const companion = path.join(fixture.root, "README.md");
+      fs.writeFileSync(companion, "unchanged native companion");
+      const modifiedAt = new Date(1_000);
+      fs.utimesSync(companion, modifiedAt, modifiedAt);
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const caches = [createPluginCache(), createPluginCache()];
+      const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+      const statSync = fs.statSync;
+      let fault: MockInstance<typeof fs.statSync> | undefined;
+      try {
+        preparePluginNativeAdmissions(fixture.index, caches[0]!);
+        const first = withPluginCache(caches[0]!, () =>
           capturePluginGenerationArtifact(fixture.root),
         );
-        artifacts.push(artifact);
-        artifact.linkHost(host);
-        artifact.assertSourceCurrent();
-        return artifact;
-      });
-    try {
-      const firstCache = caches[0]!;
-      preparePluginNativeAdmissions(fixture.index, firstCache);
-      const first = capture(firstCache);
-      expect(first.io).toMatchObject({
-        originalBytes: nativeSize,
-        capturedBytes: 0,
-        copies: 0,
-        wholeFileReads: 0,
-      });
-      expect(first.io.largestBuffer).toBeLessThanOrEqual(1024 * 1024);
-      for (let registration = 0; registration < 2; registration++) {
-        const next = capture(firstCache);
-        expectNoNativeIo(next.io);
-        expect(next.value.sourceDigest).toBe(first.value.sourceDigest);
-      }
-      for (const artifact of artifacts.splice(0)) {
-        await artifact.disposeAsync();
-      }
-      await retirePluginCache(firstCache);
-
-      const freshCache = createPluginCache();
-      caches.push(freshCache);
-      const persisted = await withPluginCache(freshCache, () =>
-        readPersistedInstalledPluginIndex({ stateDir: state.stateDir }),
-      );
-      if (!persisted) {
-        throw new Error("Native admission did not persist its installed index");
-      }
-      const receipts = Object.values(persisted.plugins[0]!.sourceAdmissions ?? {});
-      expect(receipts).toHaveLength(1);
-      expect(receipts[0]!.nativeArtifacts[fixture.filename]?.contentHash).toBe(
-        createHash("sha256").update(fixture.bytes).digest("hex"),
-      );
-      preparePluginNativeAdmissions(persisted, freshCache);
-      const warm = capture(freshCache);
-      expectNoNativeIo(warm.io);
-      expect(warm.value.sourceDigest).toBe(first.value.sourceDigest);
-      expect(fs.readFileSync(warm.value.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
-        true,
-      );
-      // A native executable resolves a sibling helper from its real installed image path.
-      const readChildSdk = (artifact: ReturnType<typeof capturePluginGenerationArtifact>) => {
-        const native = fs.realpathSync(artifact.resolve(fixture.filename));
-        return createRequire(native)(path.join(path.dirname(native), "child.cjs"));
-      };
-      expect(readChildSdk(warm.value)).toBe("first");
-      for (const companion of ["child.cjs", "sidecar.txt"]) {
-        const installedPath = path.join(fixture.root, companion);
-        const retainedPath = path.join(
-          path.dirname(fs.realpathSync(warm.value.resolve(fixture.filename))),
-          companion,
-        );
-        const installed = fs.statSync(installedPath);
-        const retained = fs.statSync(retainedPath);
-        if (companion === "child.cjs") {
-          // Public-surface files retain the existing independent-copy safety contract.
-          expect(installed.nlink).toBe(1);
-          expect([retained.dev, retained.ino]).not.toEqual([installed.dev, installed.ino]);
+        artifacts.push(first);
+        await settlePluginNativeAdmissions(caches[0]!);
+        await first.disposeAsync();
+        await retirePluginCache(caches[0]!);
+        const persisted = await readPersistedInstalledPluginIndex({ stateDir: state.stateDir });
+        const receipts = Object.values(persisted!.plugins[0]!.sourceAdmissions ?? {});
+        expect(receipts).toHaveLength(1);
+        const namespaces = Object.values(receipts[0]!.nativeNamespaces);
+        const candidate = unrelated ? createFixture(state.path("unrelated"), false) : fixture;
+        const candidateCompanion = path.join(candidate.root, "README.md");
+        if (unrelated) {
+          fs.writeFileSync(candidateCompanion, "unchanged native companion");
+          fs.utimesSync(candidateCompanion, modifiedAt, modifiedAt);
+          fault = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+            if (
+              namespaces.some(
+                (namespace) => args[0] === path.join(namespace.capturedRoot, "content"),
+              )
+            ) {
+              throw Object.assign(new Error("Unrelated capture is inaccessible"), {
+                code: "EACCES",
+              });
+            }
+            return Reflect.apply(statSync, fs, args);
+          });
         } else {
-          expect(retained).toMatchObject({ dev: installed.dev, ino: installed.ino });
+          for (const namespace of namespaces) {
+            fs.rmSync(namespace.capturedRoot, { recursive: true });
+          }
         }
-        expect(fs.readFileSync(retainedPath, "utf8")).toBe(fs.readFileSync(installedPath, "utf8"));
-      }
-      const { loadPluginRegistryHandle } = await import("./loader.js");
-      const { resolvePluginMetadataSnapshotAsync } = await import("./plugin-metadata-snapshot.js");
-      const config = {
-        plugins: {
-          allow: ["fixture"],
-          load: { paths: [fixture.root] },
-          entries: { fixture: { enabled: true } },
-          slots: { memory: "none" },
-        },
-      };
-      const loadRuntime = (
-        cache: ReturnType<typeof createPluginCache>,
-        index: InstalledPluginIndex,
-      ) =>
-        observer.measure(() =>
-          withPluginCache(cache, () =>
-            loadPluginRegistryHandle({
-              config,
-              installRecords: index.installRecords,
-              onlyPluginIds: ["fixture"],
-            }),
-          ),
-        );
-      const successor = capture(freshCache, hosts[1]);
-      expect(successor.io).toMatchObject({
-        originalBytes: nativeSize,
-        capturedBytes: 0,
-        copies: 0,
-        wholeFileReads: 0,
-      });
-      expect(successor.value.sourceDigest).toBe(warm.value.sourceDigest);
-      expect(readChildSdk(successor.value)).toBe("second");
-      expect(readChildSdk(warm.value)).toBe("first");
-      expect(
-        fs.realpathSync(
-          path.join(
-            receipts[0]!.nativeNamespaces[
-              receipts[0]!.nativeArtifacts[fixture.filename]!.namespace
-            ]!.capturedRoot,
-            "node_modules",
-            "openclaw",
-          ),
-        ),
-      ).toBe(fs.realpathSync(hosts[0]!));
-      expect(() => warm.value.assertSourceCurrent()).not.toThrow();
 
-      // Real discovery keeps the manifest and executable-entry hardlink policy intact.
-      expect(loadRuntime(freshCache, persisted).value.plugins).toContainEqual(
-        expect.objectContaining({ id: "fixture", status: "loaded", source: fixture.entry }),
-      );
-      for (const artifact of artifacts.splice(0)) {
+        preparePluginNativeAdmissions(persisted!, caches[1]!);
+        const replacement = withPluginCache(caches[1]!, () =>
+          capturePluginGenerationArtifact(candidate.root),
+        );
+        artifacts.push(replacement);
+        expect(replacement.assertSourceCurrent).not.toThrow();
+        expect(
+          fs.readFileSync(replacement.resolve(candidate.filename)).equals(candidate.bytes),
+        ).toBe(true);
+        expect(fs.readFileSync(replacement.resolve(candidateCompanion), "utf8")).toBe(
+          "unchanged native companion",
+        );
+        fs.writeFileSync(candidateCompanion, "different native companion");
+        fs.utimesSync(candidateCompanion, modifiedAt, modifiedAt);
+        expect(replacement.assertSourceCurrent).toThrow("Plugin source changed");
+      } finally {
+        fault?.mockRestore();
+        for (const artifact of artifacts) {
+          await artifact.disposeAsync();
+        }
+        for (const cache of caches) {
+          await retirePluginCache(cache);
+        }
+      }
+    });
+  },
+);
+
+it("keeps captured companions current across independent native admissions", async () => {
+  await withOpenClawTestState({ label: "native-admission-independent" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), true);
+    const companion = path.join(fixture.root, "lib", "companion.cjs");
+    const original = "module.exports = 'original';\n";
+    fs.mkdirSync(path.dirname(companion));
+    fs.writeFileSync(companion, original);
+    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+    const caches = [createPluginCache(), createPluginCache()];
+    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+    const capture = (cache: ReturnType<typeof createPluginCache>) => {
+      // Independent readers can begin from the same index before either publishes its receipt.
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+      artifacts.push(artifact);
+      return artifact;
+    };
+    try {
+      const first = capture(caches[0]!);
+      expect(fs.readFileSync(first.resolve(companion), "utf8")).toBe(original);
+      expect(first.assertSourceCurrent).not.toThrow();
+
+      const second = capture(caches[1]!);
+      for (const artifact of [first, second]) {
+        expect(fs.readFileSync(artifact.resolve(companion), "utf8")).toBe(original);
+        expect(fs.readFileSync(artifact.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
+          true,
+        );
+        expect(artifact.assertSourceCurrent).not.toThrow();
+      }
+
+      fs.writeFileSync(companion, "module.exports = 'modified';\n");
+      expect(first.assertSourceCurrent).toThrow("Plugin source changed");
+      expect(fs.readFileSync(first.resolve(companion), "utf8")).toBe(original);
+    } finally {
+      for (const artifact of artifacts) {
         await artifact.disposeAsync();
       }
-      await retirePluginCache(freshCache);
-      const runtimeCache = createPluginCache();
-      caches.push(runtimeCache);
-      // Cold startup must recover receipts through metadata even when policy is re-derived.
-      const runtime = await observer.measureAsync(() =>
-        withPluginCache(runtimeCache, async () => {
-          const snapshot = await resolvePluginMetadataSnapshotAsync({
-            config,
-            env: state.env,
-            stateDir: state.stateDir,
-          });
-          return loadPluginRegistryHandle({
-            config,
-            manifestRegistry: snapshot.manifestRegistry,
-            installRecords: snapshot.index.installRecords,
-            onlyPluginIds: ["fixture"],
-          });
+      for (const cache of caches) {
+        await retirePluginCache(cache);
+      }
+    }
+  });
+});
+
+it.each([false, true])(
+  "captures managed native packages that share a companion dependency (copied=%s)",
+  async (copied) => {
+    await withOpenClawTestState({ label: "native-shared-companion" }, async (state) => {
+      const fixture = createFixture(state.path("installed"), true);
+      fs.rmSync(fixture.filename);
+      fs.writeFileSync(
+        path.join(fixture.root, "package.json"),
+        JSON.stringify({ dependencies: { "a-library": "1.0.0", "b-addon": "1.0.0" } }),
+      );
+      if (copied) {
+        const manifest = JSON.stringify({
+          id: "fixture",
+          configSchema: { type: "object" },
+          providerCatalogEntry: "node_modules/a-library/lib/library.so",
+        });
+        fs.writeFileSync(fixture.index.plugins[0]!.manifestPath, manifest);
+        fixture.index.plugins[0]!.manifestHash = createHash("sha256")
+          .update(manifest)
+          .digest("hex");
+      }
+      const files = {
+        "a-library/package.json": '{"name":"a-library","version":"1.0.0","main":"lib/helper.cjs"}',
+        "a-library/lib/library.so": "native library bytes",
+        "a-library/lib/helper.cjs": "module.exports = 'companion';",
+        "b-addon/package.json": JSON.stringify({
+          name: "b-addon",
+          main: "lib/addon.node",
+          dependencies: { "a-library": "1.0.0" },
+        }),
+        "b-addon/lib/addon.node": "native addon bytes",
+        "c-addon/package.json": JSON.stringify({
+          name: "c-addon",
+          dependencies: { "a-library": "1.0.0" },
+        }),
+        "c-addon/lib/addon.node": "another native addon",
+      };
+      for (const [name, content] of Object.entries(files)) {
+        const filename = path.join(fixture.root, "node_modules", name);
+        fs.mkdirSync(path.dirname(filename), { recursive: true });
+        fs.writeFileSync(filename, content);
+      }
+      const cache = createPluginCache();
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const library = path.join(fixture.root, "node_modules/a-library/lib/library.so");
+      const timestamp = new Date("2020-01-01T00:00:00Z");
+      fs.utimesSync(library, timestamp, timestamp);
+      let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+      let sibling: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+      try {
+        artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+        artifact.assertSourceCurrent();
+        const require = createRequire(path.join(artifact.rootDir, "index.js"));
+        expect(require("a-library")).toBe("companion");
+        expect(fs.readFileSync(require.resolve("a-library/lib/library.so"), "utf8")).toBe(
+          "native library bytes",
+        );
+        const retained = fs.statSync(require.resolve("a-library/lib/library.so"), { bigint: true });
+        const installed = fs.statSync(library, { bigint: true });
+        expect(retained.dev === installed.dev && retained.ino === installed.ino).toBe(!copied);
+        fs.writeFileSync(library, "edited library bytes");
+        fs.utimesSync(library, timestamp, timestamp);
+        expect(fs.statSync(library, { bigint: true })).toMatchObject({
+          dev: installed.dev,
+          ino: installed.ino,
+          size: installed.size,
+          mtimeNs: installed.mtimeNs,
+        });
+        expect(() => {
+          sibling = withPluginCache(cache, () =>
+            capturePluginGenerationArtifact(path.join(fixture.root, "node_modules/c-addon")),
+          );
+        }).toThrow("Native plugin companion changed during admission");
+        expect(artifact.assertSourceCurrent).toThrow("Plugin source changed");
+      } finally {
+        await sibling?.disposeAsync();
+        await artifact?.disposeAsync();
+        await retirePluginCache(cache);
+      }
+    });
+  },
+);
+
+it("keeps an installed generation current while another cache admits its native companions", async () => {
+  await withOpenClawTestState({ label: "native-admission-overlapping-caches" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), true);
+    fs.unlinkSync(fixture.filename);
+    const manifestPath = path.join(fixture.root, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const dependencies = { "native-a": "1.0.0", "native-b": "1.0.0" };
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, dependencies }));
+    for (const name of [...Object.keys(dependencies), "common"]) {
+      const dependencyRoot = path.join(fixture.root, "node_modules", name);
+      fs.mkdirSync(dependencyRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependencyRoot, "package.json"),
+        JSON.stringify({
+          name,
+          version: "1.0.0",
+          ...(name === "common" ? {} : { dependencies: { common: "1.0.0" } }),
         }),
       );
-      expect(runtime.value.plugins).toContainEqual(
-        expect.objectContaining({ id: "fixture", status: "loaded", source: fixture.entry }),
+      if (name !== "common") {
+        fs.writeFileSync(path.join(dependencyRoot, "fixture.bin"), "native fixture");
+      }
+    }
+    const companion = path.join(fixture.root, "node_modules", "common", "a-companion.txt");
+    fs.writeFileSync(companion, "unchanged native companion");
+    const modifiedAt = new Date(1_000);
+    fs.utimesSync(companion, modifiedAt, modifiedAt);
+    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+    const caches = [createPluginCache(), createPluginCache()];
+    const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+    try {
+      for (const cache of caches) {
+        preparePluginNativeAdmissions(fixture.index, cache);
+        artifacts.push(withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root)));
+      }
+      expect(() => artifacts[0]!.assertSourceCurrent()).not.toThrow();
+      const capturedDependency = createRequire(artifacts[0]!.resolve(fixture.entry)).resolve(
+        "native-a/package.json",
       );
-      expectNoNativeIo(runtime.io);
+      const capturedCompanion = createRequire(capturedDependency).resolve("common/a-companion.txt");
+      fs.writeFileSync(companion, "different native companion");
+      fs.utimesSync(companion, modifiedAt, modifiedAt);
+      expect(() => artifacts[0]!.assertSourceCurrent()).toThrow("Plugin source changed");
+      expect(fs.readFileSync(capturedCompanion, "utf8")).toBe("unchanged native companion");
     } finally {
-      observer.restore();
       for (const artifact of artifacts) {
         await artifact.disposeAsync();
       }

@@ -24,6 +24,15 @@ describe("Android store version selection", () => {
       ...input,
       snapshot: {
         ...input.snapshot,
+        uploadedVersionCodes: [
+          202603080,
+          202603081,
+          2026031500,
+          2026041590,
+          1,
+          20260107,
+          ...input.snapshot.uploadedVersionCodes,
+        ],
         tracks: [track("production", 2026090401), track("wear:production", 2026090451)],
       },
     });
@@ -142,6 +151,17 @@ describe("Android store version selection", () => {
     expect(() => resolveAndroidStorePlan({ ...input, refs: [...input.refs, candidate] })).toThrow(
       "no matching legacy cutover",
     );
+  });
+
+  it("requires a recorded public identity instead of decoding historical inventory codes", () => {
+    for (const code of [2026090301, 202603080, 2026041590]) {
+      expect(() =>
+        resolveAndroidStorePlan({
+          ...input,
+          snapshot: { uploadedVersionCodes: [code], tracks: [track("production", code)] },
+        }),
+      ).toThrow(`Google Play production versionCode ${code} has no recorded source identity`);
+    }
   });
 
   it.each([

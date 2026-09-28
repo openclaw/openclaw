@@ -376,6 +376,17 @@ function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageConten
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
+function resolveDeliveryReplyTarget(
+  delivery: MessageDelivery | undefined,
+): NormalizedMessage["replyTarget"] {
+  const replyToId = delivery?.replyToId?.trim();
+  return replyToId
+    ? { kind: "id", id: replyToId }
+    : delivery?.replyToCurrent === true
+      ? { kind: "current" }
+      : null;
+}
+
 function expandTextContent(
   text: string,
   delivery: MessageDelivery | undefined,
@@ -383,18 +394,12 @@ function expandTextContent(
 ): {
   content: MessageContentItem[];
   audioAsVoice: boolean;
-  replyTarget: NormalizedMessage["replyTarget"];
 } {
   const extracted = extractCanvasShortcodes(text);
   const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
   const parts: MessageContentItem[] = [];
   const audioAsVoice = delivery?.audioAsVoice === true;
-  const replyToId = delivery?.replyToId?.trim();
-  const replyTarget: NormalizedMessage["replyTarget"] = replyToId
-    ? { kind: "id", id: replyToId }
-    : delivery?.replyToCurrent === true
-      ? { kind: "current" }
-      : null;
+  const replyTarget = resolveDeliveryReplyTarget(delivery);
   const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
 
   for (const segment of segments) {
@@ -447,11 +452,17 @@ function expandTextContent(
           ? [{ type: "text", text: parsed.text }]
           : [],
     audioAsVoice,
-    replyTarget,
   };
 }
 
+const normalizedMessages = new WeakMap<object, NormalizedMessage>();
+
 export function normalizeMessage(message: unknown): NormalizedMessage {
+  const original = asOptionalRecord(message);
+  const cached = original && normalizedMessages.get(original);
+  if (cached) {
+    return cached;
+  }
   const m =
     asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
     {};
@@ -474,14 +485,13 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   let content: MessageContentItem[] = [];
   let audioAsVoice = false;
-  let replyTarget: NormalizedMessage["replyTarget"] = null;
+  let replyTarget = resolveDeliveryReplyTarget(delivery);
 
   if (typeof contentRaw === "string") {
     if (isAssistantMessage) {
       const expanded = expandTextContent(contentRaw, delivery, projectedCanvasPreviews);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
-      replyTarget = expanded.replyTarget;
     } else {
       content = [{ type: "text", text: contentRaw }];
     }
@@ -546,11 +556,6 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         if (isAssistantMessage) {
           const expanded = expandTextContent(text, delivery, projectedCanvasPreviews);
           audioAsVoice = audioAsVoice || expanded.audioAsVoice;
-          if (expanded.replyTarget?.kind === "id") {
-            replyTarget = expanded.replyTarget;
-          } else if (expanded.replyTarget?.kind === "current" && replyTarget === null) {
-            replyTarget = expanded.replyTarget;
-          }
           return expanded.content;
         }
         return [
@@ -595,7 +600,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   content = stripMessageDisplayMetadata(content);
   const senderSession = readMessageSenderSession(m.senderSession);
 
-  return {
+  const normalized: NormalizedMessage = {
     role,
     content,
     timestamp,
@@ -615,4 +620,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
+  // Retained and live messages are immutable snapshots. Missing timestamps
+  // still resolve against the current clock on each call.
+  if (original && asFiniteNumber(m.timestamp) !== undefined) {
+    normalizedMessages.set(original, normalized);
+  }
+  return normalized;
 }

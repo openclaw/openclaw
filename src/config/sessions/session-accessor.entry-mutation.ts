@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
@@ -33,7 +33,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import "./session-accessor.sqlite-entry.js";
-import { forkSessionTranscriptFromParent } from "./session-accessor.sqlite-parent-session.js";
+import "./session-accessor.sqlite-parent-session.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   captureLifecycleDatabaseScope,
@@ -52,8 +52,6 @@ import type {
   SessionAbortTargetContext,
   SessionAbortTargetIdentity,
   SessionAbortTargetResult,
-  ForkSessionFromParentTranscriptResult,
-  ForkSessionFromParentTranscriptParams,
   SessionEntryCreateWithTranscriptContext,
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCreateWithTranscriptPrepareResult,
@@ -70,14 +68,9 @@ export {
 } from "./session-accessor.sqlite-entry.js";
 export {
   forkSessionEntryFromParentTarget,
+  forkSessionTranscriptFromParent as forkSessionFromParentTranscript,
   resolveSessionParentForkDecision,
 } from "./session-accessor.sqlite-parent-session.js";
-
-export async function forkSessionFromParentTranscript(
-  params: ForkSessionFromParentTranscriptParams,
-): Promise<ForkSessionFromParentTranscriptResult> {
-  return await forkSessionTranscriptFromParent(params);
-}
 
 /** Capture source custody before authority or physical-owner discovery yields. */
 function captureSessionEntryDatabasePreparation(
@@ -450,11 +443,15 @@ export async function createSessionEntryWithTranscript<TError = string>(
           await runExclusiveSqliteSessionWrite(
             transcriptScope,
             async () => {
-              runOpenClawAgentWriteTransaction((database) => {
-                commitGuard?.();
-                assertSourceCurrent?.();
-                ensureTranscriptHeader(database, transcriptScope, cwd);
-              }, toDatabaseOptions(transcriptScope));
+              runOpenClawAgentWriteTransaction(
+                (database) => {
+                  commitGuard?.();
+                  assertSourceCurrent?.();
+                  ensureTranscriptHeader(database, transcriptScope, cwd);
+                },
+                toDatabaseOptions(transcriptScope),
+                { operationLabel: "session.entry.create-transcript" },
+              );
             },
             "session.entry.create-with-transcript",
           );
@@ -576,13 +573,10 @@ export function mergeConcurrentReplySessionMetadata(params: {
 }
 
 export function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
-  if (!entry) {
-    return JSON.stringify(null);
-  }
   // The guard only rejects a true session-identity rebind. Same-session
   // activity/context writes are merged below; comparing them here would reject
   // before the merge can preserve the concurrent metadata.
-  return JSON.stringify({ sessionId: entry.sessionId });
+  return JSON.stringify(entry ? { sessionId: entry.sessionId } : null);
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */
@@ -641,13 +635,9 @@ export async function markSessionAbortTarget(params: {
           abortedLastRun: true,
           updatedAt: params.now?.() ?? Date.now(),
         };
-        applySessionAbortCutoff(
-          entry,
-          params.resolveAbortCutoff?.({
-            entry: { ...currentEntry },
-            sessionKey,
-          }),
-        );
+        const cutoff = params.resolveAbortCutoff?.({ entry: { ...currentEntry }, sessionKey });
+        entry.abortCutoffMessageSid = cutoff?.messageSid;
+        entry.abortCutoffTimestamp = cutoff?.timestamp;
         return entry;
       },
       {
@@ -674,21 +664,10 @@ export async function markSessionAbortTarget(params: {
     const fallbackTarget = resolution.target;
     if (fallbackTarget) {
       return {
-        entry: fallbackTarget.entry,
-        persisted: fallbackTarget.persisted,
-        sessionId: fallbackTarget.sessionId,
-        sessionKey: fallbackTarget.sessionKey,
+        ...fallbackTarget,
         persistenceError: formatErrorMessage(error),
       };
     }
     throw error;
   }
-}
-
-function applySessionAbortCutoff(
-  entry: Pick<SessionEntry, "abortCutoffMessageSid" | "abortCutoffTimestamp">,
-  cutoff: SessionAbortTargetCutoff | undefined,
-): void {
-  entry.abortCutoffMessageSid = cutoff?.messageSid;
-  entry.abortCutoffTimestamp = cutoff?.timestamp;
 }

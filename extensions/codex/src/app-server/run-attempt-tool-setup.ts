@@ -4,6 +4,7 @@ import {
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
   runAgentCleanupStep,
+  supportsModelTools,
   type EmbeddedRunAttemptParams,
   type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -27,6 +28,10 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import {
+  resolveInactiveCodexHeartbeatResponseDescriptor,
+  selectInactiveCodexHeartbeatResponseTool,
+} from "./heartbeat-tool-fallback.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
@@ -104,7 +109,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   } = {
     yieldDetected: false,
     yieldAcknowledgment: undefined,
-    persistentWebSearchAllowed: undefined as boolean | undefined,
+    persistentWebSearchAllowed: undefined,
     webSearchAllowed: false,
   };
   const toolOutcomeOrdinals = new Map<string, number>();
@@ -526,9 +531,32 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? { turnSourceThreadId: params.currentThreadTs }
         : {}),
     };
+    const heartbeatFallbackDescriptor = resolveInactiveCodexHeartbeatResponseDescriptor({
+      registeredTools: registeredWithScopedMcp,
+      ...(nativeSpecs ? { registeredSpecs: nativeSpecs } : {}),
+    });
+    const heartbeatFallbackTool =
+      heartbeatFallbackDescriptor && supportsModelTools(params.model)
+        ? selectInactiveCodexHeartbeatResponseTool({
+            descriptor: heartbeatFallbackDescriptor,
+            disableTools: params.disableTools,
+            toolsAllow: params.toolsAllow,
+            pluginConfig,
+          })
+        : undefined;
+    const registeredFallbackTools =
+      params.trigger === "heartbeat" ||
+      params.enableHeartbeatTool === true ||
+      params.forceHeartbeatTool === true ||
+      !heartbeatFallbackTool
+        ? undefined
+        : params.hostCapabilities.bindToolSurface([heartbeatFallbackTool], {
+            cwd: effectiveCwd ?? effectiveWorkspace,
+          });
     const toolBridge = createCodexDynamicToolBridge({
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      registeredFallbackTools,
       registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
@@ -649,9 +677,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     }
     return {
       tools: toolsWithScopedMcp,
-      registeredTools: registeredWithScopedMcp,
       requireExplicitMessageTarget,
-      scopedMcpTools,
       configuredMcp,
       disposeTools,
       configuredMcpOwnershipVersion:
@@ -665,7 +691,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState,
       toolOutcomeOrdinals,
       suppressedDynamicToolOutcomeOrdinals,
-      onCodexToolOutcome,
       allocateCodexToolOutcomeOrdinal,
       runtimeYieldCompletionClaim,
     };

@@ -423,7 +423,6 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     const { stages, contexts } = await prepareCandidateAdmissionFixture({
       marker: true,
       verdict: candidateAdmissionVerdict(),
-      installed: true,
     });
     nodeVersionSatisfiesEngine.mockReturnValue(false);
 

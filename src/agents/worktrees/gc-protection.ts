@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { inspectManagedWorktreeCheckout } from "./checkout-inspection.js";
 import { deferWorktreeGcRecord, type WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
-import type { createWorktreeLockPrefilter } from "./git-lock.js";
+import type { createWorktreeGcPrefilter } from "./git-lock.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 export async function autoRemovalProtectionReason(
   record: ManagedWorktreeRecord,
-  isLocked: ReturnType<typeof createWorktreeLockPrefilter>,
+  prefilter: ReturnType<typeof createWorktreeGcPrefilter>,
   hasLiveLease: (id: string) => boolean,
   context: { env: NodeJS.ProcessEnv; getConfig: () => OpenClawConfig },
   policy: WorktreeCleanupOwnerPolicy = {},
@@ -26,8 +26,12 @@ export async function autoRemovalProtectionReason(
   if (hasLiveLease(record.id)) {
     return "run lease is active";
   }
-  if (await isLocked(record)) {
-    return "worktree has a live or foreign lock";
+  const protection = await prefilter(record);
+  if (protection !== undefined) {
+    if (protection === "branch-moved") {
+      await deferWorktreeGcRecord(context.env, record, protection);
+    }
+    return protection;
   }
   const provisioned = await inspectManagedWorktreeCheckout(record, "provisioned", context);
   if (provisioned.retainedReason !== undefined) {

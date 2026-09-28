@@ -1,6 +1,10 @@
-import type { CronFailureNotificationDelivery } from "../types.js";
+import type { CronFailureNotificationDelivery, CronJob } from "../types.js";
 import type { CronJobFamilyIdentity } from "./row-codec.js";
-import type { CronRunReceiptHandle, CronRunReceiptStatus } from "./run-receipt.types.js";
+import type {
+  CronRunReceipt,
+  CronRunReceiptHandle,
+  CronRunReceiptStatus,
+} from "./run-receipt.types.js";
 import type { CronRunRecoveryProposal } from "./run-recovery-read.types.js";
 
 export type CronScheduleMaintenanceOptions = {
@@ -19,6 +23,23 @@ export type CronReceiptTerminal = {
 };
 
 export type CronRuntimeMutationInputs = {
+  "cron.reserveRuns": {
+    storeKey: string;
+    proposals: Array<{
+      jobId: string;
+      enabled: boolean;
+      configRevision: string;
+      nextRunAtMs?: number;
+      lastRunAtMs?: number;
+      lastRunStatus?: CronJob["state"]["lastRunStatus"];
+      immediate: boolean;
+    }>;
+    reservedAtMs: number;
+    preserveSchedule: boolean;
+    scheduleOwnershipAtMs: number;
+    onExit: boolean;
+  };
+  "cron.maintainHistory": Record<string, never>;
   "cron.activateRun": {
     storeKey: string;
     handle: CronRunReceiptHandle;
@@ -64,6 +85,8 @@ export type CronRuntimeMutationType = keyof CronRuntimeMutationInputs;
 export type CronRuntimeWorkerOperations = {
   [Type in CronRuntimeMutationType]: {
     input: CronRuntimeMutationInputs[Type] & { nonce: string };
-    output: { nonce: string };
+    output:
+      | { nonce: string }
+      | (Type extends "cron.reserveRuns" ? { nonce: string; conflict: CronRunReceipt } : never);
   };
 };

@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements status behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listActiveMemoryPublicArtifacts } from "openclaw/plugin-sdk/memory-host-core";
@@ -52,16 +51,11 @@ export type MemoryWikiStatus = {
   warnings: MemoryWikiStatusWarning[];
 };
 
-type MemoryWikiDoctorFix = {
-  code: MemoryWikiStatusWarning["code"];
-  message: string;
-};
-
 export type MemoryWikiDoctorReport = {
   healthy: boolean;
   warningCount: number;
   status: MemoryWikiStatus;
-  fixes: MemoryWikiDoctorFix[];
+  fixes: MemoryWikiStatusWarning[];
 };
 
 type ResolveMemoryWikiStatusDeps = {

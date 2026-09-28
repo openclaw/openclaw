@@ -98,7 +98,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    if (typeof (factory as unknown) !== "function") {
+    if (typeof factory !== "function") {
       reportRegistrationError(record, "codex app-server extension factory must be a function");
       return;
     }
@@ -131,7 +131,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
     policy?: PluginTypedHookPolicy,
   ) => {
-    if (typeof (handler as unknown) !== "function") {
+    if (typeof handler !== "function") {
       reportRegistrationError(record, "agent tool result middleware must be a function");
       return;
     }

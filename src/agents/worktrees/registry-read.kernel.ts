@@ -28,6 +28,7 @@ export const WORKTREE_RECORD_COLUMNS = [
   "gc_protection_json",
 ] as const satisfies readonly (keyof WorktreeRow)[];
 type WorktreeRecordRow = Pick<WorktreeRow, (typeof WORKTREE_RECORD_COLUMNS)[number]>;
+export type WorktreeRegistryListOptions = { liveOnly?: boolean };
 
 function parseRunEndCleanup(
   raw: string | null | undefined,
@@ -131,12 +132,18 @@ export function getRegistryWorktreeInDatabase(
   return row ? rowToRecord(row) : undefined;
 }
 
-export function listRegistryWorktreesInDatabase(db: DatabaseSync): ManagedWorktreeRecord[] {
-  const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+export function listRegistryWorktreesInDatabase(
+  db: DatabaseSync,
+  options: WorktreeRegistryListOptions = {},
+): ManagedWorktreeRecord[] {
+  let query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
     .selectFrom("worktrees")
     .select(WORKTREE_RECORD_COLUMNS)
     .orderBy("created_at", "desc")
     .orderBy("id", "asc");
+  if (options.liveOnly) {
+    query = query.where("removed_at", "is", null);
+  }
   return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
 }
 

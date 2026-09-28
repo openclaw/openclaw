@@ -11,6 +11,7 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -66,12 +67,6 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
   return undefined;
 }
 
-/**
- * Resolve bot display name with fallback chain:
- * 1. Account config name
- * 2. Agent name from config
- * 3. Agent identity name, then "OpenClaw"
- */
 function resolveBotDisplayName(params: {
   accountName?: string;
   agentId: string;
@@ -92,6 +87,7 @@ async function processGoogleChatEvent(
   event: GoogleChatEvent,
   target: WebhookTarget,
   turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
+  config: OpenClawConfig = target.config,
 ): Promise<void> {
   const eventType = event.type ?? event.eventType;
   if (eventType === "CARD_CLICKED") {
@@ -101,7 +97,7 @@ async function processGoogleChatEvent(
   if (eventType !== "MESSAGE") {
     return;
   }
-  const { account, config, runtime, core, statusSink, mediaMaxMb } = target;
+  const { account, runtime, core, statusSink, mediaMaxMb } = target;
   const space = event.space;
   const message = event.message;
   if (!space || !message) {
@@ -294,9 +290,6 @@ async function processGoogleChatEvent(
     },
   });
 
-  // Typing indicator setup
-  // Note: Reaction mode requires user OAuth, not available with service account auth.
-  // If reaction is configured, we fall back to message mode with a warning.
   let typingIndicator = account.config.typingIndicator ?? "message";
   if (typingIndicator === "reaction") {
     runtime.error?.(
@@ -310,7 +303,6 @@ async function processGoogleChatEvent(
       ? replyThreadName
       : undefined;
 
-  // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
     try {
       const botName = resolveBotDisplayName({
@@ -458,12 +450,13 @@ export async function startGoogleChatMonitor(
     log: options.runtime.log,
   });
 
+  const readConfig = createRuntimeConfigReader(options.config);
   const ingress = createGoogleChatIngressMonitor({
     accountId: options.account.accountId,
     runtime: options.runtime,
     abortSignal: options.abortSignal,
     dispatch: async (event, lifecycle) => {
-      await processGoogleChatEvent(event, target, lifecycle);
+      await processGoogleChatEvent(event, target, lifecycle, readConfig());
     },
   });
   const target: WebhookTarget = {

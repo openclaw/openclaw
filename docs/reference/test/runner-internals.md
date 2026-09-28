@@ -37,6 +37,25 @@ detached descendants stopped. Before manually removing an abandoned lock directo
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
 
+Runtime-consuming tests prepare checkout artifacts through the explicit build owner,
+not by launching the CLI with `--version`. Preparation reuses source-runner freshness
+checks and checkout artifact ownership, without updater service or database-maintenance
+custody. Current artifacts need no writable checkout or service inspection.
+
+Before writing, automatic preparation requires verified artifact separation or an
+observed offline managed Gateway. On Linux it reads the loaded command location without reading service
+environment files, using the existing native manager binding. A native `GetUnit`
+not-loaded result establishes no loaded runtime, not absence of its saved definition.
+An unloaded saved unit does not make an otherwise writable source checkout immutable;
+this is admission-time inspection, not service-start exclusion or a sandbox.
+Physically shared `dist` paths, unreadable artifact paths, incomplete discovery, and
+unknown service state never grant permission to rebuild. Immutable deployments and
+known live overlap remain refused. No new CLI flag or configuration is needed for
+ordinary separate worktrees; use the [existing isolated runner](/help/testing/suites#network-isolated-local-e2e)
+when native separation cannot be established. This inspection is not a sandbox.
+Explicit `pnpm build`, automatic source-CLI rebuilds, and actual update publication
+retain their existing admission policies.
+
 Lint reports its final failure on stderr after child joins and artifact ownership
 have settled, including retained ownership when cleanup is uncertain. Standalone
 Oxlint and its shard CLI end with `[oxlint] FAILED (exit N)`; `pnpm lint` owns the
@@ -69,6 +88,9 @@ emission. Its filesystem callbacks make candidates outside the checkout appear
 missing before native resolution can read them. Source and package-manifest reads
 are captured directly; admission does not depend on parsing resolution traces.
 The compiler version is pinned in `package.json` because this API is unstable.
+Configuration and requested semantic checks run before emission. Declaration
+errors come from the in-memory emit result, avoiding a separate declaration
+transform solely for diagnostics. Any error prevents artifact publication.
 
 Nested physical worktrees are supported with their own
 `pnpm install --frozen-lockfile`, even when ancestor directories contain
@@ -192,6 +214,10 @@ this boundary. Forced parent or supervisor death (such as `SIGKILL`) can prevent
 cleanup; unregistered descendants that intentionally escape the owned group remain
 outside this contract. The wrappers do
 not sweep old directories or infer ownership from names, ages, or PIDs.
+The CI shard runner also removes its default include-file and transform-cache
+scratch directory after every admitted group has joined. Caller-supplied scratch
+and persistent cache roots remain caller-owned. Unverified descendant completion
+retains the shard scratch directory and reports its exact path.
 This is home isolation, not a filesystem sandbox: explicit absolute paths,
 `os.userInfo()` account lookup, children with stripped or replaced home variables,
 and intentionally real-home live execution remain outside its protection.

@@ -4,27 +4,34 @@ import type {
 } from "../config/sessions/session-history-types.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
+import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
 
 /** Dispatch only inside the history worker's admitted database lifetime. */
 export async function readSessionHistoryRequest(
   request: SessionHistoryWorkerRequest,
   readTarget: PreparedSessionHistoryReadTarget,
 ): Promise<SessionHistoryWorkerResult> {
+  const { sourceDiscovery, ...readerTarget } = readTarget;
   const options = {
-    readers: createReadonlySessionHistoryReader(readTarget),
+    readers: createReadonlySessionHistoryReader(
+      readerTarget,
+      sourceDiscovery
+        ? () => resolveGatewaySessionStoreReadSources(sourceDiscovery).sources
+        : undefined,
+    ),
     readOnly: true,
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
   if (request.kind === "artifacts") {
     const { selectSessionArtifacts } = await import("./session-artifact-read.js");
+    const query = request.params.query;
     return {
       kind: "artifacts",
-      result: await selectSessionArtifacts(
-        request.params.target,
-        request.params.query,
-        options.readers,
-      ),
+      result:
+        query.kind === "list" && query.includeDownloadData === false && !query.downloadArtifactIds
+          ? { kind: "list", artifacts: await options.readers.readArtifactSummaries(query) }
+          : await selectSessionArtifacts(request.params.target, query, options.readers),
     };
   }
   if (request.kind === "message-page") {
@@ -66,7 +73,7 @@ export async function readSessionHistoryRequest(
   if (request.kind === "transcript-binding") {
     return {
       kind: "transcript-binding",
-      binding: options.readers.readTranscriptBinding(request.params.run),
+      binding: options.readers.readTranscriptBinding(),
     };
   }
   if (request.kind === "message-by-id") {
@@ -112,9 +119,14 @@ export async function readSessionHistoryRequest(
   if (request.kind === "rpc") {
     const { readChatHistoryPageKernel } =
       await import("./server-methods/chat-history-page-kernel.js");
+    const { encodeChatHistoryResponsePage } =
+      await import("./server-methods/chat-history-response-page.js");
     return {
       kind: "rpc",
-      page: await readChatHistoryPageKernel(request.params, options),
+      page: encodeChatHistoryResponsePage(
+        await readChatHistoryPageKernel(request.params, options),
+        request.params,
+      ),
     };
   }
   const { readSessionHistorySnapshotKernel } = await import("./session-history-snapshot.js");

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import {
   createCronStoreHarness,
@@ -57,6 +58,7 @@ installCronTestHooks({ logger });
 
 function createDirectCronService(storePath: string) {
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log: logger,

@@ -18,8 +18,8 @@ import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { buildMentionConfig } from "../mentions.js";
-import type { MentionConfig } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
+import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
 import { applyGroupGating } from "./group-gating.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
@@ -43,8 +43,6 @@ export function createWebOnMessageHandler(params: {
   backgroundTasks: Set<Promise<unknown>>;
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<(typeof import("openclaw/plugin-sdk/runtime-env"))["getChildLogger"]>;
-  baseMentionConfig: MentionConfig;
-  account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   dispatchReplyFromConfig?: NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>;
 }) {
@@ -138,7 +136,6 @@ export function createWebOnMessageHandler(params: {
     });
     const baseMentionConfig = buildMentionConfig(cfg);
 
-    // Same-phone mode logging retained
     if (conversationId === msg.platform.recipientJid) {
       logVerbose(`📱 Same-phone mode detected (from === to: ${conversationId})`);
     }
@@ -163,18 +160,10 @@ export function createWebOnMessageHandler(params: {
           })
         : route.sessionKey;
 
-    // Preflight audio transcription: run once before broadcast fan-out so all
-    // agents share the same transcript instead of each making a separate STT call.
-    // For DMs, only do this on the real inbound path after access-control/pairing
-    // checks have already passed in inbound/monitor.ts. For groups, the first
-    // gating pass must approve the group/sender before STT is attempted.
-    // null = preflight was attempted but produced no transcript (failed / disabled / no audio);
-    // undefined = preflight was not attempted (non-audio message).
+    // Share one transcript across broadcast agents, after DM or group admission.
+    // Null records a completed attempt; undefined permits a later preflight.
     let preflightAudioTranscript: string | null | undefined;
-    const hasAudioBody =
-      (msg.payload.media?.kind === "audio" ||
-        msg.payload.media?.type?.startsWith("audio/") === true) &&
-      !msg.payload.body.trim();
+    const hasAudioBody = hasWhatsAppAudioBody(msg);
     const canRunEarlyAudioPreflight =
       conversationKind === "group" || canRunDirectEarlyAudioPreflight;
     let ackAlreadySent = false;
@@ -205,29 +194,8 @@ export function createWebOnMessageHandler(params: {
         return;
       }
       try {
-        const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
-        // transcribeFirstAudio returns undefined on failure/disabled; store null so
-        // processMessage knows the attempt was already made and does not retry.
         preflightAudioTranscript =
-          (await transcribeFirstAudio({
-            ctx: {
-              media: [
-                {
-                  path: msg.payload.media.path,
-                  contentType: msg.payload.media.type,
-                  kind: msg.payload.media.kind ?? undefined,
-                },
-              ],
-              From: conversationId,
-              To: msg.platform.recipientJid,
-              Provider: "whatsapp",
-              Surface: "whatsapp",
-              OriginatingChannel: "whatsapp",
-              OriginatingTo: conversationId,
-              AccountId: route.accountId,
-            },
-            cfg,
-          })) ?? null;
+          (await transcribeWhatsAppAudioMessage(cfg, msg, route.accountId)) ?? null;
       } catch {
         // Non-fatal: store null so per-agent retries are suppressed.
         preflightAudioTranscript = null;

@@ -1,16 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
-
-const OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  // Draft-07 dependencies mix schema values with property-name arrays. The
-  // recursive helpers leave scalar array entries untouched.
-  "dependencies",
-  "patternProperties",
-  "properties",
-]);
+import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
 
 // Annotation-only keywords whose null values can be dropped without changing
 // what the schema accepts; null constraint keywords must stay so projection
@@ -23,24 +13,9 @@ const OPENAI_NULLABLE_ANNOTATION_KEYS = new Set([
   "title",
 ]);
 
-const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set([
-  "additionalItems",
-  "additionalProperties",
-  "allOf",
-  "anyOf",
-  "contains",
-  "contentSchema",
-  "else",
-  "if",
-  "items",
-  "not",
-  "oneOf",
-  "prefixItems",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
+const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set(
+  [...SCHEMA_OBJECT_KEYS, ...SCHEMA_ARRAY_KEYS].toSorted(),
+);
 
 function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
   if (!isRecord(schema)) {
@@ -87,7 +62,7 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
       changed = true;
       return [];
     }
-    const next = OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS.has(key)
+    const next = SCHEMA_MAP_KEYS.has(key)
       ? normalizeOpenAIStrictCompatSchemaMap(value)
       : OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS.has(key)
         ? normalizeOpenAIStrictCompatSchemaRecursive(value)
@@ -204,7 +179,7 @@ export function findOpenAIStrictSchemaViolations(
 
   // Schema maps contain user-chosen names. Walk their values as schemas, but
   // never interpret map keys such as `$defs.anyOf` as schema keywords.
-  for (const key of OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS) {
+  for (const key of SCHEMA_MAP_KEYS) {
     const schemaMap = record[key];
     if (!isRecord(schemaMap)) {
       continue;

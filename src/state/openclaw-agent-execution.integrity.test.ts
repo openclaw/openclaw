@@ -47,6 +47,7 @@ import {
   resolveQuarantineStorePath,
 } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 
 const counter = vi.hoisted(() => ({
   path: "",
@@ -60,7 +61,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
     const prepare = DatabaseSync.prototype.prepare;
     DatabaseSync.prototype.prepare = function(sql) {
       const statement = prepare.call(this, sql);
-      const match = /^PRAGMA (integrity_check|foreign_key_check);?$/i.exec(sql.trim());
+      const match = /^PRAGMA (integrity_check|foreign_key_check)(?:[(]'sqlite_schema'[)])?;?$/i.exec(sql.trim());
       if (this.location() === workerData.testIntegrityPath && match) {
         for (const method of ["all", "get", "iterate", "run"]) {
           const execute = statement[method].bind(statement);
@@ -105,6 +106,69 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
+);
+
+it.each(["confirmed close", "native exit"] as const)(
+  "uses native close evidence before recovering an agent lease (%s)",
+  async (outcome) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-native-close-") };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const shared = openOpenClawStateDatabase({ env });
+    const leases = () =>
+      shared.db
+        .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
+        .all(database.path);
+    const hostLeases = leases();
+    expect(hostLeases).toHaveLength(1);
+    const context = captureOpenClawStateWorkerContext({ env });
+    const assertCurrent = () => context.admission.assertCurrent();
+    const source: AgentDatabaseRequestExecutionSource = {
+      assertCurrent,
+      createAdmission: (binding) => () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          assertCurrent();
+          if (!grant()) {
+            throw new Error("Native close fixture lost admission");
+          }
+        }, binding.attachment),
+      }),
+    };
+    const generation = createAgentDatabaseNativeGeneration(
+      database.agentId,
+      database.path,
+      context,
+      assertCurrent,
+      assertCurrent,
+      undefined,
+      () => {},
+    );
+    const workers: Worker[] = [];
+    const observeWorker = (worker: Worker) => workers.push(worker);
+    const cleanup = vi.spyOn(stateWorkerStore, "openOpenClawStateWorkerCleanupStore");
+    process.on("worker", observeWorker);
+    try {
+      await expect(generation.run(source, async () => "opened")).resolves.toBe("opened");
+      expect(leases()).toHaveLength(2);
+      process.off("worker", observeWorker);
+      if (outcome === "native exit") {
+        expect(workers.length).toBeGreaterThan(0);
+        await Promise.all(workers.map((worker) => worker.terminate()));
+        expect(leases()).toHaveLength(2);
+      }
+      await generation.close();
+      expect(leases()).toEqual(hostLeases);
+      expect(cleanup).toHaveBeenCalledTimes(outcome === "confirmed close" ? 0 : 1);
+    } finally {
+      process.off("worker", observeWorker);
+      try {
+        await generation.close();
+      } finally {
+        cleanup.mockRestore();
+      }
+    }
+  },
 );
 
 it.each(["settled", "pending"] as const)(
@@ -253,7 +317,7 @@ it.each([
       closeCachedOpenClawAgentDatabase(database, { eviction: true });
       expect(database.walMaintenance.health?.state).toBe("blocked");
       expect(database.db.isOpen).toBe(false);
-      expect(readOpenClawAgentIntegrityVerification(database.path, env)).toBeUndefined();
+      expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
     } finally {
       reader.close();
     }
@@ -355,5 +419,8 @@ it.each([
         releaseOpenClawAgentDatabaseLease(siblingLease, { env }, "read-only");
       }
     }
+  }
+  if (proof === "closed-host-blocked-last") {
+    expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(1);
   }
 });

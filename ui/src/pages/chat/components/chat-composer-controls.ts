@@ -3,6 +3,7 @@ import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderKbd } from "../../../components/kbd.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
@@ -16,8 +17,6 @@ import {
 } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
-import type { RealtimeVoiceSelectionState } from "../talk/voice-selection.ts";
-import { renderRealtimeVoicePicker } from "./chat-realtime-controls.ts";
 import {
   renderChatVoiceStatus,
   renderMicrophoneActivity,
@@ -54,8 +53,6 @@ export type ChatRunControlsProps = {
   onToggleVoice?: () => void;
   onToggleCamera?: () => void;
   microphonePicker?: TemplateResult | typeof nothing;
-  voice?: RealtimeVoiceSelectionState;
-  onSelectVoice?: (voice: string) => void;
 };
 
 type MicrophonePickerProps = {
@@ -520,6 +517,12 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const activeRunActionTooltip = alternateShortcutAvailable
     ? `${activeRunActionLabel} ⏎ · ${alternateActionLabel} ${t("chat.sendShortcutModifierEnter")}`
     : activeRunActionLabel;
+  const activeRunActionTooltipTemplate = alternateShortcutAvailable
+    ? html`${activeRunActionLabel}${" "}${renderKbd("⏎", { inline: true })}${" · "}${alternateActionLabel}${" "}${renderKbd(
+        t("chat.sendShortcutModifierEnter").split(/(⌘)/u).filter(Boolean),
+        { inline: true },
+      )}`
+    : undefined;
   // Preserve the click identity without mistaking it for a follow-up mode.
   const send = (event: Event) => props.onSend(event);
   const abortAction = renderChatAbortAction(props);
@@ -585,11 +588,10 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         : t("chat.composer.emptyHint"));
   const hasSendableContent =
     hasComposedContent && props.canSend && !props.sending && !sendDisabledReason;
-  // A held draft must not replace Stop with a disabled Send. Only an available
-  // follow-up action takes that slot during an abortable run.
   const sendAction = html`
     <openclaw-tooltip
       .content=${props.preparingAttachments ? t("chat.composer.preparingAttachments") : (sendStatus ?? activeRunActionTooltip)}
+      .contentTemplate=${!props.preparingAttachments && sendStatus == null ? activeRunActionTooltipTemplate : undefined}
     >
       <button
         class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"
@@ -612,22 +614,22 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
           props.onPrimaryActionPointerDown,
         )
       : sendAction;
-  const desktopPrimaryAction = props.dictation?.active
-    ? dictationSendAction
-    : props.canAbort && !hasSendableContent
-      ? abortAction
-      : sendAction;
+  const desktopPrimaryAction = props.dictation?.active ? dictationSendAction : sendAction;
   const mobilePrimaryAction = props.dictation?.active
     ? dictationSendAction
-    : props.canAbort && !hasSendableContent
-      ? abortAction
-      : hasComposedContent
-        ? sendAction
-        : props.onToggleVoice
-          ? mobileTalkAction
-          : sendAction;
-  const primaryActions =
-    mobilePrimaryAction === desktopPrimaryAction
+    : hasComposedContent
+      ? sendAction
+      : props.onToggleVoice
+        ? mobileTalkAction
+        : sendAction;
+  // Stop keeps the trailing edge and its DOM identity throughout an active run.
+  // A ready follow-up appears before it without replacing the cancellation target.
+  const primaryActions = props.canAbort
+    ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action">
+        ${props.dictation?.active ? dictationSendAction : hasSendableContent ? sendAction : nothing}
+        ${abortAction}
+      </span>`
+    : mobilePrimaryAction === desktopPrimaryAction
       ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action"
           >${desktopPrimaryAction}</span
         >`
@@ -639,11 +641,6 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     ${
       props.voiceActive && props.onToggleVoice
         ? html`
-            ${renderRealtimeVoicePicker({
-              ...props.voice,
-              disabled: !props.connected || voiceErrored,
-              onChange: props.onSelectVoice,
-            })}
             <span class="chat-talk-control chat-talk-control--active">
               <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
                 <button

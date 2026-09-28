@@ -4,6 +4,10 @@ import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 // Tracks spawned children by pid so the killProcessTree mock can emit close on them.
@@ -105,7 +109,7 @@ async function startMockWatcher(spawned = true): Promise<MockWatcherChild[]> {
     children.push(child);
     return child;
   });
-  await startGmailWatcher(createGmailConfig());
+  await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
   return children;
 }
 
@@ -149,12 +153,17 @@ describe("startGmailWatcher", () => {
     });
 
     const staleStart = startGmailWatcher(createGmailConfig(), {
+      scheduler: createTestGatewayScheduler(),
       signal: oldController.signal,
     });
 
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
 
-    await expect(startGmailWatcher(createGmailConfig("newer@example.com"))).resolves.toEqual({
+    await expect(
+      startGmailWatcher(createGmailConfig("newer@example.com"), {
+        scheduler: createTestGatewayScheduler(),
+      }),
+    ).resolves.toEqual({
       started: true,
     });
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
@@ -189,6 +198,7 @@ describe("startGmailWatcher", () => {
     );
 
     const startPromise = startGmailWatcher(createGmailConfig(), {
+      scheduler: createTestGatewayScheduler(),
       signal: controller.signal,
     });
 
@@ -232,6 +242,7 @@ describe("startGmailWatcher", () => {
         },
       } as never,
       {
+        scheduler: createTestGatewayScheduler(),
         signal: controller.signal,
       },
     );
@@ -260,63 +271,103 @@ describe("startGmailWatcher", () => {
       return child;
     });
 
-    await startGmailWatcher(createGmailConfig());
+    await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
     expect(spawnedChildren).toHaveLength(1);
     expect(
       expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").kill,
     ).not.toHaveBeenCalled();
 
-    await startGmailWatcher(createGmailConfig());
+    await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
     expect(spawnedChildren).toHaveLength(2);
     expect(
       expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").kill,
     ).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("only one renewal fires per tick after multiple starts", async () => {
-    vi.useFakeTimers();
+  it("renews once after multiple starts and coalesces missed renewals after sleep", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
     mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-
-    await startGmailWatcher(createGmailConfig());
-    await startGmailWatcher(createGmailConfig());
+    await startGmailWatcher(createGmailConfig(), { scheduler });
+    await startGmailWatcher(createGmailConfig(), { scheduler });
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
 
-    // A leaked interval would register a second renewal after the default 12 hours.
-    await vi.advanceTimersByTimeAsync(720 * 60_000);
+    await clock.advanceBy(720 * 60_000);
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not let a stalled renewal survive stop and suppress a replacement watcher", async () => {
-    vi.useFakeTimers();
-    let stalledSignal: AbortSignal | undefined;
-    mocks.runCommandWithTimeout
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-      .mockImplementationOnce(
-        async (_args, options: { signal?: AbortSignal }) =>
-          await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-            stalledSignal = options.signal;
-            options.signal?.addEventListener(
-              "abort",
-              () => resolve({ code: 1, stdout: "", stderr: "aborted" }),
-              { once: true },
-            );
-          }),
-      )
-      .mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-
-    await startGmailWatcher(createGmailConfig("old@example.com", 1));
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(stalledSignal?.aborted).toBe(false);
-
-    await stopGmailWatcher();
-    expect(stalledSignal?.aborted).toBe(true);
-
-    await startGmailWatcher(createGmailConfig("new@example.com", 1));
-    await vi.advanceTimersByTimeAsync(60_000);
-
+    await clock.advanceBy(3 * 720 * 60_000);
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(4);
-    expect(mocks.runCommandWithTimeout.mock.calls[3]?.[0]).toContain("new@example.com");
+    await stopGmailWatcher();
+    await clock.advanceBy(720 * 60_000);
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(4);
   });
+
+  it("keeps a stalled periodic renewal single-flight", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const renewal = deferredCommandResult();
+    let tick: void | Promise<void> = undefined;
+    try {
+      mocks.runCommandWithTimeout
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockImplementation(async () => await renewal.promise);
+
+      await startGmailWatcher(createGmailConfig("me@example.com", 1), { scheduler });
+      tick = clock.advanceBy(60_000);
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+
+      await clock.advanceBy(60_000);
+      const callsWhileStalled = mocks.runCommandWithTimeout.mock.calls.length;
+      renewal.resolve({ code: 0, stdout: "", stderr: "" });
+      await tick;
+
+      expect(callsWhileStalled).toBe(2);
+    } finally {
+      renewal.resolve({ code: 0, stdout: "", stderr: "" });
+      await tick;
+    }
+  });
+
+  it.each(["watcher", "scheduler"])(
+    "retires a stalled renewal on %s stop before replacement",
+    async (stopOwner) => {
+      const clock = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      let stalledSignal: AbortSignal | undefined;
+      mocks.runCommandWithTimeout
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockImplementationOnce(
+          async (_args, options: { signal?: AbortSignal }) =>
+            await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+              stalledSignal = options.signal;
+              options.signal?.addEventListener(
+                "abort",
+                () => resolve({ code: 1, stdout: "", stderr: "aborted" }),
+                { once: true },
+              );
+            }),
+        )
+        .mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+
+      await startGmailWatcher(createGmailConfig("old@example.com", 1), { scheduler });
+      const tick = clock.advanceBy(60_000);
+      expect(stalledSignal?.aborted).toBe(false);
+
+      if (stopOwner === "scheduler") {
+        await scheduler.stop();
+      }
+      await stopGmailWatcher();
+      await tick;
+      expect(stalledSignal?.aborted).toBe(true);
+
+      await startGmailWatcher(createGmailConfig("new@example.com", 1), {
+        scheduler: createTestGatewayScheduler(clock.clock),
+      });
+      await clock.advanceBy(60_000);
+
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(4);
+      expect(mocks.runCommandWithTimeout.mock.calls[3]?.[0]).toContain("new@example.com");
+    },
+  );
 
   it("uses killProcessTree for gog shutdown and resolves on final timeout when process ignores signals", async () => {
     vi.useFakeTimers();
@@ -331,14 +382,16 @@ describe("startGmailWatcher", () => {
     });
     mocks.spawn.mockReturnValueOnce(stubbornChild);
 
-    await startGmailWatcher(createGmailConfig());
+    await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
 
     mocks.spawn.mockImplementation(() => createMockWatcherChild(false));
 
     // Re-entry starts settle on stubbornChild; advance past the 8 s final
     // timeout (stubbornChild never emits exit), then verify the outcome.
-    const startPromise = startGmailWatcher(createGmailConfig());
+    const startPromise = startGmailWatcher(createGmailConfig(), {
+      scheduler: createTestGatewayScheduler(),
+    });
     await vi.advanceTimersByTimeAsync(8_000);
     await expect(startPromise).resolves.toEqual({ started: true });
 
@@ -358,7 +411,7 @@ describe("startGmailWatcher", () => {
       return child;
     });
 
-    await startGmailWatcher(createGmailConfig());
+    await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
     expect(spawnedChildren).toHaveLength(1);
 
     // Process crashes (exit code 1). This queues a 5s respawn timeout.
@@ -366,7 +419,7 @@ describe("startGmailWatcher", () => {
 
     // Before the 5s timer fires, a config reload triggers re-entry.
     // The re-entry guard should cancel the stale respawn timeout.
-    await startGmailWatcher(createGmailConfig());
+    await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
     expect(spawnedChildren).toHaveLength(2);
 
     await vi.advanceTimersByTimeAsync(6000);
@@ -379,7 +432,9 @@ describe("startGmailWatcher", () => {
     const children = await startMockWatcher();
     mocks.killProcessTree.mockImplementation(() => {});
     mocks.runCommandWithTimeout.mockImplementationOnce(() => pendingStart.promise);
-    const restarting = startGmailWatcher(createGmailConfig("new@example.com"));
+    const restarting = startGmailWatcher(createGmailConfig("new@example.com"), {
+      scheduler: createTestGatewayScheduler(),
+    });
     try {
       await vi.advanceTimersByTimeAsync(8_000);
       expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
@@ -420,7 +475,7 @@ describe("startGmailWatcher", () => {
       });
     });
 
-    await startGmailWatcher(createGmailConfig());
+    await startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() });
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
 
     let stopped = false;
@@ -525,7 +580,9 @@ describe("startGmailWatcher", () => {
       return child;
     });
 
-    await expect(startGmailWatcher(createGmailConfig())).resolves.toEqual({ started: true });
+    await expect(
+      startGmailWatcher(createGmailConfig(), { scheduler: createTestGatewayScheduler() }),
+    ).resolves.toEqual({ started: true });
   });
 
   it.each([

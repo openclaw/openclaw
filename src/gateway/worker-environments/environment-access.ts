@@ -175,7 +175,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             },
           }
         : {}),
-      ...((record.state === "failed" || record.state === "orphaned") && record.lastError
+      ...((record.state === "failed" ||
+        record.state === "orphaned" ||
+        (record.destroyRequestedAtMs !== null && record.state !== "destroyed")) &&
+      record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
       ...(cleanupError ? { error: cleanupError } : {}),
@@ -330,6 +333,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
       }
+      request.authorize?.();
       const nodeDeviceId = record.nodeDeviceId;
       const nodeBundle =
         typeof nodeDeviceId === "string" &&
@@ -357,6 +361,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             openclawVersion: currentBundle.openclawVersion,
             protocolFeatures: [...currentBundle.protocolFeatures],
           },
+          authorize: request.authorize,
         });
         stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
         return;

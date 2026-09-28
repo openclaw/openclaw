@@ -7,6 +7,7 @@ import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
 } from "../../infra/package-update-steps.js";
+import type { PackageActivationOptions } from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import {
   failedPackageVerificationStep,
@@ -62,6 +63,7 @@ import {
 } from "./shared.js";
 import {
   createUpdateConfigSnapshot,
+  captureUpdateConfigSnapshot,
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
@@ -175,7 +177,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   };
   params.progress?.onStepStart?.(doctorProgressInfo);
   const configSnapshot = params.onConfigSnapshot
-    ? await readUpdateConfigSnapshot(resolveConfigPath(doctorEnv))
+    ? await captureUpdateConfigSnapshot(resolveConfigPath(doctorEnv), doctorEnv)
     : undefined;
   const completeDoctorStep = async (
     doctorStep: UpdateStepResult,
@@ -227,6 +229,12 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
           doctorResult,
         ),
       );
+      if (configSnapshot?.doctorOwned === false) {
+        doctorStep.warnings = [
+          ...(doctorStep.warnings ?? []),
+          "The config include graph could not be captured before Doctor; automatic config rollback is unavailable for this update.",
+        ];
+      }
       if (configWriteRefusal) {
         doctorStep.failureFacts = normalizeUpdateFailureFacts([
           createUpdateFailureFact({
@@ -243,14 +251,40 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         const { hash } = await readUpdateConfigSnapshot(configSnapshot.path);
         const doctorHash = doctorResult?.configHash;
         const doctorInputHash = doctorResult?.configInputHash;
+        const capturedPaths = new Set([
+          configSnapshot.pathSnapshot?.targetPath ?? configSnapshot.path,
+          ...(configSnapshot.includedFiles ?? []).map(
+            (file) => file.pathSnapshot?.targetPath ?? file.path,
+          ),
+        ]);
+        const writesCaptured = Object.keys(doctorResult?.configFileWrites ?? {}).every((file) =>
+          capturedPaths.has(file),
+        );
+        const includedFiles: NonNullable<UpdateConfigSnapshot["includedFiles"]> = [];
+        for (const file of configSnapshot.includedFiles ?? []) {
+          const current = await readUpdateConfigSnapshot(file.path);
+          const receipt =
+            doctorResult?.configFileWrites?.[file.pathSnapshot?.targetPath ?? file.path];
+          includedFiles.push({
+            ...file,
+            hash: current.hash,
+            doctorOwned:
+              receipt?.inputHash === undefined
+                ? current.hash === file.hash
+                : receipt.inputHash === file.hash && current.hash === receipt.hash,
+          });
+        }
         params.onConfigSnapshot?.({
           ...configSnapshot,
           hash,
+          ...(configSnapshot.includedFiles ? { includedFiles } : {}),
           doctorOwned:
-            doctorInputHash === undefined
+            configSnapshot.doctorOwned !== false &&
+            writesCaptured &&
+            (doctorInputHash === undefined
               ? hash === configSnapshot.hash
               : doctorInputHash === configSnapshot.hash &&
-                hash === (doctorHash === "unchanged" ? doctorInputHash : doctorHash),
+                hash === (doctorHash === "unchanged" ? doctorInputHash : doctorHash)),
         });
       }
     } catch (error) {
@@ -396,7 +430,10 @@ export async function prepareGitPackageExposure(
           ? normalizeFallbackFailureReason(failure.name)
           : "source-exposure-preparation-failed"),
       failure?.stderrTail ?? "Global source exposure did not reach the activation gate",
-      { failureFacts: failure?.failureFacts },
+      {
+        failureFacts: failure?.failureFacts,
+        stepResult: { steps: outcome.steps, failedStep: failure ?? undefined },
+      },
     );
   }
   return {
@@ -446,9 +483,11 @@ export type PackageInstallUpdateParams = {
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   assertCurrent?: () => void;
+  reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
   getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
+  getActivation?: () => PackageActivationOptions | undefined;
 };
 
 /** Retain one staged target while its runtime initializes a fresh profile. */
@@ -511,6 +550,9 @@ export async function stagePackageInstallUpdate(
         return await requireActive().validateCandidate(root);
       },
       beforeActivate: () => requireActive().beforeActivate(),
+      assertCurrent: () => requireActive().assertCurrent?.(),
+      reserveInstallSlot: (root) => requireActive().reserveInstallSlot?.(root),
+      getActivation: () => requireActive().getActivation?.(),
       onTransaction: (transaction) => requireActive().onTransaction(transaction),
       onConfigSnapshot: (snapshot) => requireActive().onConfigSnapshot?.(snapshot),
     },
@@ -524,7 +566,7 @@ export async function stagePackageInstallUpdate(
     throw new UpdatePreMutationError(
       ready.result.reason ?? "package-staging-failed",
       ready.result.failedStep?.stderrTail ?? "Package staging did not produce a target runtime.",
-      { failureFacts: ready.result.failedStep?.failureFacts },
+      { failureFacts: ready.result.failedStep?.failureFacts, stepResult: ready.result },
     );
   }
   return {
@@ -594,7 +636,9 @@ export async function runPackageInstallUpdate(
     resolveLifecycleNodeRunner: params.resolveLifecycleNodeRunner ?? (() => params.nodeRunner),
     beforeActivate: params.beforeActivate,
     assertCurrent: params.assertCurrent,
+    reserveInstallSlot: params.reserveInstallSlot,
     onTransaction: params.onTransaction,
+    getActivation: params.getActivation,
     installTarget,
     installSpec,
     packageName,

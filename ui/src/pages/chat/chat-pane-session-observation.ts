@@ -176,14 +176,11 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         const observation = binding.observation;
         while (current() && observation?.isCurrent()) {
           const reconcile = observation.captureReconcile();
-          const { session } = await client.request<{ session?: GatewaySessionRow }>(
-            "sessions.describe",
-            { key, agentId },
-          );
+          const { session } = await sessions.describe({ key, agentId }, { client });
           if (!current()) {
             return;
           }
-          if (reconcile(session).status !== "invalidated") {
+          if (reconcile(session ?? undefined).status !== "invalidated") {
             return;
           }
         }
@@ -240,7 +237,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     previous?.observation?.dispose();
   }
 
-  protected synchronizeSessionObservation() {
+  protected synchronizeSessionObservation(options: { eventSessionId?: string | null } = {}) {
     const state = this.state;
     const sessions = this.context.sessions;
     if (!state?.connected || !state.sessionKey.trim() || parseCatalogSessionKey(state.sessionKey)) {
@@ -259,6 +256,9 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       this.synchronizeParentSessionObservation();
       return;
     }
+    const previousObservationSessionId = previous?.matchesPane()
+      ? previous.observation?.sessionId
+      : null;
     // Unidentified live content keeps its observed incarnation across metadata rebinding.
     const retainedTranscriptSessionId =
       state.chatRunId ||
@@ -341,7 +341,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
           if (binding.observation && !binding.observation.isCurrent()) {
             const previousSessionId = binding.observation.sessionId;
             predecessorSessionId = previousSessionId;
-            this.synchronizeSessionObservation();
+            this.synchronizeSessionObservation({ eventSessionId: incoming?.sessionId });
             const replacement = this.sessionObservation;
             if (
               !ownsPaneScope() ||
@@ -395,6 +395,21 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     } else {
       // The owner can publish its first result synchronously before the handle returns.
       this.projectObservedSessionRow();
+      const observation = binding.observation;
+      const transcriptSessionId = state.currentSessionId ?? retainedTranscriptSessionId;
+      if (
+        previousObservationSessionId &&
+        observation?.isCurrent() &&
+        observation.sessionId &&
+        observation.sessionId !== options.eventSessionId &&
+        observation.sessionId !== previousObservationSessionId &&
+        observation.row?.sessionId === observation.sessionId &&
+        transcriptSessionId &&
+        transcriptSessionId !== observation.sessionId
+      ) {
+        // A canonical read can admit the successor after its event was fenced.
+        this.refreshHistory();
+      }
     }
   }
 

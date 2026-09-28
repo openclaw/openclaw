@@ -36,7 +36,6 @@ const DEFAULT_COMMAND_HELP_NAMES = [
   "models",
   "plugins",
   "sessions",
-  "tasks",
 ] as const;
 
 function sourceSubcommandHelp() {
@@ -47,7 +46,6 @@ function sourceSubcommandHelp() {
     models: "Usage: openclaw models\n",
     plugins: "Usage: openclaw plugins\n",
     sessions: "Usage: openclaw sessions\n",
-    tasks: "Usage: openclaw tasks\n",
   };
 }
 
@@ -264,7 +262,6 @@ describe("write-cli-startup-metadata", () => {
         spawnProcess: spawnProcess as typeof spawn,
         timeoutMs: 5_000,
       });
-
       child[streamName].emit("error", streamError);
       child.emit("close", null, "SIGTERM");
 
@@ -590,9 +587,27 @@ if (role === "leaf") {
       const controller = String.raw`
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { pathToFileURL } from "node:url";
 const [root, mode, repo] = process.argv.slice(2);
+let ownedLeaderPid, completedPsFault;
+const originalSpawnSync = childProcess.spawnSync;
+if (mode === "unknown") {
+  childProcess.spawnSync = function (...args) {
+    const result = Reflect.apply(originalSpawnSync, this, args);
+    const [command, argv] = args;
+    if (command === "ps" && ownedLeaderPid !== undefined && Array.isArray(argv) &&
+        argv.length === 5 && argv[0] === "-s" && argv[1] === String(ownedLeaderPid) &&
+        argv[2] === "-L" && argv[3] === "-o" && argv[4] === "pgid=,state=" &&
+        result.status === 23 && result.signal === null && !result.error) {
+      completedPsFault ??= { groupPid: ownedLeaderPid, status: result.status,
+        signal: result.signal, errorPresent: !!result.error };
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+}
 const { testing } = await import(${JSON.stringify(metadataUrl.href)});
 const { inspectManagedProcessGroup, waitForManagedProcessGroupExit } =
   await import(pathToFileURL(path.join(repo, "scripts/lib/managed-child-process.mts")));
@@ -620,12 +635,14 @@ try {
     renderSourceNodesHelpText: (context, taskContext) => {
       if (!taskContext) throw new Error("missing actual supervisor task context");
       renderState = context.env.OPENCLAW_STATE_DIR;
+      // Unknown mode fails every snapshot while the reaper holds the stopped group.
       return testing.spawnText([file("actor.mjs"), root, "leader"], {
         cwd: root, env: process.env, failureMessage: "supervised nodes fixture failed",
-        timeoutMs: 120000, killGraceMs: 5000, maxOutputBytes: 16384,
+        timeoutMs: 120000, killGraceMs: mode === "unknown" ? 1000 : 5000, maxOutputBytes: 16384,
         onTerminalFailure: taskContext.reportFailure, signal: taskContext.signal,
         spawnProcess: (...args) => {
           const child = spawn(...args);
+          ownedLeaderPid = child.pid;
           child.once("exit", (code, signal) => events.push({ event: "exit", code, signal }));
           child.once("close", (code, signal) => {
             events.push({ event: "close", code, signal });
@@ -660,9 +677,14 @@ try {
   outcome = { ok: false, code: error.code ?? null,
     cleanupCode: error.processTreeCleanupFailure?.code ?? null,
     preserveRenderState: error.preserveRenderState === true };
+} finally {
+  if (mode === "unknown") {
+    childProcess.spawnSync = originalSpawnSync;
+    syncBuiltinESMExports();
+  }
 }
 await liveControl;
-publish("outcome.json", { ...outcome, events, elapsedMs: Date.now() - started,
+publish("outcome.json", { ...outcome, completedPsFault, events, elapsedMs: Date.now() - started,
   outputPresent: fs.existsSync(outputPath), statePresent: !!renderState && fs.existsSync(renderState) });
 `;
       // The reaper owns the controller and adopted leaf. It never scans or signals unrelated PIDs.
@@ -751,7 +773,7 @@ def threads(pid):
     for entry in entries:
         try:
             fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             if entry.name == str(pid):
                 raise
             continue
@@ -938,7 +960,7 @@ finally:
           groupPresent: boolean;
           reaped: { pid: number; status: number }[];
         };
-        adopted: { pid: number };
+        adopted: { pid: number; pgid: number };
         signalZeroPresent: boolean;
         controllerCode: number;
         leaderClose: { code: number; signal: string | null };
@@ -951,6 +973,12 @@ finally:
           outputPresent: boolean;
           statePresent: boolean;
           events: { event: string; code: number; signal: string | null }[];
+          completedPsFault?: {
+            groupPid: number;
+            status: number;
+            signal: string | null;
+            errorPresent: boolean;
+          };
         };
         liveControl?: { observation: string; stopped: boolean; elapsedMs: number };
       };
@@ -1052,6 +1080,12 @@ finally:
         preserveRenderState: true,
         statePresent: true,
         outputPresent: false,
+      });
+      expect(unknown.outcome.completedPsFault).toEqual({
+        groupPid: unknown.adopted.pgid,
+        status: 23,
+        signal: null,
+        errorPresent: false,
       });
       expect(stopped.outcome, JSON.stringify(stopped.outcome)).toMatchObject({
         ok: true,
@@ -1301,7 +1335,7 @@ finally:
           "    config: 'Usage: openclaw config\\n',",
           "    doctor: 'Usage: openclaw doctor\\n', gateway: 'Usage: openclaw gateway\\n',",
           "    models: 'Usage: openclaw models\\n', plugins: 'Usage: openclaw plugins\\n',",
-          "    sessions: 'Usage: openclaw sessions\\n', tasks: 'Usage: openclaw tasks\\n',",
+          "    sessions: 'Usage: openclaw sessions\\n',",
           "  }),",
           "});",
         ].join("\n"),
@@ -1357,7 +1391,6 @@ finally:
       }
     },
   );
-
   it.each(["new", "existing", "symlinked parent"] as const)(
     "writes complete startup metadata with %s output and source-rendered help",
     async (outputKind) => {
@@ -1414,7 +1447,6 @@ finally:
           models: string;
           plugins: string;
           sessions: string;
-          tasks: string;
         };
       };
       expect(written.channelOptions).toContain("matrix");
@@ -1433,7 +1465,6 @@ finally:
       expect(written.subcommandHelpText.models).toContain("openclaw models");
       expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
       expect(written.subcommandHelpText.sessions).toContain("openclaw sessions");
-      expect(written.subcommandHelpText.tasks).toContain("openclaw tasks");
       expect(fs.readdirSync(distDir)).toEqual(["cli-startup-metadata.json"]);
       if (process.platform !== "win32") {
         expect(fs.statSync(distDir).mode & 0o777).toBe(0o750);
@@ -1469,7 +1500,6 @@ finally:
           models: "Usage: openclaw models\n",
           plugins: "Usage: openclaw plugins\n",
           sessions: "Usage: openclaw sessions\n",
-          tasks: "Usage: openclaw tasks\n",
         }),
       };
       await testing.writeCliStartupMetadata(options);
@@ -1804,7 +1834,6 @@ finally:
         models: `${banner}\nUsage: openclaw models\n`,
         plugins: `${banner}\nUsage: openclaw plugins\n`,
         sessions: `${banner}\nUsage: openclaw sessions\n`,
-        tasks: `${banner}\nUsage: openclaw tasks\n`,
       };
     };
 

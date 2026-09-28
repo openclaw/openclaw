@@ -169,7 +169,7 @@ describe("createApprovalNativeRouteReporter", () => {
         channel: "telegram",
         to: "chat:123",
         message:
-          "Approval required, but multiple channel accounts can handle this request. Open the Control UI or terminal UI to approve it.",
+          "Approval required, but multiple channel accounts can handle this request. Open the Control UI to approve it.",
       }),
     );
     expect(requestGateway).not.toHaveBeenCalledWith(

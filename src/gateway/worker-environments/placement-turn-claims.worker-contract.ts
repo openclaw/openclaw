@@ -21,6 +21,19 @@ export type PlacementTurnClaimWorkerOperations = {
     input: { claim: WorkerSessionTurnClaim; nowMs?: number };
     output: PlacementTurnClaimReceipt;
   };
+  "placementTurns.recoverWorkspace": {
+    input: { claim: WorkerSessionTurnClaim; gatewayInstanceId: string; nowMs?: number };
+    output: PlacementTurnClaimReceipt;
+  };
+  "placementTurns.handoffRuntimeRefreshResult": {
+    input: {
+      claim: WorkerSessionTurnClaim;
+      expectedGeneration: number;
+      gatewayInstanceId: string;
+      nowMs: number;
+    };
+    output: PlacementTurnClaimReceipt;
+  };
 };
 
 export function isPlacementTurnClaimCommand(command: {
@@ -29,6 +42,8 @@ export function isPlacementTurnClaimCommand(command: {
   return (
     command.type === "placementTurns.claim" ||
     command.type === "placementTurns.release" ||
-    command.type === "placementTurns.releaseIfOwned"
+    command.type === "placementTurns.releaseIfOwned" ||
+    command.type === "placementTurns.recoverWorkspace" ||
+    command.type === "placementTurns.handoffRuntimeRefreshResult"
   );
 }

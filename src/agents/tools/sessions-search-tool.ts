@@ -1,4 +1,3 @@
-/** Full-text search over visible session transcripts. */
 import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -21,7 +20,7 @@ import {
 } from "./common.js";
 import {
   callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
 import {
   resolveSessionToolTargetAgentId,
@@ -93,8 +92,6 @@ const SessionsSearchOutputSchema = Type.Union([
     { additionalProperties: false },
   ),
 ]);
-
-type GatewayCaller = AgentToolGatewayRequestCaller;
 
 type GatewaySearchHit = {
   sessionKey?: unknown;
@@ -335,7 +332,7 @@ export function createSessionsSearchTool(opts?: {
     outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const query = readToolStringParam(params, "query")?.trim() ?? "";
+      const query = readToolStringParam(params, "query") ?? "";
       if (!query) {
         throw new ToolInputError("query must not be empty");
       }

@@ -61,6 +61,7 @@ const snapshotSchema = z
 
 const recordSchema = z
   .object({
+    cursorMatchesSnapshot: z.literal(true).optional(),
     savedAt: z.number().finite().nonnegative(),
     sessionId: z.string().nullable(),
     sessionKey: z.string().min(1),
@@ -116,6 +117,7 @@ function createSnapshotRecord(
   const snapshot = sanitizeSnapshot(pending.snapshot);
   return snapshot
     ? parseSnapshotRecord({
+        cursorMatchesSnapshot: true,
         savedAt: pending.savedAt,
         sessionId: pending.snapshot.sessionId,
         sessionKey,
@@ -161,6 +163,7 @@ function measureStoredRecordWeight(record: SessionSnapshotRecord): number {
     return (
       snapshotWeight +
       JSON.stringify({
+        cursorMatchesSnapshot: record.cursorMatchesSnapshot,
         savedAt: record.savedAt,
         sessionId: record.sessionId,
         sessionKey: record.sessionKey,
@@ -289,6 +292,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       debugSnapshotStore("resetting cache after record shape mismatch");
       await resetSessionSnapshotDatabase();
       return null;
+    }
+    // Older split panes could save a sibling's newer cursor with an incomplete transcript.
+    if (!record.cursorMatchesSnapshot) {
+      delete record.snapshot.deltaCursor;
     }
     setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(record.snapshot));
     return record.snapshot;

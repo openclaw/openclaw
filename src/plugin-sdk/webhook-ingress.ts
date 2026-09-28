@@ -1,9 +1,18 @@
 /**
  * Public SDK subpath for webhook ingress guards, targets, and request helpers.
  */
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
+import {
+  createGatewayAuthRateLimiter,
+  type AuthRateLimiter,
+  type RateLimitConfig,
+} from "../gateway/auth-rate-limit.js";
 import { resolveRequestClientIpFromHeaders } from "../gateway/net.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
+import { getBoundLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 
 export { getWebhookLegacyListener };
@@ -64,7 +73,27 @@ export function resolveRequestClientIp(
       : undefined) ?? resolveRequestClientIpFromHeaders(req, trustedProxies, allowRealIpFallback)
   );
 }
-export { createGatewayAuthRateLimiter as createAuthRateLimiter } from "../gateway/auth-rate-limit.js";
+export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter & {
+  updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
+} {
+  const host = getBoundLegacyPluginSdkResourceHost();
+  if (host) {
+    return createGatewayAuthRateLimiter(config, {
+      scheduler: host.scheduler,
+      id: `auth/sdk:${randomUUID()}`,
+    });
+  }
+  const scheduler = new GatewayScheduler();
+  const limiter = createGatewayAuthRateLimiter(config, { scheduler, id: "auth:standalone" });
+  const dispose = limiter.dispose.bind(limiter);
+  limiter.dispose = () => {
+    // Only synchronous pruning uses this standalone owner. Dispose settles the
+    // request-owned penalty waits before closing it; no asynchronous jobs remain.
+    dispose();
+    void scheduler.stop();
+  };
+  return limiter;
+}
 export type { AuthRateLimiter, RateLimitConfig } from "../gateway/auth-rate-limit.js";
 export { rawDataToString } from "../infra/ws.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";

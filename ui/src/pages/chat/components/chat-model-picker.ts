@@ -241,7 +241,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         }`}
         aria-busy=${params.triggerLoading || params.triggerStarting ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason?.trim() || params.selectionScopeDescription || triggerTitle}
+        title=${params.disabledReason?.trim() || nothing}
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();
@@ -395,7 +395,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                         type="button"
                                         data-chat-model-group-toggle
                                         data-chat-model-provider-toggle
-                                        aria-expanded="false"
+                                        aria-expanded=${String(provider === activeModelOption?.provider)}
                                         aria-label=${`${t("chat.modelControls.providerModels", {
                                           provider: providerDisplayLabel(provider),
                                         })} (${options.length})`}

@@ -6,7 +6,6 @@ import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   postWebhookReplay,
-  settleAsyncWork,
 } from "./test-support/lifecycle-test-support.js";
 import {
   loadCachedLifecycleMonitorModule,
@@ -103,7 +102,7 @@ describe("Zalo reply-once lifecycle", () => {
 
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await settleAsyncWork();
+          await monitor.waitForIdle();
         },
       );
 
@@ -165,12 +164,12 @@ describe("Zalo reply-once lifecycle", () => {
               userName: "User One",
               chatId: "dm-chat-1",
             }),
-            settleBeforeReplay: true,
+            beforeReplay: monitor.waitForIdle,
           });
 
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await settleAsyncWork();
+          await monitor.waitForIdle();
         },
       );
 

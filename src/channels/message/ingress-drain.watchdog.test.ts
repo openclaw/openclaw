@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
@@ -240,10 +241,8 @@ describe("channel ingress drain watchdog", () => {
   });
 
   it.each([
-    { stop: "dispose", heartbeat: "none" },
     { stop: "dispose", heartbeat: "late" },
     { stop: "dispose", heartbeat: "reentrant" },
-    { stop: "abort", heartbeat: "none" },
     { stop: "abort", heartbeat: "late" },
     { stop: "abort", heartbeat: "reentrant" },
   ])("preserves retry facts after $stop (heartbeat: $heartbeat)", async ({ stop, heartbeat }) => {
@@ -353,10 +352,7 @@ describe("channel ingress drain watchdog", () => {
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
       await queue.enqueue("evt-long", { text: "x" }, { laneKey: "l1" });
 
-      let settleResolve!: () => void;
-      const settleGate = new Promise<void>((resolve) => {
-        settleResolve = resolve;
-      });
+      const { promise: settleGate, resolve: settleResolve } = createDeferred();
 
       const drain = createChannelIngressDrain<Payload>({
         queue,

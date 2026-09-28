@@ -220,7 +220,6 @@ type FeishuRequestAuthority = {
   beforeDispatch?: () => Promise<void>;
 };
 
-// Multi-account client cache
 const clientCache = new Map<
   string,
   {
@@ -235,12 +234,6 @@ function resolveSdkDomain(domain: FeishuDomain | undefined): Lark.Domain {
   return domain === "lark" ? Lark.Domain.Lark : Lark.Domain.Feishu;
 }
 
-/**
- * Create an HTTP instance that delegates to the Lark SDK's default instance
- * but injects a default request timeout and User-Agent header to prevent
- * indefinite hangs, set a standardized User-Agent per OAPI best practices, and
- * keep axios from taking a separate ambient proxy path for HTTPS requests.
- */
 function createFeishuHttpInstance(
   defaultTimeoutMs: number,
   configuredDomain?: FeishuDomain,
@@ -446,10 +439,6 @@ export type FeishuClientCredentials = {
   config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };
 
-/**
- * Create or get a cached Feishu client for an account.
- * Accepts any object with appId, appSecret, and optional domain/accountId.
- */
 export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client {
   const { accountId = "default", appId, appSecret, domain } = creds;
   const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(creds);
@@ -458,7 +447,6 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
-  // Check cache
   const cached = clientCache.get(accountId);
   if (
     cached &&
@@ -470,7 +458,6 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     return cached.client;
   }
 
-  // Create new client with timeout-aware HTTP instance
   const client = new Lark.Client({
     appId,
     appSecret,
@@ -479,7 +466,6 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
   });
 
-  // Cache it
   clientCache.set(accountId, {
     client,
     config: { appId, appSecret, domain, httpTimeoutMs: defaultHttpTimeoutMs },
@@ -521,9 +507,6 @@ export async function createFeishuWSClient(
   });
 }
 
-/**
- * Create an event dispatcher for an account.
- */
 export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.EventDispatcher {
   return new Lark.EventDispatcher({
     encryptKey: account.encryptKey,

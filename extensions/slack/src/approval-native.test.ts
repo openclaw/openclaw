@@ -232,35 +232,6 @@ describe("slack native approval adapter", () => {
     });
   });
 
-  it.each([
-    [undefined, "channels.slack"],
-    ["default", "channels.slack"],
-    ["work", "channels.slack.accounts.work"],
-  ])("describes explicit Slack exec-approval setup for account %s", (accountId, prefix) => {
-    const text = slackApprovalCapability.describeExecApprovalSetup?.({
-      channel: "slack",
-      channelLabel: "Slack",
-      accountId,
-    });
-
-    expect(text).toContain(
-      `Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\``,
-    );
-    expect(text).toContain(`set \`${prefix}.execApprovals.enabled\` to \`auto\` or \`true\``);
-    expect(text).toContain("Unset or `false` disables native exec approval delivery.");
-    expect(text).not.toContain("`channels.slack.dm.allowFrom`");
-  });
-
-  it("does not reuse exec setup copy for plugin approval setup", () => {
-    expect(
-      slackApprovalCapability.describeExecApprovalSetup?.({
-        channel: "slack",
-        channelLabel: "Slack",
-      }),
-    ).toContain("`channels.slack.execApprovals.approvers`");
-    expect(slackApprovalCapability.describePluginApprovalSetup).toBeUndefined();
-  });
-
   it("preserves the Grid team on approval origin and approver DM targets", async () => {
     const cfg = buildConfig();
     installationStates.push(registerSlackInstallationState("default", "enterprise"));

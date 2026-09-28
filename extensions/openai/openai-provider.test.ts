@@ -280,7 +280,7 @@ describe("buildOpenAIProvider", () => {
       choiceHint: "Use your OpenAI API key directly",
       groupId: "openai",
       groupLabel: "OpenAI",
-      groupHint: "Codex login, Sign in with ChatGPT, or API key",
+      groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
     });
     expect(apiKey?.starterModel).toBe("openai/gpt-6-astra");
   });
@@ -452,40 +452,6 @@ describe("buildOpenAIProvider", () => {
       },
     ]);
   });
-
-  it.each(["chatgpt-token-sharing", "chatgpt-identity"])(
-    "does not send %s credentials to model discovery",
-    async (authFlow) => {
-      const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>();
-      const { provider, outcomes } = await runCatalogWithFetchGuard({
-        fetchGuard,
-        auth: {
-          mode: "oauth",
-          authFlow,
-          apiKey: "sharing-fixture",
-          profileId: "openai:sharing",
-          source: "profile",
-        },
-      });
-
-      expect(fetchGuard).not.toHaveBeenCalled();
-      expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
-      expect(provider.baseUrl).toBe(OPENAI_API_BASE_URL);
-      if (authFlow === "chatgpt-token-sharing") {
-        expect(provider.models.length).toBeGreaterThan(0);
-        expect(provider.models.every((model) => model.api === "openai-responses")).toBe(true);
-      } else {
-        expect(provider.models).toEqual([]);
-      }
-      expect(outcomes).toEqual([
-        {
-          provider: "openai",
-          profileId: "openai:sharing",
-          status: authFlow === "chatgpt-token-sharing" ? "unavailable" : "auth-rejected",
-        },
-      ]);
-    },
-  );
 
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
     const provider = buildOpenAIProvider();

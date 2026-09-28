@@ -10,7 +10,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import {
   expectRuntime,
-  registerGitActivationDoctorOutcomeTests,
+  expectNoGitRuntimeStagingPaths,
   registerGitRuntimeStagingTests,
   registerGitRuntimeRestorationTests,
   runFixtureGit as git,
@@ -19,6 +19,7 @@ import {
   writeRuntime,
   type VirtualStoreLayout,
 } from "./update-runner-git-candidate.test-support.js";
+import { registerGitActivationDoctorOutcomeTests } from "./update-runner-git-transactions.test-support.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
@@ -186,17 +187,7 @@ describe("Git candidate activation", () => {
     });
   }
 
-  async function expectNoRuntimeStagingPaths() {
-    for (const inspectionRoot of inspectionRoots) {
-      await expect(fs.stat(inspectionRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    const entries = await fs.readdir(root, { recursive: true });
-    expect(
-      entries.filter((entry) =>
-        /\.openclaw-update-[0-9a-f]{8}-[0-9a-f-]{27}\.tmp(?:\/|$)/u.test(entry),
-      ),
-    ).toEqual([]);
-  }
+  const expectNoRuntimeStagingPaths = () => expectNoGitRuntimeStagingPaths(root, inspectionRoots);
 
   it.each([undefined, 5_000])(
     "separates work deadlines from observation budgets: %s",
@@ -238,6 +229,10 @@ describe("Git candidate activation", () => {
     beforeSha,
     events,
     isStopped: () => stopped,
+    runCommand,
+    setRunCommand: (runner) => {
+      runCommand = runner;
+    },
     advanceRemote,
     git,
     update,
@@ -271,6 +266,38 @@ describe("Git candidate activation", () => {
     expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
     await expectRuntime(root, beforeSha);
   });
+
+  it.each([false, true])(
+    "does not skip an incomplete installed runtime (buildFails=%s)",
+    async (buildFails) => {
+      await fs.rm(path.join(root, "dist", ".runtime-postbuildstamp"));
+      if (buildFails) {
+        await advanceRemote();
+        const execute = runCommand;
+        runCommand = (argv, options) =>
+          argv[0] === "pnpm" && argv[1] === "build"
+            ? Promise.resolve({ code: 1, stdout: "", stderr: "synthetic build failure" })
+            : execute(argv, options);
+      }
+
+      const result = await update();
+
+      if (buildFails) {
+        expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
+        expect(stopped).toBe(false);
+        expect(events).toEqual([]);
+        await expect(
+          fs.stat(path.join(root, "dist", ".runtime-postbuildstamp")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(result).toMatchObject({ status: "ok", after: { sha: beforeSha } });
+        expect(events).toEqual(["build", "validate", "stop", "migrate"]);
+        await expectRuntime(root, beforeSha);
+      }
+      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      await expectNoRuntimeStagingPaths();
+    },
+  );
 
   it.each([
     { channel: "dev", recorded: true },
@@ -824,9 +851,10 @@ describe("Git candidate activation", () => {
         "throw new Error('broken launcher');\n",
       );
       const target = await advanceRemote();
-      let validated = false;
+      const onStepComplete = vi.fn();
       const result = await update({
         devTarget: { mode: "detached", ref: target },
+        progress: { onStepComplete },
         validateCandidate: async (candidateRoot) => {
           const launcher = path.join(candidateRoot, "openclaw.mjs");
           await fs.writeFile(launcher, "export {};\n");
@@ -840,10 +868,13 @@ describe("Git candidate activation", () => {
             timeoutMs: 5000,
           });
           expect(probe.code).toBe(0);
-          validated = true;
         },
       });
-      expect(validated).toBe(true);
+      expect(
+        onStepComplete.mock.calls
+          .filter(([step]) => step.name === "preflight-update-clean-check")
+          .map(([step]) => step.exitCode),
+      ).toEqual([repairState === "committed" ? 0 : 1]);
       expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
       expect(stopped).toBe(false);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);

@@ -32,7 +32,8 @@ struct QuickChatAgentDisplay: Equatable, Sendable, Identifiable {
     }
 
     init(summary: AgentSummary) {
-        let emoji = (summary.identity?["emoji"]?.value as? String)?.nonEmptyTrimmed
+        let emoji = (summary.identity?["emoji"]?.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let avatarRendered = summary.identity?["avatarUrl"]?.value as? String
         self.init(
             id: summary.id,
@@ -267,8 +268,8 @@ final class QuickChatModel {
         },
         agentIdentityProvider: @escaping AgentIdentityProvider = { sessionKey in
             let identity = try await GatewayConnection.shared.agentIdentity(sessionKey: sessionKey)
-            let name = identity.name?.nonEmptyTrimmed ?? identity.agentid
-            let emoji = identity.emoji?.nonEmptyTrimmed
+            let name = identity.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? identity.agentid
+            let emoji = identity.emoji?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             return QuickChatAgentDisplay(
                 id: identity.agentid,
                 name: name,
@@ -402,13 +403,7 @@ final class QuickChatModel {
     }
 
     var canToggleDictation: Bool {
-        self.isDictating || self.isStartingDictation || (
-            !self.sessionKey.isEmpty &&
-                self.connectionGate == .available &&
-                !self.isGrantingPermissions &&
-                !self.isCapturingTextContext &&
-                !self.isUpdatingModel &&
-                self.sendState != .sending)
+        self.isDictating || self.isStartingDictation || self.canCaptureWindow
     }
 
     func beginPresentation() -> UUID {
@@ -420,14 +415,7 @@ final class QuickChatModel {
         self.textContextCaptureMessage = nil
         self.cancelTextContextCapture()
         self.resetDictationState()
-        self.cancelModelControlRefresh()
-        self.appliedModelSelections.removeAll()
-        self.selectedModelSelectionID = nil
-        self.selectedThinkingLevel = nil
-        self.currentSessionModelSelectionID = nil
-        self.currentSessionThinkingLevel = nil
-        self.speed = .resolve(session: nil, model: nil)
-        self.modelControlStatusMessage = nil
+        self.resetModelControls()
         self.targetSessionOverride = nil
         self.baseRoutingTarget = nil
         // The cached list stays displayable, but routing metadata must wait for the fresh
@@ -734,7 +722,7 @@ final class QuickChatModel {
     }
 
     func endPresentation() {
-        self.cancelModelCatalogEvents()
+        SimpleTaskSupport.stop(task: &self.modelCatalogEventsTask)
         self.isPresentationActive = false
         self.presentationID = UUID()
         // A quick bar target is presentation-scoped. Never carry a stale recent session
@@ -750,26 +738,19 @@ final class QuickChatModel {
         self.resetDictationState()
         // Model patches are persistent session mutations. Let an accepted selection
         // settle even though its presentation-scoped controls are being discarded.
-        self.cancelModelControlRefresh()
-        self.appliedModelSelections.removeAll()
-        self.selectedModelSelectionID = nil
-        self.selectedThinkingLevel = nil
-        self.currentSessionModelSelectionID = nil
-        self.currentSessionThinkingLevel = nil
-        self.speed = .resolve(session: nil, model: nil)
-        self.modelControlStatusMessage = nil
+        self.resetModelControls()
         // A dispatched chat.send may already be accepted; cancelling and retrying with a new UUID can duplicate it.
         self.cancelPermissionTask()
-        self.cancelPermissionPolling()
+        SimpleTaskSupport.stop(task: &self.permissionPollTask)
     }
 
     func cancelAllTasks() {
-        self.cancelModelCatalogEvents()
+        SimpleTaskSupport.stop(task: &self.modelCatalogEventsTask)
         self.sendTask?.cancel()
         self.sendTask = nil
         self.retryIdentity = nil
         self.cancelPermissionTask()
-        self.cancelPermissionPolling()
+        SimpleTaskSupport.stop(task: &self.permissionPollTask)
         self.cancelTextContextCapture()
         self.cancelModelControlRefresh()
         self.resetDictationState()
@@ -994,20 +975,13 @@ final class QuickChatModel {
         }
     }
 
-    private func cancelPermissionPolling() {
-        self.permissionPollTask?.cancel()
-        self.permissionPollTask = nil
-    }
-
     private func cancelPermissionTask() {
-        self.permissionTask?.cancel()
-        self.permissionTask = nil
+        SimpleTaskSupport.stop(task: &self.permissionTask)
         self.isGrantingPermissions = false
     }
 
     private func cancelTextContextCapture() {
-        self.textContextCaptureTask?.cancel()
-        self.textContextCaptureTask = nil
+        SimpleTaskSupport.stop(task: &self.textContextCaptureTask)
         self.textContextCaptureID = nil
         self.isCapturingTextContext = false
     }
@@ -1131,7 +1105,7 @@ extension QuickChatModel {
     }
 
     private func startModelCatalogEvents(id: UUID) {
-        self.cancelModelCatalogEvents()
+        SimpleTaskSupport.stop(task: &self.modelCatalogEventsTask)
         let eventsProvider = self.modelCatalogEventsProvider
         self.modelCatalogEventsTask = Task { [weak self] in
             let events = await eventsProvider()
@@ -1141,11 +1115,6 @@ extension QuickChatModel {
                 await self.handleModelCatalogDelivery(delivery, presentationID: id)
             }
         }
-    }
-
-    private func cancelModelCatalogEvents() {
-        self.modelCatalogEventsTask?.cancel()
-        self.modelCatalogEventsTask = nil
     }
 
     private func handleModelCatalogDelivery(_ delivery: GatewayConnection.PushDelivery, presentationID: UUID) async {
@@ -1321,23 +1290,24 @@ extension QuickChatModel {
 
     private func cancelModelControlRefresh() {
         self.modelControlsRequestID = UUID()
-        self.modelControlsTask?.cancel()
-        self.modelControlsTask = nil
+        SimpleTaskSupport.stop(task: &self.modelControlsTask)
         self.isLoadingModelControls = false
     }
 
+    private func resetModelControls() {
+        self.cancelModelControlRefresh()
+        self.appliedModelSelections.removeAll()
+        self.selectedModelSelectionID = nil
+        self.selectedThinkingLevel = nil
+        self.currentSessionModelSelectionID = nil
+        self.currentSessionThinkingLevel = nil
+        self.speed = .resolve(session: nil, model: nil)
+        self.modelControlStatusMessage = nil
+    }
+
     private func resetDictationState() {
-        self.isStartingDictation = false
-        self.isDictating = false
+        self.stopDictation()
         self.dictationStatusMessage = nil
         self.dictationSelectionRange = nil
-        self.dictationTextSession = nil
-    }
-}
-
-extension String {
-    fileprivate var nonEmptyTrimmed: String? {
-        let trimmed = self.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

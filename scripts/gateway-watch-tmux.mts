@@ -31,7 +31,6 @@ type GatewayWatchParams = {
 type GatewayWatchDeps = Required<Omit<GatewayWatchParams, "sessionName">>;
 
 const TMUX_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
-const TMUX_ATTACH_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const TMUX_ATTACH_FORCE_VALUES = new Set(["1", "true", "yes", "on"]);
 const DEFAULT_PROFILE_NAME = "main";
 const DEFAULT_BENCHMARK_PROFILE_DIR = ".artifacts/gateway-watch-profiles";
@@ -91,7 +90,7 @@ const readArgValue = (args: string[], flag: string): string | null => {
       const next = args[index + 1];
       return typeof next === "string" && !next.startsWith("-") ? next : null;
     }
-    if (arg?.startsWith(prefix)) {
+    if (arg.startsWith(prefix)) {
       return arg.slice(prefix.length);
     }
   }
@@ -174,7 +173,7 @@ const resolveGatewayWatchBenchmarkArgs = ({
       benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
       continue;
     }
-    if (arg?.startsWith("--benchmark=")) {
+    if (arg.startsWith("--benchmark=")) {
       benchmarkFlagSeen = true;
       benchmarkDir = arg.slice("--benchmark=".length) || DEFAULT_BENCHMARK_PROFILE_DIR;
       continue;
@@ -190,7 +189,7 @@ const resolveGatewayWatchBenchmarkArgs = ({
       }
       continue;
     }
-    if (arg?.startsWith("--benchmark-dir=")) {
+    if (arg.startsWith("--benchmark-dir=")) {
       benchmarkFlagSeen = true;
       benchmarkDir = arg.slice("--benchmark-dir=".length) || DEFAULT_BENCHMARK_PROFILE_DIR;
       continue;
@@ -227,9 +226,6 @@ const resolveGatewayWatchBenchmarkArgs = ({
   };
 };
 
-/**
- * Resolves the tmux session name for gateway watch arguments/environment.
- */
 export const resolveGatewayWatchTmuxSessionName = ({
   args = [],
   env = process.env,
@@ -248,8 +244,6 @@ export const resolveGatewayWatchTmuxSessionName = ({
   return parts.join("-");
 };
 
-const resolveShell = (env: NodeJS.ProcessEnv): string => env.SHELL || "/bin/sh";
-
 const resolveColorEnv = (env: NodeJS.ProcessEnv) => {
   const forceColor = env.FORCE_COLOR;
   if (forceColor == null || forceColor === "") {
@@ -261,9 +255,6 @@ const resolveColorEnv = (env: NodeJS.ProcessEnv) => {
   return { assignments: [`FORCE_COLOR=${forceColor}`], options: [] };
 };
 
-/**
- * Builds the shell command executed inside the tmux gateway watch session.
- */
 export const buildGatewayWatchTmuxCommand = ({
   args = [],
   cwd = process.cwd(),
@@ -271,7 +262,7 @@ export const buildGatewayWatchTmuxCommand = ({
   nodePath = process.execPath,
   sessionName,
 }: GatewayWatchParams = {}): string => {
-  const shell = resolveShell(env);
+  const shell = env.SHELL || "/bin/sh";
   const colorEnv = resolveColorEnv(env);
   // tmux sessions retain their own environment across respawns. Clear supported
   // selectors before applying the invoking process's current values.
@@ -355,7 +346,7 @@ export const runGatewayWatchServiceHandoff = (params: GatewayWatchParams = {}): 
     return statusResult.status || 1;
   }
   const status = parseTrailingJsonObject(statusResult.stdout);
-  if (!status || typeof status !== "object") {
+  if (!status) {
     log(stderr, "failed to parse managed Gateway service status before watch");
     return 1;
   }
@@ -449,7 +440,7 @@ const shouldAttachTmux = (deps: Pick<GatewayWatchDeps, "env" | "stdinIsTTY" | "s
   if (TMUX_ATTACH_FORCE_VALUES.has(raw)) {
     return true;
   }
-  if (TMUX_ATTACH_DISABLE_VALUES.has(raw)) {
+  if (TMUX_DISABLE_VALUES.has(raw)) {
     return false;
   }
   // TERM=dumb pseudo-TTYs cannot satisfy tmux's clear/cursor requirements.
@@ -489,12 +480,6 @@ const setTmuxSessionMetadata = (
   }
 };
 
-const retainTmuxPaneOnExit = (spawnSyncImpl: GatewaySpawn, sessionName: string) =>
-  runTmux(spawnSyncImpl, ["set-option", "-w", "-t", sessionName, "remain-on-exit", "on"]);
-
-/**
- * Runs the gateway-watch tmux wrapper main flow.
- */
 export const runGatewayWatchTmuxMain = (params: GatewayWatchParams = {}): number => {
   const resolvedArgs = resolveGatewayWatchBenchmarkArgs({
     args: params.args ?? process.argv.slice(2),
@@ -525,11 +510,10 @@ export const runGatewayWatchTmuxMain = (params: GatewayWatchParams = {}): number
     log(deps.stderr, "gateway:watch benchmark running without --force");
   }
 
-  if (TMUX_DISABLE_VALUES.has((deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase())) {
-    return runForegroundWatcher(deps);
-  }
-
-  if (deps.env.OPENCLAW_GATEWAY_WATCH_TMUX_CHILD === "1") {
+  if (
+    TMUX_DISABLE_VALUES.has((deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase()) ||
+    deps.env.OPENCLAW_GATEWAY_WATCH_TMUX_CHILD === "1"
+  ) {
     return runForegroundWatcher(deps);
   }
 
@@ -558,7 +542,8 @@ export const runGatewayWatchTmuxMain = (params: GatewayWatchParams = {}): number
 
   const launchPane = () =>
     runTmux(deps.spawnSync, ["respawn-pane", "-k", "-t", sessionName, "-c", deps.cwd, command]);
-  const prepareSession = () => retainTmuxPaneOnExit(deps.spawnSync, sessionName);
+  const prepareSession = () =>
+    runTmux(deps.spawnSync, ["set-option", "-w", "-t", sessionName, "remain-on-exit", "on"]);
   const startSession = () => {
     // Create a durable shell pane first so remain-on-exit is active before the
     // watcher can fail. Agents can then capture the original startup error.
@@ -615,9 +600,10 @@ export const runGatewayWatchTmuxMain = (params: GatewayWatchParams = {}): number
   if (shouldAttachTmux(deps)) {
     const attachResult = attachTmux(deps, sessionName);
     if (attachResult.error || attachResult.status !== 0) {
-      const detail =
-        attachResult.error?.message || String(attachResult.stderr || "").trim() || "unknown error";
-      log(deps.stderr, `failed to attach tmux session ${sessionName}: ${detail}`);
+      log(
+        deps.stderr,
+        `failed to attach tmux session ${sessionName}: ${getTmuxErrorText(attachResult)}`,
+      );
       return attachResult.status || 1;
     }
     return 0;

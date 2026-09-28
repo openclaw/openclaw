@@ -337,16 +337,19 @@ describe("Signal approval reactions", () => {
     ).toBe(false);
   });
 
-  it("rejects reaction registration without a valid explicit approval kind", async () => {
-    expect(
-      await registerTarget({
-        messageId: "1700000000099",
-        approvalId: "approval-without-owner",
-        approvalKind: undefined as never,
-        allowedDecisions: ["deny"],
-      }),
-    ).toBeNull();
-  });
+  it.each([undefined, "invalid"])(
+    "rejects reaction registration with approval kind %s",
+    async (approvalKind) => {
+      expect(
+        await registerTarget({
+          messageId: "1700000000099",
+          approvalId: "approval-without-owner",
+          approvalKind: approvalKind as never,
+          allowedDecisions: ["deny"],
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("does not match timestamp-only bindings when the inbound conversation id differs", async () => {
     await registerTarget({
@@ -415,40 +418,55 @@ describe("Signal approval reactions", () => {
     });
   });
 
-  it("authorizes reactions using Signal approval approvers", async () => {
-    await registerTarget({
-      conversationKey: "group:g1",
-      messageId: "1700000000003",
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    });
+  it.each(["plugin", "system-agent"] as const)(
+    "authorizes %s reactions using Signal approval approvers",
+    async (approvalKind) => {
+      const approvalId = `${approvalKind}:abc`;
+      await registerTarget({
+        conversationKey: "group:g1",
+        messageId: "1700000000003",
+        approvalId,
+        approvalKind,
+        allowedDecisions:
+          approvalKind === "plugin"
+            ? ["allow-once", "allow-always", "deny"]
+            : ["allow-once", "deny"],
+      });
 
-    const cfg = {
-      ...sessionConfig,
-      approvals: { plugin: { enabled: true, mode: "session" as const } },
-    };
+      const cfg = {
+        ...sessionConfig,
+        approvals:
+          approvalKind === "plugin"
+            ? { plugin: { enabled: true, mode: "session" as const } }
+            : sessionConfig.approvals,
+      };
+      const reaction = {
+        ...lookupIdentity,
+        cfg,
+        conversationKey: "group:g1",
+        messageId: "1700000000003",
+      };
 
-    const handled = await maybeResolveSignalApprovalReaction({
-      ...lookupIdentity,
-      cfg,
-      conversationKey: "group:g1",
-      messageId: "1700000000003",
-      actorId: "+15551230000",
-    });
+      await expect(
+        maybeResolveSignalApprovalReaction({ ...reaction, actorId: "+15551239999" }),
+      ).resolves.toBe(true);
+      expect(resolverMocks.resolveSignalApproval).not.toHaveBeenCalled();
 
-    expect(handled).toBe(true);
-    expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith({
-      cfg,
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
-      decision: "allow-once",
-      channel: "signal",
-      accountId: "default",
-      senderId: "+15551230000",
-      gatewayUrl: undefined,
-    });
-  });
+      await expect(
+        maybeResolveSignalApprovalReaction({ ...reaction, actorId: "+15551230000" }),
+      ).resolves.toBe(true);
+      expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledExactlyOnceWith({
+        cfg,
+        approvalId,
+        approvalKind,
+        decision: "allow-once",
+        channel: "signal",
+        accountId: "default",
+        senderId: "+15551230000",
+        gatewayUrl: undefined,
+      });
+    },
+  );
 
   it("consumes a losing surface and logs the canonical winning decision", async () => {
     await registerTarget({

@@ -38,10 +38,6 @@ export function buildCommandsPaginationKeyboard(
   return [buttons];
 }
 
-export function buildTelegramModelsMenuButtons(params: { providers: ProviderInfo[] }) {
-  return buildProviderKeyboard(params.providers);
-}
-
 export function buildTelegramCommandsListChannelData(params: {
   currentPage: number;
   totalPages: number;

@@ -1,4 +1,5 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { observeChannelIngressQueueWrite } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +8,7 @@ import {
 } from "./approval-reactions.js";
 import {
   createWhatsAppDurableInboundQueue,
+  createWhatsAppDurableInboundMessageId,
   type WhatsAppDurableInboundQueue,
 } from "./inbound/durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./inbound/ingress-lifecycle.js";
@@ -154,7 +156,9 @@ describe("web monitor inbox delivery and dedupe", () => {
         if (!claim) {
           throw new Error("expected the replayed approval claim");
         }
+        const completed = observeChannelIngressQueueWrite(queue, "complete", claim.id);
         finishReplay.resolve();
+        expect(await completed).toBe(true);
         await waitForInboundWorkDrained();
         expect(approvalResolver).toHaveBeenCalledTimes(3);
         expect(approvalResolver.mock.calls[1]).toEqual(approvalResolver.mock.calls[0]);
@@ -184,12 +188,17 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const readReceiptSent = createDeferred<void>();
+    sock.readMessages.mockImplementationOnce(async () => {
+      readReceiptSent.resolve();
+    });
     expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
     const messageId = nextMessageId("stream");
     const upsert = dmUpsert(messageId);
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
+    await readReceiptSent.promise;
 
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
@@ -387,46 +396,119 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator drains admitted same-lane turns before close completes", async () => {
-    let releaseFirst: (() => void) | undefined;
-    const firstTurn = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    const onMessage = vi.fn(async (message: WebInboundMessage) => {
-      const lifecycle = resolveWhatsAppIngressLifecycle(message);
-      if (!lifecycle) {
-        throw new Error("expected durable ingress lifecycle");
+  it.each(["same window", "separate windows"] as const)(
+    "delivery coordinator drains admitted same-lane turns before close completes: %s",
+    async (timing) => {
+      const firstId = nextMessageId("debounce-close-1");
+      const secondId = nextMessageId("debounce-close-2");
+      const thirdId = nextMessageId("debounce-close-3");
+      const first = dmUpsert(firstId, "first");
+      const second = dmUpsert(secondId, "second", 1_700_000_001);
+      const third = dmUpsert(thirdId, "third", 1_700_000_002);
+      const thirdDurableId = createWhatsAppDurableInboundMessageId({
+        remoteJid: "999@s.whatsapp.net",
+        id: thirdId,
+      });
+      const firstAdopted = createDeferred<void>();
+      const releaseFirst = createDeferred<void>();
+      const secondBuffered = createDeferred<void>();
+      const thirdBuffered = createDeferred<void>();
+      const releaseThird = createDeferred<void>();
+      const secondAdopted = createDeferred<void>();
+      const finalAdopted = createDeferred<void>();
+      const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+      const enqueue = queue.enqueue.bind(queue);
+      const enqueueSpy = vi.spyOn(queue, "enqueue").mockImplementation(async (...args) => {
+        if (args[0] === thirdDurableId) {
+          await releaseThird.promise;
+        }
+        return enqueue(...args);
+      });
+      const onMessage = vi.fn(async (message: WebInboundMessage) => {
+        const lifecycle = resolveWhatsAppIngressLifecycle(message);
+        if (!lifecycle) {
+          throw new Error("expected durable ingress lifecycle");
+        }
+        await lifecycle.onAdopted();
+        if (message.payload.body === "first") {
+          firstAdopted.resolve();
+          await releaseFirst.promise;
+        } else if (message.payload.body === "second") {
+          secondAdopted.resolve();
+        } else {
+          finalAdopted.resolve();
+        }
+      });
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        durableInboundQueue: queue,
+        debounceMs: 20,
+        shouldDebounce: (message) => {
+          if (message.payload.body === "second") {
+            secondBuffered.resolve();
+          } else if (message.payload.body === "third") {
+            thirdBuffered.resolve();
+          }
+          return message.payload.body !== "first";
+        },
+      });
+      let closePromise: Promise<void> | undefined;
+      let closed = false;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+      try {
+        sock.ev.emit("messages.upsert", first);
+        await firstAdopted.promise;
+        sock.ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [...second.messages, ...third.messages],
+        });
+        closePromise = listener.close().then(() => {
+          closed = true;
+        });
+        await secondBuffered.promise;
+        if (timing === "separate windows") {
+          // One upsert can cross debounce windows while its next durable append is pending.
+          await vi.advanceTimersByTimeAsync(20);
+          await secondAdopted.promise;
+        }
+        releaseThird.resolve();
+        await thirdBuffered.promise;
+        await vi.advanceTimersByTimeAsync(20);
+        await finalAdopted.promise;
+        expect(closed).toBe(false);
+        expect(sock.end).not.toHaveBeenCalled();
+        expect(onMessage.mock.calls.map(([message]) => message.payload.body)).toEqual(
+          timing === "same window" ? ["first", "second\nthird"] : ["first", "second", "third"],
+        );
+      } finally {
+        releaseThird.resolve();
+        releaseFirst.resolve();
+        try {
+          await (closePromise ?? listener.close());
+        } finally {
+          enqueueSpy.mockRestore();
+          vi.useRealTimers();
+        }
       }
-      await lifecycle.onAdopted();
-      if (onMessage.mock.calls.length === 1) {
-        await firstTurn;
+      expect(closed).toBe(true);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      expect(sock.readMessages).toHaveBeenCalledTimes(3);
+      for (const id of [firstId, secondId, thirdId]) {
+        expect(sock.readMessages).toHaveBeenCalledWith([
+          {
+            remoteJid: "999@s.whatsapp.net",
+            id,
+            participant: undefined,
+            fromMe: false,
+          },
+        ]);
       }
-    });
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-      debounceMs: 20,
-    });
-    sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("debounce-close-1"), "first"));
-    await waitForMessageCalls(onMessage, 1);
-
-    const second = dmUpsert(nextMessageId("debounce-close-2"), "second", 1_700_000_001);
-    const third = dmUpsert(nextMessageId("debounce-close-3"), "third", 1_700_000_002);
-    sock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [...second.messages, ...third.messages],
-    });
-
-    let closed = false;
-    const closePromise = listener.close().then(() => {
-      closed = true;
-    });
-    await waitForMessageCalls(onMessage, 2);
-    expect(closed).toBe(false);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("second\nthird");
-
-    releaseFirst?.();
-    await closePromise;
-    expect(closed).toBe(true);
-  });
+      expect(sock.end).toHaveBeenCalledTimes(1);
+      expect(Math.max(...sock.readMessages.mock.invocationCallOrder)).toBeLessThan(
+        sock.end.mock.invocationCallOrder[0],
+      );
+    },
+  );
 
   it("delivery coordinator keeps a reused debounce key pending across turns", async () => {
     let releaseFirst!: () => void;
@@ -695,7 +777,8 @@ describe("web monitor inbox delivery and dedupe", () => {
         },
       ],
     });
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
+    expect(onMessage).toHaveBeenCalledTimes(1);
 
     sock.ev.emit("messages.upsert", {
       type: "notify",
@@ -707,9 +790,7 @@ describe("web monitor inbox delivery and dedupe", () => {
         },
       ],
     });
-    await settleInboundWork();
-
-    await waitForMessageCalls(onMessage, 2);
+    await waitForInboundWorkDrained();
     expect(onMessage.mock.calls.map(([message]) => message.payload.body)).toEqual(["ping", "pong"]);
     expect(await queue.listClaims()).toHaveLength(1);
     expect(await queue.listPending({ limit: "all" })).toEqual([]);

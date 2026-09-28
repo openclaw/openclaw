@@ -20,14 +20,8 @@ final class QuickChatReplyBinding {
         self.viewModelFactory = viewModelFactory
     }
 
-    /// Starts the transport consumer before the send is dispatched so no early
-    /// delta/final frame is missed; the reply area stays hidden until show(route:).
-    /// Accepted tradeoff: construction does not synchronously install the transport
-    /// subscription (scheduler-scale gap). Deltas carry full snapshots, the shared
-    /// view model self-heals from them, and history bootstrap recovers committed
-    /// turns — so only a turn completing within a runloop tick could be lost, which
-    /// is not a real production state and does not justify a readiness handshake in
-    /// the shared chat kit.
+    /// Prepare the reply consumer before dispatch while keeping it hidden until show(route:).
+    /// Subscription starts asynchronously; full snapshots and history bootstrap recover earlier turns.
     func prepare(route: QuickChatRoutingTarget) {
         guard self.preparedRoute != route || self.viewModel == nil else { return }
         self.preparedRoute = route
@@ -77,7 +71,7 @@ final class QuickChatReplyBinding {
         self.pasteStatusMessage = message
     }
 
-    private static func makeViewModel(route: QuickChatRoutingTarget) -> OpenClawChatViewModel {
+    static func makeViewModel(route: QuickChatRoutingTarget) -> OpenClawChatViewModel {
         let transport = MacGatewayChatTransport(defaultGlobalAgentID: route.agentID)
         return OpenClawChatViewModel(
             sessionKey: route.sessionKey,

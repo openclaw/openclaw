@@ -85,6 +85,7 @@ export function copyProviderCatalogOutcomes(
     const profileId = readRecordValue(entry, "profileId");
     const rejectionScope = readRecordValue(entry, "rejectionScope");
     const status = readRecordValue(entry, "status");
+    const rawModelOrder = readRecordValue(entry, "modelOrder");
     if (
       typeof provider !== "string" ||
       provider.trim().length === 0 ||
@@ -96,12 +97,23 @@ export function copyProviderCatalogOutcomes(
     ) {
       return [];
     }
+    const modelOrder =
+      status === "ready" && rawModelOrder !== undefined
+        ? [
+            ...new Set(
+              copyArrayEntries(rawModelOrder).flatMap((value) =>
+                typeof value === "string" && value.trim() ? [value.trim()] : [],
+              ),
+            ),
+          ]
+        : [];
     return [
       {
         provider: provider.trim(),
         ...(typeof profileId === "string" ? { profileId: profileId.trim() } : {}),
         ...(rejectionScope === "catalog" ? { rejectionScope } : {}),
         status: status as ProviderCatalogOutcome["status"],
+        ...(modelOrder.length > 0 ? { modelOrder } : {}),
       },
     ];
   });

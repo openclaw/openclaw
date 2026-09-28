@@ -7,10 +7,10 @@ import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
-  QA_FRONTIER_CHARACTER_EVAL_MODELS,
-  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS,
-  QA_FRONTIER_CHARACTER_JUDGE_MODELS,
-  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL,
+  QA_FRONTIER_CHARACTER_EVAL_MODELS as DEFAULT_CHARACTER_EVAL_MODELS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS as DEFAULT_JUDGE_MODEL_OPTIONS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODELS as DEFAULT_JUDGE_MODELS,
+  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL as DEFAULT_CHARACTER_THINKING_BY_MODEL,
 } from "./providers/live-frontier/character-eval.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
@@ -18,16 +18,10 @@ import { readQaSuiteFailedScenarioCountFromFile } from "./suite-summary.js";
 import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
-const DEFAULT_CHARACTER_EVAL_MODELS = QA_FRONTIER_CHARACTER_EVAL_MODELS;
 const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
 const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
-const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
-  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL;
-const DEFAULT_JUDGE_MODELS = QA_FRONTIER_CHARACTER_JUDGE_MODELS;
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
 const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
-const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptions>> =
-  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS;
 
 type QaCharacterRunStatus = "pass" | "fail";
 
@@ -131,31 +125,17 @@ function normalizeModelRefs(models: readonly string[]) {
   return uniqueStrings(normalizeStringEntries(models));
 }
 
-function resolveCandidateThinkingDefault(params: {
-  model: string;
-  candidateThinkingDefault?: QaThinkingLevel;
-  candidateThinkingByModel?: Record<string, QaThinkingLevel>;
-  candidateModelOptions?: Record<string, QaCharacterModelOptions>;
-}) {
-  return (
-    params.candidateModelOptions?.[params.model]?.thinkingDefault ??
-    params.candidateThinkingByModel?.[params.model] ??
-    params.candidateThinkingDefault ??
-    DEFAULT_CHARACTER_THINKING_BY_MODEL[params.model] ??
-    DEFAULT_CHARACTER_THINKING
-  );
-}
-
-function resolveCandidateFastMode(params: {
-  model: string;
-  candidateFastMode?: boolean;
-  candidateModelOptions?: Record<string, QaCharacterModelOptions>;
-}) {
-  return (
-    params.candidateModelOptions?.[params.model]?.fastMode ??
-    params.candidateFastMode ??
-    isQaFastModeModelRef(params.model)
-  );
+function resolveCandidateOptions(params: QaCharacterEvalParams, model: string) {
+  const modelOptions = params.candidateModelOptions?.[model];
+  return {
+    thinkingDefault:
+      modelOptions?.thinkingDefault ??
+      params.candidateThinkingByModel?.[model] ??
+      params.candidateThinkingDefault ??
+      DEFAULT_CHARACTER_THINKING_BY_MODEL[model] ??
+      DEFAULT_CHARACTER_THINKING,
+    fastMode: modelOptions?.fastMode ?? params.candidateFastMode ?? isQaFastModeModelRef(model),
+  };
 }
 
 function resolveJudgeOptions(params: {
@@ -339,8 +319,8 @@ function normalizeJudgment(value: unknown, allowedModels: Set<string>): QaCharac
       if (!allowedModels.has(model)) {
         return null;
       }
-      const rank = typeof record.rank === "number" ? record.rank : Number(record.rank);
-      const score = typeof record.score === "number" ? record.score : Number(record.score);
+      const rank = Number(record.rank);
+      const score = Number(record.score);
       const summary = typeof record.summary === "string" ? record.summary : "";
       const strengths = Array.isArray(record.strengths)
         ? record.strengths.filter((item): item is string => typeof item === "string")
@@ -507,17 +487,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const candidatesStartedAt = Date.now();
   const { results: runs } = await runTasksWithConcurrency({
     tasks: models.map((model, index) => async () => {
-      const thinkingDefault = resolveCandidateThinkingDefault({
-        model,
-        candidateThinkingDefault: params.candidateThinkingDefault,
-        candidateThinkingByModel: params.candidateThinkingByModel,
-        candidateModelOptions: params.candidateModelOptions,
-      });
-      const fastMode = resolveCandidateFastMode({
-        model,
-        candidateFastMode: params.candidateFastMode,
-        candidateModelOptions: params.candidateModelOptions,
-      });
+      const { thinkingDefault, fastMode } = resolveCandidateOptions(params, model);
       const modelOutputDir = path.join(runsDir, `${index + 1}-${sanitizePathPart(model)}`);
       const runStartedAt = Date.now();
       logCharacterEvalProgress(
@@ -644,7 +614,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         });
         rankings = parseJudgeReply(rawReply, new Set(judgePrompt.labelToModel.keys())).map(
           (ranking) =>
-            Object.assign({}, ranking, {
+            Object.assign(ranking, {
               model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
             }),
         );

@@ -27,7 +27,6 @@ import {
   createToolSearchCatalogRef,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   resolveToolSearchConfig,
 } from "./tool-search.js";
@@ -656,15 +655,14 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(compacted.tools[0]?.description).not.toMatch(/llm_task_[a-f0-9]{8}/u);
   });
 
-  it("removes legacy Tool Search controls from the visible code mode surface", () => {
+  it("removes structured Tool Search controls from the visible code mode surface", () => {
     const { ctx, tools: codeModeTools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
       tools: [
         ...codeModeTools,
-        fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "legacy code surface"),
-        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "legacy search"),
-        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "legacy describe"),
-        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "legacy call"),
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "structured search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "structured describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "structured call"),
         pluginTool("fake_create_ticket", "Create a fake ticket"),
       ],
       ...ctx,

@@ -107,7 +107,6 @@ describe("Signal approval reaction durable replay", () => {
               channels: { signal: { allowFrom: ["+15550001111"] } },
               approvals: { exec: { enabled: true, mode: "session" } },
             },
-            isSignalReactionMessage: (reaction) => reaction != null,
           }),
         );
         const monitor = await startSignalIngressMonitor({

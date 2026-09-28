@@ -55,13 +55,7 @@ export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
 type HttpAuthState =
   | { stage: "busy" }
   | {
-      stage: "challenged";
-      flow: "cdp" | "json-list";
-      authority: BrowserRelayAuthV2Authority;
-      timer: NodeJS.Timeout;
-    }
-  | {
-      stage: "authenticated";
+      stage: "challenged" | "authenticated";
       flow: "cdp" | "json-list";
       authority: BrowserRelayAuthV2Authority;
       timer: NodeJS.Timeout;

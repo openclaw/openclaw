@@ -43,6 +43,16 @@ suite.define(() => {
           });
         });
         const current = new Date();
+        const since = new Date(
+          current.getFullYear(),
+          current.getMonth(),
+          current.getDate(),
+        ).getTime();
+        const until = new Date(
+          current.getFullYear(),
+          current.getMonth(),
+          current.getDate() + 1,
+        ).getTime();
         // Keep the automation fixtures on one local calendar day in every timezone.
         const now = new Date(
           current.getFullYear(),
@@ -58,6 +68,16 @@ suite.define(() => {
         const automationKeys = [designKey, gatewayHandoffKey, nightlyMaintenanceKey];
         const nonAutomationKeys = [releaseKey, incidentNotesKey];
         const sessionList = {
+          activityPulse: {
+            since,
+            until,
+            hours: Array.from({ length: Math.ceil((until - since) / 3_600_000) }, () => 0),
+            sessions: 0,
+            started: 0,
+            people: 0,
+            running: 0,
+          },
+          peopleIncomplete: true,
           people: [
             {
               identity: { type: "profile", id: "profile-alice" },
@@ -297,7 +317,7 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         const onlineToggle = page.getByRole("button", { name: "Online", exact: true });
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "01-sidebar-online-default-open-light.png"),
@@ -311,10 +331,10 @@ suite.define(() => {
           .poll(() =>
             page.locator(".sidebar-online .viewer-facepile").getAttribute("data-viewer-count"),
           )
-          .toBe("4");
+          .toBe("5");
         await expect
           .poll(() => page.locator(".sidebar-online .viewer-avatar--overflow").textContent())
-          .toContain("+2");
+          .toContain("+3");
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
@@ -340,7 +360,7 @@ suite.define(() => {
         await onlineToggle.focus();
         await page.keyboard.press("Space");
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
         await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
@@ -368,6 +388,10 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");
         await expect.poll(() => activityPage.count()).toBe(1);
+        await activityPage.locator(".activity-pulse__bars").waitFor();
+        expect(await activityPage.locator(".activity-pulse__bars > span").count()).toBe(
+          sessionList.activityPulse.hours.length,
+        );
         // The title sits centered in the toolbar row; the intro copy and the
         // mode tabs share the content's left edge below it.
         const introLeft = await activityPage

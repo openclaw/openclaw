@@ -151,7 +151,7 @@ export async function readSkillProposalDraftDirectory(dirPath: string): Promise<
   for (const entry of scanned.entries.toSorted((a, b) =>
     a.relativePath.localeCompare(b.relativePath),
   )) {
-    const relativePath = toPortableRelativePath(entry.relativePath);
+    const relativePath = entry.relativePath.split(path.sep).join("/");
     if (!relativePath || relativePath === "PROPOSAL.md") {
       continue;
     }
@@ -219,8 +219,4 @@ function truncateUtf8(value: string, maxBytes: number): string {
     sizeBytes += charBytes;
   }
   return out.trimEnd();
-}
-
-function toPortableRelativePath(relativePath: string): string {
-  return relativePath.split(path.sep).join("/");
 }

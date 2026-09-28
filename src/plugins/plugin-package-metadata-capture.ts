@@ -8,8 +8,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
-import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
+import {
+  retainLoadedPluginSourceCapture,
+  retainPluginSourceCaptureInstance,
+} from "./plugin-source-capture-directory.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
+import { isPluginSourceEntry } from "./plugin-source-file.js";
 import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-source-verification.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
@@ -127,6 +131,8 @@ export function createPluginNativeDependencyScopes(
 export function capturePluginDependencies(params: {
   root: string;
   manifestFile?: string;
+  /** Nested manifests nobody selected (benchmarks, examples) keep their declarations optional. */
+  incidental?: boolean;
   references: ReadonlyMap<string, ReadonlySet<string>>;
   resolve: ReturnType<typeof createPluginDependencyResolver>;
   capture: (name: string, dependency: PluginDependencyResolution) => void;
@@ -154,6 +160,7 @@ export function capturePluginDependencies(params: {
     if (!dependency) {
       if (
         !params.manifestFile ||
+        params.incidental ||
         name in (manifest.optionalDependencies ?? {}) ||
         name in (manifest.peerDependencies ?? {})
       ) {
@@ -341,7 +348,7 @@ function visitPluginPackageTargetFiles(params: {
         throw new Error(`Plugin source contains a directory cycle: ${source}`);
       }
       ancestors.add(real);
-      for (const name of fs.readdirSync(input).toSorted()) {
+      for (const name of fs.readdirSync(input).filter(isPluginSourceEntry).toSorted()) {
         visit(path.join(source, name));
       }
       ancestors.delete(real);
@@ -683,12 +690,16 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     },
     dispose() {
       beginDisposal();
-      fs.rmSync(directory, { recursive: true, force: true });
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
       instance?.release();
     },
     async disposeAsync() {
       beginDisposal();
-      await fsPromises.rm(directory, { recursive: true, force: true });
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        await fsPromises.rm(directory, { recursive: true, force: true });
+      }
       await instance?.releaseAsync();
     },
   };

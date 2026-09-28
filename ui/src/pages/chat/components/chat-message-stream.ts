@@ -19,7 +19,7 @@ import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import { renderChatReplyAttribution } from "./chat-reply-attribution.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
+import { syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
@@ -44,6 +44,7 @@ type StreamMessageOptions = Pick<
   | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
+  | "getTurnVideoMessages"
   | "onRequestOpenImage"
   | "onOpenImage"
   | "onAssistantAttachmentLoaded"
@@ -193,7 +194,9 @@ export function renderWorkGroupSummary(
     group.messages.flatMap(({ message }) => readPreparedActivity(message)),
   );
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
-  const outcomes = describeToolGroup(activity).outcomes.filter(({ kind }) => kind !== "failed");
+  const outcomes = describeToolGroup(activity).outcomes.filter(
+    ({ kind }) => kind !== "failed" && kind !== "skipped",
+  );
   const content = html`
     <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
       <button
@@ -202,11 +205,7 @@ export function renderWorkGroupSummary(
         aria-expanded=${String(opts.expanded)}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
-        @click=${(event: MouseEvent) => {
-          if (shouldToggleSelectableDisclosure(event)) {
-            opts.onToggle();
-          }
-        }}
+        @click=${opts.onToggle}
       >
         <span class="chat-tool-disclosure__content">
           <span class="chat-activity-group__label">${label}</span>

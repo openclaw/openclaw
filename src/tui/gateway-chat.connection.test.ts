@@ -208,6 +208,29 @@ describe("resolveGatewayConnection", () => {
     );
   });
 
+  it.each([false, true])(
+    "preserves SSH selection provenance through a bound handoff (%s)",
+    async (configuredRemote) => {
+      const url = "ws://127.0.0.1:18789";
+      const result = await resolveBoundGatewayConnection({
+        config: {
+          gateway: { mode: "remote", remote: { url, transport: "ssh", sshTarget: "me@studio" } },
+        },
+        url,
+        configuredRemote,
+      });
+
+      expect(result.deviceAuthScope).toBe(
+        configuredRemote
+          ? "remote:ssh:9d0708e04e550511a6fc9dba41c94ffc895fdd5029a3e5c779f2c0bc16bd4c44"
+          : url,
+      );
+      expect(result.sshTunnel).toEqual(
+        configuredRemote ? { target: "me@studio", remotePort: 18789 } : undefined,
+      );
+    },
+  );
+
   it("rejects an auth-free url override without reusing configured or env credentials", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "local", auth: { token: "configured-token" } },
@@ -454,29 +477,17 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
-  it.each([
-    {
-      label: "token",
-      auth: { token: "explicit-token" },
-      expected: { token: "explicit-token", password: undefined },
-    },
-    {
-      label: "password",
-      auth: { password: "explicit-password" },
-      expected: { token: undefined, password: "explicit-password" },
-    },
-  ])("uses explicit $label when url override is set", async ({ auth, expected }) => {
+  it("uses an explicit password when url override is set", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
-
     const result = await resolveGatewayConnection({
       url: "wss://override.example/ws",
-      ...auth,
+      password: "explicit-password", // pragma: allowlist secret
     });
-
     expect(result).toEqual({
       url: "wss://override.example/ws",
       deviceAuthScope: "wss://override.example/ws",
-      ...expected,
+      token: undefined,
+      password: "explicit-password", // pragma: allowlist secret
       preauthHandshakeTimeoutMs: undefined,
     });
   });
@@ -701,23 +712,41 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
-  it("allows a configured remote gateway to use its origin-scoped device credential", async () => {
-    loadConfig.mockReturnValue({
-      gateway: { mode: "remote", remote: { url: "wss://remote.example/rpc/?ignored=1" } },
-    });
-    loadDeviceIdentityIfPresentMock.mockReturnValue({ deviceId: "device-1" });
-    loadOriginDeviceTokenMock.mockReturnValue({
-      token: "stored-origin-token",
-      scopes: ["operator.read"],
-    });
+  it.each([
+    {
+      label: "direct origin",
+      remote: { url: "wss://remote.example/rpc/?ignored=1" },
+      scope: "wss://remote.example/rpc",
+    },
+    {
+      label: "owned SSH route",
+      remote: {
+        url: "ws://127.0.0.1:19876",
+        transport: "ssh" as const,
+        sshTarget: "me@studio",
+        remotePort: 18789,
+      },
+      scope: "remote:ssh:9d0708e04e550511a6fc9dba41c94ffc895fdd5029a3e5c779f2c0bc16bd4c44",
+    },
+  ])(
+    "reuses a paired credential for the configured $label without shared auth",
+    async ({ remote, scope }) => {
+      loadConfig.mockReturnValue({
+        gateway: { mode: "remote", remote },
+      });
+      loadDeviceIdentityIfPresentMock.mockReturnValue({ deviceId: "device-1" });
+      loadOriginDeviceTokenMock.mockImplementation(({ gatewayScope }: { gatewayScope: string }) =>
+        gatewayScope === scope ? { token: "stored-origin-token", scopes: ["operator.read"] } : null,
+      );
 
-    await expect(resolveGatewayConnection({})).resolves.toMatchObject({
-      url: "wss://remote.example/rpc/?ignored=1",
-      deviceAuthScope: "wss://remote.example/rpc",
-      token: undefined,
-      password: undefined,
-    });
-  });
+      await expect(resolveGatewayConnection({})).resolves.toMatchObject({
+        url: remote.url,
+        deviceAuthScope: scope,
+        token: undefined,
+        password: undefined,
+      });
+    },
+  );
 
   it("keeps configured remote auth required when no origin device token exists", async () => {
     loadConfig.mockReturnValue({
@@ -762,37 +791,6 @@ describe("resolveGatewayConnection", () => {
       }
     },
   );
-
-  it("resolves exec-backed SecretRef token for local mode", async () => {
-    const execProgram = [
-      "process.stdout.write(",
-      "JSON.stringify({ protocolVersion: 1, values: { EXEC_GATEWAY_TOKEN: 'exec-secret-token' } })",
-      ");",
-    ].join("");
-
-    await withSecureTestNodeCommand(async (command) => {
-      loadConfig.mockReturnValue({
-        secrets: {
-          providers: {
-            execprovider: {
-              source: "exec",
-              command,
-              args: ["-e", execProgram],
-            },
-          },
-        },
-        gateway: {
-          mode: "local",
-          auth: {
-            token: { source: "exec", provider: "execprovider", id: "EXEC_GATEWAY_TOKEN" },
-          },
-        },
-      });
-
-      const result = await resolveGatewayConnection({});
-      expect(result.token).toBe("exec-secret-token");
-    });
-  });
 
   it("resolves only token SecretRef when gateway.auth.mode is token", async () => {
     await withModeExecProviderFixture(

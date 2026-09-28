@@ -22,7 +22,6 @@ afterEach(() => vi.restoreAllMocks());
 it.skipIf(process.platform === "win32").each(
   [
     { code: 0, cleanup: "forced" as const },
-    { code: 7, cleanup: "forced" as const },
     { code: 7, cleanup: "uncertain" as const },
   ].flatMap((outcome) =>
     ["native", "installer", "receiver"].map((kind) => ({

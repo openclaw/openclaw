@@ -9,6 +9,10 @@ import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel } from "./protocol.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
 
+// Allow Codex's five-second remote catalog refresh to finish or fall back,
+// with headroom for client acquisition, response transit, and account/read.
+export const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+
 export type CodexAppServerModel = {
   id: string;
   model: string;
@@ -18,6 +22,7 @@ export type CodexAppServerModel = {
   isDefault?: boolean;
   inputModalities: string[];
   supportedReasoningEfforts: string[];
+  serviceTiers?: string[];
   defaultReasoningEffort?: string;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
@@ -82,7 +87,7 @@ async function withCodexAppServerModelRequest<T>(
   if (options.request) {
     return await run(options.request);
   }
-  const timeoutMs = options.timeoutMs ?? 2500;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
   const useSharedClient = options.sharedClient !== false;
   const {
     createIsolatedCodexAppServerClient,
@@ -158,6 +163,9 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     hidden: value.hidden,
     isDefault: value.isDefault,
     inputModalities: value.inputModalities,
+    serviceTiers: normalizeUniqueTrimmedStringList(
+      (value.serviceTiers ?? []).map((tier) => tier.id),
+    ),
     supportedReasoningEfforts: normalizeUniqueTrimmedStringList(
       value.supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
     ),

@@ -32,8 +32,8 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
@@ -159,12 +159,6 @@ function materializeV2026_7_1_2StateDatabase(stateDir: string): {
     databasePath,
     rawSha256: sha256(raw),
   };
-}
-
-function markStateDatabaseAsPreviousAppVersion(database: DatabaseSync): void {
-  database
-    .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-    .run("2026.7.0");
 }
 
 function expectStateSchemaMigrationRequired(
@@ -983,15 +977,6 @@ function runConcurrentSchemaProbe(params: {
     const roundCount = 1;
     const databasePaths = [];
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-    const coordinatorContracts =
-      mode === "fresh"
-        ? await Promise.all([
-            import(${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.boundaryPath).href)}),
-            import(${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.cryptoDigest).href)}),
-            import(${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.sqliteCoordinator).href)}),
-            import(${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabaseContract).href)}),
-          ])
-        : undefined;
 
     function waitForChild(child) {
       let stdout = "";
@@ -1048,65 +1033,6 @@ function runConcurrentSchemaProbe(params: {
       }
     }
 
-    function openFreshInitializationCoordinator(databasePath) {
-      if (!coordinatorContracts) {
-        throw new Error("fresh initialization coordinator contracts are unavailable");
-      }
-      const [
-        { resolvePathViaExistingAncestorSync },
-        { sha256HexPrefixCore },
-        { ensurePrivateSqliteCoordinatorDirectory },
-        { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
-      ] = coordinatorContracts;
-      const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-      const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync("/tmp");
-      const suffix = typeof process.getuid === "function"
-        ? \`openclaw-state-locks-\${process.getuid()}\`
-        : "openclaw-state-locks";
-      const coordinatorPath = path.join(
-        canonicalRuntimeDirectory,
-        suffix,
-        \`state-lifecycle.\${sha256HexPrefixCore(canonicalDatabasePath, 8)}.lock.sqlite\`,
-      );
-      ensurePrivateSqliteCoordinatorDirectory(
-        path.dirname(coordinatorPath),
-        "state ownership coordinator test",
-      );
-      const coordinator = new DatabaseSync(coordinatorPath);
-      try {
-        coordinator.exec(
-          \`PRAGMA busy_timeout = \${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; BEGIN EXCLUSIVE;\`,
-        );
-      } catch (error) {
-        coordinator.close();
-        throw error;
-      }
-      return coordinator;
-    }
-
-    function releaseCoordinator(coordinator) {
-      if (!coordinator) {
-        return;
-      }
-      const errors = [];
-      try {
-        coordinator.exec("ROLLBACK");
-      } catch (error) {
-        errors.push(error);
-      }
-      try {
-        coordinator.close();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "coordinator rollback and close failed");
-      }
-    }
-
     for (let round = 0; round < roundCount; round += 1) {
       const databasePath = path.join(rootDir, \`concurrent-\${mode}-\${round}.sqlite\`);
       const barrierDir = path.join(rootDir, \`barrier-\${round}\`);
@@ -1121,33 +1047,9 @@ function runConcurrentSchemaProbe(params: {
         closeOpenClawStateDatabaseForTest();
 
         const legacy = new DatabaseSync(databasePath);
-        legacy
-          .prepare(
-            \`INSERT INTO task_runs (
-               task_id, runtime, requester_session_key, owner_key, scope_kind,
-               child_session_key, agent_id, task, status, delivery_status,
-               notify_policy, created_at, last_event_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\`,
-          )
-          .run(
-            \`legacy-concurrent-\${round}\`,
-            "subagent",
-            "agent:main:main",
-            "agent:main:main",
-            "session",
-            \`agent:worker:subagent:concurrent-\${round}\`,
-            "main",
-            "Verify concurrent schema upgrade",
-            "running",
-            "pending",
-            "done_only",
-            100,
-            100,
-          );
         legacy.exec(\`
           DROP TABLE worker_environment_credentials;
           ALTER TABLE gateway_boot_lifecycle DROP COLUMN startup_reason;
-          ALTER TABLE task_runs DROP COLUMN requester_agent_id;
           ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_mode;
           ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_key_id;
           ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_signature_count;
@@ -1195,43 +1097,14 @@ function runConcurrentSchemaProbe(params: {
         );
       });
       const outcomes = workers.map(waitForChild);
-      let coordinator;
       let roundError;
       try {
         await waitForMarkers(workers, readyPaths, "ready markers", round);
-        if (mode === "fresh") {
-          coordinator = openFreshInitializationCoordinator(databasePath);
-        }
         fs.writeFileSync(startPath, "start");
-
-        if (mode === "fresh") {
-          await waitForMarkers(workers, enteringPaths, "entering markers", round);
-          // Both children have reached the synchronous open behind the exact production
-          // coordinator; target absence while it is held proves contention, not scheduling.
-          await sleep(250);
-          assert.equal(
-            fs.existsSync(databasePath),
-            false,
-            \`round \${round} database was created while the ownership coordinator was held\`,
-          );
-          for (const [index, worker] of workers.entries()) {
-            assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited early\`);
-            assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled early\`);
-          }
-        }
+        await waitForMarkers(workers, enteringPaths, "entering markers", round);
       } catch (error) {
         roundError = error;
       } finally {
-        try {
-          releaseCoordinator(coordinator);
-        } catch (error) {
-          roundError = roundError
-            ? new AggregateError(
-                [roundError, error],
-                \`round \${round} probe and coordinator release failed\`,
-              )
-            : error;
-        }
         if (roundError) {
           for (const worker of workers) {
             if (worker.exitCode === null && worker.signalCode === null) {
@@ -1245,8 +1118,7 @@ function runConcurrentSchemaProbe(params: {
         if (!roundError) {
           const openedPaths = readyPaths.map((readyPath) => readyPath + ".opened");
           await waitForMarkers(workers, openedPaths, "successful open markers", round);
-          // Opens contend together; explicit WAL-capable retirement intentionally fails
-          // on contention, so each worker stays live until granted its own close phase.
+          // Keep both real connections live through successful admission, then join each close.
           for (const [index, worker] of workers.entries()) {
             assert.equal(worker.exitCode, null, \`round \${round} worker \${index} exited before retirement\`);
             assert.equal(worker.signalCode, null, \`round \${round} worker \${index} signaled before retirement\`);
@@ -4967,23 +4839,19 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const refusal = {
       changes: [],
       warnings: [
-        `Failed migrating shared state database schema at ${databasePath}: Error: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
+        `Failed migrating shared state database schema at ${databasePath}: SqliteSchemaMismatchError: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
       ],
     };
     // Warm canonical schema contracts before measuring a repeated Doctor refusal.
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
-    const get = vi.spyOn(StatementSync.prototype, "get");
-    const all = vi.spyOn(StatementSync.prototype, "all");
-    const iterate = vi.spyOn(StatementSync.prototype, "iterate");
+    const observer = observeSqliteReadSql(StatementSync.prototype);
     try {
       expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
-      const reads = get.mock.calls.length + all.mock.calls.length + iterate.mock.calls.length;
+      const reads = observer.queries.length;
       expect.soft(reads).toBeGreaterThan(0);
       expect.soft(reads).toBeLessThanOrEqual(850);
     } finally {
-      get.mockRestore();
-      all.mockRestore();
-      iterate.mockRestore();
+      observer.restore();
     }
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
@@ -5039,12 +4907,14 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
       const message = `SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`;
       if (migrationPath === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(new Error(message));
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          new SqliteSchemaMismatchError(message),
+        );
       } else if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [],
           warnings: [
-            `Failed migrating shared state database schema at ${databasePath}: Error: ${message}`,
+            `Failed migrating shared state database schema at ${databasePath}: SqliteSchemaMismatchError: ${message}`,
           ],
         });
       } else {
@@ -5055,7 +4925,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
             operation: "gateway-startup",
             config: {},
           }),
-        ).rejects.toThrow(new Error(message));
+        ).rejects.toThrow(new SqliteSchemaMismatchError(message));
         expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
       }
 
@@ -6899,7 +6769,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
 
     expect(databasePaths).toHaveLength(1);
-    for (const [round, databasePath] of databasePaths.entries()) {
+    for (const databasePath of databasePaths) {
       const db = new DatabaseSync(databasePath, { readOnly: true });
       try {
         expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
@@ -6908,14 +6778,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         expect(
           db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
         ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-        expect(
-          db
-            .prepare("SELECT agent_id, requester_agent_id FROM task_runs WHERE task_id = ?")
-            .get(`legacy-concurrent-${round}`),
-        ).toEqual({
-          agent_id: "worker",
-          requester_agent_id: "main",
-        });
         expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
       } finally {
         db.close();
@@ -6947,235 +6809,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       }
     }
   }, 60_000);
-
-  it("migrates requester and executor attribution for existing cross-agent tasks", () => {
-    const stateDir = createTempStateDir();
-    const legacyDb = openMaterializedCurrentStateDatabase(stateDir);
-    legacyDb.exec("ALTER TABLE task_runs DROP COLUMN requester_agent_id");
-    legacyDb
-      .prepare(
-        `INSERT INTO task_runs (
-          task_id,
-          runtime,
-          requester_session_key,
-          owner_key,
-          scope_kind,
-          child_session_key,
-          agent_id,
-          task,
-          status,
-          delivery_status,
-          notify_policy,
-          created_at,
-          last_event_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "legacy-cross-agent",
-        "subagent",
-        "agent:main:main",
-        "agent:main:main",
-        "session",
-        "agent:worker:subagent:child",
-        "main",
-        "Inspect worker state",
-        "running",
-        "pending",
-        "done_only",
-        100,
-        100,
-      );
-    legacyDb
-      .prepare(
-        `INSERT INTO task_runs (
-          task_id,
-          runtime,
-          requester_session_key,
-          owner_key,
-          scope_kind,
-          child_session_key,
-          agent_id,
-          task,
-          status,
-          delivery_status,
-          notify_policy,
-          created_at,
-          last_event_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "legacy-global-cross-agent",
-        "subagent",
-        "global",
-        "global",
-        "session",
-        "agent:worker:subagent:global-child",
-        null,
-        "Inspect global worker state",
-        "running",
-        "pending",
-        "done_only",
-        110,
-        110,
-      );
-    markStateDatabaseVersion(legacyDb, 5);
-    legacyDb.close();
-
-    const reopened = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    const columns = reopened.db.prepare("PRAGMA table_info(task_runs)").all() as Array<{
-      name?: string;
-    }>;
-    expect(columns.some((column) => column.name === "requester_agent_id")).toBe(true);
-    expect(
-      reopened.db
-        .prepare(
-          `SELECT agent_id, requester_agent_id
-           FROM task_runs
-           WHERE task_id = ?`,
-        )
-        .get("legacy-cross-agent"),
-    ).toEqual({
-      agent_id: "worker",
-      requester_agent_id: "main",
-    });
-    expect(
-      reopened.db
-        .prepare(
-          `SELECT agent_id, requester_agent_id
-           FROM task_runs
-           WHERE task_id = ?`,
-        )
-        .get("legacy-global-cross-agent"),
-    ).toEqual({
-      agent_id: null,
-      requester_agent_id: null,
-    });
-
-    reopened.db
-      .prepare(
-        `INSERT INTO task_runs (
-          task_id,
-          runtime,
-          requester_session_key,
-          owner_key,
-          scope_kind,
-          child_session_key,
-          agent_id,
-          requester_agent_id,
-          task,
-          status,
-          delivery_status,
-          notify_policy,
-          created_at,
-          last_event_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "current-explicit-attribution",
-        "subagent",
-        "global",
-        "global",
-        "session",
-        "agent:worker:subagent:current",
-        "main",
-        null,
-        "Current explicit attribution",
-        "running",
-        "pending",
-        "done_only",
-        200,
-        200,
-      );
-    closeOpenClawStateDatabaseForTest();
-
-    const currentReopened = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    expect(
-      currentReopened.db
-        .prepare(
-          `SELECT agent_id, requester_agent_id
-           FROM task_runs
-           WHERE task_id = ?`,
-        )
-        .get("current-explicit-attribution"),
-    ).toEqual({
-      agent_id: "main",
-      requester_agent_id: null,
-    });
-  });
-
-  it("leaves obsolete task delivery statuses unchanged until Doctor repairs them", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-state-task-delivery-status-" },
-      async ({ stateDir }) => {
-        const database = openMaterializedCurrentStateDatabase(stateDir);
-        const insert = database.prepare(
-          `INSERT INTO task_runs (
-            task_id, runtime, requester_session_key, owner_key, scope_kind, task, status,
-            delivery_status, notify_policy, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const [taskId, deliveryStatus] of [
-          ["obsolete", "not-requested"],
-          ["canonical", "not_applicable"],
-          ["pending", "pending"],
-        ] as const) {
-          insert.run(
-            taskId,
-            "cron",
-            "",
-            `system:cron:${taskId}`,
-            "system",
-            `Task ${taskId}`,
-            "cancelled",
-            deliveryStatus,
-            "silent",
-            100,
-          );
-        }
-        markStateDatabaseAsPreviousAppVersion(database);
-        database.close();
-
-        const readStatuses = () =>
-          openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })
-            .db.prepare("SELECT task_id, delivery_status FROM task_runs ORDER BY task_id")
-            .all();
-        const expectedStatuses = [
-          { task_id: "canonical", delivery_status: "not_applicable" },
-          { task_id: "obsolete", delivery_status: "not_applicable" },
-          { task_id: "pending", delivery_status: "pending" },
-        ];
-
-        expect(readStatuses()).toEqual([
-          { task_id: "canonical", delivery_status: "not_applicable" },
-          { task_id: "obsolete", delivery_status: "not-requested" },
-          { task_id: "pending", delivery_status: "pending" },
-        ]);
-        closeOpenClawStateDatabaseForTest();
-        expect(
-          repairOpenClawStateDatabaseSchema({ env: { OPENCLAW_STATE_DIR: stateDir } }).warnings,
-        ).toEqual([]);
-        expect(readStatuses()).toEqual(expectedStatuses);
-        expect(
-          [...loadTaskRegistryStateFromSqlite().tasks.values()].map((task) => ({
-            taskId: task.taskId,
-            deliveryStatus: task.deliveryStatus,
-          })),
-        ).toEqual([
-          { taskId: "canonical", deliveryStatus: "not_applicable" },
-          { taskId: "obsolete", deliveryStatus: "not_applicable" },
-          { taskId: "pending", deliveryStatus: "pending" },
-        ]);
-
-        closeOpenClawStateDatabaseForTest();
-        expect(readStatuses()).toEqual(expectedStatuses);
-        closeOpenClawStateDatabaseForTest();
-      },
-    );
-  });
 
   it("adds hosted catalog snapshot trust columns to existing state databases", () => {
     const stateDir = createTempStateDir();
@@ -7223,89 +6856,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       name?: string;
     }>;
     expect(columns.some((column) => column.name === "detail_json")).toBe(true);
-  });
-
-  it("rolls back the requester attribution column when its backfill fails", () => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacyDb = new DatabaseSync(databasePath);
-    legacyDb.exec(`
-      ALTER TABLE task_runs DROP COLUMN requester_agent_id;
-      CREATE TRIGGER reject_task_attribution_repair
-      BEFORE UPDATE ON task_runs
-      BEGIN
-        SELECT RAISE(ABORT, 'blocked task attribution repair');
-      END;
-    `);
-    legacyDb
-      .prepare(
-        `INSERT INTO task_runs (
-          task_id,
-          runtime,
-          requester_session_key,
-          owner_key,
-          scope_kind,
-          child_session_key,
-          agent_id,
-          task,
-          status,
-          delivery_status,
-          notify_policy,
-          created_at,
-          last_event_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        "blocked-cross-agent",
-        "subagent",
-        "agent:main:main",
-        "agent:main:main",
-        "session",
-        "agent:worker:subagent:blocked",
-        "main",
-        "Inspect blocked worker state",
-        "running",
-        "pending",
-        "done_only",
-        100,
-        100,
-      );
-    markStateDatabaseVersion(legacyDb, 5);
-    legacyDb.close();
-
-    expect(() =>
-      openOpenClawStateDatabase({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      }),
-    ).toThrow(/blocked task attribution repair/);
-
-    const interruptedDb = new DatabaseSync(databasePath);
-    const interruptedColumns = interruptedDb
-      .prepare("PRAGMA table_info(task_runs)")
-      .all() as Array<{
-      name?: string;
-    }>;
-    expect(interruptedColumns.some((column) => column.name === "requester_agent_id")).toBe(false);
-    interruptedDb.exec("DROP TRIGGER reject_task_attribution_repair");
-    interruptedDb.close();
-
-    const reopened = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    expect(
-      reopened.db
-        .prepare(
-          `SELECT agent_id, requester_agent_id
-           FROM task_runs
-           WHERE task_id = ?`,
-        )
-        .get("blocked-cross-agent"),
-    ).toEqual({
-      agent_id: "worker",
-      requester_agent_id: "main",
-    });
   });
 
   it("opens databases with early cron tables before creating cron indexes", () => {

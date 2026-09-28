@@ -28,7 +28,7 @@ import * as managedContext from "./update-command-managed-context.js";
 import { finishAlreadyCurrentUpdate } from "./update-command-noop.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import * as commandRun from "./update-command-run.js";
-import { prepareUpdateCommand, resolveUpdateCommandAdmissionEnv } from "./update-command-run.js";
+import { prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -71,102 +71,75 @@ afterEach(() => {
 });
 
 it.each([
-  ...(["prepare", "environment", "database"] as const).flatMap((boundary) =>
-    (["unverified", "expired"] as const).map((response) => ({ boundary, response })),
-  ),
-  { boundary: "prepare", response: "missing" },
-  { boundary: "environment", response: "malformed" },
-  { boundary: "database", response: "invalid-envelope" },
-  { boundary: "command", response: "missing" },
-  { boundary: "command", response: "origin-only" },
-  { boundary: "command", response: "invalid-completion" },
-] as const)(
-  "refuses invalid handoff $boundary admission: $response",
-  async ({ boundary, response }) => {
-    const root = dirs.make("foreground-admission-");
-    vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
-    vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
-    const nativePlan = vi
-      .spyOn(servicePlan, "resolveManagedServicePackageUpdatePlan")
-      .mockResolvedValue({ rootRedirect: null });
-    const nativeOwner = vi
-      .spyOn(servicePlan, "readManagedGatewayServiceForUpdate")
-      .mockResolvedValue(null);
-    const state = vi
-      .spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath")
-      .mockResolvedValue(undefined);
-    const create = vi.spyOn(updateRunLedger, "createUpdateRun").mockImplementation(() => {
-      throw new Error("Unexpected ledger creation from invalid handoff metadata");
+  "unverified",
+  "expired",
+  "missing",
+  "malformed",
+  "invalid-envelope",
+  "origin-only",
+  "invalid-completion",
+] as const)("refuses invalid handoff command admission: %s", async (response) => {
+  const root = dirs.make("foreground-admission-");
+  vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
+  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
+  const nativePlan = vi
+    .spyOn(servicePlan, "resolveManagedServicePackageUpdatePlan")
+    .mockRejectedValue(new Error("Unexpected native plan from invalid handoff metadata"));
+  const nativeOwner = vi
+    .spyOn(servicePlan, "readManagedGatewayServiceForUpdate")
+    .mockResolvedValue(null);
+  const state = vi
+    .spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath")
+    .mockResolvedValue(undefined);
+  const create = vi.spyOn(updateRunLedger, "createUpdateRun").mockImplementation(() => {
+    throw new Error("Unexpected ledger creation from invalid handoff metadata");
+  });
+  const adopt = vi.spyOn(updateRunLedger, "adoptUpdateRun");
+  const handshakeRefusal = response === "unverified" || response === "expired";
+  if (handshakeRefusal) {
+    handoff.inspect.mockImplementationOnce(async () => {
+      if (response === "expired") {
+        await fs.rm(claimPath);
+      }
+      return false;
     });
-    const adopt = vi.spyOn(updateRunLedger, "adoptUpdateRun");
-    if (boundary === "command") {
-      nativePlan.mockRejectedValue(
-        new Error("Unexpected native plan from invalid handoff metadata"),
-      );
-    }
-    const handshakeRefusal = response === "unverified" || response === "expired";
-    if (handshakeRefusal) {
-      handoff.inspect.mockImplementationOnce(async () => {
-        if (response === "expired") {
-          await fs.rm(claimPath);
-        }
-        return false;
-      });
-    } else if (response === "missing") {
-      await fs.rm(claimPath);
-    } else if (response === "malformed" || response === "invalid-envelope") {
-      await fs.writeFile(claimPath, response === "malformed" ? "{" : '{"version":2,"meta":{}}');
-    } else {
-      await fs.writeFile(
-        claimPath,
-        JSON.stringify({
-          version: 1,
-          meta: {
-            runId: foregroundRunId,
-            completionOwner: response === "origin-only" ? undefined : "native",
-            foregroundOrigin: {
-              owner: "fixture-owner",
-              pid: process.pid,
-              host: "localhost",
-              startedAt: 1,
-              port: 18789,
-              stateDatabasePath: path.join(root, "state.sqlite"),
-              configPath: path.join(root, "openclaw.json"),
-            },
+  } else if (response === "missing") {
+    await fs.rm(claimPath);
+  } else if (response === "malformed" || response === "invalid-envelope") {
+    await fs.writeFile(claimPath, response === "malformed" ? "{" : '{"version":2,"meta":{}}');
+  } else {
+    await fs.writeFile(
+      claimPath,
+      JSON.stringify({
+        version: 1,
+        meta: {
+          runId: foregroundRunId,
+          completionOwner: response === "origin-only" ? undefined : "native",
+          foregroundOrigin: {
+            owner: "fixture-owner",
+            pid: process.pid,
+            host: "localhost",
+            startedAt: 1,
+            port: 18789,
+            stateDatabasePath: path.join(root, "state.sqlite"),
+            configPath: path.join(root, "openclaw.json"),
           },
-        }),
-      );
-    }
-    const options = { opts: { json: true }, root };
-    const operation =
-      boundary === "prepare"
-        ? prepareUpdateCommand(options.opts)
-        : boundary === "environment"
-          ? resolveUpdateCommandAdmissionEnv(options)
-          : boundary === "command"
-            ? updateCommand(options.opts)
-            : inspectUpdateDatabaseContexts({
-                roots: [root],
-                updateInstallKind: "package",
-                shouldRestart: true,
-                jsonMode: true,
-                timeoutMs: 1000,
-                managedServiceRootRedirect: null,
-              });
-    await expect(operation.then(() => "admitted")).rejects.toMatchObject({
-      reason: "managed-service-preflight",
-    });
-    await Promise.resolve();
-    expect(handoff.inspect).toHaveBeenCalledTimes(handshakeRefusal ? 1 : 0);
-    expect(nativePlan).not.toHaveBeenCalled();
-    expect(nativeOwner).not.toHaveBeenCalled();
-    expect(mocks.maybeStopService).not.toHaveBeenCalled();
-    expect(mocks.captureSchemaContext).not.toHaveBeenCalled();
-    expect(state).not.toHaveBeenCalled();
-    expect(create).not.toHaveBeenCalled();
-    expect(adopt).not.toHaveBeenCalled();
-  },
-);
+        },
+      }),
+    );
+  }
+  await expect(updateCommand({ json: true })).rejects.toMatchObject({
+    reason: "managed-service-preflight",
+  });
+  expect(handoff.inspect).toHaveBeenCalledTimes(handshakeRefusal ? 1 : 0);
+  expect(nativePlan).not.toHaveBeenCalled();
+  expect(nativeOwner).not.toHaveBeenCalled();
+  expect(mocks.maybeStopService).not.toHaveBeenCalled();
+  expect(mocks.captureSchemaContext).not.toHaveBeenCalled();
+  expect(state).not.toHaveBeenCalled();
+  expect(create).not.toHaveBeenCalled();
+  expect(adopt).not.toHaveBeenCalled();
+});
 
 it("keeps post-core continuation separate from foreground request admission", async () => {
   const root = dirs.make("foreground-post-core-");
@@ -322,7 +295,6 @@ it.each(["schema", "execution", "already current"] as const)(
               requestedChannel: null,
               storedChannel: null,
               controlPlaneUpdateSentinelMeta: null,
-              packageInstallSpec: params.packageInstallSpec ?? null,
               refuseUpdate,
             });
       await expect(operation.then(() => "admitted")).rejects.toMatchObject({

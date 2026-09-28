@@ -165,12 +165,8 @@ childProcess.spawn = function (command, args, options) {
     installCount += 1;
     child.once("close", () => {
       activeInstalls -= 1;
+      setImmediate(() => fs.writeFileSync(process.env.PNPM_RELEASE, "release\\n"));
     });
-    if (installCount === 1) {
-      child.once("close", () => {
-        setImmediate(() => fs.writeFileSync(process.env.PNPM_RELEASE, "release\\n"));
-      });
-    }
   }
   if (args?.includes("--render-root") && (installCount < 2 || activeInstalls > 0)) {
     fs.writeFileSync(process.env.RENDER_DURING_INSTALL, "started early\\n");
@@ -230,7 +226,13 @@ if (process.argv.includes("--render-root")) {
       }
       await close;
     }
-    expect(stderr).toBe("");
+    const progressLines = stderr.trim().split("\n");
+    expect(progressLines).toHaveLength(8);
+    for (const line of progressLines) {
+      expect(line).toMatch(
+        /^\[plugin-sdk-api-diff\] [a-f0-9]{40} (install|render) (started|completed in \d+ms)$/,
+      );
+    }
     expect(exitCode).toBe(0);
     expect(existsSync(blockedMarker)).toBe(true);
     expect(existsSync(renderStarted)).toBe(true);

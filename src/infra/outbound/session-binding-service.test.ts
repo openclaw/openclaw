@@ -694,6 +694,50 @@ describe("session binding service", () => {
     ).toBeNull();
   });
 
+  it("hides spawned-worker bindings that own the current conversation but keeps child threads", async () => {
+    const service = getSessionBindingService();
+    const current = { channel: "workspace", accountId: "default", conversationId: "user:U123" };
+    const workerKey = "agent:main:subagent:legacy-worker";
+    await service.bind({
+      targetSessionKey: workerKey,
+      targetKind: "subagent",
+      conversation: current,
+      metadata: { boundBy: "system" },
+    });
+
+    expect(service.resolveByConversation(current)).toBeNull();
+    await expect(service.resolveByConversationAsync(current)).resolves.toBeNull();
+    expect(inspectSessionBindingByConversation(current)).toMatchObject({ binding: null });
+    expect(service.listBySession(workerKey)).toEqual([]);
+
+    // A user's explicit bind of the same conversation still owns it.
+    await service.bind({
+      targetSessionKey: "agent:codex:acp:user-owned",
+      targetKind: "session",
+      conversation: current,
+      metadata: { boundBy: "U123" },
+    });
+    expect(service.resolveByConversation(current)?.targetSessionKey).toBe(
+      "agent:codex:acp:user-owned",
+    );
+
+    const childThread = {
+      channel: "adapter-chat",
+      accountId: "default",
+      conversationId: "thread-created",
+    };
+    registerSessionBindingAdapter({
+      ...childThread,
+      capabilities: { bindSupported: true, placements: ["current", "child"] },
+      listBySession: () => [],
+      resolveByConversation: (ref) => ({
+        ...createRecord({ targetSessionKey: workerKey, targetKind: "subagent", conversation: ref }),
+        metadata: { boundBy: "system" },
+      }),
+    });
+    expect(service.resolveByConversation(childThread)?.targetSessionKey).toBe(workerKey);
+  });
+
   it("supports registered plugin channels through the generic current-conversation path", async () => {
     const service = getSessionBindingService();
 

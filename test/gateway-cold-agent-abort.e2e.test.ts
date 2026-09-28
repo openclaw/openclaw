@@ -125,17 +125,16 @@ it(
       const aborted = await client.request("chat.abort", { sessionKey, runId });
       expect(aborted).toMatchObject({ aborted: true, runIds: [runId] });
       const terminal = await final;
-      // The agent RPC retains its cancellation wire status; the task records the outcome.
+      // The agent RPC retains its cancellation wire status; agent.wait retains the terminal outcome.
       expect(terminal).toEqual({
         runId,
         status: "timeout",
         summary: "aborted",
         stopReason: "rpc",
       });
-      expect(await client.request("tasks.list", { sessionKey })).toEqual({
-        tasks: [
-          expect.objectContaining({ runId, childSessionKey: sessionKey, status: "cancelled" }),
-        ],
+      expect(await client.request("agent.wait", { runId, timeoutMs: 1_000 })).toMatchObject({
+        status: "error",
+        stopReason: "rpc",
       });
       await vi.waitFor(() => expect(providerAborted).toBe(true), { timeout: 5_000 });
       expect(providerRequests).toBe(1);

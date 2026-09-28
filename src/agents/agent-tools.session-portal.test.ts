@@ -43,47 +43,31 @@ function context(dedicated: boolean, attached: boolean, locked = false) {
   );
 }
 
+function tools(
+  builder: "agent" | "gateway",
+  cfg: OpenClawConfig = { tools: { profile: "coding" } },
+  senderIsOwner = false,
+) {
+  return builder === "agent"
+    ? createOpenClawCodingTools({ ...identity, config: cfg, senderIsOwner })
+    : resolveGatewayScopedTools({ ...identity, cfg, senderIsOwner, surface: "loopback" }).tools;
+}
+
 describe("attached conversation portal tool availability", () => {
   for (const builder of ["agent", "gateway"] as const) {
-    const tools = (cfg: OpenClawConfig, senderIsOwner = false) =>
-      builder === "agent"
-        ? createOpenClawCodingTools({ ...identity, config: cfg, senderIsOwner })
-        : resolveGatewayScopedTools({ ...identity, cfg, senderIsOwner, surface: "loopback" }).tools;
-
     it(`${builder} exposes only the scoped schema for a qualified non-owner and preserves tool denies`, () => {
       const ctx = context(true, true);
       withPluginRuntimeGatewayContextResolver(
         () => ctx,
         () => {
-          const portal = tools({ tools: { profile: "coding" } }).find(
-            (tool) => tool.name === "portal",
-          );
+          const portal = tools(builder).find((tool) => tool.name === "portal");
           expect(portal).toBeDefined();
           expect(portal?.parameters).not.toHaveProperty("properties.environmentId");
           expect(portal?.description).toContain("attached dedicated worker");
           expect(
-            tools({ tools: { profile: "coding", deny: ["portal"] } }).some(
+            tools(builder, { tools: { profile: "coding", deny: ["portal"] } }).some(
               (tool) => tool.name === "portal",
             ),
-          ).toBe(false);
-        },
-      );
-    });
-
-    it.each([
-      { dedicated: false, attached: true, label: "unknown or shared host" },
-      {
-        dedicated: true,
-        attached: false,
-        label: "primary placement without a secondary attachment",
-      },
-    ])(`${builder} keeps $label unavailable to non-owners`, ({ dedicated, attached }) => {
-      const ctx = context(dedicated, attached);
-      withPluginRuntimeGatewayContextResolver(
-        () => ctx,
-        () => {
-          expect(
-            tools({ tools: { profile: "coding" } }).some((tool) => tool.name === "portal"),
           ).toBe(false);
         },
       );
@@ -94,29 +78,40 @@ describe("attached conversation portal tool availability", () => {
       withPluginRuntimeGatewayContextResolver(
         () => ctx,
         () => {
-          const portal = tools({ tools: { profile: "coding" } }, true).find(
-            (tool) => tool.name === "portal",
-          );
+          const portal = tools(builder, undefined, true).find((tool) => tool.name === "portal");
           expect(portal?.parameters).toHaveProperty("properties.environmentId");
         },
       );
     });
+  }
 
-    it(`${builder} hides the scoped mode for all model-selection-locked sessions`, () => {
-      const ctx = context(true, true, true);
+  it.each([
+    { builder: "gateway", dedicated: false, attached: true, locked: false, label: "shared host" },
+    { builder: "agent", dedicated: true, attached: false, locked: false, label: "no attachment" },
+    {
+      builder: "agent",
+      dedicated: true,
+      attached: true,
+      locked: true,
+      label: "model-selection lock",
+    },
+  ] as const)(
+    "$builder keeps $label unavailable to non-owners",
+    ({ builder, dedicated, attached, locked }) => {
+      const ctx = context(dedicated, attached, locked);
       withPluginRuntimeGatewayContextResolver(
         () => ctx,
         () => {
-          expect(
-            tools({ tools: { profile: "coding" } }).some((tool) => tool.name === "portal"),
-          ).toBe(false);
-          expect(
-            tools({ tools: { profile: "coding" } }, true).some((tool) => tool.name === "portal"),
-          ).toBe(true);
+          expect(tools(builder).some((tool) => tool.name === "portal")).toBe(false);
+          if (locked) {
+            expect(tools(builder, undefined, true).some((tool) => tool.name === "portal")).toBe(
+              true,
+            );
+          }
         },
       );
-    });
-  }
+    },
+  );
 
   it("does not expose the new mode through HTTP tool invocation", () => {
     const ctx = context(true, true);

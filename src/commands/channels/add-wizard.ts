@@ -15,8 +15,6 @@ import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-typ
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { readConfigFileSnapshotForWrite, type OpenClawConfig } from "../../config/config.js";
 import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
-import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -25,6 +23,7 @@ import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import { withCommandPluginMetadata } from "../config-validation.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName } from "./add-mutators.js";
+import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 
 type InitialWizardChannelTarget =
   | { kind: "omitted" }
@@ -130,7 +129,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   const { sourceConfig: cfg, hash: baseHash } = writeSnapshot.snapshot;
   const [{ buildAgentSummaries }, onboardChannels] = await Promise.all([
     import("../agents.config.js"),
-    import("../onboard-channels.js"),
+    import("../../flows/channel-setup.js"),
   ]);
   const channelSetup = onboardChannels.createChannelSetupHooks({
     runtime,
@@ -172,18 +171,13 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   });
   const commitWizardConfig = async (config: OpenClawConfig) => {
     await params.beforePersistentEffect?.();
-    const committed = await commitConfigWithPendingPluginInstalls({
-      sourceConfig: config,
+    const committed = await persistChannelPluginConfig({
+      cfg: config,
+      pluginInstalled: false,
       writeOptions: writeSnapshot.writeOptions,
-      ...(baseHash !== undefined ? { baseHash } : {}),
+      baseHash,
+      runtime,
     });
-    if (committed.movedInstallRecords) {
-      await refreshPluginRegistryAfterConfigMutation({
-        reason: "source-changed",
-        installRecords: committed.installRecords,
-        logger: { warn: (message) => runtime.log(message) },
-      });
-    }
     await channelSetup.runPostWriteHooks(committed.path);
     return committed.nextConfig;
   };

@@ -13,75 +13,6 @@ import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.j
 import { createToolsMcpServer } from "./tools-stdio-server.js";
 
 describe("plugin tools MCP cancellation", () => {
-  it("forwards host cancellation to tool.execute", async () => {
-    let resolveObservedSignal: (signal: AbortSignal | undefined) => void;
-    const observedSignal = new Promise<AbortSignal | undefined>((resolve) => {
-      resolveObservedSignal = resolve;
-    });
-    let abortObserved = false;
-    let observedToolCallId: string | undefined;
-
-    const tool = {
-      name: "probe_cancel",
-      description: "Probe cancellation forwarding",
-      parameters: { type: "object", properties: {} },
-      execute: async (toolCallId: string, _params: unknown, signal?: AbortSignal) => {
-        observedToolCallId = toolCallId;
-        resolveObservedSignal(signal);
-        await new Promise<void>((resolve, reject) => {
-          if (!signal) {
-            reject(new Error("tool.execute did not receive AbortSignal"));
-            return;
-          }
-          if (signal.aborted) {
-            abortObserved = true;
-            resolve();
-            return;
-          }
-          signal.addEventListener(
-            "abort",
-            () => {
-              abortObserved = true;
-              resolve();
-            },
-            { once: true },
-          );
-        });
-        return { content: [{ type: "text", text: "done" }] };
-      },
-    } as unknown as AnyAgentTool;
-
-    const server = createToolsMcpServer({ name: "test", tools: [tool] });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "test-client", version: "0.0.0" }, { capabilities: {} });
-
-    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-
-    try {
-      const controller = new AbortController();
-      const callPromise = client.callTool({ name: "probe_cancel", arguments: {} }, undefined, {
-        signal: controller.signal,
-      });
-      const signal = await observedSignal;
-
-      expect(signal).toBeInstanceOf(AbortSignal);
-      expect(signal?.aborted).toBe(false);
-
-      controller.abort();
-
-      await expect(callPromise).rejects.toBeDefined();
-      expect(abortObserved).toBe(true);
-      expect(observedToolCallId).toBeDefined();
-      if (!observedToolCallId) {
-        throw new Error("tool.execute did not receive a call id");
-      }
-      expect(consumeTrackedToolExecutionStarted(observedToolCallId)).toBeUndefined();
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-
   it.each(
     ["handler", "descendant"].flatMap((mode) => [false, true].map((hosted) => ({ mode, hosted }))),
   )(
@@ -226,6 +157,7 @@ describe("plugin tools MCP cancellation", () => {
       const transportClosed = createDeferred();
       const reads: unknown[] = [];
       let requestSignal: AbortSignal | undefined;
+      let toolCallId: string | undefined;
       let workSignal: AbortSignal | undefined;
       let descendant: Promise<void> | undefined;
       let descendantFinished = false;
@@ -238,7 +170,8 @@ describe("plugin tools MCP cancellation", () => {
         label: "Cached native work",
         description: "Returns a cached result while accepted native work remains",
         parameters: Type.Object({}),
-        execute: async (_id, _params, signal) => {
+        execute: async (id, _params, signal) => {
+          toolCallId = id;
           const ownerSignal = getAsyncWorkSignal();
           if (!signal || !ownerSignal) {
             throw new Error("Expected request and work signals");
@@ -359,6 +292,11 @@ describe("plugin tools MCP cancellation", () => {
         finish.resolve();
         await descendant;
         await closing;
+        expect(toolCallId).toBeDefined();
+        if (!toolCallId) {
+          throw new Error("tool.execute did not receive a call id");
+        }
+        expect(consumeTrackedToolExecutionStarted(toolCallId)).toBeUndefined();
         expect(reads).toEqual([{ value: 42 }]);
         expect(database.isOpen).toBe(false);
       } finally {

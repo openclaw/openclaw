@@ -30,6 +30,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../../src/test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -196,7 +197,9 @@ function migrationInput({ state, scope }: Fixture) {
 function createPausedCronService(fixture: Fixture) {
   const logger = createNoopLogger();
   const mutations: Array<Pick<CronEvent, "jobId" | "action">> = [];
+  const scheduler = createTestGatewayScheduler();
   const cron = new CronService({
+    scheduler,
     storePath: fixture.activeStore,
     cronEnabled: true,
     defaultAgentId: "main",
@@ -213,7 +216,7 @@ function createPausedCronService(fixture: Fixture) {
   });
   // CRUD can arm an unstarted service; suspend automatic ticks during convergence proof.
   cron.pauseScheduling();
-  return { cron, logger, mutations };
+  return { cron, logger, mutations, scheduler };
 }
 
 async function runRegisteredDreamingService(
@@ -649,7 +652,7 @@ describe("host Cron Doctor repair", () => {
           const authoredBefore = beforeRuntime.jobs.find(
             (row) => row.store_key === activeStore && row.job_id === "operator",
           );
-          const { cron, logger, mutations } = createPausedCronService(fixture);
+          const { cron, logger, mutations, scheduler } = createPausedCronService(fixture);
           try {
             const config: OpenClawConfig = {
               plugins: {
@@ -724,6 +727,7 @@ describe("host Cron Doctor repair", () => {
             expect(readRows(fixture.db())).toEqual(afterRuntime);
           } finally {
             cron.stop();
+            await scheduler.stop();
           }
         },
         {
@@ -755,7 +759,7 @@ describe("host Cron Doctor repair", () => {
           fixture.activeStore,
         );
       });
-      const { cron, logger, mutations } = createPausedCronService(fixture);
+      const { cron, logger, mutations, scheduler } = createPausedCronService(fixture);
       try {
         // Admit existing schedules before isolating the dreaming reconciliation's mutations.
         await cron.list({ includeDisabled: true });
@@ -808,6 +812,7 @@ describe("host Cron Doctor repair", () => {
         ]);
       } finally {
         cron.stop();
+        await scheduler.stop();
       }
     });
   });

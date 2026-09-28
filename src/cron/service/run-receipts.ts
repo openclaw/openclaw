@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   isCronSelfRemovalCurrent,
   markCronJobActive,
@@ -12,27 +15,31 @@ import {
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronStoreKey } from "../store/key.js";
-import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
+import { loadCronRows, loadedCronStoreFromRows } from "../store/row-codec.js";
 import {
   adjudicateActiveCronRunReceiptInDatabase,
   assertCronRunReceiptCurrent,
   assertCronRunReceiptCurrentInDatabase,
   assertCronRunReceiptOwnedInDatabase,
-  claimCronRunReceiptInDatabase,
   CronRunReceiptRevisionError,
+  findActiveCronRunReceiptInDatabase,
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
-  findActiveCronRunReceiptInDatabase,
   isCronRunReceiptSettlementPending,
   prepareCronRunReceiptAdjudication,
   prepareCronRunReceiptClaim,
   readCronRunReceiptCurrentJob,
   trackCronRunReceiptSettlement,
-  type PreparedCronRunReceiptClaim,
   type CronRunReceiptSettlementDisposition,
 } from "../store/run-receipt-store.js";
 import { retireCronRunTriggerStateInDatabase } from "../store/run-receipt-trigger-state.js";
-import type { CronRunReceiptHandle, CronRunReceiptStatus } from "../store/run-receipt.types.js";
+import type { CronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
+import type {
+  CronRunReceiptHandle,
+  CronRunReceiptOwnerObservation,
+  CronRunReceiptStatus,
+  PreparedCronRunReceiptClaim,
+} from "../store/run-receipt.types.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronRunStatus, CronStoredJob } from "../types.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
@@ -40,12 +47,14 @@ import {
   resolveCronJobMessageActionAuthorityInputs,
   resolveCronJobMessageToolAuthorityInputs,
 } from "./jobs-tool-policy.js";
+import { findCronRunRecoveryInDatabase } from "./run-history-recovery.js";
 import type { CronServiceState } from "./state.js";
-import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 import { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
 
 function currentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+  return state.deps.resolveDefaultAgentId
+    ? state.deps.resolveDefaultAgentId()
+    : state.deps.defaultAgentId;
 }
 
 function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronJob): string {
@@ -54,6 +63,44 @@ function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronJob): st
 
 function resolveAgentId(state: CronServiceState) {
   return (job: CronJob) => resolveCronRunReceiptAgentId(state, job);
+}
+
+/** Only receipt facts cross the reader boundary; liveness and claims stay with their owners. */
+async function observeServiceCronRunReceipts(state: CronServiceState, jobIds: readonly string[]) {
+  const context = captureOpenClawStateReadWorkerContext();
+  const storeKey = cronStoreKey(state.deps.storePath);
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    if (
+      resolveOpenClawStateSqlitePath() !== context.admission.databasePath ||
+      cronStoreKey(state.deps.storePath) !== storeKey
+    ) {
+      throw new Error("Cron receipt source changed during observation");
+    }
+  };
+  const command = {
+    type: "cron.observeRunRecovery" as const,
+    storeKey,
+    proposals: jobIds.map((jobId) => ({ jobId })),
+  };
+  const result = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    command,
+    { context, current: true },
+  );
+  assertCurrent();
+  if (result && (!result.ok || result.type !== command.type)) {
+    throw new Error("Cron receipt observation did not return its admitted snapshot");
+  }
+  const receipts = new Map<string, CronRunReceiptOwnerObservation>();
+  if (result?.ok && result.type === command.type && result.observation.kind === "observed") {
+    for (const proposal of result.observation.proposals) {
+      if (proposal.receipt) {
+        receipts.set(proposal.jobId, proposal.receipt);
+      }
+    }
+  }
+  return { receipts, assertCurrent };
 }
 
 /** Both admission paths bind message permissions from the same canonical occurrence. */
@@ -122,6 +169,7 @@ export function prepareServiceCronRunReceiptClaim(params: {
   job: CronJob;
   startedAtMs: number;
   requestRunId?: string;
+  observed: CronRunReceiptOwnerObservation | undefined;
 }): PreparedCronRunReceiptClaim {
   return prepareCronRunReceiptClaim({
     storePath: params.state.deps.storePath,
@@ -129,54 +177,65 @@ export function prepareServiceCronRunReceiptClaim(params: {
     agentId: resolveCronRunReceiptAgentId(params.state, params.job),
     startedAtMs: params.startedAtMs,
     requestRunId: params.requestRunId,
+    observed: params.observed,
   });
 }
 
-export function claimServiceCronRunReceiptInDatabase(
-  state: CronServiceState,
-  database: DatabaseSync,
-  prepared: PreparedCronRunReceiptClaim,
-): CronRunReceiptHandle {
-  return claimCronRunReceiptInDatabase({
-    database,
-    prepared,
-    resolveAgentId: resolveAgentId(state),
-  });
-}
-
-function cronRunReceiptOwnerMutationHooks(params: {
+export function prepareCronRunReceiptOwnerMutationHooks(params: {
   state: CronServiceState;
-  jobId: string;
-}): CronStoreTransactionHooks {
-  const prepared = prepareCronRunReceiptAdjudication({
-    storePath: params.state.deps.storePath,
-    jobId: params.jobId,
-    nowMs: params.state.deps.nowMs(),
+  previousJob: CronJob;
+  nextJob: CronJob;
+}): Promise<CronStoreTransactionHooks> | undefined {
+  const { state, previousJob, nextJob } = params;
+  const previousAgentId = resolveCronRunReceiptAgentId(state, previousJob);
+  const nextAgentId = resolveCronRunReceiptAgentId(state, nextJob);
+  if (previousAgentId === nextAgentId) {
+    return undefined;
+  }
+  const generation = state.lifecycleGeneration;
+  return observeServiceCronRunReceipts(state, [nextJob.id]).then((observation) => {
+    const assertCurrent = () => {
+      observation.assertCurrent();
+      if (
+        state.lifecycleGeneration !== generation ||
+        resolveCronRunReceiptAgentId(state, previousJob) !== previousAgentId ||
+        resolveCronRunReceiptAgentId(state, nextJob) !== nextAgentId
+      ) {
+        throw new Error("Cron service or owner changed during receipt observation");
+      }
+    };
+    assertCurrent();
+    const prepared = prepareCronRunReceiptAdjudication({
+      storePath: state.deps.storePath,
+      observed: observation.receipts.get(nextJob.id),
+      nowMs: state.deps.nowMs(),
+    });
+    return {
+      beforeWrite: (database) => {
+        assertCurrent();
+        // Admission and owner mutation share SQLite's write order: whichever
+        // commits first fences the other, closing the pre-dispatch side-effect gap.
+        adjudicateActiveCronRunReceiptInDatabase({
+          database,
+          jobId: nextJob.id,
+          prepared,
+          finishedAtMs: state.deps.nowMs(),
+        });
+      },
+    };
   });
-  return {
-    beforeWrite: (database) => {
-      // Admission and owner mutation share SQLite's write order: whichever
-      // commits first fences the other, closing the pre-dispatch side-effect gap.
-      adjudicateActiveCronRunReceiptInDatabase({
-        database,
-        jobId: params.jobId,
-        prepared,
-        finishedAtMs: params.state.deps.nowMs(),
-      });
-    },
-  };
 }
 
 export function cronRunReceiptMutationHooks(params: {
   state: CronServiceState;
   jobId: string;
-  ownerChanged: boolean;
+  ownerHooks?: CronStoreTransactionHooks;
   triggerStateChanged: boolean;
   messageActionAuthorityChanged?: boolean;
   messageSourceAuthorityChanged?: boolean;
   scheduleChangedJob?: CronJob;
 }): CronStoreTransactionHooks | undefined {
-  const ownerHooks = params.ownerChanged ? cronRunReceiptOwnerMutationHooks(params) : undefined;
+  const { ownerHooks } = params;
   if (
     !ownerHooks &&
     !params.triggerStateChanged &&
@@ -188,7 +247,7 @@ export function cronRunReceiptMutationHooks(params: {
   }
   return {
     ...ownerHooks,
-    beforeWrite: (database) => {
+    beforeWrite: (database, receiptSchema) => {
       if (params.scheduleChangedJob) {
         const current = loadedCronStoreFromRows(
           loadCronRows(
@@ -208,7 +267,7 @@ export function cronRunReceiptMutationHooks(params: {
       if (params.triggerStateChanged) {
         retireServiceCronRunTriggerStateInDatabase({ ...params, database });
       }
-      ownerHooks?.beforeWrite?.(database);
+      ownerHooks?.beforeWrite?.(database, receiptSchema);
     },
     afterCommit: () => {
       ownerHooks?.afterCommit?.();
@@ -246,10 +305,10 @@ function retireServiceCronRunTriggerStateInDatabase(params: {
     return;
   }
   // Owner edits close execution authority before scheduler reconciliation.
-  // Only legacy markers without a receipt association need task-history fallback.
+  // Only legacy markers without a receipt association need history fallback.
   const receiptId =
     job.state.runningReceiptId ??
-    findCronTaskRunRecoveryInDatabase({
+    findCronRunRecoveryInDatabase({
       database,
       jobId,
       storeKey,
@@ -374,8 +433,10 @@ export function cronRunReceiptPersistHooks(params: {
       ? {
           afterWrite: (
             database: Parameters<NonNullable<CronStoreTransactionHooks["afterWrite"]>>[0],
+            receiptSchema: CronRunReceiptWriteSchema,
           ) => {
             finishCronRunReceiptInDatabase({
+              receiptSchema,
               database,
               ...terminal,
             });

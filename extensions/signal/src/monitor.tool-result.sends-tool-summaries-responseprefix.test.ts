@@ -53,18 +53,18 @@ async function receiveSignalPayloads(params: {
   opts?: Partial<MonitorSignalProviderOptions>;
 }) {
   const abortController = new AbortController();
-  let ingressIdleError: Error | undefined;
+  let ingressError: Error | undefined;
   streamMock.mockImplementation(async ({ onEvent }) => {
-    for (const payload of params.payloads) {
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-    }
     try {
+      for (const payload of params.payloads) {
+        await onEvent({
+          event: "receive",
+          data: JSON.stringify(payload),
+        });
+      }
       await waitForSignalToolResultIngressIdle();
     } catch (error) {
-      ingressIdleError = toSignalToolResultTestError(error, "Signal ingress did not become idle");
+      ingressError = toSignalToolResultTestError(error, "Signal ingress delivery failed");
     } finally {
       abortController.abort();
     }
@@ -76,8 +76,8 @@ async function receiveSignalPayloads(params: {
     abortSignal: abortController.signal,
     ...params.opts,
   });
-  if (ingressIdleError) {
-    throw ingressIdleError;
+  if (ingressError) {
+    throw ingressError;
   }
 }
 

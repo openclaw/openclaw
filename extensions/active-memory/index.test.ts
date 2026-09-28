@@ -1898,26 +1898,41 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("escalates retrospective Chinese recall when recall mode is unset", async () => {
-    const prompt = "你还记得我们上周决定明天部署的方案吗？";
-    registerPluginConfig({ mode: undefined });
-    expect(currentActiveMemoryConfig().mode).toBeUndefined();
-    const context = {
-      sessionKey: "agent:main:telegram:direct:owner",
-      messageProvider: "telegram",
-      channelId: "owner",
-    };
-    const ordinary = await runPromptBuild({ prompt: "部署之前先整理聊天记录" }, context);
-    expectPrependContextContains(ordinary, skippedRecallContext);
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    const future = await runPromptBuild({ prompt: "你记得明天发送报告吗？" }, context);
-    expectPrependContextContains(future, skippedRecallContext);
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    const recall = await runPromptBuild({ prompt }, context);
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expectPrependContextContains(recall, "lemon pepper wings");
-    expectEmbeddedChannel("telegram");
-  });
+  it.each([
+    [
+      "Chinese",
+      "你还记得我们上周决定明天部署的方案吗？",
+      "部署之前先整理聊天记录",
+      "你记得明天发送报告吗？",
+    ],
+    [
+      "Russian",
+      "Помнишь, что мы решили вчера?",
+      "Давай обсудим это завтра",
+      "Ты помнишь завтра отправить отчёт?",
+    ],
+  ])(
+    "escalates retrospective %s recall when recall mode is unset",
+    async (_language, prompt, ordinaryPrompt, futurePrompt) => {
+      registerPluginConfig({ mode: undefined });
+      expect(currentActiveMemoryConfig().mode).toBeUndefined();
+      const context = {
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageProvider: "telegram",
+        channelId: "owner",
+      };
+      const ordinary = await runPromptBuild({ prompt: ordinaryPrompt }, context);
+      expectPrependContextContains(ordinary, skippedRecallContext);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      const future = await runPromptBuild({ prompt: futurePrompt }, context);
+      expectPrependContextContains(future, skippedRecallContext);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      const recall = await runPromptBuild({ prompt }, context);
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expectPrependContextContains(recall, "lemon pepper wings");
+      expectEmbeddedChannel("telegram");
+    },
+  );
 
   it("records why default escalation skips an ordinary turn", async () => {
     registerPluginConfig({ mode: undefined });
@@ -4416,17 +4431,20 @@ describe("active-memory plugin", () => {
   });
 
   it("allows a configured custom tool to succeed after a failed attempt", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     setMinimumTimeoutMsForTests(1);
     setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1_000, toolsAllow: ["memory_lookup_custom"], logging: true });
     const sessionKey = "agent:main:custom-tool-retry";
     seedSession(sessionKey, "s-custom-tool-retry", 0);
+    const transcriptWritten = createDeferred<void>();
     const failedResult = memoryToolRecord("memory_lookup_custom", {
       status: "failed",
       error: "query was too broad",
     });
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [failedResult]);
+      transcriptWritten.resolve();
       await new Promise((resolve) => {
         setTimeout(resolve, 75);
       });
@@ -4441,10 +4459,13 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "User usually orders ramen." }] };
     });
 
-    const result = await runPromptBuild(
+    const resultPromise = runPromptBuild(
       { prompt: "what food do i usually order? custom retry" },
       { sessionKey },
     );
+    await transcriptWritten.promise;
+    await vi.advanceTimersByTimeAsync(75);
+    const result = await resultPromise;
 
     expectPrependContextContains(result, "User usually orders ramen.");
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
@@ -4474,6 +4495,7 @@ describe("active-memory plugin", () => {
       status: "ok",
     },
   ])("classifies grounded harness-native recall: $name", async (testCase) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     setMinimumTimeoutMsForTests(1);
     setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1_000, toolsAllow: ["memory_search"], logging: true });
@@ -4541,6 +4563,7 @@ describe("active-memory plugin", () => {
   });
 
   it("rejects completed output after a configured custom tool reports a content-only timeout", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     setMinimumTimeoutMsForTests(1);
     setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1_000, toolsAllow: ["memory_lookup_custom"], logging: true });

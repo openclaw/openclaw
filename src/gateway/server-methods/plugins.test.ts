@@ -147,89 +147,38 @@ describe("plugin management Gateway handlers", () => {
     ).toBeUndefined();
   });
 
-  it.each([
-    {
-      label: "bundled installed plugin",
-      inspection: {
-        ok: true,
-        reviewToken,
-        plugin: {
-          id: "workboard",
-          name: "Workboard",
-          origin: "bundled",
-          installed: true,
-          enabled: true,
-        },
-        source: { kind: "bundled" },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: true },
-            allowConversationAccess: { effective: true },
-          },
+  it("returns the complete plugin consent snapshot including grants, integrity, and trust", async () => {
+    const inspection = {
+      ok: true,
+      reviewToken,
+      plugin: {
+        id: "community-plugin",
+        name: "Community Plugin",
+        origin: "global",
+        installed: true,
+        enabled: false,
+      },
+      source: {
+        kind: "clawhub",
+        packageName: "community/plugin",
+        integrity: "sha512-pinned",
+        integrityKind: "ssri",
+      },
+      grants: {
+        hooks: {
+          allowPromptInjection: { effective: false, configured: false },
+          allowConversationAccess: { effective: true, configured: true },
         },
       },
-    },
-    {
-      label: "external plugin with explicit grants, integrity, and trust",
-      inspection: {
-        ok: true,
-        reviewToken,
-        plugin: {
-          id: "community-plugin",
-          name: "Community Plugin",
-          origin: "global",
-          installed: true,
-          enabled: false,
-        },
-        source: {
-          kind: "clawhub",
-          packageName: "community/plugin",
-          integrity: "sha512-pinned",
-          integrityKind: "ssri",
-        },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: false, configured: false },
-            allowConversationAccess: { effective: true, configured: true },
-          },
-        },
-        trust: {
-          disposition: "review-required",
-          reasons: ["Install script"],
-          checkedAt: "2026-08-25T00:00:00.000Z",
-          acknowledgedAt: "2026-08-25T01:00:00.000Z",
-          pending: false,
-          stale: true,
-        },
+      trust: {
+        disposition: "review-required",
+        reasons: ["Install script"],
+        checkedAt: "2026-08-25T00:00:00.000Z",
+        acknowledgedAt: "2026-08-25T01:00:00.000Z",
+        pending: false,
+        stale: true,
       },
-    },
-    {
-      label: "not-installed official catalog plugin",
-      inspection: {
-        ok: true,
-        reviewToken,
-        plugin: {
-          id: "diffs",
-          name: "Diffs",
-          origin: "official",
-          installed: false,
-          enabled: false,
-        },
-        source: {
-          kind: "official-catalog",
-          packageName: "@openclaw/diffs",
-          integrity: "sha256-catalog-pin",
-          integrityKind: "sha256",
-        },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: true },
-            allowConversationAccess: { effective: false },
-          },
-        },
-      },
-    },
-  ])("returns the complete consent snapshot for a $label", async ({ inspection }) => {
+    };
     managementMocks.inspect.mockResolvedValue(inspection);
     const config = { plugins: { entries: {} } };
 
@@ -680,6 +629,99 @@ describe("plugin management Gateway handlers", () => {
     });
     const [item] = (result.response as { items: Array<{ catalog: object }> }).items;
     expect(item?.catalog).not.toHaveProperty("publishedToClawHub");
+  });
+
+  it("keeps enabled Media membership through browse pages and registry failure", async () => {
+    const provider = {
+      id: "novita",
+      name: "Novita",
+      packageName: "@openclaw/novita",
+      clawhubPackage: "@openclaw/novita",
+      origin: "bundled",
+      installed: true,
+      enabled: true,
+      state: "enabled",
+      categories: ["models"],
+      capabilityCategories: ["media"],
+    };
+    managementMocks.list.mockResolvedValue({
+      plugins: [provider],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    catalogMocks.browse.mockResolvedValueOnce({ items: [], nextCursor: "media-next" });
+    const first = await callHandler("plugins.catalog.browse", { category: "media" });
+    const expectedItem = {
+      catalog: { categories: ["models", "media"] },
+      local: { pluginId: "novita", enabled: true, action: "manage" },
+    };
+    expect(first).toMatchObject({
+      ok: true,
+      response: { items: [expectedItem], nextCursor: "media-next" },
+    });
+    catalogMocks.browse.mockResolvedValueOnce({
+      items: [
+        {
+          packageName: provider.packageName,
+          displayName: provider.name,
+          family: "code-plugin",
+          isOfficial: true,
+          categories: ["models"],
+          downloads: 123,
+        },
+      ],
+    });
+    const second = await callHandler("plugins.catalog.browse", {
+      category: "media",
+      cursor: "media-next",
+    });
+    expect(second).toMatchObject({
+      ok: true,
+      response: {
+        items: [
+          {
+            ...expectedItem,
+            catalog: { ...expectedItem.catalog, downloads: 123 },
+          },
+        ],
+      },
+    });
+    expect(catalogMocks.browse).toHaveBeenNthCalledWith(2, {
+      query: undefined,
+      intent: "all",
+      category: "media",
+      cursor: "media-next",
+      limit: 20,
+    });
+    catalogMocks.browse.mockRejectedValueOnce(new Error("service unavailable"));
+    const offline = await callHandler("plugins.catalog.browse", { category: "media" });
+    expect(offline).toMatchObject({
+      ok: true,
+      response: {
+        items: [expectedItem],
+        remoteError:
+          "ClawHub is unavailable: service unavailable. Installed plugins remain available.",
+      },
+    });
+    managementMocks.list.mockResolvedValue({
+      plugins: [
+        { ...provider, enabled: false, state: "disabled", capabilityCategories: undefined },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    catalogMocks.browse.mockResolvedValueOnce({ items: [] });
+    const disabledMedia = await callHandler("plugins.catalog.browse", { category: "media" });
+    expect(disabledMedia).toMatchObject({ ok: true, response: { items: [] } });
+    catalogMocks.browse.mockResolvedValueOnce({ items: [] });
+    const disabledModels = await callHandler("plugins.catalog.browse", { category: "models" });
+    expect(disabledModels).toMatchObject({
+      ok: true,
+      response: {
+        items: [{ catalog: { categories: ["models"] }, local: { enabled: false } }],
+      },
+    });
+    expect(managementMocks.inspect).not.toHaveBeenCalled();
   });
 
   it("preserves a failed browse cursor so the same page remains retryable", async () => {

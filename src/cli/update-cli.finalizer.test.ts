@@ -71,7 +71,7 @@ describe("update-cli", () => {
     }
     const nodeRunner = path.resolve("fixture-runtime", "node");
     const expectedRunner = runtime.bun ? process.execPath : nodeRunner;
-    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(nodeRunner);
+    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(expectedRunner);
     Object.defineProperty(process, "versions", {
       value: { ...process.versions, bun: runtime.bun },
     });
@@ -108,7 +108,7 @@ describe("update-cli", () => {
         return runOtherCommand(argv, options);
       });
 
-      await updateFinalizeCommand({ json: true, yes: true, timeout: "9", restart: false });
+      await updateFinalizeCommand({ json: true, yes: true, timeout: "9" });
 
       const maintenance = vi
         .mocked(runExec)
@@ -147,9 +147,7 @@ describe("update-cli", () => {
       throw new Error("Missing process.versions descriptor");
     }
     const execPath = process.execPath;
-    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(
-      path.resolve("fixture-runtime", "node"),
-    );
+    vi.spyOn(updateCliShared, "resolveNodeRunner").mockReturnValue(execPath);
     Object.defineProperty(process, "versions", {
       value: { ...process.versions, bun: "1.4.3" },
     });
@@ -157,9 +155,9 @@ describe("update-cli", () => {
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(FRESH_POST_UPDATE_ENTRYPOINT);
       vi.mocked(runExec).mockRejectedValueOnce(new Error("Doctor could not complete"));
 
-      await expect(
-        updateFinalizeCommand({ json: true, yes: true, timeout: "9", restart: false }),
-      ).rejects.toThrow("Doctor could not complete");
+      await expect(updateFinalizeCommand({ json: true, yes: true, timeout: "9" })).rejects.toThrow(
+        "Doctor could not complete",
+      );
 
       expect(runUpdateFailureTriage).toHaveBeenCalledOnce();
       expect(vi.mocked(runUpdateFailureTriage).mock.calls[0]?.[0].target).toMatchObject({
@@ -193,7 +191,6 @@ describe("update-cli", () => {
           json: true,
           yes: true,
           timeout: "9",
-          restart: false,
         });
 
         expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
@@ -265,7 +262,6 @@ describe("update-cli", () => {
     await updateFinalizeCommand({
       json: true,
       yes: true,
-      restart: false,
       deferCompletionCache: true,
     } as Parameters<typeof updateFinalizeCommand>[0] & { deferCompletionCache: boolean });
 
@@ -363,7 +359,6 @@ describe("update-cli", () => {
       updateFinalizeCommand({
         channel: "extended-stable",
         json: true,
-        restart: false,
       }),
     ).rejects.toEqual(new ExitError(1));
 
@@ -417,7 +412,7 @@ describe("update-cli", () => {
       npmPluginUpdateResult(config),
     );
 
-    await updateFinalizeCommand({ json: true, timeout: "9", restart: false });
+    await updateFinalizeCommand({ json: true, timeout: "9" });
 
     expectFreshPostUpdateDoctor({ yes: false, workspaceSuggestions: true });
     const freshDoctorCall = vi
@@ -490,7 +485,7 @@ describe("update-cli", () => {
         OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
       },
       async () => {
-        await updateFinalizeCommand({ json: true, restart: false });
+        await updateFinalizeCommand({ json: true });
       },
     );
 
@@ -534,7 +529,7 @@ describe("update-cli", () => {
       return { stdout: "", stderr: "" };
     });
 
-    await updateFinalizeCommand({ channel: "dev", json: true, restart: false });
+    await updateFinalizeCommand({ channel: "dev", json: true });
 
     expectFreshPostUpdateDoctor({ yes: false, workspaceSuggestions: true });
     expect(replaceConfigCall(0)?.baseHash).toBe("pre-doctor");
@@ -557,7 +552,7 @@ describe("update-cli", () => {
     // Simulate a no-config git/source update whose effective channel is dev.
     process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL = "dev";
     try {
-      await updateFinalizeCommand({ json: true, restart: false });
+      await updateFinalizeCommand({ json: true });
     } finally {
       if (priorEffective === undefined) {
         delete process.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL;

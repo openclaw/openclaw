@@ -23,19 +23,21 @@ export async function resolveDiscordPreflightRoute(params: {
   earlyThreadParentId?: string;
 }) {
   const conversationRuntime = await loadConversationRuntime();
-  const route = resolveDiscordConversationRoute({
-    cfg: params.preflight.cfg,
-    accountId: params.preflight.accountId,
-    guildId: params.preflight.data.guild_id ?? undefined,
-    memberRoleIds: params.memberRoleIds,
-    peer: buildDiscordRoutePeer({
-      isDirectMessage: params.isDirectMessage,
-      isGroupDm: params.isGroupDm,
-      directUserId: params.author.id,
-      conversationId: params.messageChannelId,
-    }),
-    parentConversationId: params.earlyThreadParentId,
-  });
+  const route = ({ boundAgentId }: { boundAgentId?: string }) =>
+    resolveDiscordConversationRoute({
+      cfg: params.preflight.cfg,
+      defaultAgentId: boundAgentId,
+      accountId: params.preflight.accountId,
+      guildId: params.preflight.data.guild_id ?? undefined,
+      memberRoleIds: params.memberRoleIds,
+      peer: buildDiscordRoutePeer({
+        isDirectMessage: params.isDirectMessage,
+        isGroupDm: params.isGroupDm,
+        directUserId: params.author.id,
+        conversationId: params.messageChannelId,
+      }),
+      parentConversationId: params.earlyThreadParentId,
+    });
   const bindingConversationId = resolveDiscordRuntimeBindingConversationId({
     isDirectMessage: params.isDirectMessage,
     isGroupDm: params.isGroupDm,
@@ -44,7 +46,7 @@ export async function resolveDiscordPreflightRoute(params: {
   });
   const { runtimeRoute, configuredRoute } = resolveDiscordConversationBindingRoute({
     cfg: params.preflight.cfg,
-    route,
+    resolveRoute: route,
     accountId: params.preflight.accountId,
     runtimeConversationId: bindingConversationId,
     configuredConversationId: params.messageChannelId,

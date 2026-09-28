@@ -10,7 +10,6 @@ import {
   buildPluginNpmSecurityScanReport,
   constrainPluginNpmSecurityScanReport,
   loadPluginNpmSecurityArtifacts,
-  listPluginNpmSecurityArtifacts,
   listPublishablePluginPackages,
   normalizePackedFindingPath,
   resolveCandidatePluginPackageDir,
@@ -1203,22 +1202,22 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       files: { "index.js": "export const value = 1;\n" },
       packageName: "@openclaw/test-identity",
     });
+    const loaded = loadPluginNpmSecurityArtifacts({
+      artifactRoot: artifact.artifactRoot,
+      candidateSha: CANDIDATE_SHA,
+      expectedPackages: [artifact.expectedPackage],
+      toolingSha: TOOLING_SHA,
+    });
+    expect(loaded.ingestionErrors).toEqual([]);
+    expect(loaded.artifacts.map((entry) => entry.packageName)).toEqual(["@openclaw/test-identity"]);
     expect(
-      listPluginNpmSecurityArtifacts({
-        artifactRoot: artifact.artifactRoot,
-        candidateSha: CANDIDATE_SHA,
-        expectedPackages: [artifact.expectedPackage],
-        toolingSha: TOOLING_SHA,
-      }).map((entry) => entry.packageName),
-    ).toEqual(["@openclaw/test-identity"]);
-    expect(() =>
-      listPluginNpmSecurityArtifacts({
+      loadPluginNpmSecurityArtifacts({
         artifactRoot: artifact.artifactRoot,
         candidateSha: CANDIDATE_SHA,
         expectedPackages: [],
         toolingSha: TOOLING_SHA,
-      }),
-    ).toThrow("unexpected entries");
+      }).ingestionErrors,
+    ).toEqual(["Plugin security artifact root contains 1 unexpected entries."]);
   });
 
   it("retains valid package scans when a sibling artifact is malformed", async () => {

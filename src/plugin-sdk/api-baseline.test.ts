@@ -6,8 +6,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
-import { Program } from "typescript/unstable/async";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as nativeDeclarations from "../../scripts/lib/native-declaration-subprocess.mts";
 import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
@@ -577,9 +577,67 @@ describe("Plugin SDK API baseline", () => {
     expect(fixtureError).not.toContain("return this.status");
   });
 
-  it.each(["source project creation", "declaration diagnostics"])(
-    "rejects source changes after %s while accepting linked external types",
-    async (timing) => {
+  it.skipIf(process.platform === "win32")(
+    "joins the native declaration compiler before opening semantic overlays",
+    async () => {
+      const createProject = nativeTypeScript.createNativeTypeScriptProject;
+      let observedOverlay = false;
+      const create = vi
+        .spyOn(nativeTypeScript, "createNativeTypeScriptProject")
+        .mockImplementation((options) => {
+          if (Object.keys(options.files ?? {}).some((file) => file.endsWith("fixture.ts"))) {
+            observedOverlay = true;
+            const executables = spawnSync("ps", ["-axo", "pid=,comm="], {
+              encoding: "utf8",
+            });
+            expect(executables.status).toBe(0);
+            const compilerName = path.basename(
+              nativeTypeScript.resolveInstalledNativeTypeScriptCompiler().executable,
+            );
+            const compilerPids = executables.stdout.split("\n").flatMap((line) => {
+              const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+              return match && path.basename(match[2]!) === compilerName ? [match[1]!] : [];
+            });
+            if (compilerPids.length > 0) {
+              const processes = spawnSync(
+                "ps",
+                ["-ww", "-p", compilerPids.join(","), "-o", "args="],
+                {
+                  encoding: "utf8",
+                },
+              );
+              expect(processes.error).toBeUndefined();
+              expect(processes.stderr).toBe("");
+              expect([0, 1]).toContain(processes.status);
+              if (processes.status === 1) {
+                expect(processes.stdout).toBe("");
+              }
+              expect(
+                processes.stdout
+                  .split("\n")
+                  .filter((line) => line.includes("--api --async") && line.includes(options.cwd)),
+              ).toEqual([]);
+            }
+          }
+          return createProject(options);
+        });
+      try {
+        const rendered = await renderSourceFixture({ "fixture.ts": "export const value = 1;" });
+        expect(observedOverlay).toBe(true);
+        expect(rendered.modules[0]?.exports[0]?.declaration).toBe("export const value: 1;");
+      } finally {
+        create.mockRestore();
+      }
+    },
+  );
+
+  it.each(
+    ["source project creation", "declaration emission"].flatMap((timing) =>
+      [0, 60_000].map((clockSkewMs) => ({ timing, clockSkewMs })),
+    ),
+  )(
+    "rejects source changes after $timing with clock skew $clockSkewMs while accepting linked external types",
+    async ({ timing, clockSkewMs }) => {
       const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-mutation-");
       const external = tempDirs.make("openclaw-plugin-sdk-api-linked-");
       const entry = path.join(repoRoot, "src/plugin-sdk/fixture.ts");
@@ -639,7 +697,9 @@ describe("Plugin SDK API baseline", () => {
         .join("/");
       const createProject = nativeTypeScript.createNativeTypeScriptProject;
       const create = vi.spyOn(nativeTypeScript, "createNativeTypeScriptProject");
-      const diagnose = vi.spyOn(Program.prototype, "getDeclarationDiagnostics");
+      // Declaration errors come from the emit result, the last compiler stage before publication.
+      const emitDeclarations = nativeDeclarations.emitNativeDeclarationsInSubprocess;
+      const emit = vi.spyOn(nativeDeclarations, "emitNativeDeclarationsInSubprocess");
       if (timing === "source project creation") {
         create.mockImplementationOnce(function intercept(options) {
           const native = createProject(options);
@@ -652,24 +712,32 @@ describe("Plugin SDK API baseline", () => {
           return native;
         });
       } else {
-        diagnose.mockImplementationOnce(async function (this: Program, ...args) {
-          diagnose.mockRestore();
-          const result = await this.getDeclarationDiagnostics(...args);
-          expect(
-            (await this.getSourceFileNames()).some((file) => path.resolve(file) === entry),
-          ).toBe(true);
-          expect(result).toEqual([]);
+        emit.mockImplementationOnce(async function (options) {
+          emit.mockRestore();
+          const result = await emitDeclarations(options);
+          expect(result.inputs).toContain(entry);
+          expect(result.declarations.get(entry)?.code).toContain('"checked"');
           changeSource();
           return result;
         });
       }
+      const now = Date.now;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + clockSkewMs);
       try {
-        await expect(render()).rejects.toThrow(/Boundary .*changed during compilation/u);
+        const failure = await render().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(changed).toBe(true);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({
+          message: expect.stringMatching(/Boundary .*changed during compilation/u),
+        });
       } finally {
+        clock.mockRestore();
         create.mockRestore();
-        diagnose.mockRestore();
+        emit.mockRestore();
       }
-      expect(changed).toBe(true);
       expect(fs.readFileSync(entry, "utf8")).toBe(source("changed"));
       expect(fs.readdirSync(path.join(repoRoot, ".artifacts"))).toEqual([]);
     },
@@ -816,12 +884,13 @@ describe("Plugin SDK API baseline", () => {
       },
     });
     const { program } = native.project;
-    const printer = native.project.emitter;
+    const printer = native.api.printer;
     // Materialize the native API's instance-cached method before Vitest wraps it.
     void printer.printNode;
     const print = vi.spyOn(printer, "printNode");
     const render = createDeclarationClosureRenderer({
       project: native.project,
+      printer,
       sourceProgram: program,
       emittedSources: new Set(),
       repoRoot,

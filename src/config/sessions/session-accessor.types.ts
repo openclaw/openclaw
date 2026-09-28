@@ -175,11 +175,8 @@ export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"
   threadId?: string | number;
 };
 
-export type SessionTranscriptRuntimeScope = SessionAccessScope & {
-  /** Deprecated transcript locator from older file-backed call sites. */
-  sessionFile?: string;
-  sessionId: string;
-  threadId?: string | number;
+export type SessionTranscriptRuntimeScope = SessionTranscriptAccessScope & {
+  sessionKey: string;
 };
 
 export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "sessionKey"> & {
@@ -222,10 +219,7 @@ export type SessionEntryReadView = {
 };
 
 /** Session entry read by the exact persisted session key, without alias resolution. */
-export type ExactSessionEntry = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
+export type ExactSessionEntry = SessionEntrySummary;
 
 /** Raw transcript record for non-message events; message records use appendTranscriptMessage. */
 export type TranscriptEvent = unknown;
@@ -398,13 +392,8 @@ export type SessionTranscriptWriteLockAccessorContext = {
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
 
-export type SessionTranscriptWriteTransactionContext = {
-  /** Canonical transcript identity owned by the transaction. */
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-};
+/** Canonical transcript identity owned by the transaction. */
+export type SessionTranscriptWriteTransactionContext = SessionTranscriptRuntimeTarget;
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
@@ -416,18 +405,14 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
    */
   shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
   /**
-   * Rechecks the newest assistant row after the write transaction begins.
+   * Rechecks authority after the write transaction begins. Read the newest assistant
+   * only when the predicate needs it, synchronously within this callback.
    * Direct synchronous writers bypass the process queue, so prepared facts can be stale.
    */
-  shouldAppendInTransaction?: (latestAssistantMessage: unknown) => boolean;
+  shouldAppendInTransaction?: (readLatestAssistantMessage: () => unknown) => boolean;
 };
 
-export type SessionTranscriptTurnWriteContext = {
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-};
+export type SessionTranscriptTurnWriteContext = Partial<SessionTranscriptRuntimeTarget>;
 
 export type SessionTranscriptTurnPersistOptions = {
   /** Runtime config used for lock settings, redaction, and header metadata. */
@@ -457,11 +442,14 @@ export type SessionTranscriptTurnPersistOptions = {
   /** Exact run provenance persisted on output rows and emitted on terminal assistant updates. */
   runId?: string;
   /**
-   * Complete appended or matched messages synchronously after guarded SQLite commit,
-   * before the write yields to cancellation, owner drain, or transcript publication.
+   * Accept appended or matched messages synchronously after guarded SQLite commit.
+   * Explicit completion work is joined before owner drain or transcript publication.
    * The canonical result preserves replay bytes. Throws cannot roll back committed rows.
    */
-  onMessageCommitted?: (result: TranscriptMessageAppendResult<unknown>) => void;
+  onMessageCommitted?: (
+    result: TranscriptMessageAppendResult<unknown>,
+    acceptCompletion: (complete: () => Promise<void>) => void,
+  ) => void;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
   /** Emit file-only updates even when every candidate message was skipped. */
@@ -551,9 +539,10 @@ export type ReplySessionInitializationSnapshot = {
   revision: string;
 };
 
-export type ReplySessionInitializationCommitContext = {
-  currentEntry?: SessionEntry;
-  readEntry: (sessionKey: string) => SessionEntry | undefined;
+export type ReplySessionInitializationCommitContext = Omit<
+  ReplySessionInitializationSnapshot,
+  "revision"
+> & {
   sessionEntry: SessionEntry;
 };
 
@@ -571,27 +560,19 @@ export type ReplySessionInitializationCommitResult =
       revision: string;
     };
 
-export type SessionEntryPatchOptions = {
+export type SessionEntryPatchOptions = SessionEntryUpdateOptions & {
   /** Synchronous final ownership check executed inside the commit transaction. */
   assertCommitAllowed?: () => void;
   /** Internal review owner authorization; ordinary patches preserve the current pause. */
   providerReviewMutation?: boolean;
-  /** Let this write satisfy a legacy updatedAt=0 pending reset without rotating lifecycle identity. */
-  consumePendingReset?: boolean;
   /** Entry to synthesize when a patch operation is allowed to create. */
   fallbackEntry?: SessionEntry;
   /** Fully resolved maintenance settings when the caller already has config loaded. */
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   /** Keep the previous updatedAt value when the patch should not count as activity. */
   preserveActivity?: boolean;
-  /** Throw when best-effort store recovery cannot confirm the requested write. */
-  requireWriteSuccess?: boolean;
   /** Replace the whole entry instead of merging the returned patch. */
   replaceEntry?: boolean;
-  /** Skip prune/cap/rotation maintenance for specialized internal updates. */
-  skipMaintenance?: boolean;
-  /** Let the writer cache retain the updated object without cloning. */
-  takeCacheOwnership?: boolean;
 };
 
 export type SessionEntryPatchContext = {

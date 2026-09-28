@@ -1,22 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { JsonObject } from "./protocol.js";
 import { toTranscriptToolResult } from "./run-attempt-tools.js";
-import {
-  sanitizeCodexAgentEventRecord,
-  sanitizeCodexToolArguments,
-} from "./tool-progress-normalization.js";
+import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
 
 describe("Codex tool progress payloads", () => {
-  it.each([
-    ["event records", sanitizeCodexAgentEventRecord],
-    ["dynamic tool arguments", sanitizeCodexToolArguments],
-  ] as const)("preserves redacted own JSON keys in %s", (_label, sanitize) => {
+  it("preserves redacted own JSON keys in dynamic tool arguments", () => {
     const input: JsonObject = JSON.parse(
       '{"__proto__":{"label":"kept","token":"fixture-value"},"nested":{"__proto__":null}}',
     );
     const before = JSON.stringify(input);
 
-    const result = sanitize(input);
+    const result = sanitizeCodexToolArguments(input);
 
     expect(JSON.stringify(result)).toBe(
       '{"__proto__":{"label":"kept","token":"***"},"nested":{"__proto__":null}}',

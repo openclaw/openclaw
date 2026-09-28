@@ -2,6 +2,7 @@ import type { FinishReason } from "@google/genai";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { calculateCost } from "../model-utils.js";
 import {
+  createEmptyTransportUsage,
   transportAbortError,
   type WritableTransportStream,
 } from "../transports/transport-stream-shared.js";
@@ -167,19 +168,12 @@ export async function consumeGoogleGenerateContentStream(params: {
       const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount;
       const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
       params.output.usage = {
+        ...createEmptyTransportUsage(),
         input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
         output: outputTokens,
         cacheRead,
-        cacheWrite: 0,
         totalTokens:
           chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
       };
       calculateCost(params.model, params.output.usage);
     }

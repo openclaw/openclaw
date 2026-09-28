@@ -215,6 +215,12 @@ that its installation has been replaced; restart the unit after the update.
 Use the unit name printed in your result, including any instance name, then
 check `openclaw gateway status --deep`.
 
+If the same Gateway unit exists in both user and system scopes, updates retain
+these system-scope restrictions. A differently named Gateway does not create this
+conflict. Installation-replacement restarts wait for the helper to confirm updater
+and cleanup settlement; an interrupted helper alone does not permit a restart.
+Inspect any surviving updater before manually restarting after an interruption.
+
 The restart remains operator-managed even when the updater runs as root:
 managed update handoffs own user-scope service supervision and recovery, not
 the system service's lifecycle. Pending Doctor or plugin maintenance is recorded
@@ -400,7 +406,13 @@ Doctor preserves the captures and reports that PID and the inspection failure
 (including a missing or unreadable package manifest);
 this remains a maintenance warning and does not fail the update. Retry
 `openclaw doctor --fix` after resolving the reported inspection problem.
-Windows host-wide capture cleanup remains report-only.
+On macOS, unreadable arguments from a process owned by another UID do not block
+cleanup; Doctor records that exclusion once at debug level. Unreadable arguments
+from the same UID, or an unknown UID, still preserve legacy captures. Doctor also
+preserves legacy capture roots owned by another UID, including in privileged runs. Managed
+native captures use their recorded custody and installed-index references rather
+than the host process census, as they do during startup cleanup.
+Windows host-wide legacy capture cleanup remains report-only.
 
 ## Reason codes
 

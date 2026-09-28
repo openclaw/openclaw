@@ -6,7 +6,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER, type AuthRateLimiter } from "../auth-rate-limit.js";
 import { sendJson, watchClientDisconnect } from "../http-common.js";
 import { withSerializedRateLimitAttempt } from "../rate-limit-attempt-serialization.js";
-import type { ArtifactTransferService } from "./artifact-transfer-service.js";
+import {
+  ArtifactTransferBusyError,
+  type ArtifactTransferService,
+} from "./artifact-transfer-service.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
@@ -113,7 +116,18 @@ export function createArtifactTransferHttpCallback(
   service: Omit<ArtifactTransferService, "prepare">,
 ): ArtifactTransferHttpCallback {
   return async ({ req, res, artifactKey, bearer }) => {
-    const authorization = service.authorize({ token: bearer, artifactKey });
+    let authorization: ReturnType<ArtifactTransferService["authorize"]>;
+    try {
+      authorization = service.authorize({ token: bearer, artifactKey });
+    } catch (error) {
+      if (!(error instanceof ArtifactTransferBusyError)) {
+        throw error;
+      }
+      return {
+        kind: "authorized",
+        handle: () => sendJson(res, 503, { error: "transfer_in_progress" }),
+      };
+    }
     if (!authorization) {
       return { kind: "unauthorized" };
     }
@@ -134,6 +148,13 @@ export function createArtifactTransferHttpCallback(
             sendOpaqueNotFound(res);
             return;
           }
+          const range = req.headers.range;
+          const start = range === undefined ? 0 : Number(/^bytes=(\d+)-$/u.exec(range)?.[1]);
+          if (range !== undefined && (!Number.isSafeInteger(start) || start >= file.bytes)) {
+            res.setHeader("Content-Range", `bytes */${file.bytes}`);
+            sendJson(res, 416, { error: "range_not_satisfiable" });
+            return;
+          }
           const checkAuthority = new Transform({
             transform(chunk: Buffer, _encoding, next) {
               next(
@@ -144,15 +165,19 @@ export function createArtifactTransferHttpCallback(
               );
             },
           });
-          res.writeHead(200, {
+          res.writeHead(range === undefined ? 200 : 206, {
             "content-type": "application/octet-stream",
-            "content-length": String(file.bytes),
+            "content-length": String(file.bytes - start),
+            "accept-ranges": "bytes",
+            ...(range === undefined
+              ? {}
+              : { "content-range": `bytes ${start}-${file.bytes - 1}/${file.bytes}` }),
             "x-openclaw-content-sha256": file.sha256,
           });
           // An extra EOF read can outlive the client's Content-Length-complete response
           // and let owner revocation destroy its reused keep-alive socket.
           const stream = file.handle.createReadStream({
-            start: 0,
+            start,
             end: file.bytes - 1,
             autoClose: false,
           });
@@ -165,8 +190,11 @@ export function createArtifactTransferHttpCallback(
           }
         } finally {
           stopWatchingDisconnect();
-          service.revoke(authorization);
-          await fileHandle?.close();
+          try {
+            await fileHandle?.close();
+          } finally {
+            service.finish(authorization);
+          }
         }
       },
     };

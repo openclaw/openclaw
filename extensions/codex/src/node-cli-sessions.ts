@@ -21,7 +21,11 @@ import { resolveCodexAppServerUserHomeDir } from "./app-server/auth-start-option
 import { formatCodexDisplayText } from "./command-formatters.js";
 import { visitJsonlLines } from "./jsonl-lines.js";
 import { codexCatalogHomeId } from "./session-catalog-home-id.js";
-import { MAX_SESSION_ID_LENGTH, readBoundedOptionalString } from "./session-catalog-parsing.js";
+import {
+  MAX_SESSION_ID_LENGTH,
+  readBoundedOptionalString,
+  unwrapNodeInvokePayload,
+} from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControlFactory } from "./session-catalog-types.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
@@ -226,7 +230,10 @@ export async function resumeCodexCliSessionOnNode(params: {
     timeoutMs: (params.timeoutMs ?? DEFAULT_RESUME_TIMEOUT_MS) + 5_000,
     scopes: ["operator.write"],
   });
-  const payload = unwrapNodeInvokePayload(raw);
+  const payload = unwrapNodeInvokePayload(
+    raw,
+    "Codex CLI node command returned malformed payloadJSON.",
+  );
   if (!isRecord(payload) || payload.ok !== true || typeof payload.text !== "string") {
     throw new Error("Codex CLI resume returned an invalid payload.");
   }
@@ -275,7 +282,7 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
         value?.toLowerCase().includes(filter),
       );
     })
-    .toSorted((a, b) => compareOptionalStringsDesc(a.updatedAt, b.updatedAt))
+    .toSorted((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
     .slice(0, limit);
   return JSON.stringify({ sessions, codexHome } satisfies CodexCliSessionsListResult);
 }
@@ -492,10 +499,7 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
       lastMessage = truncateText(messageText, 140);
     }
   });
-  if (!result.ok) {
-    return null;
-  }
-  if (result.lineCount === 0) {
+  if (!result.ok || result.lineCount === 0) {
     return null;
   }
   if (!sessionId) {
@@ -537,14 +541,12 @@ async function findSessionFiles(dir: string, maxDepth: number): Promise<string[]
 }
 
 function readResponseItemMessageText(parsed: Record<string, unknown>): string | undefined {
-  if (parsed.type !== "response_item" || !isRecord(parsed.payload)) {
-    return undefined;
-  }
-  if (parsed.payload.type !== "message") {
-    return undefined;
-  }
-  const role = typeof parsed.payload.role === "string" ? parsed.payload.role : "";
-  if (role !== "user") {
+  if (
+    parsed.type !== "response_item" ||
+    !isRecord(parsed.payload) ||
+    parsed.payload.type !== "message" ||
+    parsed.payload.role !== "user"
+  ) {
     return undefined;
   }
   const content = Array.isArray(parsed.payload.content) ? parsed.payload.content : [];
@@ -601,7 +603,10 @@ async function resolveCodexCliNode(params: {
 }
 
 function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResult {
-  const payload = unwrapNodeInvokePayload(raw);
+  const payload = unwrapNodeInvokePayload(
+    raw,
+    "Codex CLI node command returned malformed payloadJSON.",
+  );
   if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
     throw new Error("Codex CLI session list returned an invalid payload.");
   }
@@ -626,23 +631,6 @@ function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResu
       ];
     }),
   };
-}
-
-function unwrapNodeInvokePayload(raw: unknown): unknown {
-  const record = isRecord(raw) ? raw : {};
-  if (typeof record.payloadJSON === "string" && record.payloadJSON.trim()) {
-    try {
-      return JSON.parse(record.payloadJSON) as unknown;
-    } catch (error) {
-      throw new Error("Codex CLI node command returned malformed payloadJSON.", {
-        cause: error,
-      });
-    }
-  }
-  if ("payload" in record) {
-    return record.payload;
-  }
-  return raw;
 }
 
 function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
@@ -682,10 +670,6 @@ function truncateText(value: string, max: number): string {
     return value;
   }
   return `${truncateUtf16Safe(value, Math.max(0, max - 3))}...`;
-}
-
-function compareOptionalStringsDesc(a?: string, b?: string): number {
-  return (b ?? "").localeCompare(a ?? "");
 }
 
 function readNodeId(node: CodexCliSessionNodeInfo): string {

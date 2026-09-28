@@ -22,7 +22,7 @@ type MaintenanceAdmission = {
   admit?: (operation: () => void) => Promise<void>;
   execute?: (request: SqliteWalPeriodicRequest) => Promise<SqliteWalPeriodicResult | undefined>;
   flush?: (assertCurrent: () => void) => void;
-  cancel?: () => void;
+  cancel?: () => void | Promise<void>;
 };
 
 const admissions = resolveGlobalSingleton(
@@ -38,8 +38,8 @@ export function registerSqliteWalWorkerMaintenance(
   admissions.set(database, { execute, cancel });
 }
 
-export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void {
-  admissions.get(database)?.cancel?.();
+export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void | Promise<void> {
+  return admissions.get(database)?.cancel?.();
 }
 
 export function createSqliteWalMaintenanceScheduler(

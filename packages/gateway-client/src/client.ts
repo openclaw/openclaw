@@ -43,7 +43,12 @@ import {
 } from "./connect-auth.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveModelCatalogConnect } from "./model-catalog-connect.js";
-import type { GatewayProtocolConnectAuthority } from "./protocol-client-contract.js";
+import type { GatewayProtocolRequestTiming } from "./pending-request.js";
+import type {
+  GatewayClientCloseInfo,
+  GatewayClientConnectionMetadata,
+  GatewayProtocolConnectAuthority,
+} from "./protocol-client-contract.js";
 import {
   GatewayProtocolClient,
   type GatewayProtocolCloseContext,
@@ -69,7 +74,7 @@ import {
   isGatewayLoopbackHost,
   resolveGatewayWebSocketTransport,
 } from "./websocket-transport.js";
-import { WebSocket } from "./websocket.js";
+import { WebSocket, type GatewayWebSocketTargetOptions } from "./websocket.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -142,15 +147,6 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
-export type GatewayClientCloseInfo = {
-  phase: "pre-hello" | "post-hello";
-  socketOpened: boolean;
-  transportValidated: boolean;
-  connectRequestSent?: boolean;
-  transientPreHelloCleanClose: boolean;
-  connectError?: Error;
-};
-
 export { GatewayClientRequestError, isGatewayConnectAssemblyError } from "./request-error.js";
 export { isGatewayProtocolResponseError } from "./protocol-request.js";
 
@@ -163,8 +159,7 @@ export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTime
 
 class GatewayClientTransportPolicyError extends GatewayWebSocketTransportConfigurationError {}
 
-export type GatewayClientOptions = {
-  url?: string; // ws://127.0.0.1:18789
+export type GatewayClientOptions = GatewayWebSocketTargetOptions & {
   origin?: string;
   /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
   edgeAuthHeaders?: Readonly<Record<string, string>>;
@@ -209,7 +204,6 @@ export type GatewayClientOptions = {
   hostDeps?: GatewayClientHostDeps;
   minProtocol?: number;
   maxProtocol?: number;
-  tlsFingerprint?: string;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -218,14 +212,13 @@ export type GatewayClientOptions = {
   notifyOnStartupRetry?: boolean;
   onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
 };
 
-export type GatewayClientConnectionMetadata = {
-  clientName?: GatewayClientName;
-  hasDeviceIdentity: boolean;
-  mode?: GatewayClientMode;
-  preauthHandshakeTimeoutMs?: number;
-};
+export type {
+  GatewayClientCloseInfo,
+  GatewayClientConnectionMetadata,
+} from "./protocol-client-contract.js";
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
@@ -366,6 +359,7 @@ export class GatewayClient {
         this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(error)}`),
       onEvent: (event) => this.opts.onEvent?.(event),
       onGap: (info) => this.opts.onGap?.(info),
+      onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
       onActivity: () => {
         this.lastTick = Date.now();
       },
@@ -455,6 +449,7 @@ export class GatewayClient {
     const transport = resolveGatewayWebSocketTransport({
       url,
       tlsFingerprint: this.opts.tlsFingerprint,
+      tlsServerName: this.opts.tlsServerName,
       env: this.opts.env,
       normalizeTlsFingerprint: this.deps.normalizeTlsFingerprint,
       options: {

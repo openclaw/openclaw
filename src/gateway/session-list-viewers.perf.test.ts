@@ -504,6 +504,8 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
     const empty: WorkerSessionPlacementProjection = {
       placements: new Map(),
       moves: new Map(),
+      pendingResults: new Map(),
+      workspaceJournalOwnerSessionIds: new Set(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
       workspaceRecoveryPendingSessionIds: new Set(),

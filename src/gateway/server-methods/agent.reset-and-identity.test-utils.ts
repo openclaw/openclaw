@@ -6,6 +6,7 @@ import * as participantRecording from "../../sessions/session-participant-record
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { registerAgentResetAuthorityTests } from "./agent.reset-authority.test-support.js";
 import {
   REAL_PNG,
   REAL_PNG_DATA_URL,
@@ -554,31 +555,7 @@ describe("gateway agent handler", () => {
     expect(call.userTurnTranscriptRecorder?.message?.content).toBe("continue with this prompt");
   });
 
-  it("handles bare /reset by resetting the same session without running the model", async () => {
-    mockSessionResetSuccess({ reason: "reset" });
-    mocks.performGatewaySessionReset.mockClear();
-    mocks.agentCommand.mockClear();
-
-    const respond = await invokeAgent(
-      {
-        message: "/reset",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-idem-reset",
-      },
-      {
-        reqId: "4-reset",
-        client: operatorWriteCliClient(["operator.admin"]),
-      },
-    );
-
-    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(mockCallArg(respond)).toBe(true);
-    const result = expectRecordFields(mockCallArg(respond, 0, 1), {}).result as {
-      payloads?: Array<{ text?: string }>;
-    };
-    expect(result.payloads?.[0]?.text).toBe("✅ Session reset.");
-  });
+  registerAgentResetAuthorityTests(mocks);
 
   it("dedupes bare /reset retries after returning the terminal ack", async () => {
     mockSessionResetSuccess({ reason: "reset" });

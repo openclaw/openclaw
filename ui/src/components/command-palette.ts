@@ -10,7 +10,6 @@ import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-m
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
-import { modelCatalogRefreshError } from "../lib/model-catalog-store.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
@@ -29,7 +28,6 @@ import {
   getCommandPaletteModelItems,
   getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
-  toCommandPaletteItems,
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
 import {
@@ -420,7 +418,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         this.context?.agentSelection === context.agentSelection &&
         gateway.snapshot.client === client
       ) {
-        this.catalogItems = toCommandPaletteItems(items);
+        this.catalogItems = items;
         this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
       }
     });
@@ -631,21 +629,15 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         this.context?.agentSelection.state.selectedId ??
         resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
       sessionItems: this.sessionItems,
-      modelSearchError: this.modelReader.failed
-        ? t("palette.modelSearchFailed")
-        : models.hasSnapshot
-          ? modelCatalogRefreshError(models)
-          : null,
+      modelSearchError: this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
       catalogItems: [
-        ...toCommandPaletteItems(
-          getStaticCommandPaletteCatalogItems(
-            hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
-            this.context?.nativeDeviceSettings,
-          ),
+        ...getStaticCommandPaletteCatalogItems(
+          hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+          this.context?.nativeDeviceSettings,
         ),
         ...this.catalogItems,
-        ...toCommandPaletteItems(getCommandPaletteModelItems(models)),
+        ...getCommandPaletteModelItems(models),
       ],
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(

@@ -389,6 +389,16 @@ describe("applyCustomApiConfig", () => {
   });
 
   it.each([
+    ...["ftp://localhost/v1", "file:///tmp/model", "not-a-url"].map((baseUrl) => ({
+      name: `unsupported base URL ${baseUrl}`,
+      params: {
+        config: {},
+        baseUrl,
+        modelId: "foo-large",
+        compatibility: "openai" as const,
+      },
+      expectedMessage: "Custom provider base URL must be a valid HTTP or HTTPS URL.",
+    })),
     {
       name: "invalid compatibility values at runtime",
       params: {

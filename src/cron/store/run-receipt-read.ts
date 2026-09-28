@@ -64,18 +64,18 @@ export function receiptHandle(receipt: CronRunReceipt): CronRunReceiptHandle {
 /** Observe existing receipts without the writable owner's first-use initialization. */
 export function readActiveCronRunReceiptsInDatabase(
   database: DatabaseSync,
-  storeKey: string,
+  storeKey: string | undefined,
   jobIds: readonly string[],
 ): CronRunReceiptRecoveryCandidate[] {
-  const rows = executeSqliteQuerySync(
-    database,
-    getNodeSqliteKysely<CronRunReceiptDatabase>(database)
-      .selectFrom("cron_run_receipts")
-      .selectAll()
-      .where("store_key", "=", storeKey)
-      .where("status", "=", "running")
-      .where("job_id", "in", sqliteStringSet(jobIds)),
-  ).rows;
+  let query = getNodeSqliteKysely<CronRunReceiptDatabase>(database)
+    .selectFrom("cron_run_receipts")
+    .selectAll()
+    .where("status", "=", "running")
+    .where("job_id", "in", sqliteStringSet(jobIds));
+  if (storeKey !== undefined) {
+    query = query.where("store_key", "=", storeKey);
+  }
+  const rows = executeSqliteQuerySync(database, query).rows;
   const selected = new Set(jobIds);
   return rows
     .filter((row) => selected.has(row.job_id))

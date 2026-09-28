@@ -48,9 +48,33 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ...(params.minimalTestGateway
       ? {
           beforeRefresh: async () => {
+            const [
+              { listAgentIds },
+              { getPreparedModelCatalogOwnerSnapshot },
+              { readAgentDatabaseAdmissionRefusal },
+            ] = await Promise.all([
+              import("../agents/agent-scope.js"),
+              import("../agents/prepared-model-catalog.js"),
+              import("../state/agent-database-admission.js"),
+            ]);
+            const config = params.getConfig();
+            // Catalog and skill publications can change metadata while its model owner stays current.
+            if (
+              listAgentIds(config).every(
+                (agentId) =>
+                  readAgentDatabaseAdmissionRefusal(agentId) ||
+                  getPreparedModelCatalogOwnerSnapshot({
+                    agentId,
+                    config,
+                    allowGatewaySubagentBinding: true,
+                  })?.isCurrent(),
+              )
+            ) {
+              return;
+            }
             const { refreshPreparedModelRuntimeSnapshots } =
               await import("../agents/prepared-model-runtime.js");
-            await refreshPreparedModelRuntimeSnapshots(params.getConfig(), {
+            await refreshPreparedModelRuntimeSnapshots(config, {
               gatewayLifecycle: true,
               catalogMode: "static",
               allowGatewaySubagentBinding: true,

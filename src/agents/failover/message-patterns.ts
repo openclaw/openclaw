@@ -320,13 +320,8 @@ export function isBillingErrorMessage(raw: string): boolean {
   if (!BILLING_ERROR_HEAD_RE.test(raw)) {
     return false;
   }
-  return (
-    value.includes("upgrade") ||
-    value.includes("credits") ||
-    value.includes("payment") ||
-    value.includes("purchase") ||
-    value.includes("subscription") ||
-    value.includes("plan")
+  return ["upgrade", "credits", "payment", "purchase", "subscription", "plan"].some((hint) =>
+    value.includes(hint),
   );
 }
 export function isAuthPermanentErrorMessage(raw: string): boolean {

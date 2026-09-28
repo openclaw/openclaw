@@ -5,6 +5,7 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../../plugin-sdk/session-transcript-runtime.js";
@@ -28,7 +29,6 @@ import {
 import type { AgentSession } from "../../sessions/agent-session.js";
 import { sessionManagerPrepareCurrentTurnReplay } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import {
   appendCompletedToolWork,
   appendOversizedCacheSnapshot,
@@ -66,7 +66,7 @@ describe("context engine bootstrap", () => {
               activeContextEngine: {
                 info: { id: "fence-probe" },
                 bootstrap,
-              } as unknown as AttemptContextEngine,
+              } as unknown as ContextEngine,
             },
           );
         } finally {

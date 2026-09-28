@@ -19,6 +19,7 @@ import type {
   ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -81,7 +82,6 @@ type OpenAILiveModelReaders = Pick<
 
 const PROVIDER_ID = "openai";
 
-// OpenAI-native error codes stay with the OpenAI provider hook.
 function classifyOpenAiFailoverCode(code: string | undefined) {
   switch (code?.trim().toUpperCase()) {
     case "SERVER_ERROR":
@@ -292,14 +292,11 @@ async function buildOpenAILiveProviderConfig(
     });
     const discoveredIds = new Set(
       rows.flatMap((row) => {
-        if (!row || typeof row !== "object" || Array.isArray(row)) {
+        const candidate = asOptionalRecord(row);
+        if (candidate?.object !== undefined && candidate.object !== "model") {
           return [];
         }
-        const candidate = row as { id?: unknown; object?: unknown };
-        if (candidate.object !== undefined && candidate.object !== "model") {
-          return [];
-        }
-        const modelId = typeof candidate.id === "string" ? candidate.id.trim() : "";
+        const modelId = typeof candidate?.id === "string" ? candidate.id.trim() : "";
         return modelId ? [modelId] : [];
       }),
     );
@@ -337,26 +334,9 @@ async function buildOpenAILiveProviderConfig(
   }
 }
 
-function readCodexModelStringArray(row: unknown, keys: readonly string[]): readonly string[] {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return [];
-  }
-  const record = row as Record<string, unknown>;
-  for (const key of keys) {
-    const value = record[key];
-    if (Array.isArray(value)) {
-      return value.filter((entry): entry is string => typeof entry === "string");
-    }
-  }
-  return [];
-}
-
 function readCodexReasoningLevels(row: unknown): readonly string[] | undefined {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return undefined;
-  }
-  const record = row as Record<string, unknown>;
-  const value = record.supported_reasoning_levels ?? record.supportedReasoningLevels;
+  const record = asOptionalRecord(row);
+  const value = record?.supported_reasoning_levels ?? record?.supportedReasoningLevels;
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -364,19 +344,13 @@ function readCodexReasoningLevels(row: unknown): readonly string[] | undefined {
     if (typeof entry === "string" && entry.trim().length > 0) {
       return [entry.trim()];
     }
-    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-      const effort = (entry as { effort?: unknown }).effort;
-      return typeof effort === "string" && effort.trim().length > 0 ? [effort.trim()] : [];
-    }
-    return [];
+    const effort = asOptionalRecord(entry)?.effort;
+    return typeof effort === "string" && effort.trim().length > 0 ? [effort.trim()] : [];
   });
 }
 
 function readCodexModelRows(body: unknown): readonly unknown[] {
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new Error("OpenAI Codex model discovery response must be { models: [] }");
-  }
-  const models = (body as { models?: unknown }).models;
+  const models = asOptionalRecord(body)?.models;
   if (!Array.isArray(models)) {
     throw new Error("OpenAI Codex model discovery response must be { models: [] }");
   }
@@ -401,27 +375,21 @@ function resolveCodexModelInput(
   row: unknown,
   fallback: ModelDefinitionConfig | undefined,
 ): ModelDefinitionConfig["input"] {
-  const rawModalities = readCodexModelStringArray(row, ["input_modalities", "inputModalities"]);
+  const record = asOptionalRecord(row);
+  const rawModalities =
+    [record?.input_modalities, record?.inputModalities]
+      .find(Array.isArray)
+      ?.filter((entry): entry is string => typeof entry === "string") ?? [];
   if (rawModalities.length === 0) {
     return fallback?.input ?? ["text", "image"];
   }
   const modalities = new Set(
     rawModalities.map((modality) => normalizeLowercaseStringOrEmpty(modality)),
   );
-  const input = new Set<ModelDefinitionConfig["input"][number]>();
-  if (modalities.has("text")) {
-    input.add("text");
-  }
-  if (modalities.has("image") || modalities.has("vision")) {
-    input.add("image");
-  }
-  if (modalities.has("audio")) {
-    input.add("audio");
-  }
-  if (modalities.has("video")) {
-    input.add("video");
-  }
-  return input.size > 0 ? [...input] : (fallback?.input ?? ["text", "image"]);
+  const input = (["text", "image", "audio", "video"] as const).filter(
+    (modality) => modalities.has(modality) || (modality === "image" && modalities.has("vision")),
+  );
+  return input.length > 0 ? input : (fallback?.input ?? ["text", "image"]);
 }
 
 function normalizeOpenAICodexCatalogModel(model: ModelDefinitionConfig): ModelDefinitionConfig {
@@ -715,36 +683,6 @@ function resolveAuthoredOpenAICompletionsRoute(params: {
   return { api: "openai-completions", baseUrl };
 }
 
-function isOpenAIProvider(provider: string | undefined): boolean {
-  const normalized = normalizeProviderId(provider ?? "");
-  return normalized === PROVIDER_ID;
-}
-
-function normalizeOpenAITransport(
-  model: ProviderRuntimeModel,
-  context?: {
-    modelId?: string;
-    config?: { models?: { providers?: Record<string, ModelProviderConfig | undefined> } };
-  },
-): ProviderRuntimeModel {
-  const useResponsesTransport = shouldUseOpenAIResponsesTransport({
-    provider: model.provider,
-    modelId: context?.modelId,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    config: context?.config,
-  });
-
-  if (!useResponsesTransport) {
-    return model;
-  }
-
-  return {
-    ...model,
-    api: "openai-responses",
-  };
-}
-
 function shouldUseCodexResponsesHooks(params: {
   provider?: string;
   api?: ProviderRuntimeModel["api"] | null;
@@ -754,20 +692,6 @@ function shouldUseCodexResponsesHooks(params: {
     return true;
   }
   return typeof params.baseUrl === "string" && isOpenAICodexBaseUrl(params.baseUrl);
-}
-
-function resolveConfiguredProviderAuthTransport(
-  providerConfig: ProviderResolveDynamicModelContext["providerConfig"],
-) {
-  const authMode = providerConfig?.auth;
-  if (authMode === "oauth" || authMode === "token") {
-    return "codex";
-  }
-  if (authMode === "api-key") {
-    return "responses";
-  }
-
-  return undefined;
 }
 
 function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelContext): boolean {
@@ -951,29 +875,13 @@ export function buildOpenAIProvider(): ProviderPlugin {
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
         if (isSIWCAuthFlow(auth.authFlow)) {
-          // Token sharing authorizes Responses, not either model-discovery endpoint.
-          const sharing = auth.authFlow === TOKEN_SHARING_AUTH_FLOW;
-          const provider = buildOpenAIStaticPlatformProviderConfig(
-            undefined,
-            TOKEN_SHARING_RESOURCE,
-          );
-          return {
-            providers: {
-              [PROVIDER_ID]: {
-                ...provider,
-                models: sharing
-                  ? provider.models.filter((model) => model.api === "openai-responses")
-                  : [],
-              },
-            },
-            outcomes: [
-              {
-                provider: PROVIDER_ID,
-                profileId: auth.profileId,
-                status: sharing ? ("unavailable" as const) : ("auth-rejected" as const),
-              },
-            ],
-          };
+          const { buildTokenSharingCatalog } = await import("./token-sharing-catalog.js");
+          return await buildTokenSharingCatalog({
+            auth,
+            models: buildOpenAIStaticPlatformProviderConfig(undefined, TOKEN_SHARING_RESOURCE)
+              .models,
+            signal: ctx.signal,
+          });
         }
         if (auth.preparationFailed) {
           return null;
@@ -1103,7 +1011,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         : resolveOpenAIGptForwardCompatModel(ctx),
     preferRuntimeResolvedModel: (ctx) => codexHooks.preferRuntimeResolvedModel?.(ctx) ?? false,
     normalizeResolvedModel: (ctx) => {
-      if (!isOpenAIProvider(ctx.provider)) {
+      if (normalizeProviderId(ctx.provider ?? "") !== PROVIDER_ID) {
         return undefined;
       }
       const authoredCompletionsRoute = resolveAuthoredOpenAICompletionsRoute(ctx);
@@ -1119,7 +1027,13 @@ export function buildOpenAIProvider(): ProviderPlugin {
       ) {
         return codexHooks.normalizeResolvedModel?.(ctx);
       }
-      return normalizeOpenAITransport(ctx.model, ctx);
+      return shouldUseOpenAIResponsesTransport({
+        ...ctx.model,
+        modelId: ctx.modelId,
+        config: ctx.config,
+      })
+        ? { ...ctx.model, api: "openai-responses" }
+        : ctx.model;
     },
     normalizeTransport: (ctx) => {
       const authoredCompletionsRoute = resolveAuthoredOpenAICompletionsRoute(ctx);
@@ -1155,7 +1069,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         }) ||
         (normalizeProviderId(ctx.provider) === PROVIDER_ID &&
           (!providerConfig?.baseUrl || isOpenAIApiBaseUrl(providerConfig.baseUrl)) &&
-          resolveConfiguredProviderAuthTransport(providerConfig) === "codex");
+          isCodexCatalogAuthMode(providerConfig?.auth ?? ""));
       return (useCodexTransport ? nativeResponsesHooks : responsesHooks).prepareExtraParams?.(ctx);
     },
     resolveUsageAuth: codexHooks.resolveUsageAuth,

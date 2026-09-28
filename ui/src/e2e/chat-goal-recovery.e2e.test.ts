@@ -271,7 +271,14 @@ suite.define(() => {
         const method = "sessions.goal.update";
         const gateway = await installMockGateway(page, {
           sessionKey: "agent:main:main",
-          heldMethods: [method],
+          heldMethods: [method, "chat.startup"],
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Goal recovery context loaded." }],
+              timestamp: now,
+            },
+          ],
           methodResponses: {
             "sessions.list": {
               ts: now,
@@ -300,9 +307,21 @@ suite.define(() => {
             },
           },
         });
+        const admitHistory = async () => {
+          await gateway.waitForRequest("chat.startup");
+          await gateway.resolveDeferred("chat.startup");
+          await page.getByText("Goal recovery context loaded.", { exact: true }).waitFor();
+        };
         await page.goto(`${suite.server.baseUrl}chat/main`);
-        await page.getByRole("button", { name: "Resume goal", exact: true }).click();
+        await gateway.waitForRequest("chat.startup");
+        await page.locator(".agent-chat__goal-objective").waitFor();
+        const resume = page.getByRole("button", { name: "Resume goal", exact: true });
+        expect(await resume.count()).toBe(0);
+        expect(await gateway.getRequests(method)).toHaveLength(0);
+        await admitHistory();
+        await resume.click();
         const first = await gateway.waitForRequest(method);
+        expect(first.params).toMatchObject({ sessionId: "goal-check-session" });
         await gateway.rejectDeferred(method, {
           code: "UNAVAILABLE",
           message: "Gateway response unavailable",
@@ -310,6 +329,7 @@ suite.define(() => {
         const checkOutcome = page.getByRole("button", { name: "Check outcome", exact: true });
         await checkOutcome.waitFor();
         await page.reload();
+        await admitHistory();
         await checkOutcome.waitFor();
         await checkOutcome.click();
         const retried = await gateway.waitForRequest(method);
@@ -323,6 +343,7 @@ suite.define(() => {
         expect(await gateway.getRequests(method)).toHaveLength(1);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await page.reload();
+        await admitHistory();
         await checkOutcome.waitFor();
         expect(await gateway.getRequests(method)).toHaveLength(0);
       },

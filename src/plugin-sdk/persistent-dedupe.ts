@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { resolveNonNegativeIntegerOption } from "../../packages/normalization-core/src/number-coercion.js";
 import { createDedupeCache } from "../infra/dedupe.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createChannelReplayGuardWithDedupe,
   type ChannelReplayGuard,
@@ -469,28 +470,10 @@ export function createClaimableDedupe(
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const memoryMaxSize = resolveNonNegativeIntegerOption(options.memoryMaxSize, 0);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
-  let persistent: PersistentDedupe | null = null;
-  if (hasPluginStateOptions(options)) {
-    persistent = createPersistentDedupe({
-      ttlMs,
-      memoryMaxSize,
-      pluginId: options.pluginId,
-      stateMaxEntries: Math.max(1, resolveNonNegativeIntegerOption(options.stateMaxEntries, 1)),
-      ...(options.namespacePrefix ? { namespacePrefix: options.namespacePrefix } : {}),
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.onDiskError ? { onDiskError: options.onDiskError } : {}),
-    });
-  } else if (hasLegacyPathOptions(options)) {
-    persistent = createPersistentDedupe({
-      ttlMs,
-      memoryMaxSize,
-      fileMaxEntries: Math.max(1, resolveNonNegativeIntegerOption(options.fileMaxEntries, 1)),
-      resolveFilePath: options.resolveFilePath,
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.lockOptions ? { lockOptions: options.lockOptions } : {}),
-      ...(options.onDiskError ? { onDiskError: options.onDiskError } : {}),
-    });
-  }
+  const persistent =
+    hasPluginStateOptions(options) || hasLegacyPathOptions(options)
+      ? createPersistentDedupe({ ...options, ttlMs, memoryMaxSize })
+      : null;
 
   const inflight = new Map<
     string,
@@ -552,12 +535,7 @@ export function createClaimableDedupe(
       return { kind: "inflight", pending: existing.promise };
     }
 
-    let resolve!: (result: boolean) => void;
-    let reject!: (error: unknown) => void;
-    const promise = new Promise<boolean>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
+    const { promise, resolve, reject } = createDeferredCore<boolean>();
     void promise.catch(() => {});
     const claimValue = { promise, resolve, reject };
     inflight.set(scopedKey, claimValue);

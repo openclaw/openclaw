@@ -1,10 +1,8 @@
-// Diagnostic support bundle helpers collect logs and metadata for support exports.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 
-// File builders and writers for redacted diagnostic support bundles.
 export type DiagnosticSupportBundleFile = {
   path: string;
   mediaType: string;

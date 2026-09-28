@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import {
   buildFullReleaseCandidateBinding,
@@ -1153,41 +1154,6 @@ describe("full release execution plan", () => {
       state: "blocked_complete",
     });
   });
-
-  it.each([
-    { targetVersion: "2026.8.1", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.1-1", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.1-beta.1", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.33", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.1-alpha.1", evidenceReuse: false, rerunGroup: "all", required: true },
-    { targetVersion: "2026.8.1-alpha.1", evidenceReuse: true, rerunGroup: "all", required: false },
-    {
-      targetVersion: "2026.8.1-alpha.1",
-      evidenceReuse: false,
-      rerunGroup: "package",
-      required: false,
-    },
-  ])(
-    "enforces standalone Docker assets for $targetVersion (reuse=$evidenceReuse, group=$rerunGroup)",
-    ({ required, ...input }) => {
-      for (const dockerPreflightResult of ["success", "failure", "skipped", "cancelled"]) {
-        const { gates } = plan({ ...input, dockerPreflightResult });
-        expect(gates.find((gate) => gate.name === "Verify Docker runtime image assets")).toEqual({
-          name: "Verify Docker runtime image assets",
-          required,
-          result: dockerPreflightResult,
-        });
-        expect(
-          classifyReleaseSnapshot({
-            children: [],
-            localFailures: releasePlanGateFailures(gates),
-            releaseProfile: "stable",
-            workflowRef: "main",
-          }).state,
-        ).toBe(required && dockerPreflightResult !== "success" ? "blocked_complete" : "passed");
-      }
-    },
-  );
 
   it.each(["install-smoke", "qa-parity", "qa-live"])(
     "does not require candidate preparation for focused %s",
@@ -3281,6 +3247,84 @@ describe("release state artifacts", () => {
 });
 
 describe("collector subprocess", () => {
+  it("releases polling sleep listeners before the next GitHub observation", () => {
+    const root = tempDirs.make("frv-state-sleep-listeners-");
+    const executionPlanPath = join(root, "plan.json");
+    const output = join(root, "decision.json");
+    writeFileSync(
+      executionPlanPath,
+      JSON.stringify(
+        executionPlan({
+          children: { normalCi: { result: "success", runAttempt: 1, runId: "101" } },
+          dockerPreflightResult: "skipped",
+          candidateBindingResult: "skipped",
+          rerunGroup: "ci",
+          resolveTargetResult: "success",
+        }),
+      ),
+    );
+    const controller = join(root, "controller.mjs");
+    writeFileSync(
+      controller,
+      `import assert from "node:assert/strict";
+import cp from "node:child_process";
+import { getEventListeners } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import { mock } from "node:test";
+import { promisify } from "node:util";
+let observations = 0;
+let retainedListeners = 0;
+cp.execFile = Object.assign(() => { throw new Error("unexpected callback execution"); }, {
+  [promisify.custom]: async (command, args, options) => {
+    assert.equal(command, "gh");
+    retainedListeners = Math.max(retainedListeners, getEventListeners(options.signal, "abort").length);
+    if (args.includes("--paginate")) {
+      setImmediate(() => mock.timers.tick(60_000));
+      return { stdout: "" };
+    }
+    if (++observations === 12) {
+      throw Object.assign(new Error("HTTP 403: Resource not accessible by integration"), {
+        stderr: "HTTP 403: Resource not accessible by integration",
+      });
+    }
+    return { stdout: JSON.stringify({
+      id: 101, event: "workflow_dispatch", path: ".github/workflows/ci.yml@refs/heads/release-ci/tooling",
+      display_title: "CI full-release-validation-77-1-ci", head_branch: "release-ci/tooling",
+      head_sha: ${JSON.stringify(SHA)}, run_attempt: 1, status: "in_progress", conclusion: null,
+      created_at: "2026-08-21T00:00:00Z", updated_at: "2026-08-21T00:01:00Z",
+      html_url: "https://example.invalid/runs/101", actor: { login: "github-actions[bot]" },
+      triggering_actor: { login: "github-actions[bot]" }, repository: { full_name: "openclaw/openclaw" },
+    }) };
+  },
+});
+syncBuiltinESMExports();
+mock.timers.enable({ apis: ["setTimeout"] });
+process.argv[1] = ${JSON.stringify(SCRIPT)};
+process.argv[2] = "decision";
+try {
+  await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});
+  assert.equal(observations, 12);
+  assert.equal(retainedListeners, 0, "completed polling sleeps retained abort listeners");
+  assert.equal(process.exitCode, 2);
+  process.exitCode = 0;
+} finally {
+  mock.timers.reset();
+}
+`,
+    );
+    const result = spawnSync(process.execPath, [controller], {
+      encoding: "utf8",
+      env: collectorEnv({
+        FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+        FULL_RELEASE_STATE_PATH: output,
+        FAIL_FAST: "false",
+      }),
+      timeout: 10_000,
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(JSON.parse(readFileSync(output, "utf8")).state).toBe("orchestration_error");
+  });
+
   it("seals the canonical published candidate request without reconstruction", () => {
     const candidateRequest = canonicalCandidateRequest({ packagePublished: true });
     const { output, result } = runPlanSubprocess({ candidateRequestInput: candidateRequest });
@@ -3916,12 +3960,11 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       }
       // Earlier producers required this gate for regular releases too. A collector
       // retry must preserve that recorded policy, including a failed gate.
-      const legacyDockerGate = sealed.gates.find(
-        (gate) => gate.name === "Verify Docker runtime image assets",
-      );
-      assert(legacyDockerGate);
-      legacyDockerGate.required = true;
-      legacyDockerGate.result = dockerPreflightResult;
+      sealed.gates.push({
+        name: "Verify Docker runtime image assets",
+        required: true,
+        result: dockerPreflightResult,
+      });
       sealed.sha256 = releaseExecutionPlanSha256(sealed);
       writeFileSync(output, JSON.stringify(sealed));
       const result = runCollector("plan", {

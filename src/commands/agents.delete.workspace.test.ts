@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,7 +24,6 @@ const fsSafeMocks = vi.hoisted(() => ({
 
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
-  isGatewayCredentialsRequiredError: vi.fn(),
 }));
 
 const workspaceStateMocks = vi.hoisted(() => ({
@@ -49,12 +48,9 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 
-vi.mock("../gateway/call.js", async () => ({
-  ...(await vi.importActual<typeof import("../gateway/transport-error.js")>(
-    "../gateway/transport-error.js",
-  )),
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: gatewayMocks.callGateway,
-  isGatewayCredentialsRequiredError: gatewayMocks.isGatewayCredentialsRequiredError,
 }));
 
 vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
@@ -130,6 +126,7 @@ function expectSessionStore(
 
 describe("agents delete workspace lifecycle", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
     fsSafeMocks.movePathToTrash.mockClear();
@@ -137,16 +134,15 @@ describe("agents delete workspace lifecycle", () => {
     processMocks.runCommandWithTimeout.mockClear();
     gatewayMocks.callGateway.mockReset();
     gatewayMocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
-    gatewayMocks.isGatewayCredentialsRequiredError.mockReset();
-    gatewayMocks.isGatewayCredentialsRequiredError.mockImplementation(
-      (error: unknown) =>
-        error instanceof Error && error.name === "GatewayCredentialsRequiredError",
-    );
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
     terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
     wizardMocks.createClackPrompter.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("finishes agent-directory cleanup when workspace state deletion fails", async () => {

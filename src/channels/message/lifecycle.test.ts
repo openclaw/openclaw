@@ -1,4 +1,3 @@
-// Message lifecycle tests cover channel message state transitions and notifications.
 import { describe, expect, it, vi } from "vitest";
 import {
   createLiveMessageState,
@@ -6,23 +5,23 @@ import {
   deliverFinalizableLivePreview,
   deliverWithFinalizableLivePreviewAdapter,
   markLiveMessagePreviewUpdated,
+  type LivePreviewFinalizerDraft,
 } from "./live.js";
 import { createMessageReceiveContext } from "./receive.js";
 
 type LivePreviewMediaPayload = { text?: string; mediaUrl: string };
 type LivePreviewMediaEdit = { text?: string };
 
-function requireMockCall(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex: number,
-  label: string,
-): unknown[] {
-  const resolvedIndex = callIndex < 0 ? mock.mock.calls.length + callIndex : callIndex;
-  const call = mock.mock.calls[resolvedIndex];
-  if (!call) {
-    throw new Error(`expected ${label} call ${callIndex}`);
-  }
-  return call;
+function createDraft(
+  id: string,
+  overrides: Partial<LivePreviewFinalizerDraft<string>> = {},
+): LivePreviewFinalizerDraft<string> {
+  return {
+    flush: vi.fn(async () => undefined),
+    id: () => id,
+    clear: vi.fn(async () => undefined),
+    ...overrides,
+  };
 }
 
 describe("message lifecycle primitives", () => {
@@ -55,12 +54,7 @@ describe("message lifecycle primitives", () => {
     const result = await deliverFinalizableLivePreview({
       kind: "final",
       payload: { text: "done" },
-      draft: {
-        flush: vi.fn(async () => undefined),
-        id: () => "preview-1",
-        seal: vi.fn(async () => undefined),
-        clear: vi.fn(async () => undefined),
-      },
+      draft: createDraft("preview-1", { seal: vi.fn(async () => undefined) }),
       buildFinalEdit: (payload) => ({ text: payload.text }),
       editFinal,
       deliverNormally,
@@ -78,15 +72,11 @@ describe("message lifecycle primitives", () => {
     expect(liveState.canFinalizeInPlace).toBe(false);
     expect(liveState.receipt?.primaryPlatformMessageId).toBe("preview-1");
     expect(liveState.receipt?.platformMessageIds).toEqual(["preview-1"]);
-    expect(onPreviewFinalized).toHaveBeenCalledTimes(1);
-    const [previewId, receiptArg, stateArg] = requireMockCall(
-      onPreviewFinalized,
-      0,
-      "preview finalized",
-    ) as [string, { primaryPlatformMessageId?: string }, unknown];
-    expect(previewId).toBe("preview-1");
-    expect(receiptArg.primaryPlatformMessageId).toBe("preview-1");
-    expect(stateArg).toBe(liveState);
+    expect(onPreviewFinalized).toHaveBeenCalledExactlyOnceWith(
+      "preview-1",
+      expect.objectContaining({ primaryPlatformMessageId: "preview-1" }),
+      expect.toSatisfy((state: unknown) => state === liveState),
+    );
   });
 
   it("delivers supplemental payloads after finalizing live previews", async () => {
@@ -101,12 +91,7 @@ describe("message lifecycle primitives", () => {
     >({
       kind: "final",
       payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
-      draft: {
-        flush: vi.fn(async () => undefined),
-        id: () => "preview-1",
-        seal: vi.fn(async () => undefined),
-        clear: vi.fn(async () => undefined),
-      },
+      draft: createDraft("preview-1", { seal: vi.fn(async () => undefined) }),
       buildFinalEdit: (payload) => ({ text: payload.text }),
       buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
       editFinal,
@@ -131,11 +116,7 @@ describe("message lifecycle primitives", () => {
     >({
       kind: "final",
       payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
-      draft: {
-        flush: vi.fn(async () => undefined),
-        id: () => "preview-supplement-fallback",
-        clear: vi.fn(async () => undefined),
-      },
+      draft: createDraft("preview-supplement-fallback"),
       buildFinalEdit: (payload) => ({ text: payload.text }),
       editFinal: vi.fn(async () => undefined),
       buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
@@ -158,11 +139,7 @@ describe("message lifecycle primitives", () => {
     >({
       kind: "final",
       payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
-      draft: {
-        flush: vi.fn(async () => undefined),
-        id: () => "preview-no-supplement-sender",
-        clear: vi.fn(async () => undefined),
-      },
+      draft: createDraft("preview-no-supplement-sender"),
       buildFinalEdit: (payload) => ({ text: payload.text }),
       editFinal: vi.fn(async () => undefined),
       buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
@@ -178,11 +155,7 @@ describe("message lifecycle primitives", () => {
       deliverFinalizableLivePreview<LivePreviewMediaPayload, string, LivePreviewMediaEdit>({
         kind: "final",
         payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
-        draft: {
-          flush: vi.fn(async () => undefined),
-          id: () => "preview-supplement-unsent",
-          clear: vi.fn(async () => undefined),
-        },
+        draft: createDraft("preview-supplement-unsent"),
         buildFinalEdit: (payload) => ({ text: payload.text }),
         editFinal: vi.fn(async () => undefined),
         buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
@@ -201,12 +174,7 @@ describe("message lifecycle primitives", () => {
     const result = await deliverFinalizableLivePreview({
       kind: "final",
       payload: { text: "with media" },
-      draft: {
-        flush: vi.fn(async () => undefined),
-        id: () => "preview-2",
-        discardPending,
-        clear,
-      },
+      draft: createDraft("preview-2", { discardPending, clear }),
       buildFinalEdit: () => undefined,
       editFinal: vi.fn(async () => undefined),
       deliverNormally,
@@ -226,67 +194,53 @@ describe("message lifecycle primitives", () => {
     expect(liveState.canFinalizeInPlace).toBe(false);
   });
 
-  it.each(["shared finalizer", "exported adapter"] as const)(
-    "preserves committed normal delivery when preview cleanup fails through the %s",
-    async (entrypoint) => {
-      const events: string[] = [];
-      const cleanupError = new Error("recipient text and fake-secret must stay private");
-      const draft = {
-        flush: vi.fn(async () => undefined),
-        id: () => "preview-cleanup-failure",
-        discardPending: vi.fn(async () => {
-          events.push("discard");
-        }),
-        clear: vi.fn(async () => {
-          events.push("clear");
-          throw cleanupError;
-        }),
-      };
-      const deliverNormally = vi.fn(async () => {
-        events.push("deliver");
-        return true;
-      });
-      const onNormalDelivered = vi.fn(async () => {
-        events.push("commit");
-      });
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("preserves committed normal delivery when preview cleanup fails through the adapter", async () => {
+    const events: string[] = [];
+    const cleanupError = new Error("recipient text and fake-secret must stay private");
+    const draft = {
+      flush: vi.fn(async () => undefined),
+      id: () => "preview-cleanup-failure",
+      discardPending: vi.fn(async () => {
+        events.push("discard");
+      }),
+      clear: vi.fn(async () => {
+        events.push("clear");
+        throw cleanupError;
+      }),
+    };
+    const deliverNormally = vi.fn(async () => {
+      events.push("deliver");
+      return true;
+    });
+    const onNormalDelivered = vi.fn(async () => {
+      events.push("commit");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      try {
-        const result =
-          entrypoint === "shared finalizer"
-            ? await deliverFinalizableLivePreview({
-                kind: "final",
-                payload: { text: "already delivered" },
-                draft,
-                buildFinalEdit: () => undefined,
-                editFinal: vi.fn(async () => undefined),
-                deliverNormally,
-                onNormalDelivered,
-              })
-            : await deliverWithFinalizableLivePreviewAdapter({
-                kind: "final",
-                payload: { text: "already delivered" },
-                adapter: defineFinalizableLivePreviewAdapter({
-                  draft,
-                  buildFinalEdit: () => undefined,
-                  editFinal: vi.fn(async () => undefined),
-                }),
-                deliverNormally,
-                onNormalDelivered,
-              });
+    try {
+      const result = await deliverWithFinalizableLivePreviewAdapter({
+        kind: "final",
+        payload: { text: "already delivered" },
+        adapter: defineFinalizableLivePreviewAdapter({
+          draft,
+          buildFinalEdit: () => undefined,
+          editFinal: vi.fn(async () => undefined),
+        }),
+        deliverNormally,
+        onNormalDelivered,
+      });
 
-        expect(result.kind).toBe("normal-delivered");
-        expect(events).toEqual(["discard", "deliver", "commit", "clear"]);
-        expect(deliverNormally).toHaveBeenCalledTimes(1);
-        expect(onNormalDelivered).toHaveBeenCalledTimes(1);
-        expect(warn).toHaveBeenCalledExactlyOnceWith(
-          "Live preview cleanup failed after delivery; a stale preview may remain",
-        );
-      } finally {
-        warn.mockRestore();
-      }
-    },
-  );
+      expect(result.kind).toBe("normal-delivered");
+      expect(events).toEqual(["discard", "deliver", "commit", "clear"]);
+      expect(deliverNormally).toHaveBeenCalledTimes(1);
+      expect(onNormalDelivered).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "Live preview cleanup failed after delivery; a stale preview may remain",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
 
   it("keeps intentionally suppressed fallback delivery skipped without post-delivery cleanup", async () => {
     const clear = vi.fn(async () => {
@@ -386,12 +340,7 @@ describe("message lifecycle primitives", () => {
       deliverFinalizableLivePreview({
         kind: "final",
         payload: { text: "with media" },
-        draft: {
-          flush: vi.fn(async () => undefined),
-          id: () => "preview-2",
-          discardPending,
-          clear,
-        },
+        draft: createDraft("preview-2", { discardPending, clear }),
         buildFinalEdit: () => undefined,
         editFinal: vi.fn(async () => undefined),
         deliverNormally: vi.fn(async () => {
@@ -409,11 +358,7 @@ describe("message lifecycle primitives", () => {
   it("delivers through finalizable live preview adapters", async () => {
     const editFinal = vi.fn(async () => undefined);
     const adapter = defineFinalizableLivePreviewAdapter({
-      draft: {
-        flush: vi.fn(async () => undefined),
-        id: () => "preview-adapter-1",
-        clear: vi.fn(async () => undefined),
-      },
+      draft: createDraft("preview-adapter-1"),
       buildFinalEdit: (payload: { text: string }) => ({ text: payload.text.toUpperCase() }),
       editFinal,
     });
@@ -431,11 +376,7 @@ describe("message lifecycle primitives", () => {
 
   it("lets live preview adapters resolve the committed platform id after final edit", async () => {
     const adapter = defineFinalizableLivePreviewAdapter({
-      draft: {
-        flush: vi.fn(async () => undefined),
-        id: () => "preview-before-edit",
-        clear: vi.fn(async () => undefined),
-      },
+      draft: createDraft("preview-before-edit"),
       buildFinalEdit: (payload: { text: string }) => ({ text: payload.text }),
       editFinal: vi.fn(async () => undefined),
       resolveFinalizedId: () => "message-after-edit",
@@ -469,11 +410,7 @@ describe("message lifecycle primitives", () => {
     const handlePreviewEditError = vi.fn(() => "retain" as const);
     const editError = new Error("timeout after request");
     const adapter = defineFinalizableLivePreviewAdapter({
-      draft: {
-        flush: vi.fn(async () => undefined),
-        id: () => "preview-maybe-final",
-        clear: vi.fn(async () => undefined),
-      },
+      draft: createDraft("preview-maybe-final"),
       buildFinalEdit: (payload: { text: string }) => ({ text: payload.text }),
       editFinal: vi.fn(async () => {
         throw editError;
@@ -491,14 +428,14 @@ describe("message lifecycle primitives", () => {
     expect(result.kind).toBe("preview-retained");
     expect(result.liveState?.phase).toBe("previewing");
     expect(deliverNormally).not.toHaveBeenCalled();
-    expect(handlePreviewEditError).toHaveBeenCalledTimes(1);
-    const [editErrorContext] = requireMockCall(handlePreviewEditError, 0, "preview edit error") as [
-      { error: unknown; id?: string; edit?: unknown; payload?: unknown },
-    ];
-    expect(editErrorContext.error).toBe(editError);
-    expect(editErrorContext.id).toBe("preview-maybe-final");
-    expect(editErrorContext.edit).toEqual({ text: "done" });
-    expect(editErrorContext.payload).toEqual({ text: "done" });
+    expect(handlePreviewEditError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        error: expect.toSatisfy((error: unknown) => error === editError),
+        id: "preview-maybe-final",
+        edit: { text: "done" },
+        payload: { text: "done" },
+      }),
+    );
   });
 
   it("does not fallback-send after a successful preview edit when finalization hooks fail", async () => {
@@ -512,12 +449,7 @@ describe("message lifecycle primitives", () => {
       deliverFinalizableLivePreview({
         kind: "final",
         payload: { text: "done" },
-        draft: {
-          flush: vi.fn(async () => undefined),
-          id: () => "preview-finalized-before-hook",
-          seal: vi.fn(async () => undefined),
-          clear: vi.fn(async () => undefined),
-        },
+        draft: createDraft("preview-finalized-before-hook", { seal: vi.fn(async () => undefined) }),
         buildFinalEdit: (payload) => ({ text: payload.text }),
         editFinal,
         deliverNormally,

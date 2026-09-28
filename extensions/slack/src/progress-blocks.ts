@@ -296,11 +296,17 @@ export function buildSlackProgressStreamChunks(params: {
     }
   }
   const headline = params.title?.trim() || params.label?.trim();
+  const summaryTitle =
+    params.finalInProgressStatus === "error"
+      ? "Failed"
+      : params.finalInProgressStatus === "complete" || !params.summaryRow
+        ? "Completed"
+        : "Working";
   const newest = tasks.at(-1);
   const title = compactChunkText(
     headline ||
       (newest?.details ? `${newest.title} — ${newest.details}` : newest?.title) ||
-      (params.summaryRow ? "Working" : attention.at(-1)?.title) ||
+      (params.summaryRow ? summaryTitle : attention.at(-1)?.title) ||
       SLACK_PROGRESS_PLAN_FALLBACK_TITLE,
   );
   const diffOutput = formatTaskDiffOutput(params.diffStat);
@@ -309,7 +315,7 @@ export function buildSlackProgressStreamChunks(params: {
     // summary row for the whole turn; detailed cards add it only as a receipt.
     tasks.push({
       id: "openclaw_summary",
-      title: params.summaryRow ? compactTitle(title) : "Completed",
+      title: params.summaryRow ? compactTitle(title) : summaryTitle,
       status: params.finalInProgressStatus ?? (params.summaryRow ? "in_progress" : "complete"),
     });
   }
@@ -380,7 +386,7 @@ function buildActivityText(lines: readonly ChannelProgressDraftLine[], maxLineCh
 
 export function buildSlackProgressCardBlocks(params: {
   state: SlackProgressCardState;
-  title: string;
+  title?: string;
   titleFormat?: "plain";
   lines: readonly ChannelProgressDraftLine[];
   plan?: readonly AgentPlanStep[];
@@ -432,7 +438,9 @@ export function buildSlackProgressCardBlocks(params: {
     // Attention has its own bounded section so activity truncation cannot hide it.
     joinRecentProgressRows(attention),
   ];
-  const title = params.title.trim() || "Working";
+  const title =
+    params.title?.trim() ||
+    (params.state === "working" ? "Working" : params.state === "success" ? "Done" : "Failed");
   const blocks: (Block | KnownBlock)[] = [
     params.titleFormat === "plain"
       ? progressTextSection({ text: `${icon} ${title}`, format: "plain" })

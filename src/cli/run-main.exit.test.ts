@@ -26,15 +26,17 @@ import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginCache, getScopedPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
+import { registerBareRootArgumentTests, withCliTty } from "./run-main.bare-root.test-support.js";
+import {
+  makeProxyHandle,
+  registerRunMainProxyExitTests,
+} from "./run-main.proxy-exit.test-support.js";
 import { registerRunMainTimelineTests } from "./run-main.timeline.test-support.js";
-import { getPendingCliDisposers } from "./runtime-cleanup.js";
-import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
 const readOnlyCoreOptions = { isolateEnv: true, observe: false, pluginValidation: "core-only" };
 
@@ -86,8 +88,6 @@ const getActiveMcpLoopbackRuntimeMock = vi.hoisted(() =>
   vi.fn<() => { port: number } | undefined>(() => undefined),
 );
 const closeMcpLoopbackServerMock = vi.hoisted(() => vi.fn(async () => {}));
-const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
-const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
@@ -374,14 +374,6 @@ vi.mock("../gateway/mcp-http.js", () => ({
   closeMcpLoopbackServer: closeMcpLoopbackServerMock,
 }));
 
-vi.mock("../tasks/task-registry.js", () => ({
-  ensureTaskRegistryReady: ensureTaskRegistryReadyMock,
-}));
-
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  startTaskRegistryMaintenance: startTaskRegistryMaintenanceMock,
-}));
-
 vi.mock("./program/root-help.js", () => ({
   outputRootHelp: outputRootHelpMock,
 }));
@@ -522,35 +514,6 @@ function makeProgram<T>(primary: string | undefined, parseAsync: T) {
   return { commands: [{ name: () => primary, aliases: () => [] }], parseAsync };
 }
 
-function makeProxyHandle() {
-  return {
-    proxyUrl: "http://127.0.0.1:19876",
-    stop: vi.fn(async () => {}),
-    kill: vi.fn(),
-  };
-}
-
-async function withCliTty(value: boolean, fn: () => Promise<void>): Promise<void> {
-  const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value });
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
-  try {
-    await fn();
-  } finally {
-    if (stdinDescriptor) {
-      Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
-    if (stdoutDescriptor) {
-      Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
-    } else {
-      Reflect.deleteProperty(process.stdout, "isTTY");
-    }
-  }
-}
-
 function withInteractiveTty(fn: () => Promise<void>): Promise<void> {
   return withCliTty(true, fn);
 }
@@ -561,6 +524,7 @@ function runBareCli(): Promise<void> {
 
 function expectBoundTui(expected: {
   url: string;
+  configuredRemote?: boolean;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -824,8 +788,6 @@ describe("runCli exit behavior", () => {
     expect(routeOrder).toBeGreaterThan(captureOrder);
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(disposeRegisteredAgentHarnessesMock).not.toHaveBeenCalled();
-    expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();
-    expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
@@ -888,9 +850,9 @@ describe("runCli exit behavior", () => {
     expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the standard spinner while loading the full CLI", async () => {
+  it("finishes the standard startup spinner before parsing the full CLI", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
-    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
     buildProgramMock.mockReturnValueOnce(makeProgram("config", parseAsync));
 
     await runCli(["node", "openclaw", "config"]);
@@ -900,12 +862,12 @@ describe("runCli exit behavior", () => {
       indeterminate: true,
       delayMs: 0,
     });
-    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "config"]);
   });
 
   it("suppresses startup progress for json output commands before full CLI parsing", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
-    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
     buildProgramMock.mockReturnValueOnce(makeProgram("sessions", parseAsync));
 
     await runCli(["node", "openclaw", "sessions", "--json", "--limit", "all"]);
@@ -924,12 +886,11 @@ describe("runCli exit behavior", () => {
       "--limit",
       "all",
     ]);
-    expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses startup progress for plain model output before full CLI parsing", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
-    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
     buildProgramMock.mockReturnValueOnce(makeProgram("models", parseAsync));
 
     await runCli(["node", "openclaw", "models", "aliases", "list", "--plain"]);
@@ -948,7 +909,6 @@ describe("runCli exit behavior", () => {
       "list",
       "--plain",
     ]);
-    expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 
   it("pauses non-tty stdin after full CLI command completion", async () => {
@@ -3069,152 +3029,11 @@ describe("runCli exit behavior", () => {
     expect(tryRouteCliMock).not.toHaveBeenCalled();
   });
 
-  it("stops the managed proxy after normal gateway runtime completion", async () => {
-    const handle = makeProxyHandle();
-    startProxyMock.mockResolvedValueOnce(handle);
-
-    await runCli(["node", "openclaw", "gateway", "run"]);
-
-    expect(startProxyMock).toHaveBeenCalledWith(undefined);
-    expect(stopProxyMock).toHaveBeenCalledOnce();
-    expect(stopProxyMock).toHaveBeenCalledWith(handle);
-  });
-
-  it("stops the managed proxy and exits after SIGINT", async () => {
-    const handle = makeProxyHandle();
-    startProxyMock.mockResolvedValueOnce(handle);
-    let resolveRoute: (value: boolean) => void = () => {};
-    tryRouteCliMock.mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        resolveRoute = resolve;
-      }),
-    );
-
-    const processOnceSpy = vi.spyOn(process, "once");
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string) => {
-      void code;
-      return undefined as never;
-    }) as typeof process.exit);
-    let finishCompanionCleanup: (() => void) | undefined;
-    const unregisterCompanionCleanup = registerSignalExitBarrier(
-      () =>
-        new Promise<void>((resolve) => {
-          finishCompanionCleanup = resolve;
-        }),
-    );
-
-    try {
-      const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
-      await vi.waitFor(() => {
-        expect(
-          processOnceSpy.mock.calls.some(
-            ([event, listener]) => event === "SIGINT" && typeof listener === "function",
-          ),
-        ).toBe(true);
-      });
-
-      const sigintHandler = processOnceSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
-      if (typeof sigintHandler !== "function") {
-        throw new Error("SIGINT handler was not registered");
-      }
-      sigintHandler();
-
-      await vi.waitFor(() => {
-        expect(stopProxyMock).toHaveBeenCalledWith(handle);
-      });
-      expect(exitSpy).not.toHaveBeenCalled();
-      if (!finishCompanionCleanup) {
-        throw new Error("companion signal cleanup did not start");
-      }
-      finishCompanionCleanup();
-      await vi.waitFor(() => {
-        expect(exitSpy).toHaveBeenCalledWith(130);
-      });
-
-      resolveRoute(true);
-      await runPromise;
-      expect(stopProxyMock).toHaveBeenCalledTimes(1);
-    } finally {
-      unregisterCompanionCleanup();
-      exitSpy.mockRestore();
-      processOnceSpy.mockRestore();
-    }
-  });
-
-  it("keeps the original signal proxy stop pending through bounded command cleanup", async () => {
-    const handle = makeProxyHandle();
-    const route = createDeferredCore<boolean>();
-    const stopping = createDeferredCore();
-    const resume = createDeferredCore();
-    startProxyMock.mockResolvedValueOnce(handle);
-    tryRouteCliMock.mockReturnValueOnce(route.promise);
-    stopProxyMock.mockImplementationOnce(async () => {
-      stopping.resolve();
-      await resume.promise;
-    });
-    const running = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
-    let barrier: Promise<void> | undefined;
-    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      await vi.waitFor(() => expect(tryRouteCliMock).toHaveBeenCalled());
-      barrier = waitForSignalExitBarriers();
-      await stopping.promise;
-      vi.useFakeTimers();
-      route.resolve(true);
-      await vi.waitFor(() => expect(getPendingCliDisposers()).toContain("managed-proxy"));
-      await vi.advanceTimersByTimeAsync(5_000);
-      await running;
-      expect(getPendingCliDisposers()).toContain("managed-proxy");
-      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("managed-proxy"));
-      expect(stopProxyMock).toHaveBeenCalledExactlyOnceWith(handle);
-    } finally {
-      route.resolve(true);
-      resume.resolve();
-      vi.useRealTimers();
-      await barrier;
-      await running;
-      stderr.mockRestore();
-    }
-    expect(getPendingCliDisposers()).not.toContain("managed-proxy");
-  });
-
-  it("synchronously kills the managed proxy during hard process exit", async () => {
-    const handle = makeProxyHandle();
-    startProxyMock.mockResolvedValueOnce(handle);
-    let resolveRoute: (value: boolean) => void = () => {};
-    tryRouteCliMock.mockReturnValueOnce(
-      new Promise<boolean>((resolve) => {
-        resolveRoute = resolve;
-      }),
-    );
-
-    const processOnceSpy = vi.spyOn(process, "once");
-    try {
-      const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
-      // Only the managed-proxy kill hook registers here: the debug-capture
-      // finalize hook stays unloaded unless the capture env requests it.
-      await vi.waitFor(() => {
-        expect(
-          processOnceSpy.mock.calls.reduce(
-            (count, [event]) => count + (event === "exit" ? 1 : 0),
-            0,
-          ),
-        ).toBe(1);
-      });
-
-      const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
-      if (typeof exitHandler !== "function") {
-        throw new Error("exit handler was not registered");
-      }
-      exitHandler(0 as never);
-
-      expect(handle.kill).toHaveBeenCalledWith("SIGTERM");
-      resolveRoute(true);
-      await runPromise;
-      expect(stopProxyMock).not.toHaveBeenCalledWith(handle);
-    } finally {
-      processOnceSpy.mockRestore();
-    }
+  registerRunMainProxyExitTests({
+    runCli: (argv) => runCli(argv),
+    startProxyMock,
+    stopProxyMock,
+    tryRouteCliMock,
   });
 
   it.each([
@@ -3316,21 +3135,15 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it("points noninteractive fresh bare root invocations to onboarding automation", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: false,
-      valid: true,
-      sourceConfig: {},
-    });
-
-    await expectNonInteractiveBareCliError(
-      "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
-      () => {
-        expect(setupWizardCommandMock).not.toHaveBeenCalled();
-        expect(tryRouteCliMock).not.toHaveBeenCalled();
-        expect(buildProgramMock).not.toHaveBeenCalled();
-      },
-    );
+  registerBareRootArgumentTests({
+    runCli: (argv) => runCli(argv),
+    readConfigFileSnapshotMock,
+    buildProgramMock,
+    setupWizardCommandMock,
+    runTuiMock,
+    tryRouteCliMock,
+    withInteractiveTty,
+    expectNonInteractiveBareCliError,
   });
 
   it("starts the gateway-backed TUI for bare root invocations when config already exists", async () => {
@@ -3402,6 +3215,7 @@ describe("runCli exit behavior", () => {
       expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
         config: sourceConfig,
         gatewayUrl: url,
+        configuredRemote: true,
         token: "missing-inference-remote-auth",
         tlsFingerprint: TLS_FINGERPRINT,
       });
@@ -3723,7 +3537,7 @@ describe("runCli exit behavior", () => {
     await runBareCli();
 
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({ url, token: "unverified-remote-auth" });
+    expectBoundTui({ url, configuredRemote: true, token: "unverified-remote-auth" });
   });
 
   it("keeps a configured remote Gateway authoritative across a transient cold-restart probe", async () => {
@@ -3740,7 +3554,7 @@ describe("runCli exit behavior", () => {
 
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expect(runRemoteGatewayInferenceOnboardingMock).not.toHaveBeenCalled();
-    expectBoundTui({ url, token: "restart-remote-auth" });
+    expectBoundTui({ url, configuredRemote: true, token: "restart-remote-auth" });
   });
 
   it("keeps a configured local Gateway authoritative across a transient cold-restart probe", async () => {
@@ -3861,10 +3675,12 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
       token: "loopback-remote-auth",
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({ url, token: "loopback-remote-auth" });
+    expectBoundTui({ url, configuredRemote: true, token: "loopback-remote-auth" });
   });
 
   it("passes configured remote edge auth into the bare-root onboarding probe", async () => {
@@ -3886,10 +3702,11 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
       config,
       token: "test-token",
     });
-    expectBoundTui({ url, token: "test-token" });
+    expectBoundTui({ url, configuredRemote: true, token: "test-token" });
   });
 
   it("keeps configured remote password authoritative from preflight through TUI launch", async () => {
@@ -3911,9 +3728,11 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
       password: "configured-remote-password",
     });
-    expectBoundTui({ url, password: "configured-remote-password" });
+    expectBoundTui({ url, configuredRemote: true, password: "configured-remote-password" });
   });
 
   it("does not replace unresolved remote SecretRefs with gateway env auth", async () => {
@@ -3952,9 +3771,11 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({ url });
+    expectBoundTui({ url, configuredRemote: true });
   });
 
   it("probes an explicitly allowed plaintext private remote gateway", async () => {
@@ -3976,10 +3797,12 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
       token: "private-remote-auth",
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({ url, token: "private-remote-auth" });
+    expectBoundTui({ url, configuredRemote: true, token: "private-remote-auth" });
   });
 
   it("forwards the configured TLS pin when probing a remote gateway", async () => {
@@ -3999,11 +3822,14 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "wss://gateway.example.com:18789",
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
       token: "tls-remote-auth",
       tlsFingerprint: TLS_FINGERPRINT,
     });
     expectBoundTui({
       url: "wss://gateway.example.com:18789",
+      configuredRemote: true,
       token: "tls-remote-auth",
       tlsFingerprint: TLS_FINGERPRINT,
     });
