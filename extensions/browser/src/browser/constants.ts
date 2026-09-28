@@ -30,6 +30,8 @@ export const DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS = 20_000;
 export const DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES = 120;
 /** Default maximum tracked tabs kept per session. */
 export const DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION = 8;
+/** Maximum single WebSocket message the browser extension relay accepts. */
+export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
 /** Default interval for tab cleanup sweeps. */
 export const DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES = 5;
 /**

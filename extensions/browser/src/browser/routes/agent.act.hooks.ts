@@ -83,6 +83,11 @@ export function registerBrowserAgentActHookRoutes(
         const target = {
           cdpUrl,
           browserFilesystemLocal: capabilities.browserFilesystemLocal,
+          // Extension uploads take the byte-payload branch (Store installs cannot read
+          // gateway-local paths), but extension browsers run on this machine, so uploads
+          // that reach the payload size cap keep the local path handoff that file-access
+          // extensions still accept instead of losing large uploads that worked before.
+          uploadPathsFallbackOnPayloadLimit: profileCtx.profile.driver === "extension",
           targetId: tab.targetId,
           paths: resolvedPaths,
           timeoutMs,

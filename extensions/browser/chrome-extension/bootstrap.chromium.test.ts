@@ -23,6 +23,10 @@ import { createBrowserRouteContext } from "../src/browser/server-context.js";
 import { getFreePort } from "../src/browser/test-port.js";
 import { getBrowserControlState, stopBrowserControlService } from "../src/control-service.js";
 import { createBootstrapDiagnostic } from "./bootstrap-diagnostics.test-support.js";
+import {
+  proveExtensionUploadRoutes,
+  startRelayCommandRecorder,
+} from "./extension-upload-proof.test-support.js";
 import { proveLabeledRefScreenshot } from "./labeled-screenshot.test-support.js";
 import chromeExtensionManifest from "./manifest.json" with { type: "json" };
 import { holdNavigationAccessCheck } from "./navigation-race.test-support.js";
@@ -416,6 +420,9 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           throw new Error("Gateway wakeup did not start the configured extension relay");
         }
         diagnostic.watchRelay(relay.bridge);
+        // Record every CDP command clients send across the relay, so the extension
+        // upload proof below can show which upload route Playwright took.
+        const { relaySentCommands } = startRelayCommandRecorder(relay);
         const browserState = getBrowserControlState();
         const extensionProfile = browserState?.resolved.profiles.e2e;
         if (!browserState || !extensionProfile) {
@@ -478,6 +485,18 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         process.stderr.write(
           `[browser-extension-e2e] doctor version match ${chromeExtensionManifest.version}\n`,
         );
+        // Real extension-profile upload proof: bytes below the relay-safe bound,
+        // path handoff at or above it (see extension-upload-proof.test-support.ts).
+        await proveExtensionUploadRoutes({
+          dispatcher,
+          context,
+          gatewayPort,
+          relaySentCommands,
+          addCleanup: (dispose) => {
+            cleanups.push(dispose);
+          },
+          resolved: browserState.resolved,
+        });
         const tabsResponse = await dispatcher.dispatch({
           method: "GET",
           path: "/tabs",
