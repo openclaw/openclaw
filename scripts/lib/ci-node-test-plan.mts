@@ -342,7 +342,7 @@ const HOSTED_MAIN_UPDATE_TEST = "src/cli/update-cli.test.ts";
 // Trusted forks can use the GitHub profile on Blacksmith. Every compact
 // profile must fit the same runner-registration allowance.
 const COMPACT_NODE_TEST_JOB_CAP = 90;
-const COMPACT_NODE_TEST_JOB_GROUPS = 10;
+export const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 16;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
 // Keep capacity with the workload when packing changes; hosted stripes follow
@@ -4284,22 +4284,35 @@ function estimateParallelTestSeconds(
   return Math.ceil(Math.max(...slots));
 }
 
+export function nodeTestJobExecutionPolicy(
+  job: Pick<
+    NodeTestShard,
+    | "runner"
+    | "requiresDist"
+    | "pretestBuildMode"
+    | "planConcurrency"
+    | "groups"
+    | "env"
+    | "timeoutMinutes"
+  >,
+): string {
+  return JSON.stringify([
+    job.runner,
+    job.requiresDist,
+    job.pretestBuildMode,
+    job.planConcurrency,
+    job.groups?.some(isExclusiveCompactGroup) ?? false,
+    Object.entries(job.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+    job.timeoutMinutes,
+  ]);
+}
+
 function packSelectedNodeTestJobs(
   jobs: CompactNodeTestShard[],
   runnerBackend: string | undefined,
   canonicalFamilies: ReadonlyMap<NodeTestShardGroup, string | undefined>,
   groupSeconds: ReadonlyMap<NodeTestShardGroup, number>,
 ) {
-  const policy = (job: CompactNodeTestShard) =>
-    JSON.stringify([
-      job.runner,
-      job.requiresDist,
-      job.pretestBuildMode,
-      job.planConcurrency,
-      job.groups.some(isExclusiveCompactGroup),
-      Object.entries(job.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
-      job.timeoutMinutes,
-    ]);
   const seconds = (bin: readonly CompactNodeTestShard[]) =>
     bin.reduce(
       (total, job) =>
@@ -4348,7 +4361,10 @@ function packSelectedNodeTestJobs(
       (a, b) => b.predictedSeconds! - a.predictedSeconds! || a.checkName.localeCompare(b.checkName),
     ),
     (bin, job) => {
-      if (job.requiresDist || policy(bin[0]) !== policy(job)) {
+      if (
+        job.requiresDist ||
+        nodeTestJobExecutionPolicy(bin[0]) !== nodeTestJobExecutionPolicy(job)
+      ) {
         return false;
       }
       const combined = [...bin, job];

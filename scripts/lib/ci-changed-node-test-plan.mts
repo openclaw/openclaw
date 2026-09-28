@@ -45,6 +45,8 @@ import {
 import {
   createUiRealGatewayTestShards,
   createSelectedNodeTestShardBundles,
+  COMPACT_NODE_TEST_JOB_GROUPS,
+  nodeTestJobExecutionPolicy,
   packNodeTestGroups,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
@@ -619,6 +621,61 @@ function createChangedTargetShards(
   });
 }
 
+/** Reclaim split-row tails without reopening their process or worker envelopes. */
+function packBoundedChangedNodeRows(shards: ChangedNodeTestShard[]): ChangedNodeTestShard[] {
+  const entries = shards.map((shard, index) => {
+    const seconds = shard.predictedTestSeconds ?? shard.predictedSeconds;
+    const eligible =
+      shard.planConcurrency === 1 &&
+      !shard.requiresDist &&
+      !shard.pretestBuildMode &&
+      !shard.targets?.length &&
+      !shard.configs.length &&
+      !shard.includePatterns?.length &&
+      shard.groups?.length &&
+      shard.groups.every((group) => !group.requiresDist && !group.pretestBuildMode) &&
+      seconds !== undefined &&
+      Number.isFinite(seconds) &&
+      seconds >= 0 &&
+      seconds <= PR_NODE_TEST_SECONDS;
+    return {
+      shard,
+      index,
+      seconds: seconds ?? 0,
+      policy: eligible ? nodeTestJobExecutionPolicy(shard) : undefined,
+    };
+  });
+  const bins = packNodeTestGroups(
+    entries.toSorted(
+      (a, b) => b.seconds - a.seconds || a.shard.checkName.localeCompare(b.shard.checkName),
+    ),
+    (bin, entry) =>
+      entry.policy !== undefined &&
+      bin[0].policy === entry.policy &&
+      bin.reduce(
+        (total, item) => total + (item.shard.groups?.length ?? 0),
+        entry.shard.groups!.length,
+      ) <= COMPACT_NODE_TEST_JOB_GROUPS &&
+      bin.reduce((total, item) => total + item.seconds, entry.seconds) <= PR_NODE_TEST_SECONDS,
+  );
+  return bins
+    .toSorted(
+      (a, b) =>
+        Math.min(...a.map((entry) => entry.index)) - Math.min(...b.map((entry) => entry.index)),
+    )
+    .map((bin) => {
+      if (bin.length === 1) {
+        return bin[0].shard;
+      }
+      const seconds = bin.reduce((total, entry) => total + entry.seconds, 0);
+      return Object.assign({}, bin[0].shard, {
+        groups: bin.flatMap((entry) => entry.shard.groups!),
+        predictedSeconds: seconds,
+        predictedTestSeconds: seconds,
+      });
+    });
+}
+
 /** Narrow canonical envelopes without changing their workers, routing, or isolation. */
 function boundChangedNodeRows(
   shards: ChangedNodeTestShard[],
@@ -630,7 +687,7 @@ function boundChangedNodeRows(
   const fileTimings = { ...readRepoE2eFileTimings(), ...readToolingFileTimings(profile) };
   const groupTimings = readCompactGroupTimings(profile);
   const selected = new Set(selectedTargets);
-  return shards.flatMap((shard) => {
+  const bounded = shards.flatMap((shard) => {
     if (!shard.groups) {
       const files = shard.includePatterns;
       const testSeconds = (row: ChangedNodeTestShard) =>
@@ -786,6 +843,7 @@ function boundChangedNodeRows(
       }),
     );
   });
+  return packBoundedChangedNodeRows(bounded);
 }
 
 /**
