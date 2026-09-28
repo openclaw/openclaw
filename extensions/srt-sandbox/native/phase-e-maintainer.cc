@@ -26,6 +26,22 @@ constexpr wchar_t kManifest[] = L"C:\\ProgramData\\srt-sandbox\\phase-e.manifest
 constexpr wchar_t kStore[] = L"C:\\ProgramData\\srt-sandbox\\lease-store.json";
 constexpr wchar_t kLock[] = L"C:\\ProgramData\\srt-sandbox\\lease-store.lock";
 struct Account { std::wstring name, sid; };
+enum class FaultPoint { None, Account, Credential, RootStore, Fwpm };
+static FaultPoint ParseFault(const char* value) {
+  if(!value || !*value) return FaultPoint::None;
+  if(!strcmp(value,"fault:account")) return FaultPoint::Account;
+  if(!strcmp(value,"fault:credential")) return FaultPoint::Credential;
+  if(!strcmp(value,"fault:root-store")) return FaultPoint::RootStore;
+  if(!strcmp(value,"fault:fwpm")) return FaultPoint::Fwpm;
+  throw std::string("PHASE_E_INVALID_FAULT_POINT");
+}
+static void Inject(FaultPoint selected, FaultPoint point) { if(selected==point) throw std::string("PHASE_E_FAULT_INJECTED"); }
+static std::string ProcessCreationTime() {
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if(!GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernel,&user)) throw std::string("PHASE_E_PROCESS_IDENTITY_FAILED");
+  ULARGE_INTEGER ticks{}; ticks.LowPart=created.dwLowDateTime; ticks.HighPart=created.dwHighDateTime;
+  return std::to_string(ticks.QuadPart);
+}
 static bool Canonical(const std::wstring& n) { for (auto& p : kPool) if (n == p) return true; return false; }
 static std::wstring Sid(PSID sid) { LPWSTR value=nullptr; std::wstring out; if (sid && ConvertSidToStringSidW(sid,&value)) { out=value; LocalFree(value); } return out; }
 static bool GetAccount(const wchar_t* name, Account* account) {
@@ -119,14 +135,15 @@ static void ReconcileFwpm(const std::vector<Account>& accounts) {
   } catch(...) { FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); throw; } FwpmEngineClose0(engine);
 }
 static void RemoveOwnedFwpm(const std::vector<Account>& accounts) { HANDLE engine=nullptr; if(FwpmEngineOpen0(nullptr,RPC_C_AUTHN_WINNT,nullptr,nullptr,&engine)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_OPEN_FAILED"); try { if(FwpmTransactionBegin0(engine,0)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_TRANSACTION_FAILED"); for(size_t i=0;i<accounts.size();++i){GUID key=SlotFilterKey(i); FWPM_FILTER0* found=nullptr; DWORD status=FwpmFilterGetByKey0(engine,&key,&found); if(status==FWP_E_FILTER_NOT_FOUND)continue; if(status!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_QUERY_FAILED"); VerifyOwnedFilter(found,accounts[i],i); FwpmFreeMemory0(reinterpret_cast<void**>(&found)); if(FwpmFilterDeleteByKey0(engine,&key)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_REMOVE_FAILED");} FWPM_SUBLAYER0* sublayer=nullptr; DWORD status=FwpmSubLayerGetByKey0(engine,&kFwpmSublayer,&sublayer); if(status==ERROR_SUCCESS){if(!sublayer||sublayer->weight!=0x8000)throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH"); FwpmFreeMemory0(reinterpret_cast<void**>(&sublayer)); if(FwpmSubLayerDeleteByKey0(engine,&kFwpmSublayer)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_REMOVE_FAILED");} else if(status!=FWP_E_SUBLAYER_NOT_FOUND)throw std::string("PHASE_E_FWPM_QUERY_FAILED"); if(FwpmTransactionCommit0(engine)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_TRANSACTION_FAILED"); } catch(...) { FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); throw; } FwpmEngineClose0(engine); }
-static void CreatePool() {
+static void CreatePool(FaultPoint fault) {
   size_t legacy; auto prior=Inspect(&legacy); if(!prior.empty()) throw std::string("PHASE_E_NAMESPACE_AMBIGUOUS"); std::vector<std::wstring> made;
-  try { for(auto& name:kPool){ USER_INFO_1 user{}; user.usri1_name=const_cast<wchar_t*>(name); user.usri1_priv=USER_PRIV_USER; user.usri1_flags=UF_SCRIPT|UF_DONT_EXPIRE_PASSWD; DWORD parameter=0; if(NetUserAdd(nullptr,1,reinterpret_cast<LPBYTE>(&user),&parameter)!=NERR_Success) throw std::string("PHASE_E_ACCOUNT_CREATE_FAILED"); made.push_back(name); SetPhaseEPassword(name); } size_t ignored; auto accounts=Inspect(&ignored); if(accounts.size()!=8) throw std::string("PHASE_E_POSTCONDITION_FAILED"); CheckPrerequisites(); ReconcileFwpm(accounts); PersistOwnedState(accounts); }
-  catch(...) { for(auto& name:made) NetUserDel(nullptr,name.c_str()); throw; }
+  std::vector<Account> accounts;
+  try { for(auto& name:kPool){ USER_INFO_1 user{}; user.usri1_name=const_cast<wchar_t*>(name); user.usri1_priv=USER_PRIV_USER; user.usri1_flags=UF_SCRIPT|UF_DONT_EXPIRE_PASSWD; DWORD parameter=0; if(NetUserAdd(nullptr,1,reinterpret_cast<LPBYTE>(&user),&parameter)!=NERR_Success) throw std::string("PHASE_E_ACCOUNT_CREATE_FAILED"); made.push_back(name); Inject(fault,FaultPoint::Account); SetPhaseEPassword(name); Inject(fault,FaultPoint::Credential); } size_t ignored; accounts=Inspect(&ignored); if(accounts.size()!=8) throw std::string("PHASE_E_POSTCONDITION_FAILED"); CheckPrerequisites(); EnsureSafeRoot(); Inject(fault,FaultPoint::RootStore); ReconcileFwpm(accounts); Inject(fault,FaultPoint::Fwpm); PersistOwnedState(accounts); }
+  catch(...) { if(!accounts.empty()) { try { RemoveOwnedFwpm(accounts); } catch(...) {} } try { RemoveOwnedState(); } catch(...) {} for(auto& name:made) NetUserDel(nullptr,name.c_str()); throw; }
 }
 static std::string Evidence(const char* mode,const char* outcome,const std::vector<Account>& accounts,size_t legacy) {
   std::string list; for(size_t i=0;i<accounts.size();++i){ if(i) list+=','; std::string name(accounts[i].name.begin(),accounts[i].name.end()),sid(accounts[i].sid.begin(),accounts[i].sid.end()); list+="{\"name\":\""+name+"\",\"sid\":\""+sid+"\"}"; }
-  return std::string("{\"schema\":\"phase-e-evidence/v1\",\"mode\":\"")+mode+"\",\"outcome\":\""+outcome+"\",\"maintainer\":{\"pid\":"+std::to_string(GetCurrentProcessId())+",\"creationTime\":\"native-process\"},\"canonicalAccounts\":["+list+"],\"legacyAccountCount\":"+std::to_string(legacy)+",\"seclogon\":\"UNKNOWN\",\"manifestGeneration\":0}";
+  return std::string("{\"schema\":\"phase-e-evidence/v1\",\"mode\":\"")+mode+"\",\"outcome\":\""+outcome+"\",\"maintainer\":{\"pid\":"+std::to_string(GetCurrentProcessId())+",\"creationTime\":\""+ProcessCreationTime()+"\"},\"canonicalAccounts\":["+list+"],\"legacyAccountCount\":"+std::to_string(legacy)+",\"seclogon\":\"UNKNOWN\",\"manifestGeneration\":0}";
 }
 static napi_value Run(napi_env env, napi_callback_info info) {
   size_t argc = 2; napi_value argv[2];
@@ -135,9 +152,9 @@ static napi_value Run(napi_env env, napi_callback_info info) {
   if (napi_get_value_string_utf8(env, argv[0], mode, sizeof(mode), &length) != napi_ok) return nullptr;
   const bool valid = !strcmp(mode, "preflight") || !strcmp(mode, "setup") || !strcmp(mode, "repair") || !strcmp(mode, "rollback") || !strcmp(mode, "teardown");
   if (!valid) { napi_throw_error(env, "PHASE_E_INVALID_MODE", "invalid mode"); return nullptr; }
-  try { size_t legacy=0; auto accounts=Inspect(&legacy); const char* outcome="PREFLIGHT_OK";
-    if(!strcmp(mode,"setup")){ CreatePool(); accounts=Inspect(&legacy); outcome="SETUP_COMPLETE"; }
-    else if(!strcmp(mode,"repair")){ if(accounts.empty()) CreatePool(); else { VerifyPersistedOwnership(accounts); CheckPrerequisites(); } accounts=Inspect(&legacy); outcome="REPAIR_COMPLETE"; }
+  try { FaultPoint fault=FaultPoint::None; if((!strcmp(mode,"setup")||!strcmp(mode,"repair")) && argc==2) { char faultText[32]={}; size_t faultLength=0; if(napi_get_value_string_utf8(env,argv[1],faultText,sizeof(faultText),&faultLength)!=napi_ok) throw std::string("PHASE_E_INVALID_FAULT_POINT"); fault=ParseFault(faultText); } size_t legacy=0; auto accounts=Inspect(&legacy); const char* outcome="PREFLIGHT_OK";
+    if(!strcmp(mode,"setup")){ CreatePool(fault); accounts=Inspect(&legacy); outcome="SETUP_COMPLETE"; }
+    else if(!strcmp(mode,"repair")){ if(accounts.empty()) CreatePool(fault); else { VerifyPersistedOwnership(accounts); CheckPrerequisites(); } accounts=Inspect(&legacy); outcome="REPAIR_COMPLETE"; }
     else if(!strcmp(mode,"rollback")||!strcmp(mode,"teardown")){ if(argc!=2)throw std::string("PHASE_E_MANIFEST_REQUIRED"); size_t manifestLength=0; napi_get_value_string_utf8(env,argv[1],nullptr,0,&manifestLength); std::string manifest(manifestLength+1,0); napi_get_value_string_utf8(env,argv[1],&manifest[0],manifest.size(),&manifestLength); VerifyPersistedOwnership(accounts); if(manifest.find("\"owner\":\"srt-phase-e-maintainer\"")==std::string::npos)throw std::string("PHASE_E_MANIFEST_OWNERSHIP_MISMATCH"); for(auto& account:accounts){if(!ContainsAccountFact(manifest,account))throw std::string("PHASE_E_MANIFEST_OWNERSHIP_MISMATCH");} RemoveOwnedFwpm(accounts); for(auto& account:accounts){if(NetUserDel(nullptr,account.name.c_str())!=NERR_Success)throw std::string("PHASE_E_ROLLBACK_FAILED");} RemoveOwnedState(); accounts.clear(); outcome=!strcmp(mode,"rollback")?"ROLLBACK_COMPLETE":"TEARDOWN_COMPLETE"; }
     std::string result=Evidence(mode,outcome,accounts,legacy); napi_value out; napi_create_string_utf8(env,result.c_str(),result.size(),&out); return out;
   } catch(const std::string& error) { napi_throw_error(env,error.c_str(),error.c_str()); return nullptr; }

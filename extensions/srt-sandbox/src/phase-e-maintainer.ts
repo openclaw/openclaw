@@ -8,6 +8,7 @@ export const PHASE_E_POOL = Object.freeze(
 );
 
 export type PhaseEMode = "preflight" | "setup" | "repair" | "rollback" | "teardown";
+export type PhaseEFaultPoint = "account" | "credential" | "root-store" | "fwpm";
 export type PhaseEManifest = {
   version: 1;
   generation: number;
@@ -164,7 +165,7 @@ export function assertPhaseEPlatform(platform = process.platform): void {
  * Native addon ABI. Its methods map directly to NetAPI, SCM, FWPM, DPAPI and
  * handle-based NTFS security calls. It is intentionally not loaded on non-Windows.
  */
-export type PhaseENativeApi = { run(mode: PhaseEMode, manifestJson?: string): string };
+export type PhaseENativeApi = { run(mode: PhaseEMode, argument?: string): string };
 const validModes = new Set<PhaseEMode>(["preflight", "setup", "repair", "rollback", "teardown"]);
 const allowedEvidence = new Set([
   "schema",
@@ -219,7 +220,8 @@ export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvid
     !evidence.maintainer ||
     !Number.isInteger(evidence.maintainer.pid) ||
     evidence.maintainer.pid <= 0 ||
-    typeof evidence.maintainer.creationTime !== "string"
+    typeof evidence.maintainer.creationTime !== "string" ||
+    !/^[0-9]+$/.test(evidence.maintainer.creationTime)
   )
     throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");
   return evidence;
@@ -250,4 +252,20 @@ export function runPhaseEMaintainer(
     (nativeApi ?? loadPhaseENativeApi()).run(mode, manifest ? JSON.stringify(manifest) : undefined),
     mode,
   );
+}
+
+/** Test-only bounded failures exercise in-process rollback; no external actor is launched. */
+export function runPhaseEFaultInjection(
+  fault: PhaseEFaultPoint,
+  nativeApi?: PhaseENativeApi,
+  platform = process.platform,
+): never {
+  assertPhaseEPlatform(platform);
+  try {
+    (nativeApi ?? loadPhaseENativeApi()).run("setup", `fault:${fault}`);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("PHASE_E_FAULT_INJECTED")) throw error;
+    throw new PhaseEMaintainerError("PHASE_E_FAULT_INJECTION_FAILED");
+  }
+  throw new PhaseEMaintainerError("PHASE_E_FAULT_INJECTION_FAILED");
 }

@@ -10,6 +10,7 @@ import {
   redactPhaseEEvidence,
   rollbackCandidates,
   runPhaseEMaintainer,
+  runPhaseEFaultInjection,
   verifyInitialLeaseStore,
 } from "./phase-e-maintainer.js";
 
@@ -68,7 +69,7 @@ describe("Phase E maintainer policy", () => {
       schema: "phase-e-evidence/v1",
       mode: "preflight",
       outcome: "PREFLIGHT_OK",
-      maintainer: { pid: 42, creationTime: "t" },
+      maintainer: { pid: 42, creationTime: "133713371337" },
       canonicalAccounts: [],
       legacyAccountCount: 10,
       seclogon: "RUNNING",
@@ -99,6 +100,17 @@ describe("Phase E maintainer policy", () => {
         "preflight",
       ),
     ).toThrow("INVALID_EVIDENCE");
+  });
+  it("allows only bounded in-process mutation fault points", () => {
+    const native = {
+      run: (_mode: string, _argument?: string) => {
+        throw new Error("PHASE_E_FAULT_INJECTED");
+      },
+    };
+    expect(() => runPhaseEFaultInjection("fwpm", native, "win32")).toThrow(
+      "PHASE_E_FAULT_INJECTED",
+    );
+    expect(() => runPhaseEFaultInjection("fwpm", native, "linux")).toThrow("UNSUPPORTED_PLATFORM");
   });
   it("proves the maintainer source has no delegated execution surface", async () => {
     const source = await import("node:fs/promises").then((fs) =>
@@ -137,5 +149,17 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain("GetSecurityInfo(object,SE_FILE_OBJECT");
     expect(source).toContain("SE_DACL_PROTECTED");
     expect(source).toContain("FILE_FLAG_OPEN_REPARSE_POINT");
+  });
+  it("records a non-reusable Windows process identity and bounded fault rollback", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
+    );
+    expect(source).toContain("GetProcessTimes(GetCurrentProcess()");
+    expect(source).toContain("PHASE_E_PROCESS_IDENTITY_FAILED");
+    expect(source).toContain("FaultPoint::Account");
+    expect(source).toContain("FaultPoint::Credential");
+    expect(source).toContain("FaultPoint::RootStore");
+    expect(source).toContain("FaultPoint::Fwpm");
+    expect(source).toContain("RemoveOwnedFwpm(accounts)");
   });
 });
