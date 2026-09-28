@@ -143,7 +143,7 @@ describe("release candidate checklist", () => {
   it.each([
     {
       flags: ["--tag", "v2026.9.1-alpha.1", "--workflow-sha", "b".repeat(40)],
-      message: "--workflow-sha is only supported for regular beta and stable release candidates",
+      message: "Alpha releases are retired;",
     },
     {
       flags: [
@@ -260,13 +260,6 @@ describe("release candidate checklist", () => {
     { tag: "v2026.9.1", pin: "2026.7.4", expected: "warning", failedRegistry: "" },
     { tag: "v2026.9.1-1", pin: "2026.9.1", expected: "passed", failedRegistry: "" },
     { tag: "v2026.9.1-beta.1", pin: "2026.7.4", expected: undefined, failedRegistry: "" },
-    {
-      tag: "v2026.9.1-alpha.1",
-      pin: "2026.7.4",
-      expected: undefined,
-      failedRegistry: "",
-      distTag: "alpha",
-    },
     ...["npm", "clawhub"].map((failedRegistry) => ({
       tag: "v2026.9.1",
       pin: "2026.9.1",
@@ -321,7 +314,7 @@ describe("release candidate checklist", () => {
       launch: "npm-only" as const,
       distTag: "latest",
     })),
-    ...(["beta", "alpha"] as const).map((distTag) => ({
+    ...(["beta"] as const).map((distTag) => ({
       tag: `v2026.9.33-${distTag}.1`,
       pin: "2026.7.4",
       launch: "npm-only" as const,
@@ -386,11 +379,9 @@ describe("release candidate checklist", () => {
         "--skip-parallels",
         "--skip-telegram",
         "--skip-local-generated-check",
-        ...(tag.includes("-alpha.")
-          ? ["--workflow-ref", "tideclaw/alpha/2026-09-01-1200Z"]
-          : workflowSha
-            ? ["--workflow-sha", workflowSha]
-            : ["--publish-workflow-ref", publishWorkflowRef]),
+        ...(workflowSha
+          ? ["--workflow-sha", workflowSha]
+          : ["--publish-workflow-ref", publishWorkflowRef]),
       ]);
       if (failedRegistry) {
         options.fullReleaseRunId = "";
@@ -706,7 +697,7 @@ describe("release candidate checklist", () => {
         ).toMatchObject({
           validationPurpose: "publish",
           publicationSelection: {
-            route: tag.includes("-alpha.") ? "alpha" : publicationRoute,
+            route: publicationRoute,
             npmDistTag: options.npmDistTag,
             publishOpenclawNpm: true,
             pluginPublishScope: "all-publishable",
@@ -1487,7 +1478,7 @@ describe("release candidate checklist", () => {
     ).toThrow("still contains shipped PRs from v2026.6.11: #101");
   });
 
-  it("requires contribution records for beta candidates but permits alpha Unreleased fallback", () => {
+  it("requires contribution records for beta candidates", () => {
     const betaChangelog = [
       "# Changelog",
       "",
@@ -1505,18 +1496,6 @@ describe("release candidate checklist", () => {
         targetSha: "a".repeat(40),
       }),
     ).toThrow("missing ### Complete contribution record");
-
-    const alpha = validateCandidateChangelogProvenance({
-      changelog: betaChangelog.replace("## 2026.7.1", "## Unreleased"),
-      version: "2026.7.1",
-      tag: "v2026.7.1-alpha.1",
-      targetSha: "a".repeat(40),
-    });
-    expect(alpha).toEqual({
-      status: "skipped",
-      reason: "alpha release uses the explicit Unreleased fallback",
-      shippedBaselines: [],
-    });
   });
 
   it("infers validation profiles from candidate tags", () => {
@@ -1527,18 +1506,9 @@ describe("release candidate checklist", () => {
     );
   });
 
-  it("defaults beta and alpha Parallels to postpublish confidence", () => {
+  it("defaults beta Parallels to postpublish confidence", () => {
     const beta = parseArgs(["--tag", "v2026.5.14-beta.3"]);
-    const alpha = parseArgs([
-      "--tag",
-      "v2026.5.14-alpha.2",
-      "--workflow-ref",
-      "tideclaw/alpha/2026-07-10-1200Z",
-      "--npm-dist-tag",
-      "alpha",
-    ]);
-
-    for (const options of [beta, alpha]) {
+    for (const options of [beta]) {
       expect(options.releaseProfile).toBe("beta");
       expect(options.parallelsMode).toBe("auto");
       expect(options.skipParallels).toBe(true);
@@ -2061,22 +2031,12 @@ describe("release candidate checklist", () => {
     expect(source).toContain("target_context_ref: targetContextRef");
   });
 
-  it("preserves the matching Tideclaw alpha workflow source", () => {
-    const workflowRef = "tideclaw/alpha/2026-07-10-1200Z";
-    const options = parseArgs([
-      "--tag",
-      "v2026.7.1-alpha.3",
-      "--workflow-ref",
-      workflowRef,
-      "--npm-dist-tag",
-      "alpha",
-    ]);
-
-    expect(options.workflowRef).toBe(workflowRef);
-    expect(buildPublishCommand(options)).toContain(`'--ref' '${workflowRef}'`);
-    expect(() => parseArgs(["--tag", "v2026.7.1-alpha.3"])).toThrow(
-      "--workflow-ref must be the matching tideclaw/alpha/",
-    );
+  it.each([
+    ["--tag", "v2026.7.1-alpha.3"],
+    ["--tag", "v2026.7.1", "--npm-dist-tag", "alpha"],
+    ["--tag", "v2026.7.1", "--workflow-ref", "tideclaw/alpha/2026-07-10-1200Z"],
+  ])("rejects retired alpha candidate inputs %j", (...flags) => {
+    expect(() => parseArgs(flags)).toThrow("Alpha releases are retired;");
   });
 
   it("rejects duplicate release candidate CLI options", () => {

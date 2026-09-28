@@ -45,6 +45,15 @@ export function evaluateReleasePublishGates(input: {
       remediation: pass ? "" : remediation,
     });
   };
+  if (input.releaseTag.includes("-alpha.") || input.npmDistTag === "alpha") {
+    add(
+      "release-channel",
+      false,
+      "Alpha releases are retired; use a beta prerelease instead.",
+      "Select a beta prerelease.",
+    );
+    return gates;
+  }
   const profile = scalar(field(manifest, "releaseProfile"));
   try {
     resolveReleasePublishInputs(manifest, {
@@ -93,7 +102,7 @@ export function evaluateReleasePublishGates(input: {
     `Full release validation must run rerun_group=all before npm publish; got ${rerunGroup}`,
     "Seal successful Full Release Validation with rerun_group=all using pnpm frv continue.",
   );
-  const stableTag = !input.releaseTag.includes("-alpha.") && !input.releaseTag.includes("-beta.");
+  const stableTag = !input.releaseTag.includes("-beta.");
   const soaked = consumer === "stable-closeout" ? soak === "true" : scalar(soak) === "true";
   const soakRequired = consumer === "stable-closeout" || stableTag;
   const performance = field(field(manifest, "controls"), "performanceBlocking");

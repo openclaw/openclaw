@@ -147,6 +147,7 @@ export function startGatewayEventSubscriptions(params: {
   };
   reconcileAuditPolicy(getRuntimeConfig());
   const sessionActivitySummaries = createSessionActivitySummaries({
+    scheduler: params.scheduler,
     getConfig: getRuntimeConfig,
     getSessionRowProjection: params.getSessionRowProjection,
     onChanged: (target) => {

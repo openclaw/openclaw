@@ -1,5 +1,8 @@
 import "./install.test-support.js";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createInstallPlanFixture, nodeProbeOutput } from "./install.test-helpers.js";
 
@@ -23,6 +26,7 @@ const {
 
 describe("runDaemonInstall reinstall", () => {
   setupInstallTests();
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   it.each([
     { recorded: "node", runtime: undefined, probe: "supported" },
     { recorded: "node", runtime: "node", probe: "supported" },
@@ -81,17 +85,45 @@ describe("runDaemonInstall reinstall", () => {
     },
   );
 
-  it.each(["preserve", "replace", "reset"] as const)(
-    "handles a runtime pin during %s reinstall",
-    async (mode) => {
-      const pin = resolveTestNodeExecPath();
+  it.each([
+    { runtime: "node", mode: "preserve" },
+    { runtime: "node", mode: "replace" },
+    { runtime: "node", mode: "reset" },
+    { runtime: "bun", mode: "preserve" },
+  ] as const)(
+    "handles a $runtime runtime pin during $mode reinstall",
+    async ({ runtime, mode }) => {
+      const pin =
+        runtime === "bun"
+          ? path.join(tempDirs.make("install-bun-pin-"), "bun")
+          : resolveTestNodeExecPath();
+      if (runtime === "bun") {
+        await fs.writeFile(pin, "", { mode: 0o700 });
+        runExecMock.mockResolvedValue({
+          stdout: JSON.stringify({
+            bunVersion: "1.4.2",
+            sqliteVersion: "3.53.4",
+            sqliteProbe: {
+              available: true,
+              version: "3.53.4",
+              text: true,
+              blob: true,
+              json: true,
+            },
+          }),
+          stderr: "",
+        });
+      }
       service.readCommand.mockResolvedValue({
         programArguments: [pin, "/opt/openclaw/dist/index.js", "gateway"],
       });
       pinSnapshotMock.mockReturnValue({
         revision: "prior",
         stored: true,
-        pin: { runtime: "node", path: mode === "preserve" ? pin : "/removed/node" },
+        pin: { runtime, path: mode === "preserve" ? pin : "/removed/node" },
+      });
+      installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+        await (params as { install: () => Promise<void> }).install();
       });
       await runDaemonInstall({
         json: true,
@@ -102,6 +134,14 @@ describe("runDaemonInstall reinstall", () => {
       expect(actionState.failed).toEqual([]);
       expect(readFirstInstallPlanArg()?.pinnedRuntimePath).toBe(mode === "reset" ? undefined : pin);
       expect(installDaemonServiceAndEmitMock).toHaveBeenCalledOnce();
+      expect(service.install).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: {
+            expected: expect.objectContaining({ revision: "prior" }),
+            pin: mode === "reset" ? undefined : { runtime, path: pin },
+          },
+        }),
+      );
     },
   );
 

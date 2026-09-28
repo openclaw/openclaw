@@ -700,7 +700,11 @@ describe("scripts/pr wrappers", () => {
       join(fixture.canonical, "scripts/pr-lib/merge.sh"),
       `merge_run() { printf '<%s>\\n' "$@"; }\n`,
     );
-    for (const command of ["merge-run", "merge-recover"]) {
+    for (const [command, replacement] of [
+      ["merge-run", ""],
+      ["merge-recover", ""],
+      ["merge-recover", "b".repeat(40)],
+    ] as const) {
       const outcome = command === "merge-recover" ? "a".repeat(40) : "";
       const result = spawnSync(
         join(fixture.canonical, "scripts/pr"),
@@ -708,6 +712,7 @@ describe("scripts/pr wrappers", () => {
           command,
           "123",
           ...(outcome ? [outcome, "--confirmed-operator-recovery"] : []),
+          ...(replacement ? ["--replacement-head", replacement] : []),
           "--admin-evidence",
           "admin proof.json",
           "--confirmed-operator-admin",
@@ -716,7 +721,7 @@ describe("scripts/pr wrappers", () => {
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe(
-        `<123>\n<false>\n<${outcome}>\n<>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n`,
+        `<123>\n<false>\n<${outcome}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<${join(caller, "admin proof.json")}>\n<true>\n`,
       );
     }
   });

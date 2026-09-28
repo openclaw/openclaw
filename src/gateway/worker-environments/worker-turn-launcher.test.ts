@@ -794,6 +794,8 @@ describe("worker turn launcher local placement", () => {
             changed: false,
             verifyStable: vi.fn(async () => {}),
             verifyLocalStable: vi.fn(async () => {}),
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
       );

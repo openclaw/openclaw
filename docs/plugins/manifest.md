@@ -292,6 +292,19 @@ Bundled OpenClaw plugins declare exactly one active category. New ClawHub public
 also accept exactly one declared category, using the same array shape, or omit the
 field for ClawHub to generate a category.
 
+OpenClaw catalog browsing also derives Media membership from an enabled, locally known plugin’s
+`imageGenerationProviders`, `videoGenerationProviders`, or `musicGenerationProviders`
+contracts. This lets a Models plugin remain discoverable under Media without adding
+a second purpose category to its manifest. The Gateway carries these display-only
+memberships as `capabilityCategories`, separately from the declared `categories`,
+and combines them when joining local entries with hosted catalog cards. The same
+join applies on later pages; category ranks, identities, and the hosted cursor remain
+with their existing owners. Remote-only entries without local manifest facts retain
+the registry’s categories. Speech or transcription alone does not add Media membership.
+
+Disabled plugins keep only their declared categories. These memberships do not
+install or enable a plugin, grant permissions, or change provider selection.
+
 OpenClaw's manifest reader continues to accept one to three unique, ordered categories
 so previously installed and published packages remain readable. When reading older
 multiple-category declarations, the first remains primary and all remain searchable.
