@@ -456,7 +456,11 @@ struct ChatSessionSidebar: View {
             preview: self.rowPreview(for: session, previewRequest: previewRequest),
             showPreview: self.showMessagePreview,
             now: now)
-        return HStack(alignment: .top, spacing: 8) {
+        let hasSubtitle = presentation.subtitle != nil
+        let trailingLayout = hasSubtitle
+            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: 6))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 6))
+        return HStack(alignment: hasSubtitle ? .top : .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(ChatSessionSidebarModel.displayName(for: session))
                     .font(OpenClawChatTypography.body(
@@ -470,7 +474,7 @@ struct ChatSessionSidebar: View {
                 }
             }
             Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 6) {
+            trailingLayout {
                 if let timestamp = presentation.timestamp {
                     Text(verbatim: timestamp)
                         .font(OpenClawChatTypography.body(size: 10, weight: .regular, relativeTo: .caption))
