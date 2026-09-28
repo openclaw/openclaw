@@ -9,6 +9,7 @@ import type {
 } from "./installed-plugin-index-types.js";
 import type { ManifestModelSuppressionResolver } from "./manifest-model-suppression.types.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import type { PluginMcpAuthDeclarations } from "./mcp-auth-status.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { BundledProviderPolicySurface } from "./provider-policy-surface.types.js";
 
@@ -77,6 +78,10 @@ export type PluginCacheMetadata = {
         unconfigured?: ManifestModelSuppressionResolver;
         byConfig: WeakMap<OpenClawConfig, ManifestModelSuppressionResolver>;
       }
+    >;
+    mcpAuthDeclarations: WeakMap<
+      PluginMetadataSnapshot,
+      WeakMap<OpenClawConfig, PluginMcpAuthDeclarations>
     >;
   };
 };

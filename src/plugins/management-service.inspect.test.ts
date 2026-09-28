@@ -1,16 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as bundleMcp from "./bundle-mcp.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
   emptyMetadataSnapshot,
   hostedFeedDiffsEntry,
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
+import { bindPluginMetadataSnapshotCache, createPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
@@ -36,6 +38,8 @@ const { clearManagedPluginCatalogCache } = await import("./management-catalog.js
 const { inspectManagedPlugin } = await import("./management-service.js");
 
 describe("managed plugin inspection", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     clearManagedPluginCatalogCache();
@@ -144,6 +148,53 @@ describe("managed plugin inspection", () => {
 
     expect(inspection.mcpAuth).toBeUndefined();
     expect(mocks.mcpAuth).not.toHaveBeenCalled();
+  });
+
+  it("reuses MCP ownership until config or metadata changes while reading OAuth state live", async () => {
+    const server = { url: "https://example.test/mcp", auth: "oauth" as const };
+    const snapshot = metadataSnapshot({ enabled: true });
+    snapshot.plugins[0]!.mcpServers = { docs: server };
+    const other = { ...snapshot.plugins[0]!, id: "other" };
+    const metadata = {
+      ...snapshot,
+      manifestRegistry: { plugins: [...snapshot.plugins, other], diagnostics: [] },
+    };
+    bindPluginMetadataSnapshotCache(metadata, createPluginCache());
+    mocks.metadata.mockReturnValue(metadata);
+    const config: OpenClawConfig = {
+      plugins: { entries: { workboard: { enabled: true }, other: { enabled: false } } },
+      mcp: { servers: { docs: server } },
+    };
+    const inspect = (currentConfig = config) =>
+      inspectManagedPlugin({ config: currentConfig, pluginId: "workboard", env: {} });
+    const load = vi.spyOn(bundleMcp, "loadEnabledBundleMcpConfig");
+    mocks.mcpAuth.mockResolvedValue([{ state: "unauthenticated" }]);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "unauthenticated" }]);
+    mocks.mcpAuth.mockResolvedValue([{ state: "authorized" }]);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
+    expect(load).toHaveBeenCalledOnce();
+    expect(mocks.mcpAuth).toHaveBeenCalledTimes(2);
+
+    const shadowedConfig = {
+      ...config,
+      plugins: { entries: { workboard: { enabled: true }, other: { enabled: true } } },
+    };
+    expect((await inspect(shadowedConfig)).mcpAuth).toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
+    expect(load).toHaveBeenCalledTimes(2);
+
+    const replacement = {
+      ...metadata,
+      manifestRegistry: { plugins: [other], diagnostics: [] },
+    };
+    bindPluginMetadataSnapshotCache(replacement, createPluginCache());
+    mocks.metadata.mockReturnValue(replacement);
+    expect((await inspect(shadowedConfig)).mcpAuth).toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(3);
+    mocks.metadata.mockReturnValue(metadata);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
+    expect(load).toHaveBeenCalledTimes(3);
   });
 
   it("omits resolver-owned requester credentials from operator plugin inspection", async () => {
