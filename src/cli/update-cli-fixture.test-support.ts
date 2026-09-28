@@ -68,7 +68,6 @@ import {
   writeGitUpdateResultFixture,
   writeJsonFixture,
   writeNpmPackageInstall,
-  writePostCoreExecutorFixture,
 } from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
@@ -170,15 +169,10 @@ export function createUpdateCliFixture() {
     });
     mockNpmGlobalCommands(nodeModules, async (argv) => {
       if (argv[0] === "npm" && argv[1] === "i") {
-        const installedRoot = await writeNpmPackageInstall(argv, pkgRoot);
-        await writePostCoreExecutorFixture(installedRoot);
+        await writeNpmPackageInstall(argv, pkgRoot);
       }
     });
-    mockCurrentProcessFreshDoctor({
-      packageRoot: pkgRoot,
-      postCoreResumeAttempt: false,
-      postPluginDoctorAttempt: true,
-    });
+    mockCurrentProcessFreshDoctor({ packageRoot: pkgRoot });
     return pkgRoot;
   };
 

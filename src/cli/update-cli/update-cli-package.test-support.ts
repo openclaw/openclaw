@@ -3,11 +3,6 @@ import path from "node:path";
 import { expect, vi, type Mock } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
 import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import {
-  POST_CORE_EXECUTOR_CAPABILITY,
-  POST_CORE_MUTATION_PROTOCOL,
-} from "../../infra/update-post-core-capability.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { runCommandWithTimeout as RunCommandWithTimeout } from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
@@ -116,27 +111,7 @@ export const writeNpmPackageInstall = async (
     entrySource: "export {};\n",
     inventory: true,
   });
-  return installedRoot;
 };
-
-/** Model a current package target whose real migrated worker advertises delegated execution. */
-export async function writePostCoreExecutorFixture(packageRoot: string): Promise<void> {
-  const worker = path.join(
-    packageRoot,
-    "dist",
-    runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
-  );
-  await fs.mkdir(path.dirname(worker), { recursive: true });
-  await fs.writeFile(
-    worker,
-    `if (process.argv[2] === "--check") process.stdout.write(JSON.stringify(${JSON.stringify({
-      postCoreExecutor: POST_CORE_EXECUTOR_CAPABILITY,
-      mutationProtocol: POST_CORE_MUTATION_PROTOCOL,
-    })}));\n`,
-    "utf8",
-  );
-  await writePackageDistInventory(packageRoot);
-}
 
 export const packageTargetStatus = (
   overrides: Partial<{
@@ -458,7 +433,6 @@ export function createCurrentProcessFreshDoctorFixture(
   return (
     params: {
       postCoreResumeAttempt?: boolean;
-      postPluginDoctorAttempt?: boolean;
       packageRoot?: string;
     } = {},
   ) => {
@@ -492,8 +466,5 @@ export function createCurrentProcessFreshDoctorFixture(
       installedEntrypoint.mockResolvedValueOnce(undefined);
     }
     installedEntrypoint.mockResolvedValueOnce(freshEntrypoint);
-    if (params.postPluginDoctorAttempt) {
-      installedEntrypoint.mockResolvedValueOnce(freshEntrypoint);
-    }
   };
 }

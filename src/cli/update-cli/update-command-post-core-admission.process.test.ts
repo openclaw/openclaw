@@ -20,7 +20,8 @@ import { writePackageRoot } from "../../infra/package-update-steps.test-support.
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../../plugins/installed-plugin-index-record-state.js";
+import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../plugins/installed-plugin-index-store-path.js";
+import { readPluginMetadataStateRow } from "../../plugins/plugin-metadata-state-worker.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as processRunner from "../../process/exec.js";
@@ -233,13 +234,16 @@ it.skipIf(process.platform === "win32")(
         });
         fence.assertCurrent();
 
-        const snapshot = () => ({
+        const snapshot = async () => ({
           config: fs.readFileSync(state.configPath, "utf8"),
-          index: readPersistedInstalledPluginIndexRowSync({ env: state.env }),
+          index: await readPluginMetadataStateRow(
+            "installed-index",
+            resolveInstalledPluginIndexStateDatabaseOptions({ env: state.env }),
+          ),
           run: getUpdateRun(runId, { env: state.env }),
           journal: fs.readFileSync(resolvePackageActivationJournalPath(prepared.anchor)),
         });
-        const unchanged = snapshot();
+        const unchanged = await snapshot();
         const refusalsStartedAt = performance.now();
         const markerResultPath = state.path("marker-result.json");
         const marker = await runChild(
@@ -269,7 +273,7 @@ it.skipIf(process.platform === "win32")(
         expect(marker.code, marker.stderr).toBe(1);
         expect(marker.stdout + marker.stderr).toContain("update-recovery-pending");
         expect(fs.existsSync(markerResultPath)).toBe(false);
-        expect(snapshot()).toEqual(unchanged);
+        expect(await snapshot()).toEqual(unchanged);
 
         let mismatchedPid: number | undefined;
         let refusal: Awaited<ReturnType<typeof runChild>> | undefined;
@@ -302,16 +306,16 @@ it.skipIf(process.platform === "win32")(
         expect(mismatchedPid).toBeGreaterThan(0);
         expect(refusal?.code).toBe(1);
         expect(refusal?.stderr).toMatch(/post-core|update run/i);
-        expect(snapshot()).toEqual(unchanged);
+        expect(await snapshot()).toEqual(unchanged);
         fence.assertCurrent();
         durationsMs.refusalChildren = performance.now() - refusalsStartedAt;
 
-        const { run: beforeUnpublishedRun, ...beforeUnpublishedState } = snapshot();
+        const { run: beforeUnpublishedRun, ...beforeUnpublishedState } = await snapshot();
         assert(beforeUnpublishedRun, "The admitted update run must remain available");
         const faultPath = state.path("fail-response-publication");
         await fs.promises.writeFile(faultPath, "EIO\n");
         let retainedResultPath: string | undefined;
-        let stateAfterChild: ReturnType<typeof snapshot> | undefined;
+        let stateAfterChild: Awaited<ReturnType<typeof snapshot>> | undefined;
         const unpublishedTransport = vi
           .spyOn(processRunner, "runUtf8CommandWithTimeout")
           .mockImplementation(async (argv, options) => {
@@ -321,7 +325,7 @@ it.skipIf(process.platform === "win32")(
             }
             const result = await runChild(argv, options);
             if (postCore) {
-              stateAfterChild = snapshot();
+              stateAfterChild = await snapshot();
             }
             return result;
           });
@@ -344,7 +348,7 @@ it.skipIf(process.platform === "win32")(
           expect(stateAfterChild.config).toEqual(beforeUnpublishedState.config);
           expect(stateAfterChild.journal).toEqual(beforeUnpublishedState.journal);
           // Resume can refresh index metadata; the parent must preserve the child's exact state.
-          expect(snapshot()).toEqual(stateAfterChild);
+          expect(await snapshot()).toEqual(stateAfterChild);
           expect(stateAfterChild.run).toMatchObject({
             runId,
             status: "running",
