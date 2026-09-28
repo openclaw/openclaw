@@ -1020,6 +1020,7 @@ describe("oxlint config", () => {
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, source);
     };
+    write("package.json", '{"type":"module"}');
     for (const file of [".oxlintrc.json", "tsconfig.json", "src/tsconfig.json"]) {
       write(file, fs.readFileSync(file, "utf8"));
     }
