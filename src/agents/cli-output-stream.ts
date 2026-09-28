@@ -46,9 +46,9 @@ import {
 } from "./cli-output-records.js";
 import { appendCliResultText } from "./cli-output-results.js";
 import {
-  createClaudeTerminalResultWatcher,
+  createClaudePostBudgetWatcher,
   createCliStreamJsonTurnBudget,
-  forEachTerminalResultEvent,
+  createTerminalResultEventDispatcher,
 } from "./cli-output-stream-budget.js";
 import {
   CLI_STREAM_JSON_OUTPUT_LIMITS,
@@ -210,13 +210,14 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } = state);
   };
 
-  const dispatchTerminalResultEvents = (
-    parsed: CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[],
-  ) =>
-    forEachTerminalResultEvent(parsed, (event) => {
-      sawTerminalResult = true;
-      handleCustomJsonlEvent(event);
-    });
+  const dispatchTerminalResultEvents = createTerminalResultEventDispatcher((event) => {
+    sawTerminalResult = true;
+    handleCustomJsonlEvent(event);
+  });
+
+  // Only traffic the parent lane assembles is charged; see the budget module.
+  const chargeClaudeRawLine = (chars: number) =>
+    !claudeStreamJson || !turnBudget.chargeable || turnBudget.chargeChars(chars);
 
   const observeSessionId = (parsed: Record<string, unknown>) => {
     const parsedSessionId = pickCliSessionId(parsed, params.backend);
@@ -239,10 +240,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (lifecycle) {
       if ("errorText" in lifecycle) {
         parseErrorText = lifecycle.errorText;
-      } else {
-        if (claudeStreamJson && !turnBudget.chargeChars(rawLine.length + 1)) {
-          return true;
-        }
+      } else if (chargeClaudeRawLine(rawLine.length + 1)) {
         for (const parsed of decodeCliRecords(line)) {
           observeSessionId(parsed);
         }
@@ -271,7 +269,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (parsed == null) {
       return false;
     }
-    if (claudeStreamJson && !turnBudget.chargeChars(rawLine.length + 1)) {
+    if (!chargeClaudeRawLine(rawLine.length + 1)) {
       // The line that exhausts the budget may itself be the terminal result.
       dispatchTerminalResultEvents(parsed);
       return true;
@@ -608,8 +606,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
   };
 
-  const watchForClaudeTerminalResult = createClaudeTerminalResultWatcher({
+  const handlePostBudgetLine = createClaudePostBudgetWatcher({
     ...params,
+    tracker: toolTracker,
     hasTerminalResult: () => sawTerminalResult,
     onResultEvents: dispatchTerminalResultEvents,
     onResultRecord: handleParsedRecord,
@@ -623,13 +622,17 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (!line && !claudeStreamJson) {
       return;
     }
-    if (!turnBudget.chargeLine() && !claudeStreamJson) {
+    // Forwarded subagent traffic reaches the parent only through the Agent tool
+    // result, so the parent lane discards it. `observeLine` therefore leaves it
+    // uncharged rather than spending the turn's budget on bytes that never
+    // become parent output.
+    if (!turnBudget.observeLine(line, claudeStreamJson) && !claudeStreamJson) {
       parseErrorText = turnBudget.errorText(false);
       lineBuffer.pending = "";
       return;
     }
     if (turnBudget.exhausted) {
-      watchForClaudeTerminalResult(line);
+      handlePostBudgetLine(line);
       return;
     }
     if (!line) {
@@ -640,7 +643,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
     const parsedRecords = decodeCliRecords(line);
-    if (claudeStreamJson) {
+    if (claudeStreamJson && turnBudget.chargeable) {
       const normalized =
         parsedRecords.length === 1
           ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
@@ -651,7 +654,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         : rawLine.length;
       if (!turnBudget.chargeChars(retainedChars + 1)) {
         // The line that exhausts the budget may itself be the terminal result.
-        watchForClaudeTerminalResult(line);
+        handlePostBudgetLine(line);
         return;
       }
     }

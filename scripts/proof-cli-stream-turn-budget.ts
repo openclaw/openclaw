@@ -23,14 +23,44 @@
  *  4. retention-flat  — 32 MiB pushed AFTER the budget is spent emits zero new
  *                       assistant text and grows the heap by a tiny fraction of
  *                       the bytes streamed. Pins that memory is still bounded.
+ *  5. subagent-exempt — 3x both budgets streamed as forwarded subagent traffic
+ *                       (`parent_tool_use_id` set), which the parent lane
+ *                       discards. Pins that no budget is spent and the parent's
+ *                       own answer is still assembled normally.
+ *  6. progress-past-budget — after the budget IS spent by parent traffic, the
+ *                       parser still emits tool start, tool result and
+ *                       attributed subagent progress. Pins the liveness facts
+ *                       the gateway's stall detector reads once a tool is
+ *                       active; without them a healthy run is aborted as stuck.
  *
  * Run: pnpm tsx scripts/proof-cli-stream-turn-budget.ts
  */
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
+import type {
+  CliToolResultDelta,
+  CliToolUseStartDelta,
+} from "../src/agents/cli-output-contracts.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "../src/agents/cli-output-stream-limits.js";
 import { createCliJsonlStreamingParser } from "../src/agents/cli-output-stream.js";
 
 const SESSION_ID = "proof-budget-session";
 const FINAL_ANSWER = "Report written to ~/reports/theseus-research/context-epidemiology.md";
+
+/**
+ * Collects garbage without requiring `--expose-gc` on the run command, so the
+ * retention assertion below measures RETAINED bytes. Post-budget lines are now
+ * decoded to recover progress events, and the transient parse garbage that
+ * produces would otherwise read as retention.
+ */
+function forceGarbageCollection(): void {
+  setFlagsFromString("--expose-gc");
+  try {
+    (runInNewContext("gc") as () => void)();
+  } finally {
+    setFlagsFromString("--no-expose-gc");
+  }
+}
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -176,6 +206,7 @@ function scenarioRetentionFlat(): void {
   const parser = createParser(assistantDeltas);
   overflowRawCharBudget(parser);
   const deltasAtOverflow = assistantDeltas.length;
+  forceGarbageCollection();
   const heapAtOverflow = process.memoryUsage().heapUsed;
 
   let streamedAfter = 0;
@@ -184,6 +215,7 @@ function scenarioRetentionFlat(): void {
     streamedAfter += chunk.length;
     parser.push(chunk);
   }
+  forceGarbageCollection();
   const heapGrowth = process.memoryUsage().heapUsed - heapAtOverflow;
 
   assert(
@@ -199,8 +231,164 @@ function scenarioRetentionFlat(): void {
   );
 }
 
+const PARENT_AGENT_TOOL_CALL_ID = "toolu_proof_parent_agent";
+
+/** One forwarded subagent record, exactly as Claude Code writes it on the parent's stdout. */
+function subagentFrame(index: number, payloadChars: number): string {
+  return JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: PARENT_AGENT_TOOL_CALL_ID,
+    session_id: SESSION_ID,
+    message: {
+      id: `msg_subagent_${index}`,
+      content: [{ type: "text", text: "s".repeat(payloadChars) }],
+    },
+  });
+}
+
+function parentToolUseFrame(toolCallId: string, name: string): string {
+  return JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    message: {
+      id: "msg_parent_tool",
+      content: [{ type: "tool_use", id: toolCallId, name, input: { command: "sleep 60" } }],
+    },
+  });
+}
+
+function parentToolResultFrame(toolCallId: string): string {
+  return JSON.stringify({
+    type: "user",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    message: {
+      content: [{ type: "tool_result", tool_use_id: toolCallId, content: "Exit code 1" }],
+    },
+  });
+}
+
+function createLivenessParser(sinks: {
+  assistantDeltas: string[];
+  toolStarts: CliToolUseStartDelta[];
+  toolResults: CliToolResultDelta[];
+  attributedProgress: string[];
+}) {
+  return createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: (delta) => sinks.assistantDeltas.push(delta.delta),
+    onToolUseStart: (tool) => sinks.toolStarts.push(tool),
+    onToolResult: (result) => sinks.toolResults.push(result),
+    onAttributedSubagentProgress: (id) => sinks.attributedProgress.push(id),
+  });
+}
+
+function scenarioSubagentExempt(): void {
+  const sinks = {
+    assistantDeltas: [] as string[],
+    toolStarts: [] as CliToolUseStartDelta[],
+    toolResults: [] as CliToolResultDelta[],
+    attributedProgress: [] as string[],
+  };
+  const parser = createLivenessParser(sinks);
+
+  // Three times both budgets, entirely in traffic the parent lane discards.
+  let streamed = 0;
+  let lines = 0;
+  while (
+    streamed < CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars * 3 ||
+    lines < CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines * 3
+  ) {
+    const chunk = `${subagentFrame(lines, 480)}\n`;
+    streamed += chunk.length;
+    lines += 1;
+    parser.push(chunk);
+  }
+
+  parser.push(`${textDeltaFrame(FINAL_ANSWER)}\n`);
+  parser.push(`${terminalResultFrame()}\n`);
+  parser.finish();
+
+  assert(
+    parser.getErrorText() === null,
+    `subagent-exempt: parser reported "${parser.getErrorText()}" for a turn whose parent lane stayed tiny`,
+  );
+  assert(
+    parser.getOutputTruncationText() === null,
+    `subagent-exempt: a budget was spent on discarded traffic (${parser.getOutputTruncationText()})`,
+  );
+  assert(
+    parser.getOutput()?.text === FINAL_ANSWER,
+    `subagent-exempt: expected the parent answer, got ${JSON.stringify(parser.getOutput()?.text)}`,
+  );
+  assert(
+    sinks.assistantDeltas.join("").includes(FINAL_ANSWER),
+    "subagent-exempt: the parent's own streamed text was not assembled",
+  );
+  assert(
+    sinks.attributedProgress.length === lines,
+    `subagent-exempt: expected ${lines} attributed progress signals, saw ${sinks.attributedProgress.length}`,
+  );
+  console.log(
+    `[subagent-exempt] streamed ${streamed} chars / ${lines} lines of forwarded subagent traffic (${(streamed / (1024 * 1024)).toFixed(1)} MiB, ${((lines / CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnLines) * 100).toFixed(0)}% of the line cap); no budget spent, parent answer intact`,
+  );
+}
+
+function scenarioProgressPastBudget(): void {
+  const sinks = {
+    assistantDeltas: [] as string[],
+    toolStarts: [] as CliToolUseStartDelta[],
+    toolResults: [] as CliToolResultDelta[],
+    attributedProgress: [] as string[],
+  };
+  const parser = createLivenessParser(sinks);
+
+  // Parent traffic alone spends the budget, exactly as the incident turn did.
+  overflowRawCharBudget(parser);
+  const deltasAtOverflow = sinks.assistantDeltas.length;
+
+  const toolCallId = "toolu_proof_bash_after_budget";
+  parser.push(`${parentToolUseFrame(toolCallId, "Bash")}\n`);
+  parser.push(`${subagentFrame(0, 64)}\n`);
+  parser.push(`${parentToolResultFrame(toolCallId)}\n`);
+  parser.push(`${terminalResultFrame()}\n`);
+  parser.finish();
+
+  assert(
+    sinks.toolStarts.some((tool) => tool.toolCallId === toolCallId && tool.name === "Bash"),
+    "progress-past-budget: no tool start reached the gateway after the budget was spent; lastProgress would freeze",
+  );
+  assert(
+    sinks.toolResults.some((result) => result.toolCallId === toolCallId),
+    "progress-past-budget: no tool result reached the gateway; activeParsedToolCount would never decrement",
+  );
+  assert(
+    sinks.attributedProgress.includes(PARENT_AGENT_TOOL_CALL_ID),
+    "progress-past-budget: attributed subagent progress stopped; a long Agent call would read as blocked",
+  );
+  assert(
+    sinks.assistantDeltas.length === deltasAtOverflow,
+    "progress-past-budget: assistant text was assembled past the budget; retention is not flat",
+  );
+  assert(
+    parser.getOutputTruncationText() !== null,
+    "progress-past-budget: the budget was never spent, so the scenario proved nothing",
+  );
+  assert(
+    parser.getErrorText() === null && parser.getOutput()?.text === FINAL_ANSWER,
+    "progress-past-budget: the finished turn was not recovered",
+  );
+  console.log(
+    `[progress-past-budget] past exhaustion: ${sinks.toolStarts.length} tool start(s), ${sinks.toolResults.length} tool result(s), ${sinks.attributedProgress.length} attributed progress signal(s), 0 new assistant deltas`,
+  );
+}
+
 scenarioRecovered("recovered-raw", overflowRawCharBudget);
 scenarioRecovered("recovered-lines", overflowLineBudget);
 scenarioUnknowable();
 scenarioRetentionFlat();
+scenarioSubagentExempt();
+scenarioProgressPastBudget();
 console.log("All runtime assertions passed.");

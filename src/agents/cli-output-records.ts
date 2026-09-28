@@ -391,6 +391,30 @@ export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean
   return parsed.parent_tool_use_id != null;
 }
 
+const CLAUDE_SUBAGENT_PARENT_KEY = '"parent_tool_use_id":';
+
+/**
+ * Recognizes forwarded subagent traffic from the raw JSONL line, before the
+ * parent's turn budget charges it and therefore before it is decoded.
+ *
+ * A parent-lane record serializes the key as `"parent_tool_use_id":null`; only
+ * forwarded subagent traffic carries a string id. The needle cannot appear
+ * inside a JSON string value, because a quote there is escaped as `\"`, so
+ * matching it is equivalent to the decoded `isClaudeSubagentRecord` check
+ * without paying for a parse.
+ */
+export function isClaudeSubagentJsonlLine(line: string): boolean {
+  const keyIndex = line.indexOf(CLAUDE_SUBAGENT_PARENT_KEY);
+  if (keyIndex === -1) {
+    return false;
+  }
+  let offset = keyIndex + CLAUDE_SUBAGENT_PARENT_KEY.length;
+  while (offset < line.length && (line[offset] === " " || line[offset] === "\t")) {
+    offset += 1;
+  }
+  return line[offset] === '"';
+}
+
 const CLAUDE_FOREGROUND_AGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
 
 export function isClaudeForegroundAgentToolName(name: string): boolean {
