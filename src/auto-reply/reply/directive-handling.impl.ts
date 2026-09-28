@@ -522,7 +522,7 @@ export async function handleDirectiveOnly(
     if (!params.persistenceState && allowPrivilegedPersistence && queueChanged) {
       resumedQueuedWork = resumeSuspendedFollowupDrain(sessionKey, {
         cfg: params.cfg,
-        channel: params.messageProviderKey ?? params.messageProvider ?? params.surface,
+        channel: params.messageProvider ?? params.surface,
         sessionEntry,
       });
     }
