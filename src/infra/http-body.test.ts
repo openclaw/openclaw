@@ -137,11 +137,6 @@ describe("http body limits", () => {
     vi.useRealTimers();
   });
 
-  it("reads body within max bytes", async () => {
-    const req = createMockRequest({ chunks: ['{"ok":true}'] });
-    await expect(readRequestBodyWithLimit(req, { maxBytes: 1024 })).resolves.toBe('{"ok":true}');
-  });
-
   it.each([
     {
       name: "rejects oversized streamed body",

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements channel behavior.
 import {
   startWebLoginWithQr as startWebLoginWithQrImpl,
   waitForWebLogin as waitForWebLoginImpl,

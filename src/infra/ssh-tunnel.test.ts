@@ -7,6 +7,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
   ensurePortAvailable: vi.fn<(port: number, host?: string) => Promise<void>>(),
+  inspectPortUsage: vi.fn<typeof import("./ports-inspect.js").inspectPortUsage>(),
   resolveSshClient: vi.fn<() => string | null>(() => "/usr/bin/ssh"),
   spawn: vi.fn(),
 }));
@@ -25,7 +26,12 @@ vi.mock("./ssh-client.js", () => ({
   resolveSshClient: mocks.resolveSshClient,
 }));
 
-import { getFreePort } from "../test-utils/ports.js";
+vi.mock("./ports-inspect.js", () => ({
+  inspectPortUsage: mocks.inspectPortUsage,
+}));
+
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import type { PortUsage } from "./ports-types.js";
 import { PortInUseError } from "./ports.js";
 import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
 
@@ -94,6 +100,37 @@ describe("parseSshTarget", () => {
 
 describe("startSshPortForward", () => {
   const openServers: net.Server[] = [];
+  const portClaims: TestPortClaim[] = [];
+
+  async function getClaimedPort(): Promise<number> {
+    const claim = await acquireTestPortBlock({ offsets: [0] });
+    portClaims.push(claim);
+    return claim.port;
+  }
+
+  async function listenOnPort(port = 0): Promise<net.Server> {
+    const server = net.createServer();
+    openServers.push(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    return server;
+  }
+
+  function startTunnel(
+    options: Partial<Parameters<typeof startSshPortForward>[0]> & { localPortPreferred: number },
+  ) {
+    return startSshPortForward({
+      target: "me@example.com:2222",
+      remotePort: 18789,
+      timeoutMs: 1000,
+      ...options,
+    });
+  }
 
   afterEach(async () => {
     vi.useRealTimers();
@@ -103,7 +140,9 @@ describe("startSshPortForward", () => {
         server?.close(() => resolve());
       });
     }
+    await Promise.all(portClaims.splice(0).map((claim) => claim.release()));
     mocks.ensurePortAvailable.mockReset();
+    mocks.inspectPortUsage.mockReset();
     mocks.resolveSshClient.mockReset();
     mocks.resolveSshClient.mockReturnValue("/usr/bin/ssh");
     mocks.spawn.mockReset();
@@ -111,6 +150,12 @@ describe("startSshPortForward", () => {
 
   // A synthetic child can open a real loopback listener or stall until cancellation.
   function spawnFakeSsh({ listen = true } = {}) {
+    mocks.inspectPortUsage.mockImplementation(async (port) => ({
+      port,
+      status: "busy",
+      listeners: [{ pid: 4242 }],
+      hints: [],
+    }));
     mocks.spawn.mockImplementation((_cmd: string, args: string[]) => {
       const forwardSpec = args[args.indexOf("-L") + 1] ?? "";
       const localPort = Number(forwardSpec.split(":")[1]);
@@ -145,10 +190,9 @@ describe("startSshPortForward", () => {
     mocks.resolveSshClient.mockReturnValueOnce(null);
 
     await expect(
-      startSshPortForward({
+      startTunnel({
         target: "me@example.com",
         localPortPreferred: 43210,
-        remotePort: 18789,
         timeoutMs: 250,
       }),
     ).rejects.toThrow("trusted SSH client not found in system directories");
@@ -157,15 +201,45 @@ describe("startSshPortForward", () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { target: "gateway-alias", port: undefined, hostKeyPolicy: "strict" as const },
+    { target: "gateway-alias:22", port: "22", hostKeyPolicy: "strict" as const },
+    { target: "gateway-alias", port: undefined, hostKeyPolicy: "openssh" as const },
+  ])(
+    "preserves OpenSSH routing for $target ($hostKeyPolicy)",
+    async ({ target, port, hostKeyPolicy }) => {
+      const stop = new Error("captured SSH process boundary");
+      mocks.spawn.mockImplementationOnce(() => {
+        throw stop;
+      });
+      await expect(startTunnel({ target, hostKeyPolicy, localPortPreferred: 43210 })).rejects.toBe(
+        stop,
+      );
+      const args = mocks.spawn.mock.calls[0]?.[1] as string[];
+      if (port) {
+        expect(args.slice(args.indexOf("-p"), args.indexOf("-p") + 2)).toEqual(["-p", port]);
+      } else {
+        expect(args).not.toContain("-p");
+      }
+      expect(args.includes("StrictHostKeyChecking=yes")).toBe(hostKeyPolicy === "strict");
+      expect(args).toEqual(
+        expect.arrayContaining([
+          "ControlMaster=no",
+          "ControlPath=none",
+          "ControlPersist=no",
+          "ForkAfterAuthentication=no",
+        ]),
+      );
+    },
+  );
+
   it("scopes the preferred-port preflight to the IPv4 loopback interface", async () => {
     const sentinel = new Error("stop before spawning ssh");
     mocks.ensurePortAvailable.mockRejectedValueOnce(sentinel);
 
     await expect(
-      startSshPortForward({
-        target: "me@example.com:2222",
+      startTunnel({
         localPortPreferred: 43210,
-        remotePort: 18789,
         timeoutMs: 250,
       }),
     ).rejects.toBe(sentinel);
@@ -173,56 +247,114 @@ describe("startSshPortForward", () => {
     expect(mocks.ensurePortAvailable).toHaveBeenCalledWith(43210, "127.0.0.1");
   });
 
-  it("falls back to an ephemeral port when the preferred port is in use", async () => {
-    // ensurePortAvailable raises the domain PortInUseError (no errno `code`),
-    // which the catch must treat as "busy" and allocate another port.
-    // Reserve a real port so the ephemeral listener cannot hand the same
-    // number back and make the assertion flaky.
-    const occupied = net.createServer();
-    await new Promise<void>((resolve, reject) => {
-      occupied.once("error", reject);
-      occupied.listen(0, "127.0.0.1", () => {
-        occupied.off("error", reject);
-        resolve();
+  it.each(["PortInUseError", "EADDRINUSE", "EACCES", "EPERM"])(
+    "falls back to an ephemeral port when the preferred port fails with %s",
+    async (code) => {
+      // Reserve the preferred port so the OS cannot reissue it during fallback.
+      const occupied = await listenOnPort();
+      const addr = occupied.address();
+      if (!addr || typeof addr === "string") {
+        throw new Error("failed to reserve preferred port");
+      }
+      const preferredPort = addr.port;
+
+      mocks.ensurePortAvailable.mockRejectedValueOnce(
+        code === "PortInUseError"
+          ? new PortInUseError(preferredPort)
+          : Object.assign(new Error(`preferred port unavailable: ${code}`), { code }),
+      );
+      spawnFakeSsh();
+
+      const tunnel = await startTunnel({
+        localPortPreferred: preferredPort,
       });
+
+      expect(tunnel.localPort).not.toBe(preferredPort);
+      expect(tunnel.localPort).toBeGreaterThan(0);
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        "/usr/bin/ssh",
+        expect.arrayContaining(["-L", `127.0.0.1:${tunnel.localPort}:127.0.0.1:18789`]),
+        expect.anything(),
+      );
+
+      await tunnel.stop();
+    },
+  );
+
+  it.each([
+    { ownership: "foreign", listeners: [{ pid: 4343 }] },
+    { ownership: "mixed", listeners: [{ pid: 4242 }, { pid: 4343 }] },
+    { ownership: "unknown", listeners: [{}] },
+    { ownership: "unavailable", listeners: [] },
+  ])(
+    "rejects a busy port with $ownership ownership while SSH is still alive",
+    async ({ listeners }) => {
+      const localPort = await getClaimedPort();
+      await listenOnPort(localPort);
+      // The competing listener wins after preflight, before SSH reports binding
+      // failure. This child stays alive until the owner explicitly stops it.
+      spawnFakeSsh({ listen: false });
+      mocks.inspectPortUsage.mockResolvedValueOnce({
+        port: localPort,
+        status: "busy",
+        listeners,
+        hints: [],
+      });
+
+      await expect(startTunnel({ localPortPreferred: localPort })).rejects.toThrow(
+        "cannot verify SSH tunnel listener ownership",
+      );
+
+      const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
+      expect(child.killed).toBe(true);
+      expect(mocks.inspectPortUsage).toHaveBeenCalledWith(localPort, {
+        probeHosts: ["127.0.0.1"],
+        signal: expect.any(AbortSignal),
+      });
+    },
+  );
+
+  it("rejects verified listener ownership when the SSH child closes during inspection", async () => {
+    const localPort = await getClaimedPort();
+    await listenOnPort(localPort);
+    spawnFakeSsh({ listen: false });
+    const inspecting = createDeferred();
+    const inspection = createDeferred<PortUsage>();
+    mocks.inspectPortUsage.mockImplementationOnce(() => {
+      inspecting.resolve();
+      return inspection.promise;
     });
-    openServers.push(occupied);
-    const addr = occupied.address();
-    if (!addr || typeof addr === "string") {
-      throw new Error("failed to reserve preferred port");
-    }
-    const preferredPort = addr.port;
-
-    mocks.ensurePortAvailable.mockRejectedValueOnce(new PortInUseError(preferredPort));
-    spawnFakeSsh();
-
-    const tunnel = await startSshPortForward({
-      target: "me@example.com:2222",
-      localPortPreferred: preferredPort,
-      remotePort: 18789,
-      timeoutMs: 1000,
-    });
-
-    expect(tunnel.localPort).not.toBe(preferredPort);
-    expect(tunnel.localPort).toBeGreaterThan(0);
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "/usr/bin/ssh",
-      expect.arrayContaining(["-L", `127.0.0.1:${tunnel.localPort}:127.0.0.1:18789`]),
-      expect.anything(),
+    const forwarding = startTunnel({ localPortPreferred: localPort });
+    const inspected = await Promise.race([
+      inspecting.promise.then(() => true),
+      forwarding.then(async (tunnel) => {
+        await tunnel.stop();
+        return false;
+      }),
+    ]);
+    expect(inspected).toBe(true);
+    const rejection = expect(forwarding).rejects.toThrow(
+      "ssh exited before tunnel listener ownership was verified",
     );
+    const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
+    child.emit("close", 0, null);
+    inspection.resolve({
+      port: localPort,
+      status: "busy",
+      listeners: [{ pid: 4242 }],
+      hints: [],
+    });
 
-    await tunnel.stop();
+    await rejection;
+    expect(child.killed).toBe(true);
   });
 
   it.each(["term", "kill"] as const)(
     "keeps every stop caller pending until the child exits after %s",
     async (exitAfter) => {
       spawnFakeSsh();
-      const tunnel = await startSshPortForward({
-        target: "me@example.com:2222",
-        localPortPreferred: await getFreePort(),
-        remotePort: 18789,
-        timeoutMs: 1000,
+      const tunnel = await startTunnel({
+        localPortPreferred: await getClaimedPort(),
       });
       const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
         killed: boolean;
@@ -260,11 +392,8 @@ describe("startSshPortForward", () => {
   it("stops an established tunnel when its owner aborts", async () => {
     spawnFakeSsh();
     const controller = new AbortController();
-    const tunnel = await startSshPortForward({
-      target: "me@example.com:2222",
-      localPortPreferred: await getFreePort(),
-      remotePort: 18789,
-      timeoutMs: 1000,
+    const tunnel = await startTunnel({
+      localPortPreferred: await getClaimedPort(),
       signal: controller.signal,
     });
     const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
@@ -286,11 +415,8 @@ describe("startSshPortForward", () => {
     child.kill = vi.fn(() => true);
     mocks.spawn.mockReturnValue(child);
     const controller = new AbortController();
-    const forwarding = startSshPortForward({
-      target: "me@example.com:2222",
-      localPortPreferred: await getFreePort(),
-      remotePort: 18789,
-      timeoutMs: 1000,
+    const forwarding = startTunnel({
+      localPortPreferred: await getClaimedPort(),
       signal: controller.signal,
     });
     let settled = false;
@@ -318,7 +444,7 @@ describe("startSshPortForward", () => {
   )(
     "joins pending readiness $pending before startup rejects on $terminal",
     async ({ terminal, pending }) => {
-      const localPort = await getFreePort();
+      const localPort = await getClaimedPort();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const spawnError = new Error("ENOENT: no such file or directory, spawn /usr/bin/ssh");
       (spawnError as NodeJS.ErrnoException).code = "ENOENT";
@@ -348,10 +474,8 @@ describe("startSshPortForward", () => {
         retryScheduled.resolve();
         return timer;
       });
-      const forwarding = startSshPortForward({
-        target: "me@example.com:2222",
+      const forwarding = startTunnel({
         localPortPreferred: localPort,
-        remotePort: 18789,
         timeoutMs: 500,
         signal: controller.signal,
       });
@@ -394,7 +518,7 @@ describe("startSshPortForward", () => {
     "keeps the startup budget through a %s ms wall-clock step",
     async (stepMs) => {
       spawnFakeSsh({ listen: false });
-      const localPort = await getFreePort();
+      const localPort = await getClaimedPort();
       const controller = new AbortController();
       const now = Date.now;
       let offset = 0;
@@ -409,10 +533,8 @@ describe("startSshPortForward", () => {
       const started = performance.now();
       try {
         await expect(
-          startSshPortForward({
-            target: "me@example.com:2222",
+          startTunnel({
             localPortPreferred: localPort,
-            remotePort: 18789,
             timeoutMs: 250,
             signal: controller.signal,
           }),
@@ -448,10 +570,9 @@ describe("startSshPortForward", () => {
     });
     try {
       await expect(
-        startSshPortForward({
+        startTunnel({
           target: "synthetic.example",
           localPortPreferred: 43210,
-          remotePort: 18789,
           timeoutMs: 250,
         }),
       ).rejects.toThrow(
@@ -471,13 +592,10 @@ describe("startSshPortForward", () => {
       // Under fake timers neither advances, so a listener that loses the race on the
       // first probe hangs to the suite timeout instead of failing on its own budget.
       spawnFakeSsh();
-      const localPort = await getFreePort();
+      const localPort = await getClaimedPort();
 
-      const tunnel = await startSshPortForward({
-        target: "me@example.com:2222",
+      const tunnel = await startTunnel({
         localPortPreferred: localPort,
-        remotePort: 18789,
-        timeoutMs: 1000,
       });
 
       const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {

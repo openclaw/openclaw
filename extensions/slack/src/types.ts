@@ -1,5 +1,6 @@
 // Slack type declarations define plugin contracts.
 import type { AppMentionEvent, GenericMessageEvent, MessageAttachment } from "@slack/types";
+import type { ConversationsHistoryResponse } from "@slack/web-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackAppContext } from "./agent-context.js";
 
@@ -10,7 +11,11 @@ export type SlackFile = Partial<Pick<SlackFileSource, SlackFileField>> & {
   subtype?: string;
 };
 
-export type SlackAttachment = Partial<MessageAttachment> & {
+type SlackHistoryMessage = NonNullable<ConversationsHistoryResponse["messages"]>[number];
+type SlackHistoryAttachment = NonNullable<SlackHistoryMessage["attachments"]>[number];
+
+// Events and history reads use different SDK block shapes; block-text validates either input.
+export type SlackAttachment = Partial<MessageAttachment | SlackHistoryAttachment> & {
   author_id?: string;
   from_url?: string;
   channel_name?: string;

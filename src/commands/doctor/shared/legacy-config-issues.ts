@@ -16,15 +16,11 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { findLegacySystemAgentOwnerIssue } from "./legacy-config-migrations.runtime.system-agent.js";
 
-function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
-  return new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
-}
-
 function collectPluginLegacyConfigRules(
   raw: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigRule[] {
-  const channelIds = collectConfiguredChannelIds(raw);
+  const channelIds = new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
   const pluginIds = collectDoctorConfigRepairPluginIds(raw, touchedPaths).filter(
     (pluginId) => !channelIds.has(pluginId),
   );

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import crabboxPlugin from "../../extensions/crabbox/index.js";
 import { ensureSessionEntrySync } from "../../src/config/sessions/session-accessor.js";
 import * as support from "../../src/gateway/worker-environments/service.test-support.js";
-import type { OpenKeyedStoreOptions } from "../../src/plugin-sdk/plugin-state-runtime.js";
+import type { OpenAsyncKeyedStoreOptions } from "../../src/plugin-sdk/plugin-state-runtime.js";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -53,7 +53,7 @@ describe("Crabbox allocation through Gateway ownership", () => {
       let pauseLookup = false;
       const runtime = createPluginRuntimeMock({
         state: {
-          openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
             const store = createPluginStateKeyedStoreForTests<T>("crabbox", {
               ...options,
               env: { OPENCLAW_STATE_DIR: support.testState.root },
@@ -182,7 +182,10 @@ describe("Crabbox allocation through Gateway ownership", () => {
       });
       try {
         if (allocation === "fork") {
-          const seed = await service.create("development", "checkpoint-source");
+          const seed = await service.createWithRequest({
+            profileId: "development",
+            idempotencyKey: "checkpoint-source",
+          });
           await service.destroyUnattached(seed.environmentId);
         }
         runner.mockClear();

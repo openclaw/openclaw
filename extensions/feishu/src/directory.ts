@@ -1,24 +1,21 @@
-// Feishu plugin module implements directory behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import {
   listFeishuDirectoryGroups,
   listFeishuDirectoryPeers,
   type FeishuDirectoryGroup,
+  type FeishuDirectoryParams,
   type FeishuDirectoryPeer,
 } from "./directory.static.js";
 
 const MAX_FEISHU_DIRECTORY_PAGES = 100;
 
-export async function listFeishuDirectoryPeersLive(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-  fallbackToStatic?: boolean;
-}): Promise<FeishuDirectoryPeer[]> {
+export async function listFeishuDirectoryPeersLive(
+  params: FeishuDirectoryParams & {
+    fallbackToStatic?: boolean;
+  },
+): Promise<FeishuDirectoryPeer[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     return listFeishuDirectoryPeers(params);
@@ -85,14 +82,12 @@ export async function listFeishuDirectoryPeersLive(params: {
   }
 }
 
-export async function listFeishuDirectoryGroupsLive(params: {
-  cfg: ClawdbotConfig;
-  query?: string;
-  limit?: number;
-  accountId?: string;
-  fallbackToStatic?: boolean;
-  filter?: (group: FeishuDirectoryGroup) => boolean;
-}): Promise<FeishuDirectoryGroup[]> {
+export async function listFeishuDirectoryGroupsLive(
+  params: FeishuDirectoryParams & {
+    fallbackToStatic?: boolean;
+    filter?: (group: FeishuDirectoryGroup) => boolean;
+  },
+): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     return listFeishuDirectoryGroups(params);

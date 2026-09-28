@@ -25,7 +25,12 @@ export async function prepareLocalWorkspaceReconciliation(params: {
   const { request, hashMemo, metrics } = params;
   const pending = request.journal.load();
   if (pending) {
-    await recoverWorkerWorkspaceReconciliation({ root: request.localPath, journal: pending });
+    await recoverWorkerWorkspaceReconciliation({
+      root: request.localPath,
+      journal: pending,
+      assertCurrent: request.assertCurrent,
+    });
+    request.assertCurrent?.();
     request.journal.abort();
   }
   pruneWorkspaceHashMemo(hashMemo);
@@ -83,6 +88,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
         base: snapshot.base,
         current: snapshot.current,
         journal: request.journal,
+        assertCurrent: request.assertCurrent,
         acceptance: { kind: "reconcile", publish: snapshot.publishAcceptedManifest },
       }),
     );

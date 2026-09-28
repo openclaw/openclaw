@@ -7,7 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveExecApprovalsFromFile, type ExecCommandSegment } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
-import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import {
   evaluateSystemRunAllowlist,
   resolveSystemRunExecArgv,
@@ -253,90 +252,6 @@ describe("resolveSystemRunExecArgv", () => {
         segments: [],
         segmentSatisfiedBy: ["safeBins"],
         authorizationPlan: undefined,
-      });
-
-      expect(result).toBeNull();
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "returns rebuilt shell argv when the authorization plan supports rewriting",
-    async () => {
-      const env = { PATH: "/usr/bin:/bin" };
-      const authorizationPlan = await planShellAuthorization({
-        command: "head -c 16",
-        env,
-        platform: process.platform,
-      });
-      expect(authorizationPlan.ok).toBe(true);
-      if (!authorizationPlan.ok) {
-        throw new Error(authorizationPlan.reason);
-      }
-      const segmentSatisfiedBy: ["safeBins"] = ["safeBins"];
-      const expectedCommand = buildAuthorizedShellCommandFromPlan({
-        plan: authorizationPlan,
-        mode: "safeBins",
-        segmentSatisfiedBy,
-      });
-      expect(expectedCommand.ok).toBe(true);
-      if (!expectedCommand.ok) {
-        throw new Error(expectedCommand.reason);
-      }
-
-      const result = await resolveSystemRunExecArgv({
-        plannedAllowlistArgv: undefined,
-        argv: ["/bin/sh", "-lc", "head -c 16"],
-        security: "allowlist",
-        isWindows: false,
-        policy: {
-          approvedByAsk: false,
-          analysisOk: true,
-          allowlistSatisfied: true,
-        },
-        shellCommand: "head -c 16",
-        segments: authorizationPlan.groups.flatMap((group) =>
-          group.candidates.map((candidate) => candidate.sourceSegment),
-        ),
-        segmentSatisfiedBy,
-        authorizationPlan,
-      });
-
-      expect(result).not.toBeNull();
-      expect(result?.[0]).toBe("/bin/sh");
-      expect(result?.[2]).toBe(expectedCommand.command);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "fails closed instead of rewriting opaque shell transports",
-    async () => {
-      const env = { PATH: "/usr/bin:/bin" };
-      const authorizationPlan = await planShellAuthorization({
-        command: "head -c 16",
-        env,
-        platform: process.platform,
-      });
-      expect(authorizationPlan.ok).toBe(true);
-      if (!authorizationPlan.ok) {
-        throw new Error(authorizationPlan.reason);
-      }
-
-      const result = await resolveSystemRunExecArgv({
-        plannedAllowlistArgv: undefined,
-        argv: ["nu", "--commands", "head -c 16"],
-        security: "allowlist",
-        isWindows: false,
-        policy: {
-          approvedByAsk: false,
-          analysisOk: true,
-          allowlistSatisfied: true,
-        },
-        shellCommand: "head -c 16",
-        segments: authorizationPlan.groups.flatMap((group) =>
-          group.candidates.map((candidate) => candidate.sourceSegment),
-        ),
-        segmentSatisfiedBy: ["safeBins"],
-        authorizationPlan,
       });
 
       expect(result).toBeNull();

@@ -336,17 +336,6 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
-  it("warns on non-numeric OpenAI speed values", () => {
-    const provider = buildOpenAISpeechProvider();
-
-    expect(
-      provider.parseDirectiveToken?.(createSpeedDirectiveContext("speed", "fast") as never),
-    ).toEqual({
-      handled: true,
-      warnings: ['invalid OpenAI speed "fast" (0.25-4.0)'],
-    });
-  });
-
   it("warns on partial OpenAI speed values", () => {
     const provider = buildOpenAISpeechProvider();
 

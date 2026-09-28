@@ -5,16 +5,11 @@ import {
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
 import { buildGatewayDiscoveryTarget } from "../../infra/gateway-discovery-targets.js";
-import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 
 export type GatewayDiscoverOpts = {
   timeout?: string;
   json?: boolean;
 };
-
-export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number {
-  return parseTimeoutMsWithFallback(raw, fallbackMs, { invalidType: "error" });
-}
 
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
   // Use display and endpoint fields; Bonjour can surface the same gateway on multiple interfaces.

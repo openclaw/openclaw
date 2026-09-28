@@ -207,16 +207,6 @@ function readRecordFile(params: {
   return undefined;
 }
 
-function buildCandidateLookup(
-  candidates: readonly PluginCandidate[],
-): Map<string, PluginCandidate> {
-  const bySource = new Map<string, PluginCandidate>();
-  for (const candidate of candidates) {
-    bySource.set(candidate.source, candidate);
-  }
-  return bySource;
-}
-
 export function buildInstalledPluginIndexRecords(params: {
   candidates: readonly PluginCandidate[];
   registry: PluginManifestRegistry;
@@ -226,7 +216,9 @@ export function buildInstalledPluginIndexRecords(params: {
   /** Index builds scoped to an explicit env stamp that env's compat decisions. */
   env?: NodeJS.ProcessEnv;
 }): InstalledPluginIndexRecord[] {
-  const candidateBySource = buildCandidateLookup(params.candidates);
+  const candidateBySource = new Map(
+    params.candidates.map((candidate) => [candidate.source, candidate]),
+  );
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateBySource.get(record.source);

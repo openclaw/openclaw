@@ -2,18 +2,23 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { GatewayStoredSessionTargets } from "../../config/sessions/combined-store-gateway.js";
+import type {
+  GatewayStoredSessionTarget,
+  GatewayStoredSessionTargets,
+} from "../../config/sessions/combined-store-gateway.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import { loadExactSessionEntryCandidates } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveExistingUsageSessionFile } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { resolveGatewaySessionDisplayName } from "../session-utils-display.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
@@ -37,10 +42,10 @@ export function resolveSessionUsageTarget(
   config: OpenClawConfig,
   agentIdHint?: string,
 ): ResolvedSessionUsageTarget | undefined {
-  const { canonicalKey, entry, storePath } = loadGatewaySessionEntryReadOnly(
-    key,
-    agentIdHint ? { agentId: agentIdHint } : undefined,
-  );
+  const { canonicalKey, entry, storePath } = loadGatewaySessionEntryReadOnly(key, {
+    ...(agentIdHint ? { agentId: agentIdHint } : {}),
+    projection: "list",
+  });
   const parsed = parseAgentSessionKey(key);
   const agentId =
     parsed?.agentId ?? agentIdHint ?? resolveSessionAgentId({ config, sessionKey: key });
@@ -75,10 +80,14 @@ export type UsageSessionSelection = UsageSessionSummaryTarget & {
   label?: string;
   updatedAt: number;
   storeEntry?: SessionEntry;
+  /** Recorded lineage attribution when a retained instance has no current store row. */
+  creatorEntry?: SessionEntry;
   scope?: "instance" | "family";
   sessionFamilyKey?: string;
   currentSessionId?: string;
   includedSessionIds?: string[];
+  contextTarget?: { storeTarget: GatewayStoredSessionTarget["storeTarget"]; storedKey: string };
+  contextWeight?: SessionEntry["systemPromptReport"];
 };
 
 function usageSessionIdentity(agentId: string, sessionId: string): string {
@@ -203,10 +212,9 @@ export async function selectUsageSessions(params: {
   } = params;
   // Load session store for named sessions only on a result-cache miss.
   const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-  // Usage exposes saved prompt reports as context weight, including its availability flag.
   const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(config, {
     ...sessionStoreOpts,
-    projection: "full",
+    projection: "list",
   });
   const scopedStore = Object.fromEntries(
     Object.entries(store).filter(
@@ -305,7 +313,7 @@ export async function selectUsageSessions(params: {
             agentId: agentIdFromKey,
             sessionId,
             sessionFile,
-            label: storeEntry?.label,
+            label: resolveGatewaySessionDisplayName(resolvedStoreKey, storeEntry),
             updatedAt,
             storeEntry,
           },
@@ -332,6 +340,7 @@ export async function selectUsageSessions(params: {
             instances: [discovered],
             updatedAt: discovered.mtime,
             scope: "instance",
+            creatorEntry: familyOwners.get(identity)?.entry,
           });
         }
         continue;
@@ -364,7 +373,7 @@ export async function selectUsageSessions(params: {
             agentId: discovered.agentId,
             sessionId: entry.sessionId,
             sessionFile,
-            label: entry.label,
+            label: resolveGatewaySessionDisplayName(key, entry),
             updatedAt: entry.updatedAt ?? discovered.mtime,
             storeEntry: entry,
           },
@@ -382,5 +391,51 @@ export async function selectUsageSessions(params: {
   // Sort by most recent first
   mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
+  // Carry physical targets through filtering; only emitted rows will hydrate context.
+  for (const row of mergedEntries) {
+    const target = targetsBySessionKey.get(row.key);
+    if (!target) {
+      continue;
+    }
+    row.contextTarget = { storeTarget: target.storeTarget, storedKey: target.storeKey ?? row.key };
+  }
+
   return mergedEntries;
+}
+
+export function loadUsageSessionContext(
+  selected: UsageSessionSelection[],
+  visibilityFilter?: (key: string, entry: SessionEntry) => boolean,
+): void {
+  const contextRows = new Map<
+    GatewayStoredSessionTarget["storeTarget"],
+    Array<{ row: UsageSessionSelection; storedKey: string }>
+  >();
+  for (const row of selected) {
+    const target = row.contextTarget;
+    if (target) {
+      const rows = contextRows.get(target.storeTarget) ?? [];
+      rows.push({ row, storedKey: target.storedKey });
+      contextRows.set(target.storeTarget, rows);
+    }
+  }
+  for (const [target, rows] of contextRows) {
+    const entries = new Map(
+      loadExactSessionEntryCandidates({
+        readOnly: true,
+        readSource: { agentId: target.agentId, path: target.storePath },
+        sessionKeys: rows.map(({ storedKey }) => storedKey),
+      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+    for (const { row, storedKey } of rows) {
+      const entry = entries.get(storedKey);
+      // Summary loading can yield across a reset or sharing change; never expose its successor's report.
+      if (
+        entry?.sessionId === row.sessionId &&
+        (!visibilityFilter || visibilityFilter(row.key, entry))
+      ) {
+        row.contextWeight = entry.systemPromptReport;
+      }
+    }
+  }
 }

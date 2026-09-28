@@ -24,9 +24,7 @@ describe("importClaudeHistory", () => {
   it("omits metadata without changing other native conversation rows", async () => {
     appended.length = 0;
     const parse = (entry: Record<string, unknown>) =>
-      parseTranscriptLine(Buffer.from(JSON.stringify(entry)), (value, maxLength) =>
-        typeof value === "string" && value.length <= maxLength ? value : undefined,
-      );
+      parseTranscriptLine(Buffer.from(JSON.stringify(entry)));
     const items = [
       parse({
         type: "user",

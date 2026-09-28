@@ -10,7 +10,7 @@ import {
 import { readTranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.js";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { extractToolBlockCardsCached, extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveToolBlockId } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
@@ -21,6 +21,7 @@ type ProjectedItem = MessageItem & {
 };
 type Source = {
   item: MessageItem;
+  originalMessage: Record<string, unknown>;
   message: Record<string, unknown>;
   index: number;
   remaining: unknown[];
@@ -44,6 +45,9 @@ type Invocation = {
   projections: Projection[];
 };
 
+type CachedBundle = { inputs: unknown[]; message: ProjectedItem["message"] };
+const messagesBySource = new WeakMap<object, Map<string, CachedBundle>>();
+
 function resultBlock(card: ToolCard): Record<string, unknown> {
   return {
     type: "tool_result",
@@ -53,6 +57,11 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
     details: card.details,
     isError: card.isError,
     exitCode: card.exitCode,
+    __openclaw: {
+      id: card.resultMessageId,
+      toolOutput: card.toolOutput,
+      truncated: card.outputTruncated,
+    },
   };
 }
 
@@ -61,12 +70,14 @@ function readProjections(item: MessageItem, index: number): Projection[] {
   if (!message) {
     return [];
   }
+  const originalMessage = message;
   let content = Array.isArray(message.content) ? message.content : [];
   const isToolBlock = (block: unknown) => {
     const type = asRecord(block)?.type;
     return isToolCallContentType(type) || isToolResultContentType(type);
   };
   let blocks = content.filter(isToolBlock);
+  const prepared = new Map<unknown, ToolCard>();
   // Resolve no-id fallback once through the card owner. Keep anonymous pairs
   // in the source while identified siblings still join the invocation registry.
   if (blocks.some((block) => !resolveToolBlockId(asRecord(block)!, message!))) {
@@ -86,10 +97,12 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       }
       const card = pending.splice(cardIndex, 1)[0]!;
       const fields = { id: card.callId, name: card.name, details: card.details };
-      return [
+      const resolved = [
         ...(call ? [{ ...raw, ...fields, arguments: card.args }] : []),
         ...(!call || card.completed || card.outputText !== undefined ? [resultBlock(card)] : []),
       ];
+      resolved.forEach((projection) => prepared.set(projection, card));
+      return resolved;
     });
     message = { ...message, content };
     blocks = content.filter(
@@ -106,9 +119,11 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       return [];
     }
     blocks = [resultBlock(card)];
+    prepared.set(blocks[0], card);
   }
   const source: Source = {
     item,
+    originalMessage,
     message,
     index,
     standalone,
@@ -121,7 +136,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
     const id = resolveToolBlockId(raw, message)!;
     const call = isToolCallContentType(raw.type);
     const live = message["__openclawToolStreamLive"] === true;
-    const [card] = extractToolCardsCached({ ...message, content: [raw] });
+    const card = prepared.get(raw) ?? extractToolBlockCardsCached(originalMessage, raw)[0];
     return {
       source,
       id,
@@ -149,10 +164,20 @@ function readProjections(item: MessageItem, index: number): Projection[] {
       block: {
         ...raw,
         id,
-        ...(call ? { arguments: card?.args } : { text: card?.outputText }),
+        ...(call
+          ? { arguments: card?.args }
+          : {
+              text: card?.outputText,
+              // Preserve the result owner when the call becomes the grouped row.
+              __openclaw: {
+                id: card?.resultMessageId,
+                toolOutput: card?.toolOutput,
+                truncated: card?.outputTruncated,
+              },
+            }),
         ...(card?.details !== undefined ? { details: card.details } : {}),
-        ...(card?.isError !== undefined ? { isError: card.isError } : {}),
-        ...(card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
+        ...(!call && card?.isError !== undefined ? { isError: card.isError } : {}),
+        ...(!call && card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
       },
     };
   });
@@ -246,13 +271,18 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       invocation.live = projection.source.message;
     }
     if (projection.source.standalone) {
-      invocation.attachments.push(...projection.source.remaining);
+      // Attachment pixels follow the winning result too; a live omission must
+      // not survive beside its persisted image or return on a late tool event.
+      if (invocation.result?.source === projection.source) {
+        invocation.attachments = projection.source.remaining;
+      }
       projection.source.remaining = [];
     }
     invocations.set(invocationKey, invocation);
   }
   const rows = new Map<number, ProjectedItem[]>();
-  const bundles = new Map<string, { item: ProjectedItem; index: number }>();
+  const bundles = new Map<string, { item: ProjectedItem; index: number; inputs: unknown[] }>();
+  const memoInputs = new Map<ProjectedItem, { owner: object; inputs: unknown[] }>();
   const unchanged = new Set(sources.values());
   for (const invocation of invocations.values()) {
     const owners = new Set(invocation.projections.map((projection) => projection.source));
@@ -290,8 +320,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     ];
     // Batch only calls with the same message-scoped rendering metadata. Separate
     // result refs or completion states need separate rows, never sibling flags.
-    const bundleKey = JSON.stringify([
-      owner.source.index,
+    const renderingKey = JSON.stringify([
       owner.runId,
       Boolean(invocation.live),
       completed,
@@ -300,6 +329,18 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       invocation.live?.["__openclawToolStreamReceivedAt"],
       (names.get(identity(owner))?.size ?? 0) > 1 ? owner.name : undefined,
     ]);
+    const bundleKey = `${owner.source.index}:${renderingKey}`;
+    const inputs = [
+      renderingKey,
+      identity(owner),
+      owner.name,
+      ...invocation.projections.flatMap(({ source }) => [
+        source.originalMessage,
+        ...(Array.isArray(source.originalMessage.content)
+          ? source.originalMessage.content
+          : [source.originalMessage.content]),
+      ]),
+    ];
     const bundle = bundles.get(bundleKey);
     const prepared = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
     for (const source of [message, invocation.live, result?.source.message]) {
@@ -323,6 +364,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       }
     }
     if (bundle) {
+      bundle.inputs.push(...inputs);
       bundle.item.message.content.push(...content);
       bundle.item.message.activity = [
         ...readPreparedActivity(bundle.item.message),
@@ -353,14 +395,15 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
           : {}),
       },
     };
-    bundles.set(bundleKey, { item, index });
+    bundles.set(bundleKey, { item, index, inputs });
+    memoInputs.set(item, { owner: owner.source.originalMessage, inputs });
   }
   for (const { item, index } of bundles.values()) {
     const row = rows.get(index) ?? [];
     row.push(item);
     rows.set(index, row);
   }
-  return items.flatMap((item, index) => {
+  const result = items.flatMap((item, index) => {
     const source = sources.get(index);
     if (!source || unchanged.has(source)) {
       return [item];
@@ -417,6 +460,34 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     }
     return row;
   });
+  // Assembly and prose/media interleaving are complete. Only messages are
+  // reused: duplicate grouping can still mutate the returned item wrappers.
+  const nextBySource = new Map<object, Map<string, CachedBundle>>();
+  for (const [item, { owner, inputs }] of memoInputs) {
+    inputs.push(item.message.content.length);
+    for (const block of item.message.content) {
+      const raw = asRecord(block);
+      if (isToolCallContentType(raw?.type) || isToolResultContentType(raw?.type)) {
+        inputs.push(raw?.type, raw?.id, raw?.name);
+      } else {
+        inputs.push(block);
+      }
+    }
+    const cached = messagesBySource.get(owner)?.get(item.key);
+    if (
+      cached?.inputs.length === inputs.length &&
+      inputs.every((input, index) => input === cached.inputs[index])
+    ) {
+      item.message = cached.message;
+    }
+    const next = nextBySource.get(owner) ?? new Map<string, CachedBundle>();
+    next.set(item.key, { inputs, message: item.message });
+    nextBySource.set(owner, next);
+  }
+  for (const [owner, next] of nextBySource) {
+    messagesBySource.set(owner, next);
+  }
+  return result;
 }
 
 export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {

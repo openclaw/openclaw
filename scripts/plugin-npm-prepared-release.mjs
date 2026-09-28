@@ -12,15 +12,20 @@ import {
   validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
 import {
+  classifyNpmDistTagVersion,
   fetchNpmRegistryPackumentWithRetry,
   fetchNpmRegistryTarballWithRetry,
   npmRegistryReadbackDeadline,
+  NpmRegistryUnavailableError,
   resolveNpmPublishPlan,
 } from "./lib/npm-publish-plan.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
-import { verifyPluginPublicationArtifact } from "./plugin-publication-artifact.mjs";
+import {
+  inspectPackageTarballBytes,
+  verifyPluginPublicationArtifact,
+} from "./plugin-publication-artifact.mjs";
 
 export const PREPARED_NPM_MANIFEST = "plugin-npm-prepared.json";
 const SCHEMA = "openclaw.plugin-npm-prepared/v1";
@@ -397,6 +402,7 @@ export async function consumePreparedNpmPackage(params) {
       }),
     ),
     outputDir: params.outputDir,
+    verificationOutput: params.verificationOutput,
   });
 }
 
@@ -405,8 +411,44 @@ export async function verifyPreparedNpmRegistry(params) {
     label: "qualified plugin tarball",
     maxBytes: MAX_PACKAGE_BYTES,
   });
-  const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
-  const shasum = createHash("sha1").update(tarball).digest("hex");
+  const { distTags } = await verifyNpmRegistryPublication(params, tarball);
+  if (distTags) {
+    requireNpmDistTagSelection(params, distTags);
+  }
+  return { alreadyPublished: distTags !== null };
+}
+
+// A version this run never published may already be superseded: a later
+// release owns the primary selector, so no tag is verified or repaired for it.
+export async function verifyPublishedNpmRegistry(params) {
+  const { distTags } = await verifyNpmRegistryPublication({
+    ...params,
+    route: "npm-readback",
+    allowMissing: false,
+  });
+  const [primaryTag] = params.publishTags;
+  const supersededBy = distTags[primaryTag];
+  if (classifyNpmDistTagVersion(supersededBy, params.version) === "ahead") {
+    return { alreadyPublished: true, supersededBy };
+  }
+  requireNpmDistTagSelection(params, distTags);
+  return { alreadyPublished: true, supersededBy: null };
+}
+
+function requireNpmDistTagSelection(params, distTags) {
+  for (const publishTag of params.publishTags) {
+    const selectorState = classifyNpmDistTagVersion(distTags[publishTag], params.version);
+    if (selectorState !== "match") {
+      const message = `${params.packageName}: ${publishTag} differs from the prepared version; use authorized tag repair.`;
+      if (selectorState === "missing" || selectorState === "lagging") {
+        throw new NpmRegistryUnavailableError(message);
+      }
+      throw new Error(message);
+    }
+  }
+}
+
+async function verifyNpmRegistryPublication(params, tarball) {
   requireValue(
     PACKAGE.test(params.packageName) && ROUTES.has(params.route),
     "Invalid prepared npm publication request.",
@@ -416,17 +458,15 @@ export async function verifyPreparedNpmRegistry(params) {
   let registry;
   let version;
   for (;;) {
-    try {
-      registry = await fetchNpmRegistryPackumentWithRetry({
-        packageName: params.packageName,
-        packageUrl: `https://registry.npmjs.org/${encodeURIComponent(params.packageName)}`,
-        fetchImpl: params.fetchImpl,
-        deadlineMs,
-      });
-    } catch (error) {
-      requireValue(deadlineMs === undefined || Date.now() < deadlineMs, pendingMessage);
-      throw error;
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      throw new NpmRegistryUnavailableError(pendingMessage);
     }
+    registry = await fetchNpmRegistryPackumentWithRetry({
+      packageName: params.packageName,
+      packageUrl: `https://registry.npmjs.org/${encodeURIComponent(params.packageName)}`,
+      fetchImpl: params.fetchImpl,
+      deadlineMs,
+    });
     requireValue(
       registry.status === 404 || registry.ok,
       `npm registry returned HTTP ${registry.status}.`,
@@ -453,24 +493,29 @@ export async function verifyPreparedNpmRegistry(params) {
         registry.status !== 404 || params.route === "npm-token-bootstrap",
         "Prepared OIDC package no longer exists; obtain an explicitly approved bootstrap.",
       );
-      return { alreadyPublished: false };
+      return { distTags: null };
     }
     const remainingMs = deadlineMs - Date.now();
-    requireValue(remainingMs > 0, pendingMessage);
+    if (remainingMs <= 0) {
+      throw new NpmRegistryUnavailableError(pendingMessage);
+    }
     console.error(pendingMessage);
     await new Promise((resolveDelay) => {
       setTimeout(resolveDelay, Math.min(10_000, remainingMs));
     });
-    requireValue(Date.now() < deadlineMs, pendingMessage);
   }
   requireValue(
     version.name === params.packageName && version.version === params.version,
-    "npm registry version identity differs from the qualified package.",
+    "npm registry version identity differs from the requested package.",
   );
-  requireValue(
-    version.dist?.integrity === integrity && version.dist?.shasum === shasum,
-    `${params.packageName}@${params.version}: registry bytes conflict with the qualified artifact.`,
-  );
+  if (tarball) {
+    requireValue(
+      version.dist?.integrity ===
+        `sha512-${createHash("sha512").update(tarball).digest("base64")}` &&
+        version.dist?.shasum === createHash("sha1").update(tarball).digest("hex"),
+      `${params.packageName}@${params.version}: registry bytes conflict with the qualified artifact.`,
+    );
+  }
   const url = new URL(version.dist.tarball);
   requireValue(
     url.origin === "https://registry.npmjs.org" && !url.username && !url.password,
@@ -479,19 +524,29 @@ export async function verifyPreparedNpmRegistry(params) {
   const published = await fetchNpmRegistryTarballWithRetry({
     packageName: params.packageName,
     packageUrl: url.href,
-    maxBytes: tarball.length,
+    maxBytes: tarball?.length ?? MAX_PACKAGE_BYTES,
     deadlineMs,
     fetchImpl: params.fetchImpl,
   });
-  requireValue(
-    published.length === tarball.length && sha256(published) === sha256(tarball),
-    "Published npm tarball bytes differ from the qualified artifact.",
-  );
-  requireValue(
-    registry.packument["dist-tags"]?.[params.publishTag] === params.version,
-    `${params.packageName}: ${params.publishTag} differs from the prepared version; use authorized tag repair.`,
-  );
-  return { alreadyPublished: true };
+  if (tarball) {
+    requireValue(
+      published.length === tarball.length && sha256(published) === sha256(tarball),
+      "Published npm tarball bytes differ from the qualified artifact.",
+    );
+  } else {
+    requireValue(
+      version.dist?.integrity ===
+        `sha512-${createHash("sha512").update(published).digest("base64")}` &&
+        version.dist?.shasum === createHash("sha1").update(published).digest("hex"),
+      "Published npm tarball bytes differ from registry integrity.",
+    );
+    const { packageManifest } = inspectPackageTarballBytes(published);
+    requireValue(
+      packageManifest.name === params.packageName && packageManifest.version === params.version,
+      "Published npm archive package identity differs from the requested version.",
+    );
+  }
+  return { distTags: registry.packument["dist-tags"] };
 }
 
 function outputValues(file, values) {
@@ -576,6 +631,7 @@ async function main(argv) {
       sourcePackageJson: options["--source-package-json"],
       cacheDir: options["--cache-dir"],
       outputDir: options["--output-dir"],
+      verificationOutput: options["--verification-output"],
     });
     outputValues(options["--github-output"], {
       package_name: result.manifest.package.name,
@@ -586,14 +642,34 @@ async function main(argv) {
       tarball_sha256: result.tarballSha256,
     });
   } else if (command === "registry") {
-    const result = await verifyPreparedNpmRegistry({
-      packageName: options["--package-name"],
-      version: options["--version"],
-      publishTag: options["--publish-tag"],
-      route: options["--route"],
-      tarballPath: options["--tarball"],
-      allowMissing: options["--allow-missing"] === "true",
-    });
+    let result;
+    try {
+      result = await verifyPreparedNpmRegistry({
+        packageName: options["--package-name"],
+        version: options["--version"],
+        publishTags: [options["--publish-tag"]],
+        route: options["--route"],
+        tarballPath: options["--tarball"],
+        allowMissing: options["--allow-missing"] === "true",
+      });
+    } catch (error) {
+      // Only an accepted publish with a parent verifier may defer unavailable
+      // reads. Conflicting bytes/identity and unsafe selectors remain hard failures.
+      if (
+        options["--defer-visibility"] !== "true" ||
+        options["--allow-missing"] !== "false" ||
+        options["--route"] === "npm-readback" ||
+        !(error instanceof NpmRegistryUnavailableError)
+      ) {
+        throw error;
+      }
+      const message = `${options["--package-name"]}@${options["--version"]}: published, visibility pending; the parent's final registry verification must pass before release completion. Do not republish.`;
+      console.warn(`::warning::${message}`);
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        writeFileSync(process.env.GITHUB_STEP_SUMMARY, `- ${message}\n`, { flag: "a" });
+      }
+      return;
+    }
     if (options["--github-output"]) {
       outputValues(options["--github-output"], { already_published: result.alreadyPublished });
     }

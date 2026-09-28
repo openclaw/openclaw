@@ -182,7 +182,7 @@ suite.define(() => {
           .locator(".sidebar-shell__body")
           .evaluate((element) => element.getBoundingClientRect().height),
       ).toBeCloseTo(initial.sidebarHeight, 2);
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
     } finally {
       releaseArtwork();
@@ -264,12 +264,12 @@ suite.define(() => {
             const row = page.locator(
               '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
             );
-            const menu = row.getByRole("button", { name: "Open session menu" });
+            const menu = row.locator(".sidebar-recent-session__link");
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             const card = page.locator(".community-invite-card");
             await expect.poll(() => card.count()).toBe(0);
             if (interaction === "touch") {
-              await menu.tap();
+              await row.locator("[data-sidebar-session-menu]").tap();
               await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
             } else if (interaction === "keyboard") {
               await page.mouse.move(900, 500);
@@ -315,9 +315,9 @@ suite.define(() => {
                 );
                 expect(await card.count()).toBe(0);
                 await page.keyboard.press("Shift+Tab");
-                await menu.press("Enter");
+                await menu.press("Shift+F10");
               } else if (interaction === "pointer") {
-                await menu.click();
+                await row.click({ button: "right" });
               }
               await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
               await page.locator("openclaw-session-menu wa-dropdown-item:focus").waitFor();
@@ -336,7 +336,7 @@ suite.define(() => {
             }
             await card.waitFor({ state: "visible" });
             if (interaction === "touch") {
-              await menu.tap();
+              await row.locator("[data-sidebar-session-menu]").tap();
             } else {
               await row.hover();
             }

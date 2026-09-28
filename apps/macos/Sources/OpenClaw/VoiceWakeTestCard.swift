@@ -20,12 +20,12 @@ struct VoiceWakeTestCard: View {
                 .tint(self.isTesting ? .red : .accentColor)
             }
 
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 self.statusIcon
                 VStack(alignment: .leading, spacing: 4) {
                     Text(verbatim: self.statusText)
                         .font(.subheadline)
-                        .frame(maxHeight: 22, alignment: .center)
+                        .fixedSize(horizontal: false, vertical: true)
                     if case let .detected(text) = testState {
                         Text(String(format: String(localized: "Heard: %@"), text))
                             .font(.footnote)
@@ -33,7 +33,7 @@ struct VoiceWakeTestCard: View {
                             .lineLimit(2)
                     }
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(10)
             .background(.quaternary.opacity(0.2))

@@ -168,18 +168,23 @@ async function inspectEligibleOrigin(localPath: string): Promise<OriginInspectio
 
 /** Optional published-origin fast path; HTTPS transfer remains the canonical fallback. */
 export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec) {
-  const repository = createNodeWorkerRepositoryPreparation(exec);
   return {
     async trySyncWorkspace(
       request: WorkerLocalWorkspaceSyncRequest,
       expectedManifestRef: string,
     ): Promise<OriginSyncOutcome> {
       validateWorkspaceSyncRequest(request);
+      request.authorize?.();
       const inspection = await inspectEligibleOrigin(request.localPath);
+      request.authorize?.();
       if (inspection.kind === "fallback") {
         return inspection;
       }
-      const prepared = await repository.prepareRepository(inspection.identity, expectedManifestRef);
+      const preparation = createNodeWorkerRepositoryPreparation(exec, request.authorize);
+      const prepared = await preparation.prepareRepository(
+        inspection.identity,
+        expectedManifestRef,
+      );
       return prepared.kind === "prepared"
         ? {
             kind: "synced",
@@ -196,13 +201,17 @@ export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec
       request: WorkerLocalWorkspaceSyncRequest,
       result: WorkerWorkspaceSyncResult,
     ): Promise<WorkerWorkspaceSyncResult> {
+      request.authorize?.();
       if (result.mode === "plain") {
         return result;
       }
       const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
         runCommandWithTimeout(argv, { timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 1024 }),
       );
-      await repository.configureAuthor(result.remoteWorkspaceDir, author);
+      await createNodeWorkerRepositoryPreparation(exec, request.authorize).configureAuthor(
+        result.remoteWorkspaceDir,
+        author,
+      );
       return result;
     },
   };

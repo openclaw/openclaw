@@ -76,7 +76,7 @@ export async function artifactFixture(mac: MacScriptFixture) {
   for (const arch of ["arm64", "x86_64"] as const) {
     const worker = path.join(app, workerRoot, arch);
     await write(path.join(worker, "bin/node"), binaries[arch], 0o755);
-    await write(path.join(worker, workerDist, "entry.js"), "// inert package entry\n");
+    await write(path.join(worker, workerDist, "mac-node-worker.js"), "// inert worker entry\n");
     await write(path.join(worker, workerDist, "build-info.json"), JSON.stringify(buildInfo));
     await write(
       path.join(worker, addon),
@@ -87,7 +87,6 @@ export async function artifactFixture(mac: MacScriptFixture) {
       path.join(worker, "lib/native.a"),
       binaries[arch === "arm64" ? "armArchive" : "intelArchive"],
     );
-    await symlink("../lib/node_modules/openclaw/dist/entry.js", path.join(worker, "bin/openclaw"));
     await symlink("native [fixture]", path.join(worker, "lib/node_modules/native-alias"));
   }
   const jq = await mac.run("/bin/sh", ["-c", "command -v jq"], {

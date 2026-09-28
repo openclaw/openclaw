@@ -11,7 +11,7 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "../../server-methods/types.js";
-import { assertValidParams } from "../../server-methods/validation.js";
+import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
 import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
 import { assertTalkSessionStorageTarget } from "../session-target.js";
 import {
@@ -139,71 +139,78 @@ function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkV
 }
 
 export const talkVoiceHandlers: GatewayRequestHandlers = {
-  "talk.voice.get": async (options) => {
-    const { params, respond } = options;
-    if (!assertValidParams(params, validateTalkVoiceGetParams, "talk.voice.get", respond)) {
-      return;
-    }
-    try {
-      const caller = resolveVoiceCaller(options, params);
-      caller.assertCurrent();
-      const selection =
-        caller.kind === "managed" ? caller.managed.read() : readTalkVoiceSelection(caller.session);
-      respond(true, selection, undefined);
-    } catch (error) {
-      respondUnavailable(respond, error);
-    }
-  },
-  "talk.voice.set": async (options) => {
-    const { params, respond, context } = options;
-    if (!assertValidParams(params, validateTalkVoiceSetParams, "talk.voice.set", respond)) {
-      return;
-    }
-    try {
-      const caller = resolveVoiceCaller(options, params);
-      if (caller.kind === "managed") {
-        const result = await caller.managed.changeVoice(params.voice, {
-          assertCurrent: caller.assertCurrent,
-          signal: options.signal,
+  "talk.voice.get": defineValidatedGatewayHandler(
+    "talk.voice.get",
+    validateTalkVoiceGetParams,
+    async (options) => {
+      const { params, respond } = options;
+      try {
+        const caller = resolveVoiceCaller(options, params);
+        caller.assertCurrent();
+        const selection =
+          caller.kind === "managed"
+            ? caller.managed.read()
+            : readTalkVoiceSelection(caller.session);
+        respond(true, selection, undefined);
+      } catch (error) {
+        respondUnavailable(respond, error);
+      }
+    },
+  ),
+  "talk.voice.set": defineValidatedGatewayHandler(
+    "talk.voice.set",
+    validateTalkVoiceSetParams,
+    async (options) => {
+      const { params, respond, context } = options;
+      try {
+        const caller = resolveVoiceCaller(options, params);
+        if (caller.kind === "managed") {
+          const result = await caller.managed.changeVoice(params.voice, {
+            assertCurrent: caller.assertCurrent,
+            signal: options.signal,
+          });
+          respond(true, result, undefined);
+          return;
+        }
+        const result = await requestTalkVoiceChange({
+          ...caller,
+          voice: params.voice,
+          requesterConnId: caller.connId,
+          send: (event) =>
+            context.broadcastToConnIds(
+              "talk.voice.change",
+              event,
+              new Set([caller.session.connId]),
+            ),
         });
         respond(true, result, undefined);
-        return;
+      } catch (error) {
+        respondUnavailable(respond, error);
       }
-      const result = await requestTalkVoiceChange({
-        ...caller,
-        voice: params.voice,
-        requesterConnId: caller.connId,
-        send: (event) =>
-          context.broadcastToConnIds("talk.voice.change", event, new Set([caller.session.connId])),
-      });
-      respond(true, result, undefined);
-    } catch (error) {
-      respondUnavailable(respond, error);
-    }
-  },
-  "talk.voice.complete": async (options) => {
-    const { params, respond, client } = options;
-    if (
-      !assertValidParams(params, validateTalkVoiceCompleteParams, "talk.voice.complete", respond)
-    ) {
-      return;
-    }
-    try {
-      options.sessionMutationCommitGuard?.();
-      options.sessionMutationAuthorization?.assertCurrent();
-      if (
-        !client?.connId ||
-        client.invalidated ||
-        client.connectionSignal?.aborted ||
-        options.hasCurrentClientAuthority?.() === false ||
-        client.internal?.agentRuntimeIdentity
-      ) {
-        throw new Error("Only the connected voice client can acknowledge a voice change");
+    },
+  ),
+  "talk.voice.complete": defineValidatedGatewayHandler(
+    "talk.voice.complete",
+    validateTalkVoiceCompleteParams,
+    async (options) => {
+      const { params, respond, client } = options;
+      try {
+        options.sessionMutationCommitGuard?.();
+        options.sessionMutationAuthorization?.assertCurrent();
+        if (
+          !client?.connId ||
+          client.invalidated ||
+          client.connectionSignal?.aborted ||
+          options.hasCurrentClientAuthority?.() === false ||
+          client.internal?.agentRuntimeIdentity
+        ) {
+          throw new Error("Only the connected voice client can acknowledge a voice change");
+        }
+        await completeTalkVoiceChange({ ...params, connId: client.connId });
+        respond(true, { ok: true }, undefined);
+      } catch (error) {
+        respondUnavailable(respond, error);
       }
-      await completeTalkVoiceChange({ ...params, connId: client.connId });
-      respond(true, { ok: true }, undefined);
-    } catch (error) {
-      respondUnavailable(respond, error);
-    }
-  },
+    },
+  ),
 };

@@ -16,6 +16,7 @@ import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 import { dataHandlingFindings, secretAuthProvenanceFindings } from "./data-auth-findings.js";
 import { execApprovalsFindings } from "./exec-approval-findings.js";
 import { ingressFindings } from "./ingress-findings.js";
+import { createOrderedPolicyShape } from "./ordered-shape.js";
 import { SUPPORTED_TOOL_METADATA } from "./policy-constants.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import {
@@ -188,6 +189,19 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       ? policyRoutingRules(policy)
       : undefined;
   const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile(ctx) : undefined;
+  const evidenceOptions = {
+    includeIngress,
+    includeGatewayExposure,
+    includeAgentWorkspace,
+    includeDataHandling,
+    includeToolPosture: policyHasToolPostureRules(policy),
+    includeSandboxPosture,
+    includeSecrets,
+    includeAuthProfiles,
+    includeExecApprovals,
+    execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
+    routing,
+  };
   let unmigratedToolsFinding: HealthFinding | undefined;
   if (requiredMetadata.size > 0) {
     const [toolsFile, legacyToolsFile] = await Promise.all([
@@ -210,32 +224,10 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     }
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
-      includeIngress,
-      includeGatewayExposure,
-      includeAgentWorkspace,
-      includeDataHandling,
-      includeToolPosture: policyHasToolPostureRules(policy),
-      includeSandboxPosture,
-      includeSecrets,
-      includeAuthProfiles,
-      includeExecApprovals,
-      execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
-      routing,
+      ...evidenceOptions,
     });
   } else {
-    evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
-      includeIngress,
-      includeGatewayExposure,
-      includeAgentWorkspace,
-      includeDataHandling,
-      includeToolPosture: policyHasToolPostureRules(policy),
-      includeSandboxPosture,
-      includeSecrets,
-      includeAuthProfiles,
-      includeExecApprovals,
-      execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
-      routing,
-    });
+    evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, evidenceOptions);
   }
   const policyFindings: HealthFinding[] = [
     ...policyContainerShapeFindings(policy, policyFile.displayName, policyFile.ocDocName),
@@ -421,41 +413,18 @@ function toolMetadataRequirementFindings(
   policyPath: string,
   policyDocName: string,
 ): readonly HealthFinding[] {
-  if (!isRecord(policy) || !isRecord(policy.tools) || policy.tools.requireMetadata === undefined) {
-    return [];
-  }
-  if (!Array.isArray(policy.tools.requireMetadata)) {
-    return [
-      {
-        checkId: CHECK_IDS.policyInvalidFile,
-        severity: "error",
-        message: `${policyPath} tools.requireMetadata must be an array of metadata keys.`,
-        source: "policy",
-        path: policyPath,
-        target: `oc://${policyDocName}/tools/requireMetadata`,
-        fixHint: `Use supported metadata keys: ${SUPPORTED_TOOL_METADATA.join(", ")}.`,
-      },
-    ];
-  }
-  const invalidIndex = policy.tools.requireMetadata.findIndex(
-    (entry) =>
-      typeof entry !== "string" ||
-      !SUPPORTED_TOOL_METADATA.includes(
-        entry.trim().toLowerCase() as (typeof SUPPORTED_TOOL_METADATA)[number],
-      ),
-  );
-  if (invalidIndex < 0) {
-    return [];
-  }
-  return [
-    {
-      checkId: CHECK_IDS.policyInvalidFile,
-      severity: "error",
-      message: `${policyPath} tools.requireMetadata[${invalidIndex}] must be a supported metadata key.`,
-      source: "policy",
-      path: policyPath,
-      target: `oc://${policyDocName}/tools/requireMetadata/#${invalidIndex}`,
-      fixHint: `Use supported metadata keys: ${SUPPORTED_TOOL_METADATA.join(", ")}.`,
+  const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
+  const finding = shape.list("tools.requireMetadata", {
+    allowed: SUPPORTED_TOOL_METADATA,
+    normalize: "lower",
+    array: {
+      message: "{policy} {property} must be an array of metadata keys.",
+      hint: "Use supported metadata keys: {allowed}.",
     },
-  ];
+    entry: {
+      message: "{policy} {property}[{index}] must be a supported metadata key.",
+      hint: "Use supported metadata keys: {allowed}.",
+    },
+  });
+  return finding === undefined ? [] : [finding];
 }

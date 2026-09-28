@@ -9,12 +9,10 @@ import {
   replaceTranscriptEvents,
 } from "./session-accessor.js";
 import { readSessionTranscriptActiveStats } from "./session-accessor.sqlite-active-events.js";
-import {
-  readRecentSessionTranscriptHistoryEvents,
-  readSessionTranscriptHistoryEventCount,
-} from "./session-accessor.sqlite-history-events.js";
+import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
 import {
   historyEventId,
+  readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryAnchorPage,
   readSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,

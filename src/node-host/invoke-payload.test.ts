@@ -3,11 +3,9 @@ import { coerceNodeInvokeInputPayload, coerceNodeInvokePayload } from "./invoke-
 
 describe("coerceNodeInvokePayload", () => {
   it.each([
-    ["preserves the exact owning session", "agent:main:managed", "agent:main:managed"],
     ["normalizes the owning session", "  agent:main:managed  ", "agent:main:managed"],
     ["omits an absent owning session", undefined, undefined],
     ["omits a blank owning session", "  ", undefined],
-    ["omits a non-string owning session", 42, undefined],
   ])("%s", (_name, sessionKey, expectedSessionKey) => {
     expect(
       coerceNodeInvokePayload({

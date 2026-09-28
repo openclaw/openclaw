@@ -48,6 +48,19 @@ describe("applySharedChannelFieldHelp", () => {
     );
   });
 
+  it("does not impose message-window semantics on shared transcript limits", () => {
+    const next = applySharedChannelFieldHelp({
+      "channels.signal.dmHistoryLimit": {},
+      "channels.msteams.accounts.*.dmHistoryLimit": {},
+      "channels.signal.historyLimit": {},
+    });
+    for (const hint of Object.values(next)) {
+      expect(hint.help).toContain("user-turn");
+      expect(hint.help).not.toContain("200");
+      expect(hint.help).not.toContain("0 disables");
+    }
+  });
+
   it("treats empty help as a deliberate suppression, not a missing value", () => {
     const next = applySharedChannelFieldHelp({
       "channels.irc.enabled": { advanced: false, help: "" },

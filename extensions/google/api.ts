@@ -1,4 +1,3 @@
-// Google API module exposes the plugin public contract.
 import {
   resolveProviderHttpRequestConfig,
   type ProviderRequestTransportOverrides,

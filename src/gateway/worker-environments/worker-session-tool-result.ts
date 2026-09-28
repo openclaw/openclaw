@@ -1,10 +1,34 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type {
+  WorkerPortalParams,
+  WorkerPresenceParams,
+  WorkerSessionsSendParams,
+  WorkerSessionsSpawnParams,
+  WorkerSessionToolResult,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { jsonResult } from "../../agents/tools/tool-results.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
+
+export type WorkerSessionToolRequest = {
+  identity: WorkerConnectionIdentity;
+  signal?: AbortSignal;
+} & (
+  | { toolName: "sessions_spawn"; request: WorkerSessionsSpawnParams }
+  | { toolName: "sessions_send"; request: WorkerSessionsSendParams }
+  | { toolName: "portal"; request: WorkerPortalParams }
+  | { toolName: "presence"; request: WorkerPresenceParams }
+  | { toolName: "skill_workshop"; request: WorkerSkillWorkshopParams }
+);
+
+export type WorkerSessionToolExecutor = (
+  request: WorkerSessionToolRequest,
+) => Promise<WorkerSessionToolResult>;
 
 export class WorkerSessionToolOutcomeUnknownError extends Error {
   constructor(cause: unknown) {
@@ -24,8 +48,9 @@ export function workerSessionToolErrorResult(error: unknown) {
   });
 }
 
-function responseFrameBytes(resultJson: string): number {
-  return Buffer.byteLength(
+export function serializeWorkerSessionToolResult(result: unknown): string {
+  const resultJson = JSON.stringify(result);
+  const frameBytes = Buffer.byteLength(
     JSON.stringify({
       type: "res",
       id: "x".repeat(WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH),
@@ -34,11 +59,7 @@ function responseFrameBytes(resultJson: string): number {
     }),
     "utf8",
   );
-}
-
-export function serializeWorkerSessionToolResult(result: unknown): string {
-  const resultJson = JSON.stringify(result);
-  if (responseFrameBytes(resultJson) > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
+  if (frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
     return JSON.stringify(
       workerSessionToolErrorResult(new Error("Worker session tool result exceeded the limit")),
     );

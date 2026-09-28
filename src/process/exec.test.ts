@@ -25,6 +25,32 @@ import {
 const OPENCLAW_CLI_ENV_VALUE = "1";
 
 describe("runCommandWithTimeout", () => {
+  it("inherits a caller-owned stdin descriptor without reading it into JavaScript", async () => {
+    const descriptor = openSync(fileURLToPath(import.meta.url), "r");
+    let running: ReturnType<typeof runCommandWithTimeout>;
+    try {
+      running = runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
+        { stdinFileDescriptor: descriptor, timeoutMs: 3_000 },
+      );
+    } finally {
+      // Spawn duplicates the descriptor before returning to the caller.
+      closeSync(descriptor);
+    }
+    const result = await running;
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("// Exec tests cover command execution");
+  });
+
+  it("rejects competing stdin sources before spawning", async () => {
+    await expect(
+      runCommandWithTimeout([process.execPath, "-e", "process.exit(99)"], {
+        input: "buffered",
+        stdinFileDescriptor: 0,
+      }),
+    ).rejects.toThrow("either input or stdinFileDescriptor");
+  });
+
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
     expect(
       shouldSpawnWithShell({
@@ -50,30 +76,40 @@ describe("runCommandWithTimeout", () => {
           : mode === "default-signal"
             ? "setInterval(()=>{},1000); process.stdout.write('ready');"
             : `const timer=setInterval(()=>{},1000); process.on('SIGINT',()=>{${mode === "cooperative" ? "clearInterval(timer);process.stdout.write('interrupted');process.exitCode=17;" : ""}}); process.stdout.write('ready');`;
-      const running = runCommandWithTimeout([process.execPath, "-e", program], {
-        signal: controller.signal,
-        killProcessTree: true,
-        killSignal: "SIGINT",
-        killGraceMs: 100,
-        timeoutMs: 5000,
-        onOutputChunk: () => {
-          ready();
-        },
-      });
-      await started;
-      if (mode !== "normal") {
-        controller.abort();
-      }
-      const result = await running;
-      expect(result.cleanup).toBe(mode === "default-signal" ? "cooperative" : mode);
-      if (mode === "default-signal") {
-        expect(result).toMatchObject({ code: null, signal: "SIGINT", termination: "signal" });
-      }
-      if (mode === "normal" || mode === "cooperative") {
-        expect(result.code).toBe(17);
-      }
-      if (mode === "cooperative") {
-        expect(result.stdout).toContain("interrupted");
+      // Keep process I/O and polling real, but don't let host scheduling consume the grace period.
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      try {
+        const running = runCommandWithTimeout([process.execPath, "-e", program], {
+          signal: controller.signal,
+          killProcessTree: true,
+          killSignal: "SIGINT",
+          killGraceMs: 100,
+          timeoutMs: 5000,
+          onOutputChunk: () => {
+            ready();
+          },
+        });
+        await started;
+        if (mode !== "normal") {
+          controller.abort();
+        }
+        if (mode === "forced") {
+          now.mockReturnValue(1_100);
+        }
+        const result = await running;
+        expect(result.cleanup).toBe(mode === "default-signal" ? "cooperative" : mode);
+        expect(result.killIssuedByAbort).toBe(mode === "normal" ? undefined : true);
+        if (mode === "default-signal") {
+          expect(result).toMatchObject({ code: null, signal: "SIGINT", termination: "signal" });
+        }
+        if (mode === "normal" || mode === "cooperative") {
+          expect(result.code).toBe(17);
+        }
+        if (mode === "cooperative") {
+          expect(result.stdout).toContain("interrupted");
+        }
+      } finally {
+        now.mockRestore();
       }
     },
   );
@@ -111,6 +147,29 @@ describe("runCommandWithTimeout", () => {
           await waitForPidToExit(descendant);
         }
       }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["SIGKILL", 9] as const)(
+    "reports normal extinction after a successful native-style command with timeout signal %s",
+    async (killSignal) => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdout.write('enabled\\n')"],
+        {
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+          killSignal,
+          timeoutMs: 5_000,
+        },
+      );
+      expect(result).toMatchObject({
+        termination: "exit",
+        code: 0,
+        signal: null,
+        stdout: "enabled\n",
+        stderr: "",
+        cleanup: "normal",
+      });
     },
   );
 
@@ -275,6 +334,7 @@ describe("runCommandWithTimeout", () => {
         termination: "signal",
         cleanup: "uncertain",
       });
+      expect(result.killIssuedByAbort).toBeUndefined();
     },
   );
 
@@ -312,18 +372,6 @@ describe("runCommandWithTimeout", () => {
           process.env.comspec = previousComspec;
         }
       }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "swallows stdin EPIPE when the child exits before input is consumed (#75438)",
-    { timeout: 5_000 },
-    async () => {
-      const result = await runCommandWithTimeout([process.execPath, "-e", "process.exit(0)"], {
-        timeoutMs: 3_000,
-        input: "this input will EPIPE because the child ignores stdin\n",
-      });
-      expect(result.code).toBe(0);
     },
   );
 
@@ -710,6 +758,9 @@ describe("runCommandBuffered", () => {
             // clock so missing post-termination release still reaches test cleanup.
             const closed = once(parent, "close", { signal: AbortSignal.timeout(1_000) });
             await vi.advanceTimersByTimeAsync(timeoutMs - 101);
+            await vi.advanceTimersToNextTimerAsync();
+            await vi.advanceTimersByTimeAsync(100);
+            await vi.advanceTimersToNextTimerAsync();
             await vi.advanceTimersByTimeAsync(100);
             // Output release runs in the next timers phase so buffered pipe I/O
             // gets a poll turn on both Node and Bun.
@@ -724,6 +775,9 @@ describe("runCommandBuffered", () => {
           if (exitCode === 0) {
             expect(existsSync(termPath)).toBe(false);
             await vi.advanceTimersByTimeAsync(50);
+            await vi.advanceTimersToNextTimerAsync();
+            await vi.advanceTimersByTimeAsync(100);
+            await vi.advanceTimersToNextTimerAsync();
           }
           for (let attempt = 0; attempt < 40 && !existsSync(termPath); attempt += 1) {
             await new Promise<void>((resolve) => {
@@ -923,77 +977,5 @@ describe("attachChildProcessBridge", () => {
     child.emit("exit");
     expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
     detach();
-  });
-});
-
-describe("child input admission", () => {
-  it("publishes input only after binding the actual spawned PID and argv", async () => {
-    let admittedPid: number | undefined;
-    let admittedArgv: readonly string[] | undefined;
-    const result = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        "let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({pid:process.pid,argv:[process.argv0,...process.execArgv,...process.argv.slice(1)],input})))",
-      ],
-      {
-        input: "owned",
-        timeoutMs: 5_000,
-        beforeInput: (pid, argv) => {
-          admittedPid = pid;
-          admittedArgv = argv;
-        },
-      },
-    );
-    expect(result.code).toBe(0);
-    expect(admittedArgv).toBeDefined();
-    expect(JSON.parse(result.stdout)).toEqual({
-      pid: admittedPid,
-      argv: admittedArgv,
-      input: "owned",
-    });
-  });
-
-  it("joins the child without delivering input when admission rejects", async () => {
-    let pid: number | undefined;
-    const refusal = new Error("authority lost before input");
-    const work = runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        "process.stdin.on('data',()=>process.stdout.write('effect'));setInterval(()=>{},1000)",
-      ],
-      {
-        input: "forbidden",
-        timeoutMs: 5_000,
-        killProcessTree: true,
-        beforeInput: (childPid) => {
-          pid = childPid;
-          throw refusal;
-        },
-      },
-    );
-    await expect(work).rejects.toBe(refusal);
-    expect(refusal).toMatchObject({
-      cleanup: process.platform === "win32" ? "forced" : "cooperative",
-    });
-    expect(pid).toBeTypeOf("number");
-    expect(isPidAlive(pid!)).toBe(false);
-  });
-
-  it("rejects asynchronous admission and drains its rejection before returning", async () => {
-    let pid: number | undefined;
-    const options = { input: "forbidden", timeoutMs: 5_000, killProcessTree: true };
-    // Model an untyped JS caller; the typed callback contract forbids a Promise.
-    Reflect.set(options, "beforeInput", async (childPid: number) => {
-      pid = childPid;
-      throw new Error("late refusal");
-    });
-    const work = runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdin.resume();setInterval(()=>{},1000)"],
-      options,
-    );
-    await expect(work).rejects.toThrow("must complete synchronously");
-    expect(isPidAlive(pid!)).toBe(false);
   });
 });

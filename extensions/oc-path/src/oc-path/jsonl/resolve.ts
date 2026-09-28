@@ -18,7 +18,7 @@
 import type { JsoncEntry, JsoncValue } from "../jsonc/ast.js";
 import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
 import type { OcPath } from "../oc-path.js";
-import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from "../oc-path.js";
+import { splitOcPathSlots } from "../oc-path.js";
 import type { JsonlAst, JsonlLine } from "./ast.js";
 import { pickJsonlLine } from "./line.js";
 
@@ -59,29 +59,9 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
     return null;
   }
 
-  const segments: string[] = [];
-  if (path.item !== undefined) {
-    for (const s of splitRespectingBrackets(path.item, ".")) {
-      segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
-    }
-  }
-  if (path.field !== undefined) {
-    for (const s of splitRespectingBrackets(path.field, ".")) {
-      segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
-    }
-  }
-
-  const match = resolveJsoncValueOcPath(lineEntry.value, segments);
+  const match = resolveJsoncValueOcPath(lineEntry.value, splitOcPathSlots(path.item, path.field));
   if (match === null) {
     return null;
   }
-  if (match.kind === "object-entry") {
-    return {
-      kind: "object-entry",
-      node: match.node,
-      line: lineEntry.line,
-      path: match.path,
-    };
-  }
-  return { kind: "value", node: match.node, line: lineEntry.line, path: match.path };
+  return { ...match, line: lineEntry.line };
 }

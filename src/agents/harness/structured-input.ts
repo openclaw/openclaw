@@ -20,7 +20,7 @@ import type {
   StructuredInputValue,
 } from "./structured-input-boundary.js";
 import { compileStructuredInputField } from "./structured-input-schema.js";
-import type { AgentHarnessUserInputQuestion } from "./user-input-bridge.js";
+import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
 const MAX_FORM_FIELDS = 12;
 const MAX_SCHEMA_KEYS = 24;

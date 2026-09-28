@@ -2,15 +2,18 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { recordStartupRecoveryStoreResult } from "../../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
+import { createGatewayHostLifecycle } from "../../cli/gateway-cli/host-lifecycle.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { HealthSummary } from "../health/types.js";
+import type { GatewayHostLifecycle } from "../server-public.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { healthHandlers } from "./health.js";
 
@@ -24,6 +27,7 @@ async function callStatus(
   config: OpenClawConfig,
   scopes = ["operator.read"],
   options: { includeCliProjection?: boolean } = {},
+  hostLifecycle?: GatewayHostLifecycle,
 ) {
   setRuntimeConfigSnapshot(config, config);
   const respond = vi.fn();
@@ -31,7 +35,12 @@ async function callStatus(
     req: {} as never,
     params: { includeChannelSummary: false, ...options },
     respond: respond as never,
-    context: {} as never,
+    context: {
+      hostLifecycle,
+      cron: { getSuspensionBlockerCount: () => 0 },
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+    } as never,
     client: { connect: { role: "operator", scopes } } as never,
     isWebchatConnect: () => false,
   });
@@ -39,6 +48,51 @@ async function callStatus(
 }
 
 describe("Gateway status owner routing", () => {
+  it("reports only the current host's recorded shutdown budget and resident PID", async () => {
+    await withStateDirEnv("openclaw-gateway-budget-status-", async ({ stateDir }) => {
+      const config = {
+        agents: { entries: { main: {} } },
+        session: { store: path.join(stateDir, "sessions.json") },
+      };
+      let current = true;
+      let recorded = {
+        timeoutMs: 25_000,
+        reserveMs: 10_000,
+        nativeStopBudget: true,
+      };
+      const host = createGatewayHostLifecycle({
+        isCurrent: () => current,
+        isServing: () => true,
+        acceptStop: () => {},
+        processOwner: { ownsProcessLifecycle: false, supervisor: "systemd" },
+        getShutdownBudget: () => recorded,
+      });
+      const release = beginLifecycleWriteCustody("migration");
+      try {
+        for (const timeoutMs of [25_000, 325_000]) {
+          recorded = { timeoutMs, reserveMs: 10_000, nativeStopBudget: true };
+          const response = await callStatus(config, undefined, {}, host.capability);
+          expect(response.mock.calls[0]?.[1]).toMatchObject({
+            pid: process.pid,
+            shutdownBudget: {
+              ...recorded,
+              writeCustody: [{ phase: "migration", count: 1 }],
+              activeWork: { lifecycleWrites: 1 },
+            },
+          });
+        }
+        current = false;
+        const replaced = await callStatus(config, undefined, {}, host.capability);
+        expect(replaced.mock.calls[0]?.[1].shutdownBudget).toBeUndefined();
+        const absent = await callStatus(config);
+        expect(absent.mock.calls[0]?.[1].shutdownBudget).toBeUndefined();
+      } finally {
+        release();
+        await host.retire();
+      }
+    });
+  });
+
   it.each(["status", "cached health", "refreshed health"] as const)(
     "reports current model acquisition and recovery through %s",
     async (surface) => {
@@ -96,6 +150,63 @@ describe("Gateway status owner routing", () => {
         const recovered = await read();
         expect(recovered.mock.calls[0]?.[0]).toBe(true);
         expect(recovered.mock.calls[0]?.[1].modelRuntime).toEqual(complete);
+      });
+    },
+  );
+
+  it.each([
+    { changeDuringRead: true, reset: false },
+    { changeDuringRead: true, reset: true },
+    { changeDuringRead: false, reset: true },
+  ])(
+    "keeps cached health diagnostics current ($changeDuringRead, $reset)",
+    async ({ changeDuringRead, reset }) => {
+      await withStateDirEnv("openclaw-gateway-health-diagnostics-", async ({ stateDir }) => {
+        const initial = {
+          degraded: false,
+          degradedSinceMs: null,
+          reasons: [],
+          intervalMs: 1_000,
+          delayP99Ms: 20,
+          delayMaxMs: 25,
+          utilization: 0.2,
+          cpuCoreRatio: 0.1,
+        } satisfies NonNullable<HealthSummary["eventLoop"]>;
+        const cached: HealthSummary = {
+          ok: true,
+          ts: Date.now(),
+          durationMs: 1,
+          channels: {},
+          channelOrder: [],
+          channelLabels: {},
+          heartbeatSeconds: 0,
+          agents: [],
+          sessions: { path: path.join(stateDir, "sessions.json"), count: 0, recent: [] },
+          eventLoop: initial,
+        };
+        let current: HealthSummary["eventLoop"] = changeDuringRead ? initial : undefined;
+        const next = reset ? undefined : { ...initial, cpuCoreRatio: 1.2 };
+        const respond = vi.fn();
+        const request = healthHandlers.health!({
+          req: {} as never,
+          params: {},
+          respond: respond as never,
+          context: {
+            getHealthCache: () => cached,
+            refreshHealthSnapshot: vi.fn(async () => cached),
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            getEventLoopHealth: () => current,
+            logHealth: { error: vi.fn() },
+          } as never,
+          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+          isWebchatConnect: () => false,
+        });
+        current = next;
+        await request;
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[1].eventLoop).toBe(next);
+        expect(respond.mock.calls[0]?.[3]).toEqual({ cached: true });
+        expect(cached.eventLoop).toBe(initial);
       });
     },
   );

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
-  replaceSessionEntry,
+  ensureSessionEntrySync,
   replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -26,6 +26,7 @@ import {
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -38,6 +39,7 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import {
   readSessionMessageCountAsync,
   readSessionMessagesMatchingIdAsync,
@@ -58,7 +60,8 @@ async function fixture(messageId = "attached") {
   const sessionKey = `agent:main:${sessionId}`;
   const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   const scope = { agentId: "main", sessionId, sessionKey, storePath };
-  await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+  // This fixture owns the competing writer; background entry maintenance must not join it.
+  expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
   const attachmentId = randomUUID();
   const body = Buffer.from("synthetic managed original\n");
   const mediaRoot = path.join(stateDir, "media");
@@ -66,7 +69,7 @@ async function fixture(messageId = "attached") {
   const originalPath = path.join(mediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
   fs.mkdirSync(path.dirname(originalPath), { recursive: true });
   fs.writeFileSync(originalPath, body);
-  insertManagedImageRecord(
+  await insertManagedImageRecord(
     {
       attachmentId,
       sessionKey,
@@ -334,13 +337,14 @@ describe("managed attachment SQLite visibility", () => {
       seq: number;
       event_json: string;
     };
-    const writer = new DatabaseSync(database.path);
+    // Match runtime connection admission instead of failing immediately on an
+    // unrelated transient lock. The write still commits inside the read snapshot.
+    const writer = new DatabaseSync(database.path, { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
     const parse = JSON.parse;
     let rewrote = false;
     const spy = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
       if (!rewrote && value === JSON.stringify(other)) {
         rewrote = true;
-        expect(database.db.isTransaction).toBe(true);
         writer.exec("BEGIN IMMEDIATE");
         try {
           rewriteSqliteTranscriptEventRowsInTransaction({ ...database, db: writer }, f.scope, [
@@ -359,7 +363,15 @@ describe("managed attachment SQLite visibility", () => {
       return parse(value, reviver);
     });
     try {
-      expect(await f.download()).not.toBeNull();
+      // Run the worker's reader kernel here so this deterministic competing writer
+      // fires inside its read snapshot; the other cases exercise actual dispatch.
+      const reader = createReadonlySessionHistoryReader({
+        database: { agentId: "main", path: database.path },
+        transcript: { ...f.scope, sessionFile: f.scope.sessionKey },
+      });
+      expect(await reader.readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toMatchObject([
+        { content: [f.block] },
+      ]);
       expect(rewrote).toBe(true);
       expect(database.db.isTransaction).toBe(false);
     } finally {

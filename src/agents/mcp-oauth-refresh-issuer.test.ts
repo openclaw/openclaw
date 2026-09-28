@@ -2,11 +2,14 @@ import path from "node:path";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
+import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 const SERVER_NAME = "Remote Docs";
 const SERVER_URL = "https://mcp.example.com/mcp";
@@ -25,10 +28,12 @@ async function withTempHome<T>(
   return withBaseTempHome(async (home) => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     try {
       return await run();
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
@@ -99,27 +104,26 @@ async function seedAuthorizedStore(
   order: "discovery-then-tokens" | "tokens-then-discovery",
   expiresIn = 3600,
 ) {
-  const provider = createMcpOAuthClientProvider({
-    identity: IDENTITY,
+  await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+    const discoveryState = {
+      authorizationServerUrl: ORIGINAL_ISSUER,
+      resourceMetadataUrl: ORIGINAL_METADATA_URL,
+    };
+    const tokens = {
+      access_token: STORED_ACCESS,
+      refresh_token: STORED_REFRESH,
+      token_type: "Bearer",
+      expires_in: expiresIn,
+    };
+    await provider.saveClientInformation?.({ client_id: "stored-client-id" });
+    if (order === "discovery-then-tokens") {
+      await provider.saveDiscoveryState?.(discoveryState);
+      await provider.saveTokens(tokens);
+    } else {
+      await provider.saveTokens(tokens);
+      await provider.saveDiscoveryState?.(discoveryState);
+    }
   });
-  const discoveryState = {
-    authorizationServerUrl: ORIGINAL_ISSUER,
-    resourceMetadataUrl: ORIGINAL_METADATA_URL,
-  };
-  const tokens = {
-    access_token: STORED_ACCESS,
-    refresh_token: STORED_REFRESH,
-    token_type: "Bearer",
-    expires_in: expiresIn,
-  };
-  await provider.saveClientInformation?.({ client_id: "stored-client-id" });
-  if (order === "discovery-then-tokens") {
-    await provider.saveDiscoveryState?.(discoveryState);
-    await provider.saveTokens(tokens);
-  } else {
-    await provider.saveTokens(tokens);
-    await provider.saveDiscoveryState?.(discoveryState);
-  }
 }
 
 function buildOAuthFetch(fetchFn: FetchLike) {
@@ -140,8 +144,14 @@ const TEMP_HOME_OPTIONS = {
 };
 
 describe("MCP OAuth refresh issuer binding", () => {
-  beforeEach(() => closeOpenClawStateDatabaseForTest());
-  afterEach(() => closeOpenClawStateDatabaseForTest());
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
 
   it("does not send the stored refresh token to a different issuer from a challenge", async () => {
     await withTempHome(
@@ -158,7 +168,7 @@ describe("MCP OAuth refresh issuer binding", () => {
         ).rejects.toThrow(/requires OAuth authorization/);
 
         expect(network.tokenRequests).toEqual([]);
-        expect(readStore().tokens).toMatchObject({
+        expect((await readStore()).tokens).toMatchObject({
           access_token: STORED_ACCESS,
           refresh_token: STORED_REFRESH,
         });
@@ -186,7 +196,7 @@ describe("MCP OAuth refresh issuer binding", () => {
         expect(network.tokenRequests).toHaveLength(1);
         expect(network.tokenRequests[0]?.url).toBe(`${ORIGINAL_ISSUER}/token`);
         expect(network.tokenRequests[0]?.body).toContain(`refresh_token=${STORED_REFRESH}`);
-        expect(readStore().tokens?.access_token).toBe("rotated-access");
+        expect((await readStore()).tokens?.access_token).toBe("rotated-access");
       },
       { prefix: "openclaw-mcp-oauth-issuer-same-", ...TEMP_HOME_OPTIONS },
     );
@@ -211,16 +221,20 @@ describe("MCP OAuth refresh issuer binding", () => {
       await withTempHome(
         async () => {
           await seedAuthorizedStore("discovery-then-tokens");
-          const provider = createMcpOAuthClientProvider({
-            identity: IDENTITY,
-          });
-          await provider.saveDiscoveryState?.({
-            authorizationServerUrl: issuer,
-            resourceMetadataUrl: REPLACEMENT_METADATA_URL,
-          });
+          await withMcpOAuthProviderForTest(
+            {
+              identity: IDENTITY,
+            },
+            async (provider) => {
+              await provider.saveDiscoveryState?.({
+                authorizationServerUrl: issuer,
+                resourceMetadataUrl: REPLACEMENT_METADATA_URL,
+              });
 
-          expect(provider.tokens()).toBeUndefined();
-          expect(readStore().tokens).toMatchObject({
+              expect(await provider.tokens()).toBeUndefined();
+            },
+          );
+          expect((await readStore()).tokens).toMatchObject({
             access_token: STORED_ACCESS,
             refresh_token: STORED_REFRESH,
           });
@@ -234,8 +248,8 @@ describe("MCP OAuth refresh issuer binding", () => {
     await withTempHome(
       async () => {
         await seedAuthorizedStore("tokens-then-discovery", 0);
-        expect(readStore().tokensAuthorizationServerUrl).toBeUndefined();
-        expect(readStore().discoveryState?.authorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
+        expect((await readStore()).discoveryState?.authorizationServerUrl).toBe(ORIGINAL_ISSUER);
         const network = createOAuthNetwork({
           challengeMetadataUrl: ORIGINAL_METADATA_URL,
           issuer: ORIGINAL_ISSUER,
@@ -251,7 +265,7 @@ describe("MCP OAuth refresh issuer binding", () => {
         expect(network.tokenRequests).toHaveLength(1);
         expect(network.tokenRequests[0]?.url).toBe(`${ORIGINAL_ISSUER}/token`);
         expect(network.tokenRequests[0]?.body).toContain(`refresh_token=${STORED_REFRESH}`);
-        expect(readStore().tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
       },
       { prefix: "openclaw-mcp-oauth-issuer-upgrade-", ...TEMP_HOME_OPTIONS },
     );
@@ -278,7 +292,7 @@ describe("MCP OAuth refresh issuer binding", () => {
         ).rejects.toThrow(/requires OAuth authorization/);
 
         expect(newIssuer.tokenRequests).toEqual([]);
-        expect(readStore().tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
       },
       { prefix: "openclaw-mcp-oauth-issuer-upgrade-challenge-", ...TEMP_HOME_OPTIONS },
     );
@@ -288,7 +302,7 @@ describe("MCP OAuth refresh issuer binding", () => {
     await withTempHome(
       async () => {
         await seedAuthorizedStore("tokens-then-discovery");
-        expect(readStore().tokensAuthorizationServerUrl).toBeUndefined();
+        expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
         const network = createOAuthNetwork({
           challengeMetadataUrl: REPLACEMENT_METADATA_URL,
           issuer: REPLACEMENT_ISSUER,
@@ -300,8 +314,8 @@ describe("MCP OAuth refresh issuer binding", () => {
         ).rejects.toThrow(/requires OAuth authorization/);
 
         expect(network.tokenRequests).toEqual([]);
-        expect(readStore().tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
-        expect(readStore().tokens).toMatchObject({
+        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        expect((await readStore()).tokens).toMatchObject({
           access_token: STORED_ACCESS,
           refresh_token: STORED_REFRESH,
         });
@@ -313,18 +327,22 @@ describe("MCP OAuth refresh issuer binding", () => {
   it("fails closed for a token-only legacy store with no recoverable issuer", async () => {
     await withTempHome(
       async () => {
-        const provider = createMcpOAuthClientProvider({
-          identity: IDENTITY,
-        });
-        await provider.saveClientInformation?.({ client_id: "stored-client-id" });
-        await provider.saveTokens({
-          access_token: STORED_ACCESS,
-          refresh_token: STORED_REFRESH,
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
-        expect(readStore().discoveryState).toBeUndefined();
-        expect(readStore().tokensAuthorizationServerUrl).toBeUndefined();
+        await withMcpOAuthProviderForTest(
+          {
+            identity: IDENTITY,
+          },
+          async (provider) => {
+            await provider.saveClientInformation?.({ client_id: "stored-client-id" });
+            await provider.saveTokens({
+              access_token: STORED_ACCESS,
+              refresh_token: STORED_REFRESH,
+              token_type: "Bearer",
+              expires_in: 3600,
+            });
+          },
+        );
+        expect((await readStore()).discoveryState).toBeUndefined();
+        expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
         const network = createOAuthNetwork({
           challengeMetadataUrl: REPLACEMENT_METADATA_URL,
           issuer: REPLACEMENT_ISSUER,
@@ -336,7 +354,7 @@ describe("MCP OAuth refresh issuer binding", () => {
         ).rejects.toThrow(/OAuth authorization/);
 
         expect(network.tokenRequests).toEqual([]);
-        expect(readStore().tokens).toMatchObject({ refresh_token: STORED_REFRESH });
+        expect((await readStore()).tokens).toMatchObject({ refresh_token: STORED_REFRESH });
       },
       { prefix: "openclaw-mcp-oauth-issuer-tokenonly-", ...TEMP_HOME_OPTIONS },
     );
@@ -356,8 +374,9 @@ describe("MCP OAuth refresh issuer binding", () => {
           buildOAuthFetch(network.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
         ).rejects.toThrow(/OAuth authorization/);
 
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
-        expect(readStore().tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
       },
       { prefix: "openclaw-mcp-oauth-issuer-reload-", ...TEMP_HOME_OPTIONS },
     );

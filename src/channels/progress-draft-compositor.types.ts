@@ -35,7 +35,10 @@ export type ChannelProgressDraftCompositorParams = {
   mode: StreamingMode;
   active: boolean;
   seed: string;
-  update: (
+  /** Display data only; hydration neither starts publishing nor proves visibility. */
+  initialSnapshot?: ChannelProgressDraftCompositorSnapshot;
+  /** Omit to prepare display data without publication or timers. */
+  update?: (
     text: string,
     options: ChannelProgressDraftUpdateOptions,
   ) => Promise<boolean | void> | boolean | void;

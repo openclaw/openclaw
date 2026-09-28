@@ -16,7 +16,7 @@ import { appendAssistantTranscriptRoleText, appendImageAlternative } from "./ir-
 import {
   appendHtmlTags,
   attachBlockMetadata,
-  attachListItemMetadata,
+  copyMarkdownListItem,
   copyHtmlTags,
   defineMetadata,
   RAW_HTML_TOKEN_TYPE,
@@ -231,6 +231,12 @@ export type MarkdownParseOptions = {
    * instead of emphasis delimiters. Disabled by default.
    */
   preserveDunderIdentifiers?: boolean;
+  /**
+   * Let links with any scheme (file:, data:, javascript:, ...) tokenize instead
+   * of being dropped by markdown-it's built-in denylist. Only set this when the
+   * caller's own `buildLink` already applies a scheme allowlist downstream.
+   */
+  allowAllLinkSchemes?: boolean;
 };
 
 function appendHeadingSeparator(state: RenderState, nextBlockStart: number | undefined) {
@@ -249,7 +255,7 @@ function appendHeadingSeparator(state: RenderState, nextBlockStart: number | und
   state.headingLineEnd = undefined;
 }
 
-// These seven parser switches bound the prepared configurations to 128 entries.
+// These eight parser switches bound the prepared configurations to 256 entries.
 // Parse state and rendered options remain local to each markdownToIRWithMeta call.
 const markdownParsers = new Map<number, MarkdownItParser>();
 
@@ -261,7 +267,8 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
     (options.enableHtmlUnderline ? 8 : 0) |
     (options.enableSpoilers ? 16 : 0) |
     (options.tableMode && options.tableMode !== "off" ? 32 : 0) |
-    (options.autolink === false ? 64 : 0);
+    (options.autolink === false ? 64 : 0) |
+    (options.allowAllLinkSchemes ? 128 : 0);
   const prepared = markdownParsers.get(key);
   if (prepared) {
     return prepared;
@@ -315,18 +322,25 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   if (options.autolink === false) {
     md.disable("autolink");
   }
+  if (options.allowAllLinkSchemes) {
+    // markdown-it's default validateLink drops file:/javascript:/vbscript:/data:
+    // links before they ever tokenize as a link, so the raw `[label](href)`
+    // source leaks through unparsed. Scheme allowlisting belongs to the
+    // renderer's own buildLink policy, not this parser (see image-spans.ts).
+    md.validateLink = () => true;
+  }
   markdownParsers.set(key, md);
   return md;
 }
 
 /** Count fenced code body characters using the same block grammar as rendering. */
 export function countMarkdownFencedCodeChars(markdown: string): number {
-  const tokens = createMarkdownIt({ linkify: false, autolink: false, tableMode: "bullets" }).parse(
-    markdown,
-    {},
-  );
+  if (!markdown.includes("```") && !markdown.includes("~~~")) {
+    return 0;
+  }
+  const parser = createMarkdownIt({ linkify: false, autolink: false, tableMode: "bullets" });
   let count = 0;
-  for (const token of tokens) {
+  for (const token of parser.parse(markdown, {})) {
     if (token.type === "fence") {
       // The parser's final LF frames the code body; counting it shifts the speech threshold.
       count += token.content.length - (token.content.endsWith("\n") ? 1 : 0);
@@ -1121,28 +1135,14 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
           const markerOnly = !state.text
             .slice(markerEnd, markerContentEnd)
             .replace(/[ \t\r\n]/gu, "");
-          const listItem: MarkdownListItemMarker = {
-            kind: item.kind,
-            ...(item.listMarker ? { listMarker: item.listMarker } : {}),
-            ...(item.task ? { task: true } : {}),
-            ...(item.taskMarker ? { taskMarker: item.taskMarker } : {}),
-            ...(item.listId !== undefined ? { listId: item.listId } : {}),
-            ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-            ...(item.depth !== undefined ? { depth: item.depth } : {}),
-            ...(item.start !== undefined ? { start: item.start } : {}),
-            end,
-          };
           state.listItems.push(
-            attachListItemMetadata(listItem, {
+            copyMarkdownListItem(item, {
+              listMarker: item.listMarker,
+              taskMarker: item.taskMarker,
+              start: item.start,
+              end,
               ...(contentEnd > contentStart ? { contentStart, contentEnd } : {}),
-              ...((item.sourceMarker ? item.markerOnly : markerOnly)
-                ? { markerOnly: true as const }
-                : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
+              markerOnly: (item.sourceMarker ? item.markerOnly : markerOnly) ? true : undefined,
             }),
           );
         }
@@ -1174,7 +1174,6 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendText(state, token.content ?? "", token);
         break;
 
-      // Table handling
       case "table_open":
         if (state.tableMode !== "off") {
           state.table = initTableState();
@@ -1425,33 +1424,19 @@ export function markdownToIRWithMeta(
       : undefined;
     return listMarker || taskMarker
       ? [
-          attachListItemMetadata(
-            {
-              kind: item.kind,
-              ...(listMarker ? { listMarker } : {}),
-              ...(item.task ? { task: true as const } : {}),
-              ...(taskMarker ? { taskMarker } : {}),
-              ...(item.listId !== undefined ? { listId: item.listId } : {}),
-              ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-              ...(item.depth !== undefined ? { depth: item.depth } : {}),
-              ...(item.start !== undefined ? { start: Math.min(item.start, finalLength) } : {}),
-              ...(item.end !== undefined ? { end: Math.min(item.end, finalLength) } : {}),
-            },
-            {
-              ...(item.contentStart !== undefined
-                ? { contentStart: Math.min(item.contentStart, finalLength) }
-                : {}),
-              ...(item.contentEnd !== undefined
-                ? { contentEnd: Math.min(item.contentEnd, finalLength) }
-                : {}),
-              ...(item.markerOnly ? { markerOnly: true as const } : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
-            },
-          ),
+          copyMarkdownListItem(item, {
+            listMarker,
+            taskMarker,
+            start: item.start !== undefined ? Math.min(item.start, finalLength) : undefined,
+            end: item.end !== undefined ? Math.min(item.end, finalLength) : undefined,
+            contentStart:
+              item.contentStart !== undefined
+                ? Math.min(item.contentStart, finalLength)
+                : undefined,
+            contentEnd:
+              item.contentEnd !== undefined ? Math.min(item.contentEnd, finalLength) : undefined,
+            markerOnly: item.markerOnly,
+          }),
         ]
       : [];
   });

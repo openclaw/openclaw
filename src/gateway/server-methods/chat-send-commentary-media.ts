@@ -19,6 +19,7 @@ import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { readAssistantTextBlocksForPhase } from "../../shared/chat-message-content.js";
 import {
+  attachManagedOutgoingMediaToMessage,
   buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
   prepareOutgoingMediaFromReplyPayload,
@@ -137,7 +138,7 @@ export function observeChatSendCommentaryMedia(params: {
           if (!anchor) {
             const { waitForSessionTranscriptProjection } =
               await import("../../config/sessions/session-transcript-reconcile.js");
-            await waitForSessionTranscriptProjection(scope);
+            await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
             anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
           }
@@ -145,7 +146,7 @@ export function observeChatSendCommentaryMedia(params: {
             return;
           }
           const managedMedia = new Map<string, AssistantDisplayContentBlock[]>();
-          let attached = false;
+          let committed = false;
           try {
             const mediaScope = captureWebchatReplyMediaScope({
               requesterContext: params.requesterContext,
@@ -163,10 +164,10 @@ export function observeChatSendCommentaryMedia(params: {
               });
               assertCurrent();
               for (const [index, payload] of payloads.entries()) {
+                // History ownership starts after the rewrite; GC can run during preparation.
                 const blocks = await createManagedOutgoingMediaBlocks({
                   sessionKey: scope.sessionKey,
                   agentId: scope.agentId,
-                  messageId,
                   items: prepareOutgoingMediaFromReplyPayload(payload),
                   localRoots: getWebchatReplyMediaLocalRoots({
                     ...mediaScope,
@@ -186,7 +187,7 @@ export function observeChatSendCommentaryMedia(params: {
             });
             const { waitForSessionTranscriptProjection } =
               await import("../../config/sessions/session-transcript-reconcile.js");
-            await waitForSessionTranscriptProjection(scope);
+            await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
             const rewritten = await rewriteTranscriptMessageAtAnchor(anchor, (value) => {
               assertCurrent();
@@ -225,15 +226,32 @@ export function observeChatSendCommentaryMedia(params: {
               return { ...currentMessage, [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent };
             });
             if (rewritten) {
-              attached = true;
+              // Publication failures must not discard originals already referenced by history.
+              committed = true;
               lastRewrite = { sessionId: scope.sessionId, generation: rewritten.generation };
+              // Settle the authorized commit even if the run becomes stale after the rewrite.
+              const mediaBlocks = [...managedMedia.values()]
+                .flat()
+                .filter(
+                  (block) =>
+                    block.type === "image" ||
+                    block.type === "audio" ||
+                    block.type === "video" ||
+                    block.type === "attachment",
+                );
+              if (
+                mediaBlocks.length > 0 &&
+                !(await attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks }))
+              ) {
+                throw new Error("Webchat commentary media ownership could not be persisted");
+              }
               await publishAssistantTranscriptRewrite({ scope, rewritten: [{ messageId }] });
             }
           } finally {
-            if (!attached) {
+            if (!committed) {
               await removeManagedOutgoingMediaBlocks({
                 blocks: [...managedMedia.values()].flat(),
-                messageId,
+                messageId: null,
               });
             }
           }

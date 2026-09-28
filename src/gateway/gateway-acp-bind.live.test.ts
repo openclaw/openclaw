@@ -401,17 +401,10 @@ async function bindConversationAndWait(params: {
   while (Date.now() - startedAt < timeoutMs) {
     attempt += 1;
     const backend = getAcpRuntimeBackend("acpx");
-    const runtime = backend?.runtime as
-      | {
-          probeAvailability?: () => Promise<void>;
-          doctor?: () => Promise<{ message?: string; details?: string[] }>;
-        }
-      | undefined;
+    const runtime = backend?.runtime;
     const backendUnavailable = !backend || (backend.healthy && !backend.healthy());
     if (backendUnavailable) {
-      if (runtime?.probeAvailability) {
-        await runtime.probeAvailability().catch(() => {});
-      }
+      await runtime?.doctor?.().catch(() => {});
       const backendReadyAfterProbe = backend && (!backend.healthy || backend.healthy());
       if (backendReadyAfterProbe) {
         logLiveStep(`acpx backend became healthy before bind attempt ${attempt}`);

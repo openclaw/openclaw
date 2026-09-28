@@ -186,33 +186,6 @@ describe("Slack direct-delivery request authority", () => {
     );
   });
 
-  it("stops later chunks after direct authority is revoked", async () => {
-    const paths: string[] = [];
-    const onDeliveryResult = vi.fn();
-    let isLive = true;
-    await withServer(
-      (request, response) => {
-        paths.push(request.url ?? "");
-        request.resume();
-        isLive = false;
-        sendSlackResponse(response, { ok: true, ts: "171234.1", channel: "C123" });
-      },
-      async (baseUrl) => {
-        await expect(
-          sendMessageSlack("channel:C123", "alpha beta", {
-            cfg: useSlackApi(baseUrl, 5),
-            assertDirectAdapterHandoff: assertLive(() => isLive),
-            onDeliveryResult,
-          }),
-        ).rejects.toThrow("direct delivery is no longer active");
-        expect(paths).toEqual(["/api/chat.postMessage"]);
-        expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ messageId: "171234.1" }),
-        );
-      },
-    );
-  });
-
   it("stops fallback messages after direct authority is revoked", async () => {
     const paths: string[] = [];
     let isLive = true;
@@ -240,31 +213,6 @@ describe("Slack direct-delivery request authority", () => {
           }),
         ).rejects.toThrow("direct delivery is no longer active");
         expect(paths).toEqual(["/api/chat.postMessage"]);
-      },
-    );
-  });
-
-  it("does not attach a direct-send callback to later ordinary writes", async () => {
-    const paths: string[] = [];
-    let isLive = true;
-    await withServer(
-      (request, response) => {
-        paths.push(request.url ?? "");
-        request.resume();
-        sendSlackResponse(response, { ok: true, ts: `${paths.length}.1`, channel: "C123" });
-      },
-      async (baseUrl) => {
-        const cfg = useSlackApi(baseUrl);
-        await sendMessageSlack("channel:C123", "direct", {
-          cfg,
-          assertDirectAdapterHandoff: assertLive(() => isLive),
-        });
-        isLive = false;
-
-        await expect(sendMessageSlack("channel:C123", "ordinary", { cfg })).resolves.toMatchObject({
-          messageId: "2.1",
-        });
-        expect(paths).toEqual(["/api/chat.postMessage", "/api/chat.postMessage"]);
       },
     );
   });

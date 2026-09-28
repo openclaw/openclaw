@@ -2,6 +2,7 @@ import { globSync } from "node:fs";
 import path from "node:path";
 import { assert, beforeAll, expect, it } from "vitest";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
+import { diagnosticForksPool } from "./vitest/vitest.forks-pool.ts";
 import { createGatewayCoreVitestConfig } from "./vitest/vitest.gateway-core.config.ts";
 import { createGatewayDatabaseWorkersVitestConfig } from "./vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
@@ -67,7 +68,7 @@ it.each(consumers)("runs the real APNs reader $file in one fork owner", ({ file,
   ]);
   const selected = projects.filter((project) => project.files.has(file));
   expect(selected.map((project) => ({ name: project.name, pool: project.pool }))).toEqual([
-    { name: owner, pool: "forks" },
+    { name: owner, pool: owner === "infra" ? diagnosticForksPool : "forks" },
   ]);
 });
 

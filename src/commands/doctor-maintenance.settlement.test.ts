@@ -1,173 +1,252 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type {
-  maybeStopManagedServiceBeforeMutableUpdate,
-  PreManagedServiceStop,
-} from "../cli/update-cli/update-command-service-maintenance.js";
-import type { GatewayService, readGatewayServiceState } from "../daemon/service.js";
+import "./doctor-maintenance.settlement.test-support.js";
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { expect, it, vi } from "vitest";
+import { GatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
+import * as updateState from "../infra/update-candidate-state.js";
+import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { resolveCommandProcessSignal, retainCommandProcessCleanup } from "../process/exec-spawn.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
-const boundary = vi.hoisted(() => ({
-  stop: vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>(),
-  read: vi.fn<typeof readGatewayServiceState>(),
-  command: vi.fn<GatewayService["readCommand"]>(),
-  revalidate: vi.fn(),
-  restart: vi.fn(),
-  health: vi.fn(),
-  resume: vi.fn(),
-  complete: vi.fn(),
-  close: vi.fn(),
-  release: vi.fn(),
-  log: vi.fn(),
-  native: vi.fn(() => {
-    throw new Error("Doctor settlement controls cannot start or inspect native processes");
-  }),
-}));
+const settlement = await import("./doctor-maintenance.settlement.test-support.js");
+const { begin, boundary, cleanupBarrier, root } = settlement;
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: boundary.native,
-  spawnSync: boundary.native,
-  fork: boundary.native,
-  exec: boundary.native,
-  execSync: boundary.native,
-  execFile: boundary.native,
-  execFileSync: boundary.native,
-}));
-vi.mock("../config/paths.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/paths.js")>()),
-  isDefaultInstallIdentity: () => true,
-}));
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: async () => ({ config: {} }),
-}));
-vi.mock("./doctor-service-repair-policy.js", () => ({
-  shouldManageGatewayService: async () => true,
-  isServiceRepairExternallyManaged: () => false,
-  resolveUpdateParentGatewayActivation: () => undefined,
-}));
-vi.mock("./doctor-update-refusal.js", () => ({
-  recordUpdateDoctorRefusal: vi.fn(),
-  resolveUpdateDoctorGitRecovery: async () => undefined,
-}));
-vi.mock("../infra/update-run-ledger.js", () => ({
-  listUpdateRuns: () => [],
-  recordUpdateRunRepairContinuation: vi.fn(),
-}));
-vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/state-database-coordinator.js")>()),
-  acquireGatewayMaintenanceCoordinator: () => ({
-    release: boundary.release,
-    createSchemaFenceDelegate: vi.fn(),
-  }),
-  acquireStateDatabaseCoordinator: () => ({ release: boundary.release }),
-}));
-vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
-  createOpenClawDatabaseMaintenanceScope: () => ({
-    run: <T>(operation: () => T) => operation(),
-    close: boundary.close,
-  }),
-}));
-vi.mock("../state/openclaw-agent-db-lease.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-agent-db-lease.js")>()),
-  assertNoOpenClawAgentDatabaseLeasesReadOnly: () => {},
-}));
-vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
-  maybeStopManagedServiceBeforeMutableUpdate: boundary.stop,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate: boundary.resume,
-  revalidateManagedGatewayServiceAfterUpdate: boundary.revalidate,
-}));
-vi.mock("../daemon/service.js", () => ({
-  resolveGatewayService: () => ({ readCommand: boundary.command, restart: boundary.restart }),
-  readGatewayServiceState: boundary.read,
-}));
-vi.mock("../daemon/service-operation-lock.js", () => ({
-  withGatewayServiceOperationLock: async (
-    _env: NodeJS.ProcessEnv,
-    run: (assertCurrent: () => void) => Promise<unknown>,
-  ) => run(() => {}),
-}));
-vi.mock("../cli/update-cli/update-command-service-plan.js", () => ({
-  resolveUpdatedGatewayRestartPort: async () => 18789,
-}));
-vi.mock("../cli/daemon-cli/restart-health.js", async () => ({
-  waitForGatewayHealthyRestart: boundary.health,
-  renderRestartDiagnostics: (await import("../cli/daemon-cli/restart-health-diagnostics.js"))
-    .renderRestartDiagnostics,
-}));
-
-const root = "/synthetic/doctor-install";
-let stopped: PreManagedServiceStop;
-beforeEach(() => {
-  vi.resetAllMocks();
-  vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/doctor-state");
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", "/synthetic/doctor-state/openclaw.json");
-  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
-  vi.spyOn(process, "kill").mockImplementation(boundary.native);
-  const serviceEnv = {
-    OPENCLAW_STATE_DIR: "/synthetic/doctor-state",
-    OPENCLAW_CONFIG_PATH: "/synthetic/doctor-state/openclaw.json",
-  };
-  stopped = {
-    stopped: true,
-    inspected: true,
-    runtimeInspected: true,
-    running: false,
-    offline: true,
-    serviceEnv,
-    serviceUpdateVerdict: { kind: "owned", root, fingerprint: "fixture", refreshDefinition: false },
-    windowsTaskAutoStartRecovery: {
-      suspended: Promise.resolve(true),
-      beginMutation: () => {},
-      restore: async () => {},
-      handoff: () => {},
-      complete: boundary.complete,
-      interrupted: () => false,
-    },
-  };
-  boundary.stop.mockImplementation(async (params) => {
-    if (params.phase === "inspect") {
-      return { ...stopped, stopped: false, running: true, offline: false };
+it.each([false, true])(
+  "captures settled Doctor writes without attributing earlier writes (changed=%s)",
+  async (changed) => {
+    vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
+      async (paths) => readUpdateDatabaseGenerations(paths),
+    );
+    const pathname = path.join(settlement.tempDirs.make("doctor-write-receipt-"), "agent.sqlite");
+    const missing = `${pathname}.missing`;
+    const seed = new DatabaseSync(pathname);
+    seed.exec("CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)");
+    seed.close();
+    const databaseGenerations = readUpdateDatabaseGenerations([pathname, missing]);
+    if (changed) {
+      const foreign = new DatabaseSync(pathname);
+      foreign.exec("INSERT INTO evidence VALUES (99)");
+      foreign.close();
     }
-    params.onStopped?.(stopped);
-    return stopped;
-  });
-  const command = { programArguments: ["/synthetic/node", `${root}/openclaw.mjs`, "gateway"] };
-  boundary.command.mockResolvedValue(command);
-  boundary.read.mockResolvedValue({
-    installed: true,
-    running: false,
-    env: serviceEnv,
-    command,
-    loadState: { status: "loaded" },
-    runtime: { status: "stopped" },
-  });
-  boundary.health.mockResolvedValue({ healthy: true });
-  boundary.native.mockImplementation(() => {
-    throw new Error("Doctor settlement controls cannot start or inspect native processes");
-  });
-});
-afterEach(() => {
-  try {
-    expect(boundary.native).not.toHaveBeenCalled();
-  } finally {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  }
-});
+    const maintenance = await beginDoctorMaintenance({
+      root: null,
+      options: { repair: true, nonInteractive: true },
+      runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+      databaseGenerations,
+    });
+    expect(maintenance?.databaseWrites).toBeUndefined();
+    const owned = new DatabaseSync(pathname);
+    owned.exec("PRAGMA journal_mode=WAL; INSERT INTO evidence VALUES (2)");
+    boundary.close.mockImplementationOnce(async () => owned.close());
+    await maintenance!.releaseState();
+    const receipt = maintenance!.databaseWrites;
+    expect(receipt).toEqual({
+      unchanged: !changed,
+      generations: readUpdateDatabaseGenerations([pathname, missing]),
+    });
+    expect(receipt?.generations[pathname]).not.toBe(databaseGenerations[pathname]);
+    const later = new DatabaseSync(pathname);
+    later.exec("INSERT INTO evidence VALUES (100)");
+    later.close();
+    await maintenance!.release();
+    expect(maintenance!.databaseWrites).toEqual(receipt);
+    expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(
+      receipt?.generations[pathname],
+    );
+  },
+);
 
-function begin() {
-  return beginDoctorMaintenance({
-    root,
+it("keeps fingerprint failures advisory and publishes no database write proof", async () => {
+  vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
+    readUpdateDatabaseGenerations(paths),
+  );
+  const pathname = path.join(settlement.tempDirs.make("doctor-write-proof-unavailable-"), "db");
+  fs.mkdirSync(pathname);
+  const maintenance = await beginDoctorMaintenance({
+    root: null,
     options: { repair: true, nonInteractive: true },
     runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    databaseGenerations: { [pathname]: null },
   });
-}
+  await expect(maintenance!.finish({})).resolves.toBeUndefined();
+  expect(maintenance!.databaseWrites).toBeUndefined();
+  expect(maintenance!.warnings).toContainEqual(
+    expect.stringContaining("Database write verification is unavailable"),
+  );
+  await maintenance!.release();
+});
+
+it.each([
+  { phase: "admission", cleanup: "uncertain" },
+  { phase: "receipt", cleanup: "forced" },
+  { phase: "receipt", cleanup: "uncertain" },
+] as const)(
+  "joins database $phase workers before releasing state custody ($cleanup)",
+  async ({ phase, cleanup }) => {
+    const barrier = cleanupBarrier();
+    const databaseGenerations = { "/synthetic/doctor-state/state/openclaw.sqlite": null };
+    let reads = 0;
+    vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async () => {
+      reads++;
+      if (reads === (phase === "admission" ? 1 : 2)) {
+        barrier.retain();
+      }
+      return databaseGenerations;
+    });
+    let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
+    const work = (async () => {
+      maintenance = await beginDoctorMaintenance({
+        root,
+        options: { repair: true, nonInteractive: true },
+        runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+        databaseGenerations,
+      });
+      await maintenance!.finish({});
+    })().catch((error: unknown) => error);
+    try {
+      await Promise.race([
+        barrier.joining,
+        work.then(() => {
+          throw new Error("Database custody ended before fingerprint worker cleanup joined");
+        }),
+      ]);
+      expect(boundary.release).not.toHaveBeenCalled();
+      if (phase === "admission") {
+        expect(boundary.stop).toHaveBeenCalledTimes(1);
+      }
+      expect(boundary.resume).not.toHaveBeenCalled();
+      expect(boundary.restart).not.toHaveBeenCalled();
+      expect(maintenance?.databaseWrites).toBeUndefined();
+    } finally {
+      barrier.cleanup.resolve(cleanup);
+      await work;
+    }
+    const error = await work;
+    if (cleanup === "forced") {
+      expect(error).toBeUndefined();
+      expect(boundary.release).toHaveBeenCalledOnce();
+      expect(boundary.restart).toHaveBeenCalledOnce();
+      expect(maintenance?.databaseWrites).toEqual({
+        unchanged: true,
+        generations: databaseGenerations,
+      });
+      return;
+    }
+    expect(hasCommandProcessCleanupError(error)).toBe(true);
+    expect(maintenance?.databaseWrites).toBeUndefined();
+    if (maintenance) {
+      await expect(maintenance.release()).rejects.toSatisfy(hasCommandProcessCleanupError);
+      await expect(maintenance.releaseState()).rejects.toSatisfy(hasCommandProcessCleanupError);
+    }
+    expect(boundary.release).not.toHaveBeenCalled();
+    expect(boundary.resume).not.toHaveBeenCalled();
+    expect(boundary.complete).not.toHaveBeenCalled();
+    expect(boundary.restart).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "settles failed repair before restoration (data at risk=%s)",
+  async (unsafe) => {
+    const maintenance = await begin();
+    const failure = unsafe
+      ? new DoctorStateMigrationRefusalError([])
+      : new Error("diagnostic failed");
+    try {
+      await maintenance!.finish(undefined, undefined, failure);
+      expect(boundary.restart).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+      expect(boundary.health).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+      expect(boundary.close).toHaveBeenCalledOnce();
+      expect(boundary.resume).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+    } finally {
+      await maintenance?.release();
+    }
+  },
+);
+
+it.each([false, true])(
+  "checks same-installation policy before restoring Doctor's Gateway (repair activated=%s)",
+  async (activated) => {
+    const events: string[] = [];
+    const read = boundary.read.getMockImplementation()!;
+    boundary.repair.mockImplementation(async () => {
+      expect(boundary.release).toHaveBeenCalled();
+      events.push("repair");
+      boundary.read.mockImplementation(async (...args) => ({
+        ...(await read(...args)),
+        running: activated,
+        runtime: { status: activated ? "running" : "stopped" },
+      }));
+      return {};
+    });
+    boundary.restart.mockImplementation(async () => events.push("restart"));
+    const maintenance = await begin();
+    await maintenance!.finish({}, async (config) => config);
+    expect(events).toEqual(activated ? ["repair"] : ["repair", "restart"]);
+    expect(boundary.health).toHaveBeenCalledOnce();
+  },
+);
+
+it("does not suggest an unsafe manual stop after a reported write-custody refusal", async () => {
+  const refusal = new GatewayServiceStopUnsafeError(
+    "Gateway maintenance stop refused: data at risk in owner phase migration (1).",
+  );
+  boundary.stop.mockImplementation(async (params) => {
+    if (params.phase === "inspect") {
+      return { ...settlement.stopped, stopped: false, running: true, offline: false };
+    }
+    throw refusal;
+  });
+  const error = await begin().catch((reason: unknown) => reason);
+  expect(error).toBeInstanceOf(Error);
+  expect(String(error)).toContain(refusal.message);
+  expect(String(error)).not.toContain("Stop the Gateway service and other OpenClaw processes");
+  expect(boundary.restart).not.toHaveBeenCalled();
+});
+
+it("releases its acquired process owner without deferring a one-shot authority refusal", async () => {
+  const refused = new Error("Synthetic revoked update authority");
+  let revoked = false;
+  const assertCurrent = vi.fn(() => {
+    if (!revoked && boundary.gatewayAcquire.mock.calls.length) {
+      revoked = true;
+      throw refused;
+    }
+  });
+  await expect(begin(assertCurrent)).rejects.toBe(refused);
+  expect(boundary.release).toHaveBeenCalledOnce();
+  expect(boundary.ownerAssert).not.toHaveBeenCalled();
+  expect(boundary.restart).not.toHaveBeenCalled();
+  expect(boundary.stop).toHaveBeenCalledOnce();
+});
+
+it("preserves caller cancellation after a settled maintenance inspection", async () => {
+  const controller = new AbortController();
+  const cancelled = new Error("Synthetic update cancellation");
+  boundary.stop.mockImplementation(async () => {
+    controller.abort(cancelled);
+    return {
+      stopped: false,
+      inspected: false,
+      runtimeInspected: false,
+      running: false,
+      serviceUpdateVerdict: { kind: "unavailable", message: "Inspection was cancelled." },
+    };
+  });
+  boundary.gatewayAcquire.mockImplementation(() => {
+    throw new GatewayStateOwnerContentionError("/synthetic/doctor-state/state/openclaw.sqlite");
+  });
+  await expect(withCommandProcessScope(() => begin(), controller.signal)).rejects.toBe(cancelled);
+  expect(boundary.stop).toHaveBeenCalledOnce();
+  expect(boundary.restart).not.toHaveBeenCalled();
+});
 
 it("leaves a progressing Gateway running and warns after the readiness cap", async () => {
   boundary.health.mockResolvedValue({
@@ -194,21 +273,6 @@ it("leaves a progressing Gateway running and warns after the readiness cap", asy
   );
   expect(boundary.restart).toHaveBeenCalledOnce();
 });
-
-function cleanupBarrier() {
-  const cleanup = createDeferredCore<"forced" | "uncertain">();
-  const joining = createDeferredCore();
-  return {
-    cleanup,
-    joining: joining.promise,
-    retain() {
-      retainCommandProcessCleanup(cleanup.promise);
-      resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
-        once: true,
-      });
-    },
-  };
-}
 
 it.each(["forced", "uncertain"] as const)(
   "joins failed maintenance admission before compensating (%s)",
@@ -252,17 +316,29 @@ it.each(["forced", "uncertain"] as const)(
   },
 );
 
-it.each(
-  (["inspection", "autostart"] as const).flatMap((phase) =>
-    (["forced", "uncertain"] as const).map((cleanup) => ({ phase, cleanup })),
-  ),
-)(
+it.each([
+  { phase: "inspection", cleanup: "uncertain" },
+  { phase: "autostart", cleanup: "uncertain" },
+  { phase: "installation", cleanup: "forced" },
+  { phase: "installation", cleanup: "uncertain" },
+] as const)(
   "settles restoration $phase and retains unknown cleanup ($cleanup)",
   async ({ phase, cleanup }) => {
+    if (phase === "installation") {
+      settlement.stopped.serviceUpdateVerdict = {
+        kind: "owned",
+        root: "/synthetic/service-install",
+        fingerprint: "fixture",
+        refreshDefinition: true,
+        requiresInstallRootRefresh: true,
+      };
+      boundary.revalidate.mockResolvedValueOnce(settlement.stopped.serviceUpdateVerdict);
+    }
     const maintenance = await begin();
     if (!maintenance) {
       throw new Error("The repair did not acquire maintenance");
     }
+    boundary.unlock.mockClear();
     const barrier = cleanupBarrier();
     if (phase === "inspection") {
       const read = boundary.read.getMockImplementation()!;
@@ -270,8 +346,13 @@ it.each(
         barrier.retain();
         return await read(...args);
       });
-    } else {
+    } else if (phase === "autostart") {
       boundary.resume.mockImplementation(async () => barrier.retain());
+    } else {
+      boundary.repair.mockImplementation(async () => {
+        barrier.retain();
+        return {};
+      });
     }
     const work = maintenance.finish({}).catch((error: unknown) => error);
     try {
@@ -283,9 +364,15 @@ it.each(
       ]);
       expect(boundary.restart).not.toHaveBeenCalled();
       expect(boundary.health).not.toHaveBeenCalled();
+      expect(boundary.unlock).not.toHaveBeenCalled();
       if (phase === "autostart") {
         expect(boundary.complete).not.toHaveBeenCalled();
         expect(boundary.read).not.toHaveBeenCalled();
+      } else if (phase === "installation") {
+        expect(boundary.read).toHaveBeenCalledOnce();
+        expect(boundary.revalidate).toHaveBeenCalledOnce();
+        expect(boundary.resume).not.toHaveBeenCalled();
+        expect(boundary.complete).toHaveBeenCalledExactlyOnceWith(false);
       }
     } finally {
       barrier.cleanup.resolve(cleanup);
@@ -294,8 +381,11 @@ it.each(
     const error = await work;
     if (cleanup === "forced") {
       expect(error).toBeUndefined();
-      expect(boundary.restart).toHaveBeenCalledOnce();
+      expect(boundary.restart).not.toHaveBeenCalled();
       expect(boundary.health).toHaveBeenCalledOnce();
+      expect(boundary.read).toHaveBeenCalledTimes(2);
+      expect(boundary.revalidate).toHaveBeenCalledTimes(2);
+      expect(boundary.repair).toHaveBeenCalledOnce();
       expect(boundary.log).toHaveBeenCalledWith(
         "Gateway restarted and verified after Doctor repair.",
       );
@@ -323,3 +413,229 @@ it.each(
     );
   },
 );
+
+it.each([false, true])(
+  "waits for the stopped Gateway's lifecycle ownership (expires=%s)",
+  async (expires) => {
+    let elapsed = 0;
+    let ticks = 0;
+    let loaded = true;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    boundary.owner.mockReturnValue({ state: "live", mode: "supervised" });
+    const acquire = boundary.gatewayAcquire.getMockImplementation()!;
+    boundary.gatewayAcquire.mockImplementation(() => {
+      if (expires || ticks < 3) {
+        throw new GatewayStateOwnerContentionError("/synthetic/doctor-state/state/openclaw.sqlite");
+      }
+      return acquire();
+    });
+    boundary.sleep.mockImplementation(async (ms: number) => {
+      expect(loaded).toBe(false);
+      expect(boundary.restart).not.toHaveBeenCalled();
+      elapsed += ms;
+      ticks++;
+    });
+    const stop = boundary.stop.getMockImplementation()!;
+    boundary.stop.mockImplementation(async (params) => {
+      const result = await stop(params);
+      if (params.phase !== "inspect") {
+        loaded = false;
+      }
+      return result;
+    });
+    boundary.restart.mockImplementation(async () => {
+      loaded = true;
+    });
+
+    if (expires) {
+      await expect(begin()).rejects.toThrow("OpenClaw state database is busy at");
+      expect(elapsed).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+      expect(boundary.log).toHaveBeenCalledWith(
+        expect.stringMatching(/Warning:.*state ownership.*openclaw doctor --fix/),
+      );
+    } else {
+      const maintenance = await begin();
+      expect(ticks).toBe(3);
+      expect(boundary.restart).not.toHaveBeenCalled();
+      await maintenance!.finish({});
+    }
+    expect(loaded).toBe(true);
+    expect(boundary.restart).toHaveBeenCalledOnce();
+  },
+);
+
+it("restores a service after state ownership fails without retaining a partial maintenance scope", async () => {
+  boundary.owner.mockReturnValue({ state: "live", mode: "supervised" });
+  let heldLeases = 0;
+  boundary.gatewayAcquire
+    .mockImplementation(() => {
+      heldLeases++;
+      return {
+        release: () => {
+          heldLeases--;
+        },
+        assertCurrent: boundary.ownerAssert,
+        run<T>(operation: () => T): T {
+          boundary.ownerAssert();
+          return operation();
+        },
+      };
+    })
+    .mockImplementationOnce(() => {
+      throw new GatewayStateOwnerContentionError("/synthetic/doctor-state/state/openclaw.sqlite");
+    });
+  boundary.ownerAssert.mockImplementation(() => {
+    throw new Error("state ownership changed before repair");
+  });
+  await expect(begin()).rejects.toThrow(/state ownership changed before repair/);
+  expect(boundary.restart).toHaveBeenCalledOnce();
+  expect(heldLeases).toBe(0);
+  expect(boundary.sleep).not.toHaveBeenCalled();
+});
+
+it.each(["acquired", "native-revoked", "install-drift"] as const)(
+  "refuses changed repair admission and compensates under original service custody (%s)",
+  async (phase) => {
+    if (phase === "install-drift") {
+      settlement.stopped.serviceUpdateVerdict = {
+        kind: "owned",
+        root,
+        fingerprint: "fixture",
+        refreshDefinition: true,
+        requiresInstallRootRefresh: true,
+      };
+      boundary.revalidate.mockResolvedValue(settlement.stopped.serviceUpdateVerdict);
+    }
+    let ticks = 0;
+    let gatewayHeld = false;
+    let ownerVerified = false;
+    let conflict = false;
+    let checkedUnderOwner = false;
+    let stopCustody: (() => void) | undefined;
+    let capturedStopAdmission: (() => void) | undefined;
+    boundary.owner.mockReturnValue({ state: "live", mode: "supervised" });
+    boundary.gatewayAcquire.mockImplementation(() => {
+      if (ticks < 2) {
+        throw new GatewayStateOwnerContentionError("/synthetic/doctor-state/state/openclaw.sqlite");
+      }
+      gatewayHeld = true;
+      return {
+        release: () => {
+          gatewayHeld = false;
+        },
+        assertCurrent: boundary.ownerAssert,
+        run<T>(operation: () => T): T {
+          boundary.ownerAssert();
+          return operation();
+        },
+      };
+    });
+    boundary.ownerAssert.mockImplementation(() => {
+      expect(gatewayHeld).toBe(true);
+      ownerVerified = true;
+      conflict = true;
+    });
+    boundary.sleep.mockImplementation(async () => {
+      ticks++;
+    });
+    boundary.admission.mockImplementation(() => {
+      checkedUnderOwner ||= gatewayHeld && ownerVerified;
+      return conflict
+        ? { kind: "conflict", message: "repair admission conflict" }
+        : { kind: "recovery", runs: [] };
+    });
+    const stop = boundary.stop.getMockImplementation()!;
+    boundary.stop.mockImplementation(async (params) => {
+      if (params.phase !== "inspect") {
+        stopCustody = boundary.scopeAssert;
+        capturedStopAdmission = params.assertCurrent;
+      }
+      return await stop(params);
+    });
+    boundary.resume.mockImplementation(async () => {
+      // Windows autostart recovery retains the caller assertion supplied at stop.
+      capturedStopAdmission?.();
+    });
+    boundary.authority.mockImplementation(() => {
+      if (phase === "native-revoked" && conflict) {
+        throw new Error("native operation custody retired");
+      }
+    });
+    boundary.restart.mockImplementation(async () => {
+      expect(stopCustody).toBeTypeOf("function");
+      stopCustody!();
+      expect(gatewayHeld).toBe(false);
+    });
+    const refusal = await begin().catch((error: unknown) => error);
+    expect(String(refusal)).toMatch(/repair admission conflict|native operation custody retired/);
+    expect(refusal).not.toBeInstanceOf(DoctorMaintenanceRefusalError);
+    expect(checkedUnderOwner).toBe(true);
+    expect(boundary.restart).toHaveBeenCalledTimes(
+      phase === "native-revoked" || phase === "install-drift" ? 0 : 1,
+    );
+    expect(boundary.repair).not.toHaveBeenCalled();
+    expect(boundary.complete).toHaveBeenCalled();
+    expect(boundary.close).toHaveBeenCalledOnce();
+    expect(gatewayHeld).toBe(false);
+  },
+);
+
+it.each([false, true])(
+  "restores within the shared stop budget when ownerless cleanup persists (stopFailed=%s)",
+  async (stopFailed) => {
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    let elapsed = 0;
+    let parked = false;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    boundary.owner.mockImplementation(() =>
+      parked ? undefined : { state: "live", mode: "supervised" },
+    );
+    boundary.gatewayAcquire.mockImplementation(() => {
+      throw new GatewayStateOwnerContentionError("/synthetic/doctor-state/state/openclaw.sqlite");
+    });
+    boundary.sleep.mockImplementation(async (ms: number) => {
+      expect(parked).toBe(true);
+      expect(boundary.restart).not.toHaveBeenCalled();
+      elapsed += ms;
+    });
+    const stop = boundary.stop.getMockImplementation()!;
+    const stopError = new Error("service stop failed after parking");
+    boundary.stop.mockImplementation(async (params) => {
+      const result = await stop(params);
+      if (params.phase !== "inspect") {
+        parked = true;
+        elapsed = GATEWAY_SERVICE_STOP_TIMEOUT_MS - 1_250;
+        if (stopFailed) {
+          throw stopError;
+        }
+      }
+      return result;
+    });
+    const refusal = await begin(() => {}).catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(Error);
+    if (stopFailed) {
+      expect(collectNestedErrorCandidates(refusal)).toContain(stopError);
+    } else {
+      expect(String(refusal)).toContain("OpenClaw state database is busy at");
+    }
+    expect(elapsed).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+    expect(boundary.ownerAssert).not.toHaveBeenCalled();
+    expect(boundary.lease).not.toHaveBeenCalled();
+    expect(boundary.close).not.toHaveBeenCalled();
+    expect(boundary.restart).toHaveBeenCalledOnce();
+    expect(boundary.health).toHaveBeenCalledOnce();
+    expect(boundary.log).toHaveBeenCalledWith(
+      expect.stringMatching(/Warning:.*state ownership.*Restoring its service/),
+    );
+  },
+);
+
+it("leaves an already stopped Gateway with its legacy update parent after repair", async () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  boundary.stop.mockImplementation(async () => ({ ...settlement.stopped, stopped: false }));
+  const maintenance = await begin();
+  await maintenance!.finish({});
+  expect(boundary.restart).not.toHaveBeenCalled();
+  expect(boundary.health).not.toHaveBeenCalled();
+});

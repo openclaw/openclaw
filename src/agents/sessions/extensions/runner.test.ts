@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ModelRegistry } from "../model-registry.js";
+import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
 import type { SessionManager } from "../session-manager.js";
 import { createExtensionRuntime } from "./loader.js";
 import { ExtensionRunner } from "./runner.js";
@@ -144,6 +145,34 @@ const catchAndContinueCases: Array<
 ];
 
 describe("ExtensionRunner handler dispatch", () => {
+  it.each(catchAndContinueCases)(
+    "propagates committed metadata view loss from %s before another handler runs",
+    async (event, invoke) => {
+      const failure = new SessionMetadataCommittedError(
+        {
+          type: "thinking_level_change",
+          id: "committed-thinking",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:00.000Z",
+          thinkingLevel: "high",
+        },
+        { generation: "fixture", rawSeq: 1, updatedAt: 1 },
+        new Error("view read failed"),
+      );
+      const later = vi.fn(async () => undefined);
+      const runner = buildRunner([
+        buildExtension({ [event]: [() => reject(failure)] }),
+        buildExtension({ [event]: [later] }, "/tmp/later.ts"),
+      ]);
+      const report = vi.fn();
+      runner.onError(report);
+
+      await expect(invoke(runner)).rejects.toBe(failure);
+      expect(later).not.toHaveBeenCalled();
+      expect(report).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(catchAndContinueCases)(
     "isolates %s handler failures and reports their extension",
     async (event, invoke) => {

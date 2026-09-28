@@ -3,6 +3,8 @@ import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CodexThreadListParams } from "./app-server/protocol.js";
+import { CodexCatalogCurrency } from "./session-catalog-currency.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { projectCodexCatalogPage } from "./session-catalog-projection.js";
 import {
@@ -24,6 +26,135 @@ afterEach(() => {
 });
 
 describe("resident Codex catalog", () => {
+  it("runs due local file scans while a demand-triggered native walk is blocked", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reconcileFiles = vi.fn(async () => {});
+    const reconcileNative = vi.fn(async () => blocked);
+    const currency = new CodexCatalogCurrency({
+      local: true,
+      reconcileFiles,
+      reconcileNative,
+      report: () => {},
+    });
+    try {
+      currency.start();
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(reconcileFiles).toHaveBeenCalledTimes(2);
+      const walk = currency.refreshNativeIfDue();
+      await vi.waitFor(() => expect(reconcileNative).toHaveBeenCalledExactlyOnceWith(true));
+      currency.requestNativeRefresh();
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(reconcileFiles).toHaveBeenCalledTimes(3);
+      expect(reconcileNative).toHaveBeenCalledTimes(1);
+      expect(currency.hasActiveWork()).toBe(true);
+      release();
+      await walk;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(reconcileNative).toHaveBeenNthCalledWith(2, false);
+    } finally {
+      release();
+      await currency.close();
+    }
+  });
+
+  it("defers full native safety reconciliation until a catalog read after idle", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const recent = Array.from({ length: 64 }, (_, index) =>
+      idleThread({
+        id: `recent-${index}`,
+        source: "cli",
+        recencyAt: 100 - index,
+      }),
+    );
+    const missed = idleThread({ id: "missed", source: "cli", recencyAt: 1 });
+    let nativeRows = recent;
+    const readNative = vi.fn(async (params: CodexThreadListParams) => {
+      const offset = Number(params.cursor ?? 0);
+      const limit = params.limit ?? 64;
+      return projectCodexCatalogPage(
+        {
+          data: nativeRows.slice(offset, offset + limit),
+          nextCursor: offset + limit < nativeRows.length ? String(offset + limit) : null,
+        },
+        { sanitize: sanitizeTerminalText },
+      );
+    });
+    const index = new CodexCatalogIndex({
+      homeId: "idle-safety-reconcile",
+      readNative,
+      assertCurrent: () => {},
+    });
+    try {
+      await index.initialize();
+      expect(readNative).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(readNative).toHaveBeenCalledOnce();
+
+      // A missed native notification changes an older thread beyond an unchanged prefix.
+      nativeRows = [...recent, missed];
+      readNative.mockRejectedValueOnce(new Error("native unavailable"));
+      const page = await index.list({ limit: 100 });
+      expect(page.sessions).toHaveLength(64);
+      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
+
+      // A failed walk preserves cached rows and does not retry on a busy reader.
+      await index.list({ limit: 100 });
+      expect(readNative).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(readNative).toHaveBeenCalledTimes(2);
+
+      const stale = await index.list({ limit: 100 });
+      expect(stale.sessions).toHaveLength(64);
+      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(4));
+      const refreshed = await index.list({ limit: 100 });
+      expect(refreshed.sessions).toHaveLength(64);
+      const tail = await index.list({ limit: 100, cursor: refreshed.nextCursor });
+      expect(tail.sessions.map((session) => session.threadId)).toEqual(["missed"]);
+      expect(readNative).toHaveBeenCalledTimes(4);
+    } finally {
+      await index.close();
+    }
+  });
+
+  it("serves a cached page while a due full native walk is blocked", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const native = idleThread({ id: "cached", source: "cli" });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const readNative = vi.fn(async () => {
+      if (readNative.mock.calls.length > 1) {
+        await blocked;
+      }
+      return projectCodexCatalogPage({ data: [native] }, { sanitize: sanitizeTerminalText });
+    });
+    const index = new CodexCatalogIndex({
+      homeId: "blocked-safety-reconcile",
+      readNative,
+      assertCurrent: () => {},
+    });
+    try {
+      await index.initialize();
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      const page = await index.list({ limit: 1 });
+      expect(page.sessions[0]?.threadId).toBe("cached");
+      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
+    } finally {
+      release();
+      await index.close();
+    }
+  });
+
   it("preserves native sub-second order when exposed timestamps tie", async () => {
     const native = ["alpha", "bravo", "zulu"].map((id) =>
       idleThread({
@@ -65,9 +196,14 @@ describe("resident Codex catalog", () => {
     const f = fixture(3_000);
     const control = await f.make();
     let page = await control.listPage({ limit: 100 });
+    expect(page.sessions).toHaveLength(64);
+    const second = await control.listPage({ limit: 100, cursor: page.nextCursor });
+    expect(second.sessions[0]?.threadId).toBe("thread-064");
     while (page.nextCursor) {
       page = await control.listPage({ limit: 100, cursor: page.nextCursor });
     }
+    expect(f.fetched.flat()).toHaveLength(3_000);
+    expect(Math.max(...f.fetched.map((rows) => rows.length))).toBe(64);
     f.expire();
     const readFile = vi.spyOn(fs, "readFile");
     const open = vi.spyOn(fs, "open");
@@ -82,10 +218,12 @@ describe("resident Codex catalog", () => {
   it.each(["larger limit", "removed rows"])(
     "ends a backward page before its anchor after %s",
     async (change) => {
-      const control = await fixture(90).make();
+      const f = fixture(90);
+      const control = await f.make();
       const limit = change === "larger limit" ? 20 : 64;
       const first = await control.listPage({ limit });
       const second = await control.listPage({ limit, cursor: first.nextCursor });
+      f.fetched.length = 0;
       const removed = change === "removed rows" ? first.sessions.slice(0, 24) : [];
       for (const session of removed) {
         await control.archiveThread(session.threadId);
@@ -94,22 +232,14 @@ describe("resident Codex catalog", () => {
       expect(previous.sessions.map((session) => session.threadId)).toEqual(
         first.sessions.slice(removed.length).map((session) => session.threadId),
       );
+      expect(f.fetched).toEqual([]);
+      expect(
+        commandRpcMocks.codexControlRequest.mock.calls.filter(
+          (call) => call[1] === "thread/archive",
+        ),
+      ).toHaveLength(removed.length);
     },
   );
-
-  it("hydrates the complete home once while retaining 64-row wire pages", async () => {
-    const f = fixture();
-    const control = await f.make();
-    const first = await control.listPage({ limit: 100 });
-    expect(first.sessions).toHaveLength(64);
-    expect(f.fetched.flat()).toHaveLength(160);
-    expect(Math.max(...f.fetched.map((rows) => rows.length))).toBe(64);
-    const calls = f.fetched.length;
-    const second = await control.listPage({ limit: 100, cursor: first.nextCursor });
-    expect(second.sessions).toHaveLength(64);
-    expect(second.sessions[0]?.threadId).toBe("thread-064");
-    expect(f.fetched).toHaveLength(calls);
-  });
 
   it("retains only display-sized previews from large native responses", async () => {
     const f = fixture(80, 1024 * 1024);
@@ -179,21 +309,6 @@ describe("resident Codex catalog", () => {
     expect(f.fetched).toEqual([]);
   });
 
-  it("removes an archived thread before the next list without a native re-walk", async () => {
-    const f = fixture();
-    const control = await f.make();
-    await control.listPage({ limit: 100 });
-    f.fetched.length = 0;
-    await control.archiveThread("thread-000");
-    const page = await control.listPage({ limit: 100 });
-    expect(page.sessions[0]?.threadId).toBe("thread-001");
-    expect(page.sessions.some((row) => row.threadId === "thread-000")).toBe(false);
-    expect(f.fetched).toEqual([]);
-    expect(
-      commandRpcMocks.codexControlRequest.mock.calls.filter((call) => call[1] === "thread/archive"),
-    ).toHaveLength(1);
-  });
-
   it("reconciles a new rollout with only bounded reads of that file", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
@@ -261,6 +376,9 @@ describe("resident Codex catalog", () => {
   });
 
   it("does not reread unchanged incomplete rollouts during currency scans", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     const root = path.join(tempDirs.make("openclaw-resident-incomplete-"), "sessions");
     const file = await writeCatalogRollout(root, idleThread({ id: "partial" }));
     await fs.writeFile(file, '{"type":"session_meta","payload":');
@@ -272,6 +390,7 @@ describe("resident Codex catalog", () => {
     });
     try {
       await index.initialize();
+      await vi.advanceTimersByTimeAsync(0);
       await index.reconcile();
       const open = vi.spyOn(fs, "open");
       await index.reconcile();
@@ -316,15 +435,17 @@ describe("resident Codex catalog", () => {
       await vi.advanceTimersByTimeAsync(15 * 60_000);
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(stat).toHaveBeenCalled();
-      expect(readNative).toHaveBeenCalledTimes(2);
+      expect(readNative).toHaveBeenCalledOnce();
       stat.mockClear();
+      await index.upsertThread(existing);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+      expect(readNative).toHaveBeenCalledTimes(2);
+      expect(stat).not.toHaveBeenCalled();
+      await index.upsertThread(existing);
       await vi.advanceTimersByTimeAsync(30_000);
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(readNative).toHaveBeenCalledTimes(3);
-      expect(stat).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(30_000);
-      await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
-      expect(readNative).toHaveBeenCalledTimes(4);
       expect(stat).not.toHaveBeenCalled();
 
       await writeCatalogRollout(root, idleThread({ id: "external", preview: "External request" }));

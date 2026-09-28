@@ -1,4 +1,3 @@
-// Feishu plugin module implements card ux approval behavior.
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { buildFeishuCardButton, buildFeishuCardInteractionContext } from "./card-ux-shared.js";
 

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendBoundedWatchLog,
@@ -28,8 +27,13 @@ import {
 import { refreshLocalBuildStampTimes } from "../../scripts/lib/local-build-metadata.mts";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -341,10 +345,7 @@ describe("check-gateway-watch-regression", () => {
       samples: [50_000, 59_000],
       idleCpuMs: 9_000,
       lateError: "fixture shutdown error",
-      failures: [
-        "gateway:watch failed to start: fixture shutdown error",
-        "LOUD ALARM: gateway:watch used 9000ms CPU in 10000ms window, above loud-alarm threshold 8000ms",
-      ],
+      failures: ["gateway:watch failed to start: fixture shutdown error"],
     },
   ])("$name", async ({ ready, samples, idleCpuMs, lateError, failures }) => {
     const outputDir = tempDirs.make("openclaw-gateway-watch-measurement-");
@@ -410,6 +411,17 @@ describe("check-gateway-watch-regression", () => {
     });
     expect(findings.failures).toEqual(failures);
     expect(findings.warnings).toEqual([]);
+    expect(findings.limitViolations).toEqual(
+      idleCpuMs !== null && idleCpuMs > options.cpuFailMs
+        ? [
+            {
+              file: "scripts/check-gateway-watch-regression.mts",
+              title: "Gateway watch CPU budget",
+              message: "gateway:watch used 9000ms CPU in 10000ms window, above threshold 8000ms",
+            },
+          ]
+        : [],
+    );
   });
 
   it("reports early gateway watch exit before readiness distinctly", () => {
@@ -791,11 +803,12 @@ describe("check-gateway-watch-regression", () => {
 
   it("releases default readiness timers so an early-exit observer finishes naturally", () => {
     const outputDir = tempDirs.make("openclaw-gateway-watch-readiness-exit-");
+    const ownerUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.gatewayWatch);
+    const nodeExecutable = resolveTestNodeExecPath();
     const result = spawnSync(
-      resolveTestNodeExecPath(),
+      nodeExecutable,
       [
-        "--import",
-        pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+        ...resolveRuntimeWorkerArgv(ownerUrl, nodeExecutable).slice(0, -1),
         "--input-type=module",
         "-e",
         `
@@ -835,7 +848,7 @@ process.kill = (pid, signal) => {
   return true;
 };
 syncBuiltinESMExports();
-const { runTimedWatch } = await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/check-gateway-watch-regression.mts")).href)});
+const { runTimedWatch } = await import(${JSON.stringify(ownerUrl.href)});
 const result = await runTimedWatch({
   readySettleMs: 0, readyTimeoutMs: 30_000, sigkillGraceMs: 1,
   sigkillExitGraceMs: 100, windowMs: 10_000,

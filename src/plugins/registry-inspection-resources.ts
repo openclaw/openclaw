@@ -1,5 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
@@ -126,11 +126,14 @@ export class PluginRegistryInspectionResources {
   }
 
   /** Logical use owns its execution consumers separately from this inspection's physical claims. */
-  createInvocationScope(registry: PluginRegistry): PluginInvocationScope {
+  createInvocationScope(
+    registry: PluginRegistry,
+    instances: Iterable<PluginInstanceHandle> = collectRegistryInvocationInstances(registry),
+  ): PluginInvocationScope {
     if (this.#release) {
       throw new Error("Plugin inspection resources have been released");
     }
-    return new PluginInvocationScope(registry, collectRegistryInvocationInstances(registry), {
+    return new PluginInvocationScope(registry, instances, {
       retained: true,
       parent: this.#adoptedInvocations,
     });

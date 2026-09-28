@@ -126,44 +126,7 @@ public struct SkillRequirements: Codable, Sendable {
     }
 }
 
-public struct SkillMissing: Codable, Sendable {
-    public let bins: [String]
-    public let anyBins: [String]
-    public let env: [String]
-    public let config: [String]
-    public let os: [String]
-
-    public init(
-        bins: [String],
-        anyBins: [String] = [],
-        env: [String],
-        config: [String],
-        os: [String] = [])
-    {
-        self.bins = bins
-        self.anyBins = anyBins
-        self.env = env
-        self.config = config
-        self.os = os
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case bins
-        case anyBins
-        case env
-        case config
-        case os
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.bins = try container.decode([String].self, forKey: .bins)
-        self.anyBins = try container.decodeIfPresent([String].self, forKey: .anyBins) ?? []
-        self.env = try container.decode([String].self, forKey: .env)
-        self.config = try container.decode([String].self, forKey: .config)
-        self.os = try container.decodeIfPresent([String].self, forKey: .os) ?? []
-    }
-}
+public typealias SkillMissing = SkillRequirements
 
 public struct SkillStatusConfigCheck: Codable, Identifiable, Sendable {
     public let path: String

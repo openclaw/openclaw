@@ -147,7 +147,7 @@ async function main() {
               text: [
                 "mcp code mode api file qa check:",
                 "MCP and API are code-mode globals; they are defined only inside the exec tool, not in normal chat.",
-                "Call exec with language javascript and this exact code:",
+                "Call exec with this exact JavaScript code:",
                 'const files = await API.list("mcp");',
                 'const root = await API.read("mcp/index.d.ts");',
                 'const api = await API.read("mcp/fixture.d.ts");',

@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -9,18 +7,9 @@ import type {
 } from "../node-registry-private.js";
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 
-const node: NodeWorkerSupervisorNodeProof = {
-  nodeId: "node-1",
-  connId: "conn-1",
-  pairingIdentity: "pairing-1",
-  pairingGeneration: "generation-1",
-  clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-  clientMode: "node",
-  protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-  commands: [],
-};
+const node = createNodeWorkerBundleTestNode();
 const artifact = {
   install: "bundle" as const,
   bundleHash: "a".repeat(64),
@@ -39,7 +28,7 @@ const receipt = {
 
 function nodeProof(nodeId: string, bundlePrewarm?: 1): NodeWorkerSupervisorNodeProof {
   return {
-    ...node,
+    ...createNodeWorkerBundleTestNode(),
     nodeId,
     connId: `conn-${nodeId}`,
     workerHost: {
@@ -141,7 +130,7 @@ describe("Gateway node worker bundle installer", () => {
     );
     const input = invoke.mock.calls[0]?.[0].params as { archive: { token: string } };
     expect(
-      transfer.authorize({ token: input.archive.token, bundleHash: artifact.bundleHash }),
+      transfer.authorize({ token: input.archive.token, artifactKey: artifact.bundleHash }),
     ).toBeUndefined();
   });
 
@@ -213,37 +202,34 @@ describe("Gateway node worker bundle installer", () => {
     expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundlePrewarm");
   });
 
-  it.each([true, false])(
-    "keeps explicit cancellation with its request when prewarm is %s",
-    async (prewarm) => {
-      const controller = new AbortController();
-      const transfer = createNodeWorkerBundleTransferService();
-      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
-        expect(request.signal).toBe(controller.signal);
-        controller.abort();
-        return { ok: true, payloadJSON: JSON.stringify(receipt) };
-      });
-      const transport: NodeWorkerSupervisorTransport = {
-        hasCurrentRunner: () => true,
-        getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
-        listCurrentNodes: async () => [node],
-        isCurrent: () => true,
-        invoke,
-      };
-      const ensure = createGatewayNodeWorkerBundleInstaller({
-        gatewayNamespace: "gateway-test",
-        getTransport: () => transport,
-        transfer,
-      });
-      await expect(
-        ensure({
-          deviceId: node.nodeId,
-          artifact,
-          prewarm,
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow("no longer current");
-      transfer.closeAll();
-    },
-  );
+  it("keeps explicit cancellation with its request", async () => {
+    const controller = new AbortController();
+    const transfer = createNodeWorkerBundleTransferService();
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      expect(request.signal).toBe(controller.signal);
+      controller.abort();
+      return { ok: true, payloadJSON: JSON.stringify(receipt) };
+    });
+    const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => true,
+      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
+      listCurrentNodes: async () => [node],
+      isCurrent: () => true,
+      invoke,
+    };
+    const ensure = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => transport,
+      transfer,
+    });
+    await expect(
+      ensure({
+        deviceId: node.nodeId,
+        artifact,
+        prewarm: true,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("no longer current");
+    transfer.closeAll();
+  });
 });

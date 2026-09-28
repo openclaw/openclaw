@@ -384,7 +384,7 @@ final class ComputerScreenActionExecutor {
 
     func pressLeftButton(at point: CGPoint, flags: CGEventFlags, inputScopeId: UUID) throws {
         guard !self.leftButtonDown else { throw ComputerActionError.buttonAlreadyHeld }
-        try self.rawMouseButton(down: true, at: point, flags: flags)
+        try self.mouseButtonEventPoster(true, point, flags)
         self.setLeftButtonDown(true, flags: flags, inputScopeId: inputScopeId)
     }
 
@@ -442,7 +442,7 @@ final class ComputerScreenActionExecutor {
     {
         let releaseFlags = self.heldButtonFlags.union(additionalFlags)
         do {
-            try self.rawMouseButton(down: false, at: point, flags: releaseFlags)
+            try self.mouseButtonEventPoster(false, point, releaseFlags)
         } catch {
             // Ownership authorizes the only safe follow-up mouse-up. Keep it and
             // its modifiers until synthesis succeeds, with a live watchdog retry.
@@ -624,10 +624,6 @@ final class ComputerScreenActionExecutor {
         }
         try self.mouseEventPoster(up)
         needsRelease = false
-    }
-
-    private func rawMouseButton(down: Bool, at point: CGPoint, flags: CGEventFlags) throws {
-        try self.mouseButtonEventPoster(down, point, flags)
     }
 
     private static func postMouseButtonEvent(

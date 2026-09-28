@@ -20,7 +20,7 @@ struct AgentWorkspaceFilesScreen: View {
                         titleFont: OpenClawType.title3SemiBold,
                         subtitleFont: OpenClawType.subheadMedium)
                     {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
+                        OpenClawSidebarControlButton(action: headerSidebarAction)
                     } accessory: {
                         EmptyView()
                     }
@@ -249,7 +249,7 @@ struct AgentWorkspaceFilePreview: View {
             }
         }
         .sheet(item: self.$shareItem) { item in
-            ChatTranscriptShareSheet(fileURL: item.fileURL)
+            OpenClawChatFileShareSheet(fileURL: item.fileURL)
         }
         .alert("Could not share this file.", isPresented: self.$showsShareError) {
             Button {

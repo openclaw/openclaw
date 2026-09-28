@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../infra/worker-task-server.js";
 
 serveWorkerTasks<boolean>((input) => {
   if (

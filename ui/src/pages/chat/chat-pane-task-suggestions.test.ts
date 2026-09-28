@@ -8,14 +8,16 @@ import type {
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { createTestChatPane as createChatPane } from "./chat-pane.test-support.ts";
+import {
+  createSessionCapabilityFixture,
+  createTestChatPane as createChatPane,
+} from "./chat-pane.test-support.ts";
 import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
 
 const suggestion: TaskSuggestion = {
@@ -54,7 +56,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
 
@@ -84,7 +86,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane, state } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
 
@@ -110,7 +112,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane, state } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
     const pending = pane.dismissTaskSuggestion(suggestion);
@@ -132,7 +134,7 @@ describe("chat pane task suggestion lifecycle", () => {
       const dismissed = createDeferred<never>();
       const { pane, state } = createTestChatPane({
         client: createTestGatewayClient(createGatewayRequestMock(() => dismissed.promise)),
-        sessions: {} as SessionCapability,
+        sessions: createSessionCapabilityFixture(),
       });
       pane.taskSuggestions = [suggestion];
       const pending = pane.dismissTaskSuggestion(suggestion);
@@ -161,7 +163,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion];
     await pane.dismissTaskSuggestion(suggestion);
@@ -185,7 +187,7 @@ describe("chat pane task suggestion lifecycle", () => {
     });
     const { pane } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.taskSuggestions = [suggestion, next];
     const first = pane.dismissTaskSuggestion(suggestion);
@@ -215,7 +217,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
 
     try {
@@ -255,7 +257,7 @@ describe("chat pane task suggestion lifecycle", () => {
           : Promise.resolve({ suggestions: [] } satisfies TaskSuggestionsListResult),
     );
     const client = createTestGatewayClient(request);
-    const sessions = {} as SessionCapability;
+    const sessions = createSessionCapabilityFixture();
     const { pane } = createTestChatPane({ client, sessions });
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
@@ -314,12 +316,136 @@ describe("chat pane task suggestion lifecycle", () => {
     ).toHaveLength(0);
   });
 
+  it("recovers a worktree source on the same card without changing the prompt or launch mode", async () => {
+    let attempts = 0;
+    const request = createGatewayRequestMock((method) => {
+      if (method === "projects.list") {
+        return Promise.resolve({
+          projects: [
+            { id: "app", displayName: "App", repoRoot: "/projects/app", source: "registered" },
+          ],
+        });
+      }
+      if (method === "taskSuggestions.accept") {
+        if (++attempts === 1) {
+          return Promise.reject(
+            new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "Checkout has no commits",
+              details: { code: "TASK_WORKTREE_SOURCE_REQUIRED", cwd: suggestion.cwd },
+            }),
+          );
+        }
+        return Promise.resolve({ taskId: suggestion.id, key: "agent:main:recovered" });
+      }
+      return Promise.resolve({ suggestions: [suggestion] });
+    });
+    const { pane } = createTestChatPane({
+      client: createTestGatewayClient(request),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
+      "taskSuggestions.accept",
+      "projects.list",
+    ]);
+    pane.taskSuggestions = [suggestion];
+    const container = document.createElement("div");
+    const draw = () =>
+      render(renderChatTaskSuggestionTray(pane.suggestionChatProps(true, false, false)), container);
+    await pane.acceptTaskSuggestion(suggestion, "worktree");
+    await vi.waitFor(() => {
+      draw();
+      expect(container.querySelector(".task-suggestion__repository-choice")).not.toBeNull();
+    });
+    draw();
+    expect(container.textContent).toContain(suggestion.prompt);
+    expect(container.textContent).toContain("Checkout has no commits");
+    const input = () =>
+      container.querySelector<HTMLInputElement>(".task-suggestion__repository-path")!;
+    expect(input().value).toBe(suggestion.cwd);
+    container.querySelector<HTMLButtonElement>(".task-suggestion__repository-choice")!.click();
+    draw();
+    expect(input().value).toBe("/projects/app");
+    expect(attempts).toBe(1);
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Cancel")!
+      .click();
+    draw();
+    expect(container.querySelector(".task-suggestion__repository-path")).toBeNull();
+    expect(container.textContent).toContain(suggestion.prompt);
+    container.querySelector<HTMLButtonElement>(".task-suggestion__retry")!.click();
+    draw();
+    expect(input().value).toBe("/projects/app");
+    input().value = "relative/path";
+    input().dispatchEvent(new Event("input"));
+    draw();
+    expect(container.querySelector<HTMLButtonElement>(".task-suggestion__retry")!.disabled).toBe(
+      true,
+    );
+    input().value = "/projects/app";
+    input().dispatchEvent(new Event("input"));
+    draw();
+    container.querySelector<HTMLButtonElement>(".task-suggestion__retry")!.click();
+    await vi.waitFor(() =>
+      expect(
+        pane.suggestionChatProps(true, false, false).taskSuggestionAcceptance?.(suggestion.id)
+          ?.phase,
+      ).toBe("started"),
+    );
+    draw();
+    expect(container.textContent).toContain("Task started");
+    expect(container.textContent).toContain(suggestion.prompt);
+    expect(request.mock.calls.filter(([method]) => method === "taskSuggestions.accept")).toEqual([
+      ["taskSuggestions.accept", { taskId: suggestion.id, mode: "worktree" }],
+      ["taskSuggestions.accept", { taskId: suggestion.id, mode: "worktree", cwd: "/projects/app" }],
+    ]);
+    expect(request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
+  });
+
+  it("does not populate a recovery chooser from a retired connection", async () => {
+    const projects = createDeferred<{
+      projects: Array<{ id: string; displayName: string; repoRoot: string; source: string }>;
+    }>();
+    const request = createGatewayRequestMock((method) =>
+      method === "projects.list"
+        ? projects.promise
+        : Promise.reject(
+            new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "No commits",
+              details: { code: "TASK_WORKTREE_SOURCE_REQUIRED" },
+            }),
+          ),
+    );
+    const { pane } = createTestChatPane({
+      client: createTestGatewayClient(request),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
+      "taskSuggestions.accept",
+      "projects.list",
+    ]);
+    pane.taskSuggestions = [suggestion];
+    await pane.acceptTaskSuggestion(suggestion, "worktree");
+    pane.connectionGeneration += 1;
+    projects.resolve({
+      projects: [
+        { id: "stale", displayName: "Stale project", repoRoot: "/stale", source: "registered" },
+      ],
+    });
+    await projects.promise;
+    const outcome = pane
+      .suggestionChatProps(true, false, false)
+      .taskSuggestionAcceptance?.(suggestion.id);
+    expect(outcome?.phase === "failed" && outcome.repository?.projects).toEqual([]);
+  });
+
   it("drops an accept response after a same-client reconnect", async () => {
     const accepted = createDeferred<TaskSuggestionsAcceptResult>();
     const client = {
       request: vi.fn(() => accepted.promise),
     } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
+    const sessions = createSessionCapabilityFixture();
     const { pane } = createTestChatPane({ client, sessions });
     pane.taskSuggestions = [suggestion];
     const pending = pane.acceptTaskSuggestion(suggestion);
@@ -343,7 +469,7 @@ describe("chat pane task suggestion lifecycle", () => {
     );
     const { pane, state } = createTestChatPane({
       client: createTestGatewayClient(request),
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     pane.context.gateway.snapshot.selfUser = { id: "operator-a", name: "Operator A" };
     state.loadAssistantIdentity = vi.fn(async () => {});
@@ -416,7 +542,7 @@ describe("chat pane task suggestion lifecycle", () => {
       });
       const { pane } = createTestChatPane({
         client: createTestGatewayClient(request),
-        sessions: {} as SessionCapability,
+        sessions: createSessionCapabilityFixture(),
       });
       pane.taskSuggestions = [suggestion];
       const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
@@ -466,7 +592,7 @@ describe("chat pane task suggestion lifecycle", () => {
         recoveryScope: { get: () => (source === "unknown" ? "" : "principal-a") },
         recoveryScopeReady: { get: () => recoveryReady },
       });
-      const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const { pane } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
       const snapshot = pane.context.gateway.snapshot;
       const hello = snapshot.hello!;
       snapshot.hello = {
@@ -521,7 +647,7 @@ describe("chat pane task suggestion lifecycle", () => {
       );
       const { pane, state } = createTestChatPane({
         client: createTestGatewayClient(request),
-        sessions: {} as SessionCapability,
+        sessions: createSessionCapabilityFixture(),
       });
       state.currentSessionId = initiallyKnown ? "physical-original" : undefined;
       state.loadAssistantIdentity = vi.fn(async () => {});
@@ -579,7 +705,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const client = {
       request: vi.fn(() => listed.promise),
     } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
+    const sessions = createSessionCapabilityFixture();
     const { pane } = createTestChatPane({ client, sessions });
 
     const pending = pane.refreshTaskSuggestions();

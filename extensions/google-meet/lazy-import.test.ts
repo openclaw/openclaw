@@ -55,6 +55,8 @@ describe("google-meet lazy imports", () => {
       runtimeImports += 1;
       return {
         GoogleMeetRuntime: class {
+          async reconcileTranscriptPolicy() {}
+
           async status() {
             return { sessions: [] };
           }

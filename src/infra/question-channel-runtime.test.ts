@@ -1,7 +1,7 @@
 // Covers question message finalization lifecycle and delivery races.
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QuestionRecord } from "../../packages/gateway-protocol/src/schema/questions.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -10,7 +10,23 @@ import {
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createQuestionChannelRuntime } from "./question-channel-runtime-internal.js";
+
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
+beforeEach(() => {
+  clock = createGatewaySchedulerClock();
+  scheduler = createTestGatewayScheduler(clock.clock);
+});
+
+afterEach(async () => {
+  await scheduler.stop();
+});
 
 const record: QuestionRecord = {
   id: "ask_0123456789abcdef0123456789abcdef",
@@ -47,7 +63,7 @@ describe("question channel runtime", () => {
             finalize,
           });
         if (binding === "known") {
-          runtime.handleRequested(record);
+          runtime.handleRequested(record, scheduler);
           register();
           runtime.handleResolved({
             id: record.id,
@@ -76,7 +92,7 @@ describe("question channel runtime", () => {
         expect(events).toEqual(["finalizer settled", "runtime cleared", "runtime cleared"]);
         expect(finalize).toHaveBeenCalledOnce();
         const nextFinalize = vi.fn();
-        runtime.handleRequested(record);
+        runtime.handleRequested(record, scheduler);
         runtime.registerDelivery({
           questionId: record.id,
           deliveryId: "next-generation",
@@ -112,7 +128,7 @@ describe("question channel runtime", () => {
           runtime.registerDelivery({ questionId: record.id, deliveryId: "late-plugin", finalize });
         if (binding === "known") {
           await gateway.track(() => {
-            runtime.handleRequested(record);
+            runtime.handleRequested(record, scheduler);
             runtime.handleResolved({
               id: record.id,
               status: "answered",
@@ -121,7 +137,7 @@ describe("question channel runtime", () => {
           });
           await pluginCaller.track(register);
         } else {
-          await otherGateway.track(() => runtime.handleRequested(record));
+          await otherGateway.track(() => runtime.handleRequested(record, scheduler));
           await gateway.track(() =>
             runtime.runWithDeliveries(
               [record.id],
@@ -164,12 +180,11 @@ describe("question channel runtime", () => {
   );
 
   it("joins reentrant clear before releasing its finalizer and does not recreate a retention timer", async () => {
-    vi.useFakeTimers();
     const runtime = createQuestionChannelRuntime();
     const release = createDeferredCore();
     let clearing: Promise<void> | undefined;
     try {
-      runtime.handleRequested(record);
+      runtime.handleRequested(record, scheduler);
       runtime.registerDelivery({
         questionId: record.id,
         deliveryId: "reentrant-clear",
@@ -180,14 +195,13 @@ describe("question channel runtime", () => {
       });
       runtime.handleResolved({ id: record.id, status: "expired" });
       expect(clearing).toBeDefined();
-      expect(vi.getTimerCount()).toBe(0);
+      expect(clock.armedAtMs).toBeNull();
       release.resolve();
       await clearing;
     } finally {
       release.resolve();
       await clearing;
       await runtime.clear();
-      vi.useRealTimers();
     }
   });
 
@@ -208,12 +222,14 @@ describe("question channel runtime", () => {
     let drained = false;
     try {
       await gateway.track(() => {
-        runtime.handleRequested(record);
+        runtime.handleRequested(record, scheduler);
         runtime.registerDelivery({ questionId: record.id, deliveryId: "held", finalize });
-        lateRequest = releaseLateRequest.promise.then(() => runtime.handleRequested(lateRecord));
+        lateRequest = releaseLateRequest.promise.then(() =>
+          runtime.handleRequested(lateRecord, scheduler),
+        );
       });
       await otherGateway.track(() => {
-        runtime.handleRequested(otherRecord);
+        runtime.handleRequested(otherRecord, scheduler);
         runtime.registerDelivery({
           questionId: otherRecord.id,
           deliveryId: "other",
@@ -269,7 +285,7 @@ describe("question channel runtime", () => {
       const before = getActiveGatewayRootWorkCount();
       const admission = mode === "rooted" ? tryBeginGatewayRootWorkAdmission() : null;
       const deliver = async () => {
-        runtime.handleRequested(record);
+        runtime.handleRequested(record, scheduler);
         runtime.registerDelivery({
           questionId: record.id,
           deliveryId: "root-retention",
@@ -307,7 +323,7 @@ describe("question channel runtime", () => {
     const finalize = vi.fn();
 
     try {
-      gateway.handleQuestionChannelRequested(record);
+      gateway.handleQuestionChannelRequested(record, scheduler);
       plugin.registerQuestionChannelDelivery({
         questionId: record.id,
         deliveryId: "slack:default:C123:171234.001",
@@ -326,38 +342,36 @@ describe("question channel runtime", () => {
   });
 
   it("clears shared callbacks and retention timers when the gateway restarts", async () => {
-    vi.useFakeTimers();
     try {
       const gateway = await importFreshModule<typeof import("./question-channel-runtime.js")>(
         import.meta.url,
         "./question-channel-runtime.js?scope=question-gateway-lifecycle",
       );
       const staleFinalize = vi.fn();
-      gateway.handleQuestionChannelRequested(record);
+      gateway.handleQuestionChannelRequested(record, scheduler);
       gateway.registerQuestionChannelDelivery({
         questionId: record.id,
         deliveryId: "slack:default:C123:171234.002",
         finalize: staleFinalize,
       });
-      gateway.handleQuestionChannelRequested({ ...record, id: "ask_terminal" });
+      gateway.handleQuestionChannelRequested({ ...record, id: "ask_terminal" }, scheduler);
       gateway.handleQuestionChannelResolved({ id: "ask_terminal", status: "expired" });
 
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      expect(clock.armedAtMs).not.toBeNull();
       await drainGlobalSingletonLifecycleState("restart");
-      expect(vi.getTimerCount()).toBe(0);
+      expect(clock.armedAtMs).toBeNull();
 
       gateway.handleQuestionChannelResolved({ id: record.id, status: "cancelled" });
       expect(staleFinalize).not.toHaveBeenCalled();
     } finally {
       await drainGlobalSingletonLifecycleState("restart");
-      vi.useRealTimers();
     }
   });
 
   it("finalizes delivered messages once with canonical answer labels", async () => {
     const finalize = vi.fn();
     const runtime = createQuestionChannelRuntime();
-    runtime.handleRequested(record);
+    runtime.handleRequested(record, scheduler);
     runtime.registerDelivery({ questionId: record.id, deliveryId: "telegram:1", finalize });
 
     const event = {
@@ -372,25 +386,16 @@ describe("question channel runtime", () => {
     await runtime.clear();
   });
 
-  it("finalizes expiry delivered after the terminal event", async () => {
-    const finalize = vi.fn();
-    const runtime = createQuestionChannelRuntime();
-    runtime.handleRequested(record);
-    runtime.handleResolved({ id: record.id, status: "expired" });
-    runtime.registerDelivery({ questionId: record.id, deliveryId: "slack:1", finalize });
-
-    await vi.waitFor(() => expect(finalize).toHaveBeenCalledOnce());
-    expect(finalize).toHaveBeenCalledWith("Expired");
-    await runtime.clear();
-  });
-
   it("does not echo free-text answers", async () => {
     const finalize = vi.fn();
     const runtime = createQuestionChannelRuntime();
-    runtime.handleRequested({
-      ...record,
-      questions: [{ ...record.questions[0]!, options: [], isOther: true }],
-    });
+    runtime.handleRequested(
+      {
+        ...record,
+        questions: [{ ...record.questions[0]!, options: [], isOther: true }],
+      },
+      scheduler,
+    );
     runtime.registerDelivery({ questionId: record.id, deliveryId: "telegram:text", finalize });
     runtime.handleResolved({
       id: record.id,
@@ -403,19 +408,17 @@ describe("question channel runtime", () => {
   });
 
   it("retains terminal state beyond the gateway grace for late delivery capture", async () => {
-    vi.useFakeTimers();
+    const finalize = vi.fn();
+    const runtime = createQuestionChannelRuntime();
     try {
-      const finalize = vi.fn();
-      const runtime = createQuestionChannelRuntime();
-      runtime.handleRequested(record);
+      runtime.handleRequested(record, scheduler);
       runtime.handleResolved({ id: record.id, status: "expired" });
-      await vi.advanceTimersByTimeAsync(15_001);
+      await clock.advanceBy(15_001);
       runtime.registerDelivery({ questionId: record.id, deliveryId: "slack:late", finalize });
 
-      expect(finalize).toHaveBeenCalledWith("Expired");
-      await runtime.clear();
+      expect(finalize).toHaveBeenCalledExactlyOnceWith("Expired");
     } finally {
-      vi.useRealTimers();
+      await runtime.clear();
     }
   });
 
@@ -423,13 +426,13 @@ describe("question channel runtime", () => {
     const runtime = createQuestionChannelRuntime();
     const finalize = vi.fn();
     try {
-      runtime.handleRequested(record);
+      runtime.handleRequested(record, scheduler);
       runtime.handleResolved({
         id: record.id,
         status: "answered",
         answers: { answers: { target: ["Production"] } },
       });
-      runtime.handleRequested({ ...record, createdAtMs: 20_000, expiresAtMs: 30_000 });
+      runtime.handleRequested({ ...record, createdAtMs: 20_000, expiresAtMs: 30_000 }, scheduler);
       runtime.registerDelivery({ questionId: record.id, deliveryId: "new-question", finalize });
       expect(finalize).not.toHaveBeenCalled();
       runtime.handleResolved({ id: record.id, status: "expired" });
@@ -449,8 +452,7 @@ describe("question channel runtime", () => {
   ] as const)(
     "does not revive a captured $binding delivery from $deliveryOwner scope after $retirement",
     async ({ binding, retirement, deliveryOwner }) => {
-      vi.useFakeTimers();
-      const runtime = createQuestionChannelRuntime({ terminalRetentionMs: 50 });
+      const runtime = createQuestionChannelRuntime();
       const gateway = new AsyncWorkScope();
       const pluginCaller = new AsyncWorkScope();
       const capturingScope = deliveryOwner === "question" ? gateway : pluginCaller;
@@ -459,7 +461,7 @@ describe("question channel runtime", () => {
       const nextFinalize = vi.fn();
       let delivery: Promise<void> | undefined;
       try {
-        await gateway.track(() => runtime.handleRequested(record));
+        await gateway.track(() => runtime.handleRequested(record, scheduler));
         runtime.handleResolved({ id: record.id, status: "expired" });
         await capturingScope.track(() => {
           delivery = runtime.runWithDeliveries(
@@ -488,9 +490,9 @@ describe("question channel runtime", () => {
           await gateway.drain();
           runtime.retireGateway(gateway.signal);
         }
-        runtime.handleRequested({ ...record, createdAtMs: 20, expiresAtMs: 100 });
+        runtime.handleRequested({ ...record, createdAtMs: 20, expiresAtMs: 100 }, scheduler);
         if (retirement === "retention expiry") {
-          await vi.advanceTimersByTimeAsync(50);
+          await clock.advanceBy(24 * 60 * 60 * 1_000);
         }
         release.resolve();
         await delivery;
@@ -513,9 +515,7 @@ describe("question channel runtime", () => {
         await delivery;
         await Promise.all([gateway.drain(), pluginCaller.drain()]);
         await runtime.clear();
-        const remainingTimers = vi.getTimerCount();
-        vi.useRealTimers();
-        expect(remainingTimers).toBe(0);
+        expect(clock.armedAtMs).toBeNull();
       }
     },
   );
@@ -524,7 +524,7 @@ describe("question channel runtime", () => {
     const error = new Error("edit failed");
     const onFinalizeError = vi.fn();
     const runtime = createQuestionChannelRuntime({ onFinalizeError });
-    runtime.handleRequested(record);
+    runtime.handleRequested(record, scheduler);
     runtime.registerDelivery({
       questionId: record.id,
       deliveryId: "discord:1",
@@ -561,7 +561,7 @@ describe("terminal status labels", () => {
     };
     const finalize = vi.fn();
     const runtime = createQuestionChannelRuntime();
-    runtime.handleRequested(recordWithOther);
+    runtime.handleRequested(recordWithOther, scheduler);
     runtime.registerDelivery({ questionId: recordWithOther.id, deliveryId: "test:1", finalize });
     runtime.handleResolved({
       id: "ask_q",

@@ -6,7 +6,7 @@ import { buildCommandTestParams } from "../../auto-reply/reply/commands.test-har
 import { resolveBoundAcpDispatchSessionKey } from "../../auto-reply/reply/dispatch-from-config.context.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { resolveChatSendOriginatingRoute } from "./chat-origin-routing.js";
 
 const sessionKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
@@ -36,8 +36,8 @@ describe("dashboard WebChat ACP binding", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-webchat-acp-"));
   });
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.unstubAllEnvs();
   });
 
@@ -64,18 +64,18 @@ describe("dashboard WebChat ACP binding", () => {
           },
         },
       });
-      closeOpenClawStateDatabaseForTest();
-      expect(resolveBoundAcpDispatchSessionKey({ cfg, ctx: webchatContext() })).toBe(
+      await closeOpenClawStateDatabaseAsync();
+      expect(await resolveBoundAcpDispatchSessionKey({ cfg, ctx: webchatContext() })).toBe(
         targetSessionKey,
       );
       expect(
-        resolveBoundAcpDispatchSessionKey({
+        await resolveBoundAcpDispatchSessionKey({
           cfg,
           ctx: webchatContext(sessionKey.replace("main", "other")),
         }),
       ).toBeUndefined();
       expect(
-        resolveBoundAcpDispatchSessionKey({
+        await resolveBoundAcpDispatchSessionKey({
           cfg,
           ctx: webchatContext(sessionKey.replace("11111111", "33333333")),
         }),
@@ -88,7 +88,7 @@ describe("dashboard WebChat ACP binding", () => {
         conversation: { channel: "webchat", accountId: "default", conversationId: siblingKey },
       });
       expect(
-        resolveBoundAcpDispatchSessionKey({
+        await resolveBoundAcpDispatchSessionKey({
           cfg,
           ctx: { ...webchatContext(), AccountId: "other" },
         }),
@@ -97,10 +97,12 @@ describe("dashboard WebChat ACP binding", () => {
       unbindParams.sessionKey = sessionKey;
       const unbound = await handleSessionCommand(unbindParams, true);
       expect(unbound?.reply?.text).toContain("Conversation unbound.");
-      expect(resolveBoundAcpDispatchSessionKey({ cfg, ctx: webchatContext(siblingKey) })).toBe(
-        targetSessionKey,
-      );
-      expect(resolveBoundAcpDispatchSessionKey({ cfg, ctx: webchatContext() })).toBeUndefined();
+      expect(
+        await resolveBoundAcpDispatchSessionKey({ cfg, ctx: webchatContext(siblingKey) }),
+      ).toBe(targetSessionKey);
+      expect(
+        await resolveBoundAcpDispatchSessionKey({ cfg, ctx: webchatContext() }),
+      ).toBeUndefined();
     },
   );
 });

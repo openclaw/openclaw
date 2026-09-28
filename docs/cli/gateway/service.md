@@ -24,6 +24,23 @@ openclaw gateway uninstall
 It still validates core configuration and refuses configuration written by a newer
 OpenClaw binary. Start and restart continue to validate plugin configuration.
 
+On Windows, Scheduled Task stop and restart first ask the verified Gateway to drain
+and exit. Older or unresponsive Gateways fall back to termination of the captured
+process tree; a replacement instance is preserved. Transient SQLite sharing errors
+after confirmed process exit are retried; if inspection remains unavailable, the
+command warns and checks that the Gateway port is free before continuing with restart.
+
+If task settlement inspection remains unavailable
+within the stop budget, restart still attempts the captured task after confirming
+the Gateway exited, then reports that restart is unverified. An observed replacement
+is preserved and the restart is refused.
+
+If `gateway start` reaches its readiness deadline while the managed Gateway is
+still starting, it reports `still-starting` and exits with code `2`. The service
+keeps running; check `openclaw gateway status --deep` again before restarting it.
+A crashed service or a foreign listener still produces a failure. Port ownership
+alone does not prove readiness or rule out warm-up.
+
 ### Recover an unreadable native service definition
 
 If installation or a managed update reports `SERVICE_DEFINITION_UNKNOWN`, first
@@ -98,6 +115,10 @@ commands retain their service-management behavior.
 
 ### Pin the service runtime
 
+Forced reinstall retains a supported Node executable recorded in the service.
+Doctor also retains it when no runtime migration is needed. An explicit
+`--runtime node` requests automatic selection again.
+
 Use `--runtime-path` to keep the service on an operator-selected Node or Bun
 executable instead of automatic runtime selection:
 
@@ -116,6 +137,21 @@ To replace it, supply another `--runtime-path`; to return to automatic selection
 run `openclaw gateway install --runtime node --force` without `--runtime-path`.
 An explicit wrapper still controls the executable and takes precedence over a pin.
 Installation starts the service and may restart an existing Gateway.
+
+### Repair a LaunchAgent environment wrapper
+
+On macOS, the generated LaunchAgent starts a shell wrapper with the generated
+environment file followed by the Gateway command. If `gateway status` reports a
+missing environment-file argument, or the service log reports **Invalid LaunchAgent
+environment file**, run `openclaw gateway install --force` from the owning account
+and profile, then check `openclaw gateway status` and `openclaw health`.
+
+Back up the plist and private service environment file before repairing a malformed
+definition. If its runtime argument was also changed, select the intended executable
+explicitly with `--runtime-path` as shown above. A recorded runtime pin whose service
+definition has changed must be explicitly selected again. Keep service-only
+environment values available to the reinstall; malformed wrapper arguments can
+prevent OpenClaw from reading the previous environment file.
 
 ### Install with a wrapper
 
@@ -164,6 +200,7 @@ openclaw gateway restart
   </Accordion>
   <Accordion title="Lifecycle behavior">
     - `gateway start` is idempotent: when the managed service is already running, it reports the running process and leaves it untouched. A loaded but stopped service is started as before.
+    - On Windows, an explicit `gateway start` re-enables a disabled Scheduled Task after verifying its selected profile and command. It preserves the registered launcher and trigger settings. If enablement succeeds but launch fails, the Task may remain enabled; inspect the same profile with `gateway status --deep` before retrying. `update repair` leaves a Gateway that was already stopped offline; run `gateway start` afterward when you intend to bring it online.
     - If no managed service is installed, `gateway start` prints install hints and exits nonzero. `gateway restart` can first recover an installed-but-unloaded LaunchAgent or a verified unmanaged Gateway; if neither a managed service nor recovery handles the action, it prints the same hints and exits nonzero. Stopping an absent service remains a successful no-op.
     - If `gateway start` or `gateway restart` needs to repair a stale service definition, the command refuses when the invoking shell resolves a different state directory, config path, or port than the installed service. Match or unset the conflicting environment overrides, or use `openclaw gateway install --force` to retarget the service intentionally.
     - On Linux, `gateway start` and `gateway restart` also refuse ineffective repairs when an operator-owned systemd drop-in overrides the command or working directory. Inspect the effective unit with `systemctl --user cat <unit>.service`, then update or remove that drop-in. `gateway install --force` rewrites only the managed base unit and warns if the override remains; `Environment=` drop-ins remain supported.

@@ -1,11 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   allocatePluginStateNamespaceCreatedAt,
-  assertCanInsertPluginStateEntry,
   bindPluginStateEntry,
   createPluginStateError,
   deleteExpiredPluginStateEntries,
-  enforcePostRegisterLimits,
   hasPluginStateEntry,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   parseStoredJson,
@@ -14,6 +12,7 @@ import {
   upsertPluginStateEntry,
   type PluginStateDatabase,
 } from "./plugin-state-store.kernel.js";
+import { enforcePostRegisterLimits } from "./plugin-state-store.retention.js";
 import { serializePluginStoreJson, validatePluginStoreKey } from "./plugin-store-validation.js";
 
 export type PluginStateSequencedJournalParams = {
@@ -30,7 +29,6 @@ export type PluginStateSequencedJournalParams = {
     valueKind?: string;
   };
   journalValueJson: string;
-  maxPluginEntries: number;
 };
 
 const journalValueErrors = {
@@ -181,26 +179,6 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
       path: store.path,
     });
   }
-  if (!cursor) {
-    assertCanInsertPluginStateEntry({
-      maxPluginEntries: params.maxPluginEntries,
-      store,
-      pluginId: params.pluginId,
-      namespace: params.cursorNamespace,
-      maxEntries: params.cursorMaxEntries,
-      overflowPolicy: "evict-oldest",
-      now,
-    });
-  }
-  assertCanInsertPluginStateEntry({
-    maxPluginEntries: params.maxPluginEntries,
-    store,
-    pluginId: params.pluginId,
-    namespace: params.journalNamespace,
-    maxEntries: params.journalMaxEntries,
-    overflowPolicy: "evict-oldest",
-    now,
-  });
   upsertPluginStateEntry(
     store.db,
     bindPluginStateEntry({
@@ -220,7 +198,6 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
     overflowPolicy: "evict-oldest",
     now,
     protectedKey: params.cursorKey,
-    maxPluginEntries: undefined,
   });
   upsertPluginStateEntry(
     store.db,
@@ -238,7 +215,6 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
     }),
   );
   enforcePostRegisterLimits({
-    maxPluginEntries: params.maxPluginEntries,
     store,
     pluginId: params.pluginId,
     namespace: params.journalNamespace,

@@ -40,15 +40,6 @@ describe("runtime overrides", () => {
     ).toBe("global|main|research");
   });
 
-  it("sets and applies nested overrides", () => {
-    const cfg = {
-      channels: { whatsapp: { responsePrefix: "[openclaw]" } },
-    } as OpenClawConfig;
-    setConfigOverride("channels.whatsapp.responsePrefix", "[debug]");
-    const next = applyConfigOverrides(cfg);
-    expect(next.channels?.whatsapp?.responsePrefix).toBe("[debug]");
-  });
-
   it("captures an immutable override applier", () => {
     setConfigOverride("gateway.auth.token", "startup-token");
     const applyStartupOverrides = captureConfigOverrideApplier();

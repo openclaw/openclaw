@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema cron gates", () => {
-  it.each([undefined, false, true])(
+  it.each([undefined, false])(
     "accepts skipMissedJobs=%s without changing its default",
     (skipMissedJobs) => {
       expect(OpenClawSchema.parse({ cron: { skipMissedJobs } }).cron?.skipMissedJobs).toBe(

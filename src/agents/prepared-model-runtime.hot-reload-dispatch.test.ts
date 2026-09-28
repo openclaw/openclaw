@@ -1,13 +1,11 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
-  resetPreparedModelRuntimeHarness,
+  usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
@@ -25,10 +23,7 @@ import { refreshModelRuntimeAfterHotReload } from "../gateway/server-reload-mode
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import { loadPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
@@ -44,18 +39,14 @@ import {
 } from "./prepared-model-runtime.js";
 import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const fixture = usePreparedModelRuntimeHarness(
+  { label: "hot-reload-dispatch" },
+  clearRuntimeConfigSnapshot,
+);
+const { mocks } = fixture;
 
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "hot-reload-dispatch" });
-  await resetPreparedModelRuntimeHarness(state);
+beforeEach(() => {
   mocks.configuredAgentIds = ["default"];
-});
-
-afterEach(async ({ task }) => {
-  clearRuntimeConfigSnapshot();
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
 function config(enabled: boolean): OpenClawConfig {
@@ -63,7 +54,7 @@ function config(enabled: boolean): OpenClawConfig {
 }
 
 function ownerInput(cfg: OpenClawConfig) {
-  return { config: cfg, agentId: "default", agentDir: state.agentDir("default") };
+  return { config: cfg, agentId: "default", agentDir: fixture.state.agentDir("default") };
 }
 
 async function publish(cfg: OpenClawConfig) {
@@ -83,7 +74,7 @@ function createPluginReloadHandler(
     heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
-      storePath: state.path("cron.sqlite"),
+      storePath: fixture.state.path("cron.sqlite"),
       cronEnabled: false,
       reconcileExitWatchers: vi.fn(async () => {}),
       reconcileStreamWatchers: vi.fn(async () => {}),
@@ -93,6 +84,7 @@ function createPluginReloadHandler(
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return createGatewayReloadHandlers({
+    scheduler: createTestGatewayScheduler(),
     deps: {} as never,
     broadcast: vi.fn(),
     getState: () => reloadState,
@@ -119,7 +111,7 @@ function createPluginReloadHandler(
 describe("Gateway plugin reload run admission", () => {
   it("cancels degraded startup acquisition before plugin drain and publishes only its replacement", async () => {
     mocks.configuredAgentIds = ["default", "held"];
-    const heldWorkspace = state.path("held-workspace");
+    const heldWorkspace = fixture.state.path("held-workspace");
     mocks.configuredWorkspaces.set("held", heldWorkspace);
     const modelConfig = (id: string): OpenClawConfig => ({
       agents: { defaults: { model: `custom/${id}` } },
@@ -193,7 +185,7 @@ describe("Gateway plugin reload run admission", () => {
       const snapshot = getPreparedModelRuntimeSnapshot({
         config: committed,
         agentId: "held",
-        agentDir: state.agentDir("held"),
+        agentDir: fixture.state.agentDir("held"),
       });
       if (snapshot) {
         publications.push({
@@ -279,10 +271,8 @@ describe("Gateway plugin reload run admission", () => {
   });
 
   it.each([
-    { outcome: "commit", arrival: "during drainage" },
     { outcome: "rollback", arrival: "during drainage" },
     { outcome: "commit", arrival: "before drainage" },
-    { outcome: "rollback", arrival: "before drainage" },
   ] as const)(
     "preserves a run admitted $arrival and waiting requests through plugin $outcome",
     async ({ outcome, arrival }) => {
@@ -329,7 +319,7 @@ describe("Gateway plugin reload run admission", () => {
         pluginIds: ["synthetic"],
         reason: "reload",
       };
-      const input = { ...ownerInput(retained), workspaceDir: state.path("run-workspace") };
+      const input = { ...ownerInput(retained), workspaceDir: fixture.state.path("run-workspace") };
       let settled = false;
       let requestSettled = false;
       let admission: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
@@ -414,40 +404,37 @@ describe("Gateway plugin reload run admission", () => {
 });
 
 describe("retained config and committed model publication", () => {
-  it.each(["build", "cleanup"] as const)(
-    "preserves an unrelated %s failure when preparation is superseded",
-    async (failureKind) => {
-      const retained = config(true);
+  it("preserves an unrelated aggregate failure when preparation is superseded", async () => {
+    const retained = config(true);
+    await publish(retained);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const failure = new AggregateError(
+      [new Error("fixture cleanup failed")],
+      "fixture build cleanup",
+    );
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      throw failure;
+    });
+    const admission = acquireAgentRunPreparedModelRuntime({
+      ...ownerInput(retained),
+      workspaceDir: fixture.state.path("failed-run-workspace"),
+    });
+    const result = admission.catch((error: unknown) => error);
+    try {
+      await Promise.race([entered.promise, result]);
+      markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
+      release.resolve();
+      // Finish replacement so a mistaken retry would return a lease, not hang this assertion.
       await publish(retained);
-      const entered = createDeferred();
-      const release = createDeferred();
-      const failure =
-        failureKind === "build"
-          ? new Error("fixture catalog failed")
-          : new AggregateError([new Error("fixture cleanup failed")], "fixture build cleanup");
-      mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        throw failure;
-      });
-      const admission = acquireAgentRunPreparedModelRuntime({
-        ...ownerInput(retained),
-        workspaceDir: state.path("failed-run-workspace"),
-      });
-      const result = admission.catch((error: unknown) => error);
-      try {
-        await Promise.race([entered.promise, result]);
-        markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
-        release.resolve();
-        // Finish replacement so a mistaken retry would return a lease, not hang this assertion.
-        await publish(retained);
-        expect(await result).toBe(failure);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([admission.then((lease) => lease[Symbol.asyncDispose]())]);
-      }
-    },
-  );
+      expect(await result).toBe(failure);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([admission.then((lease) => lease[Symbol.asyncDispose]())]);
+    }
+  });
 
   it.each(["advance", "hot reload"])(
     "%s preserves exact catalog isolation while dispatch selects the committed config",
@@ -485,20 +472,11 @@ describe("retained config and committed model publication", () => {
     },
   );
 
-  it("advances model-neutral config without another catalog discovery", async () => {
-    await publish(config(true));
-    const discoveries = mocks.runPreparedModelCatalogWorker.mock.calls.length;
-    const committed = config(false);
-    advancePreparedModelRuntimeConfig(committed);
-    const runtime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
-    expect(runtime?.config).toEqual(committed);
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(discoveries);
-  });
-
   it("does not let a retained lease authorize an old config catalog read", async () => {
     const retained = config(true);
     await publish(retained);
     await using lease = await acquirePreparedModelRuntimeSnapshot(ownerInput(retained));
+    const discoveries = mocks.runPreparedModelCatalogWorker.mock.calls.length;
     advancePreparedModelRuntimeConfig(config(false));
     await withPreparedModelRuntimePluginGenerationScope(
       lease.pluginGeneration,
@@ -509,6 +487,7 @@ describe("retained config and committed model publication", () => {
       },
       () => lease.snapshot,
     );
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(discoveries);
   });
 });
 

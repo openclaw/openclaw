@@ -549,16 +549,16 @@ describe("qa suite", () => {
         NODE_OPTIONS: "--max-old-space-size=4096",
       }),
     ).toEqual({
-      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGUSR2",
+      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGQUIT",
     });
     expect(
       mergeQaRuntimeEnvPatches(
         { OPENAI_API_KEY: "mock" },
-        { NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2" },
+        { NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT" },
       ),
     ).toEqual({
       OPENAI_API_KEY: "mock",
-      NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2",
+      NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT",
     });
   });
 

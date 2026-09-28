@@ -1,20 +1,14 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
-  resetPreparedModelRuntimeHarness,
+  usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import * as inlineProviderModels from "./embedded-agent-runner/model.inline-provider.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import * as configuredModels from "./model-selection-shared.js";
@@ -30,18 +24,12 @@ import {
 import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const fixture = usePreparedModelRuntimeHarness({ label: "prepared-fleet-batch" });
+const { mocks } = fixture;
 
 describe("prepared fleet batches", () => {
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "prepared-fleet-batch" });
-    await resetPreparedModelRuntimeHarness(state);
+  beforeEach(() => {
     mocks.configuredAgentIds = ["first", "middle", "last"];
-  });
-
-  afterEach(async (context) => {
-    await cleanupPreparedModelRuntimeHarness(state, context.task.result?.state === "fail");
   });
 
   it.each([
@@ -66,7 +54,7 @@ describe("prepared fleet batches", () => {
       const mutateAuth = () => {
         mocks.authStorage.getAll.mockReturnValue(credentials);
         mocks.mutationListener?.({
-          agentDir: state.agentDir("fleet-0"),
+          agentDir: fixture.state.agentDir("fleet-0"),
           affectsInheritedStores: false,
         });
       };
@@ -117,7 +105,7 @@ describe("prepared fleet batches", () => {
             getPreparedModelRuntimeSnapshot({
               config,
               agentId: "fleet-0",
-              agentDir: state.agentDir("fleet-0"),
+              agentDir: fixture.state.agentDir("fleet-0"),
             })
               ?.createStores()
               .authStorage.getAll(),
@@ -136,7 +124,7 @@ describe("prepared fleet batches", () => {
           getPreparedModelRuntimeSnapshot({
             config,
             agentId: heldAgent,
-            agentDir: state.agentDir(heldAgent),
+            agentDir: fixture.state.agentDir(heldAgent),
           }),
         ).toBeDefined();
       } finally {
@@ -157,7 +145,7 @@ describe("prepared fleet batches", () => {
     const finishSecondAuth = createDeferredCore();
     const mutateAuth = () =>
       mocks.mutationListener?.({
-        agentDir: state.agentDir("first"),
+        agentDir: fixture.state.agentDir("first"),
         affectsInheritedStores: false,
       });
     let initial = true;
@@ -225,71 +213,68 @@ describe("prepared fleet batches", () => {
     }
   });
 
-  it.each([false, true])(
-    "retains settled agents after a late failure (neutral config advance: %s)",
-    async (advanceConfig) => {
-      mocks.configuredAgentIds = ["first", "last"];
-      const acquiring = createDeferredCore();
-      const acquired = createDeferredCore();
-      const failed = createDeferredCore();
-      mocks.prepareStaticCatalog.mockImplementation(async (options) => {
-        if ((options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-last") {
-          acquiring.resolve();
-          await acquired.promise;
-        }
-        return { entries: [] };
-      });
-      mocks.warn.mockImplementation((message: string) => {
-        if (message.includes("background model runtime publication failed")) {
-          failed.resolve();
-        }
-      });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const publication = refreshPreparedModelRuntimeSnapshots(
-        {},
-        {
-          gatewayLifecycle: true,
-          startup: true,
-          catalogMode: "static",
-        },
-      );
-      try {
-        await acquiring.promise;
-        await vi.advanceTimersByTimeAsync(120_000);
-        await publication;
-        if (advanceConfig) {
-          advancePreparedModelRuntimeConfig({ logging: { level: "debug" } });
-        }
-        acquired.reject(new Error("fixture catalog failure"));
-        await failed.promise;
-        await expect(
-          loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" }),
-        ).resolves.toMatchObject({ agentId: "first" });
-        expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
-          degraded: true,
-          pendingAgents: ["last"],
-        });
-      } finally {
-        acquired.resolve();
-        await Promise.allSettled([publication]);
-        await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
-        vi.useRealTimers();
+  it("retains settled agents after a late failure across a neutral config advance", async () => {
+    mocks.configuredAgentIds = ["first", "last"];
+    const acquiring = createDeferredCore();
+    const acquired = createDeferredCore();
+    const failed = createDeferredCore();
+    mocks.prepareStaticCatalog.mockImplementation(async (options) => {
+      if ((options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-last") {
+        acquiring.resolve();
+        await acquired.promise;
       }
-    },
-  );
+      return { entries: [] };
+    });
+    mocks.warn.mockImplementation((message: string) => {
+      if (message.includes("background model runtime publication failed")) {
+        failed.resolve();
+      }
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const publication = refreshPreparedModelRuntimeSnapshots(
+      {},
+      {
+        gatewayLifecycle: true,
+        startup: true,
+        catalogMode: "static",
+      },
+    );
+    try {
+      await acquiring.promise;
+      await vi.advanceTimersByTimeAsync(120_000);
+      await publication;
+      advancePreparedModelRuntimeConfig({ logging: { level: "debug" } });
+      acquired.reject(new Error("fixture catalog failure"));
+      await failed.promise;
+      await expect(
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" }),
+      ).resolves.toMatchObject({ agentId: "first" });
+      expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
+        degraded: true,
+        pendingAgents: ["last"],
+      });
+    } finally {
+      acquired.resolve();
+      await Promise.allSettled([publication]);
+      await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+      vi.useRealTimers();
+    }
+  });
 
   it.each([false, true])(
     "services queued event-loop work between agents (shared workspace: %s)",
     async (sharedWorkspace) => {
       if (sharedWorkspace) {
         for (const id of mocks.configuredAgentIds) {
-          mocks.configuredWorkspaces.set(id, state.workspaceDir);
+          mocks.configuredWorkspaces.set(id, fixture.state.workspaceDir);
         }
       }
       const events: string[] = [];
       let queued: Promise<void> | undefined;
       mocks.discoverAuthStorage.mockImplementation((agentDir) => {
-        const agent = mocks.configuredAgentIds.find((id) => state.agentDir(id) === agentDir)!;
+        const agent = mocks.configuredAgentIds.find(
+          (id) => fixture.state.agentDir(id) === agentDir,
+        )!;
         events.push(agent);
         if (agent === "first") {
           queued = nextTurn().then(() => {
@@ -324,8 +309,8 @@ describe("prepared fleet batches", () => {
     });
     const publication = publishPreparedModelRuntimeSnapshot({
       config: {},
-      agentDir: state.agentDir("cancelled"),
-      workspaceDir: state.workspaceDir,
+      agentDir: fixture.state.agentDir("cancelled"),
+      workspaceDir: fixture.state.workspaceDir,
     });
     cancelled = true;
     markPreparedModelRuntimeSnapshotsStale("cancel before workspace preparation");
@@ -385,7 +370,11 @@ describe("prepared fleet batches", () => {
     });
     const readSnapshots = () =>
       mocks.configuredAgentIds.map((agentId) =>
-        getPreparedModelRuntimeSnapshot({ config, agentId, agentDir: state.agentDir(agentId) }),
+        getPreparedModelRuntimeSnapshot({
+          config,
+          agentId,
+          agentDir: fixture.state.agentDir(agentId),
+        }),
       );
     try {
       await refreshPreparedModelRuntimeSnapshots(config, {
@@ -472,10 +461,7 @@ describe("prepared fleet batches", () => {
       catalogMode: "static",
     });
     const snapshot = getPreparedModelRuntimeSnapshot({
-      config,
-      agentId: "first",
-      agentDir: state.agentDir("first"),
-      inheritedAuthDir: state.agentDir("default"),
+      ...fixture.agentInput("first", config),
       workspaceDir: "/tmp/workspace-first",
     });
     expect(snapshot?.createStores().authStorage.getAll()).toEqual(credentials);
@@ -486,7 +472,7 @@ describe("prepared fleet batches", () => {
     mocks.configuredAgentIds = ["first"];
     const config = {};
     const inherited = vi.spyOn(legacyAuth, "resolveLegacyInheritedAuthDir");
-    inherited.mockReturnValue(state.agentDir("default"));
+    inherited.mockReturnValue(fixture.state.agentDir("default"));
     mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
       inherited.mockReturnValue(undefined);
       mocks.mutationListener?.({ affectsInheritedStores: true });
@@ -500,7 +486,7 @@ describe("prepared fleet batches", () => {
       const snapshot = getPreparedModelRuntimeSnapshot({
         config,
         agentId: "first",
-        agentDir: state.agentDir("first"),
+        agentDir: fixture.state.agentDir("first"),
         workspaceDir: "/tmp/workspace-first",
       });
       expect(snapshot).toBeDefined();

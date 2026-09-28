@@ -249,10 +249,7 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
       document.body.append(trigger);
       trigger.focus();
       const preview = document.createElement("openclaw-file-preview-modal");
-      preview.showSearch = false;
-      preview.showCopy = false;
-      preview.folderTree = true;
-      preview.renderMarkdown = true;
+      preview.layout = "document";
       preview.label = "Operator guide";
       preview.activePath = "SKILL.md";
       const long =
@@ -285,6 +282,13 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
         preview.shadowRoot!.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")!;
       const dialog = await resolveRenderedDialog(owner);
       expect(preview.shadowRoot!.querySelector(".search")).toBeNull();
+      expect(
+        preview.shadowRoot!.querySelector(
+          ".chips, .item-meta, .state, .list-section, .detail-head, .foot",
+        ),
+      ).toBeNull();
+      const close = preview.shadowRoot!.querySelector<HTMLButtonElement>('[aria-label="Close"]')!;
+      expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(width);
       expect(
         preview.shadowRoot!.querySelector(".chat-copy-btn, .code-block-copy, script"),
       ).toBeNull();
@@ -323,7 +327,11 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
       await userEvent.keyboard("{ArrowDown}");
       await preview.updateComplete;
       expect(preview.activePath).toBe("references/guide.md");
-      await userEvent.keyboard("{Escape}");
+      if (width === 390) {
+        close.click();
+      } else {
+        await userEvent.keyboard("{Escape}");
+      }
       await expect.poll(() => preview.isConnected).toBe(false);
       await expect.poll(() => document.activeElement).toBe(trigger);
     },

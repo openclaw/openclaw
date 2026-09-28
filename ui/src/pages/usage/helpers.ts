@@ -35,9 +35,14 @@ type UsageSessionQueryTarget = {
   } | null;
 };
 
-export function currentLocalDate(): string {
-  const date = new Date();
+export function currentLocalDate(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+export function createDefaultUsageDateRange(date = new Date()) {
+  const start = new Date(date);
+  start.setDate(start.getDate() - 29);
+  return { startDate: currentLocalDate(start), endDate: currentLocalDate(date) };
 }
 
 export function toUsageErrorMessage(error: unknown): string {
@@ -84,8 +89,6 @@ export function selectUsageSessionKeys(
   }
   return selected.length === 1 && selected[0] === key ? [] : [key];
 }
-
-const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
 
 const globToRegex = (pattern: string): RegExp => {
   const escaped = pattern
@@ -236,7 +239,7 @@ const prepareUsageQuery = (
     warnings.push(`Missing value for ${term.key}`);
   }
 
-  const value = normalizeQueryText(term.value ?? "");
+  const value = normalizeLowercaseStringOrEmpty(term.value ?? "");
   const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
     ? NUMERIC_QUERY_SPECS[key]
     : undefined;
@@ -310,7 +313,7 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
   const warnings: string[] = [];
   const categoricalTerms = new Map<string, UsageQueryPredicate[]>();
   const predicates = terms.map((term) => {
-    const key = normalizeQueryText(term.key ?? "");
+    const key = normalizeLowercaseStringOrEmpty(term.key ?? "");
     const predicate = prepareUsageQuery(term, key, warnings);
     if (!MULTI_VALUE_QUERY_KEYS.has(key)) {
       return predicate;

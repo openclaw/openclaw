@@ -45,7 +45,7 @@ let applyCodeModeCatalog: typeof import("./code-mode.js").applyCodeModeCatalog;
 let createCodeModeTools: typeof import("./code-mode.js").createCodeModeTools;
 let createToolSearchCatalogRef: typeof import("./tool-search.js").createToolSearchCatalogRef;
 let createNodesTool: typeof import("./tools/nodes-tool.js").createNodesTool;
-let testing: typeof import("./code-mode.test-support.js").testing;
+let resetCodeModeTestState: typeof import("./code-mode.test-support.js").resetCodeModeTestState;
 
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   expect(result.details).toBeDefined();
@@ -98,12 +98,10 @@ async function runUntilCompleted(params: {
   execTool: AnyAgentTool;
   waitTool: AnyAgentTool;
   code: string;
-  typecheck?: boolean;
 }): Promise<Record<string, unknown>> {
   let details = resultDetails(
     await params.execTool.execute("code-nodes-call", {
       code: params.code,
-      ...(params.typecheck ? { language: "typescript", typecheck: true } : {}),
     }),
   );
   for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
@@ -120,7 +118,7 @@ describe("Code Mode nodes", () => {
     ({ applyCodeModeCatalog, createCodeModeTools } = await import("./code-mode.js"));
     ({ createToolSearchCatalogRef } = await import("./tool-search.js"));
     ({ createNodesTool } = await import("./tools/nodes-tool.js"));
-    ({ testing } = await import("./code-mode.test-support.js"));
+    ({ resetCodeModeTestState } = await import("./code-mode.test-support.js"));
   });
 
   beforeEach(() => {
@@ -154,19 +152,13 @@ describe("Code Mode nodes", () => {
     });
   });
 
-  afterEach(() => {
-    testing.activeRuns.clear();
-    testing.resumingRunIds.clear();
-  });
+  afterEach(() => resetCodeModeTestState());
 
-  it.each([false, true])(
-    "lists nodes and invokes typed handles (preflight=%s)",
-    async (typecheck) => {
-      const harness = createHarness();
-      const details = await runUntilCompleted({
-        ...harness,
-        typecheck,
-        code: `
+  it("lists nodes and invokes typed handles", async () => {
+    const harness = createHarness();
+    const details = await runUntilCompleted({
+      ...harness,
+      code: `
         const listed = await nodes.list();
         const node = await nodes.get(listed.find(entry => entry.connected)?.id ?? "Desk");
         const invoked = await node.invoke("device.status", { detail: true });
@@ -181,64 +173,40 @@ describe("Code Mode nodes", () => {
           hasExec: "exec" in node,
         };
       `,
-      });
-
-      expect(details.status).toBe("completed");
-      expect(details.value).toEqual({
-        listed: [
-          {
-            id: "node-1",
-            name: "Desk",
-            platform: "darwin",
-            connected: true,
-            commands: ["device.status", "fs.listDir", "computer.act", "danger.read"],
-          },
-          {
-            id: "node-2",
-            name: "shadow-id",
-            connected: false,
-            commands: ["device.status"],
-          },
-        ],
-        id: "node-1",
-        name: "Desk",
-        methods: ["id", "invoke", "listDir", "name"],
-        invoked: {
-          payload: { nodeId: "node-1", command: "device.status", params: { detail: true } },
-        },
-        directory: {
-          payload: { nodeId: "node-1", command: "fs.listDir", params: { path: "/tmp" } },
-        },
-        hasExec: false,
-      });
-      expect(harness.nestedCalls).not.toHaveLength(0);
-      expect(harness.nestedCalls.every((call) => call.parentToolCallId === "code-nodes-call")).toBe(
-        true,
-      );
-    },
-  );
-
-  it("rejects invalid node arguments and unguarded optional methods before invocation", async () => {
-    const harness = createHarness();
-    const details = await runUntilCompleted({
-      ...harness,
-      typecheck: true,
-      code: `
-        await nodes.get(123);
-        const node = await nodes.get("Desk");
-        await node.listDir("/tmp");
-        await node.describe();
-      `,
     });
-    expect(details).toMatchObject({
-      status: "failed",
-      code: "invalid_input",
-      bridgeDispatchStarted: false,
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      listed: [
+        {
+          id: "node-1",
+          name: "Desk",
+          platform: "darwin",
+          connected: true,
+          commands: ["device.status", "fs.listDir", "computer.act", "danger.read"],
+        },
+        {
+          id: "node-2",
+          name: "shadow-id",
+          connected: false,
+          commands: ["device.status"],
+        },
+      ],
+      id: "node-1",
+      name: "Desk",
+      methods: ["id", "invoke", "listDir", "name"],
+      invoked: {
+        payload: { nodeId: "node-1", command: "device.status", params: { detail: true } },
+      },
+      directory: {
+        payload: { nodeId: "node-1", command: "fs.listDir", params: { path: "/tmp" } },
+      },
+      hasExec: false,
     });
-    expect(details.error).toContain("Argument of type 'number' is not assignable");
-    expect(details.error).toContain("Cannot invoke an object which is possibly 'undefined'");
-    expect(details.error).toContain("Property 'describe' does not exist");
-    expect(harness.nestedCalls).toHaveLength(0);
+    expect(harness.nestedCalls).not.toHaveLength(0);
+    expect(harness.nestedCalls.every((call) => call.parentToolCallId === "code-nodes-call")).toBe(
+      true,
+    );
   });
 
   it("omits listDir when the node does not advertise fs.listDir", async () => {

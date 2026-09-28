@@ -24,7 +24,8 @@ export type MentionInbox = {
   mentionable: (
     client: GatewayClient | null,
     input: UsersMentionableParams,
-  ) => Result<UsersMentionableResult, ErrorShape>;
+    publish: (result: Result<UsersMentionableResult, ErrorShape>) => undefined,
+  ) => Promise<void>;
   validateRecipients: (
     client: GatewayClient | null,
     input: UsersMentionableParams,
@@ -36,6 +37,6 @@ export type MentionInbox = {
     ids: readonly string[],
   ) => Result<MentionsListResult, ErrorShape>;
   recordCommittedInput: (input: MentionCommittedInput) => void;
-  invalidate: () => void;
+  invalidate: (sessionKey?: string) => void;
   dispose: () => void;
 };

@@ -7,6 +7,7 @@ import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.gateway.buildGatewayTlsConfig
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.AppDropdownMenu
 import ai.openclaw.app.ui.design.ClawTheme
 import android.annotation.SuppressLint
 import android.os.Handler
@@ -31,7 +32,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -70,7 +70,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 private const val INLINE_WIDGET_PROFILE_PREFIX = "openclaw-inline-widget-"
-private const val INLINE_WIDGET_DOCUMENT_MAX_BYTES = 2L * 1024 * 1024
+private const val INLINE_WIDGET_DOCUMENT_MAX_BYTES = 10L * 1024 * 1024
 private const val INLINE_WIDGET_FETCH_TIMEOUT_SECONDS = 8L
 private const val HTTP_HEADER_ACCEPT = "Accept"
 private const val HTTP_HEADER_CACHE_CONTROL = "Cache-Control"
@@ -229,7 +229,7 @@ internal fun ChatInlineWidget(
                 },
               )
             }
-            DropdownMenu(
+            AppDropdownMenu(
               expanded = exportMenuExpanded,
               onDismissRequest = {
                 exportMenuExpanded = false

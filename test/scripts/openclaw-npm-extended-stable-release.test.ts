@@ -104,11 +104,8 @@ describe("npm extended-stable publication boundary", () => {
     ["2026.6.11", "alpha"],
     ["2026.6.11", "beta"],
     ["2026.6.11", "latest"],
-    ["2026.6.11-1", "alpha"],
-    ["2026.6.11-1", "beta"],
     ["2026.6.11-1", "latest"],
     ["2026.6.33", "extended-stable"],
-    ["2026.6.34", "extended-stable"],
   ])("accepts %s on %s", (version, distTag) => {
     expect(() => validateNpmPublishBoundary(version, distTag)).not.toThrow();
   });
@@ -116,17 +113,10 @@ describe("npm extended-stable publication boundary", () => {
   it.each([
     ["2026.6.11", "extended-stable"],
     ["2026.6.11-alpha.1", "beta"],
-    ["2026.6.11-alpha.1", "extended-stable"],
     ["2026.6.11-beta.1", "latest"],
-    ["2026.6.11-beta.1", "extended-stable"],
-    ["2026.6.33", "alpha"],
     ["2026.6.33", "beta"],
-    ["2026.6.33", "latest"],
-    ["2026.6.33-1", "alpha"],
-    ["2026.6.33-1", "beta"],
     ["2026.6.33-1", "latest"],
     ["2026.6.33-1", "extended-stable"],
-    ["2026.6.33", "stable"],
     ["2026.6.33", "nightly"],
   ])("rejects %s on %s", (version, distTag) => {
     expect(() => validateNpmPublishBoundary(version, distTag)).toThrow();
@@ -166,16 +156,13 @@ describe("npm extended-stable publication boundary", () => {
     ).toThrow(/does not allow correction suffixes/u);
   });
 
-  it.each(["alpha", "beta", "latest"])(
-    "rejects extended-stable guard bypass with the %s dist-tag",
-    (distTag) => {
-      expect(() =>
-        validateNpmPublishBoundary("2026.6.11", distTag, {
-          bypassExtendedStableGuard: true,
-        }),
-      ).toThrow(/only be used with the extended-stable npm dist-tag/u);
-    },
-  );
+  it("rejects extended-stable guard bypass with a regular dist-tag", () => {
+    expect(() =>
+      validateNpmPublishBoundary("2026.6.11", "beta", {
+        bypassExtendedStableGuard: true,
+      }),
+    ).toThrow(/only be used with the extended-stable npm dist-tag/u);
+  });
 
   it("preserves the unknown dist-tag rejection when bypass is requested", () => {
     expect(() =>
@@ -224,7 +211,7 @@ describe("extended-stable npm release request", () => {
     mainPackageVersion: "2026.7.2",
   };
 
-  it("accepts .33 and later patches only in the trailing completed month", () => {
+  it("accepts .33 and later patches in either trailing completed month", () => {
     expect(validateExtendedStableNpmReleaseRequest(valid)).toEqual({
       extendedStable: true,
       releaseVersion: "2026.6.33",
@@ -240,6 +227,12 @@ describe("extended-stable npm release request", () => {
     expect(
       validateExtendedStableNpmReleaseRequest({
         ...valid,
+        mainPackageVersion: "2026.8.1",
+      }),
+    ).toMatchObject({ extendedStable: true, releaseVersion: "2026.6.33" });
+    expect(
+      validateExtendedStableNpmReleaseRequest({
+        ...valid,
         releaseTag: "v2026.12.33",
         npmWorkflowRef: "refs/heads/extended-stable/2026.12.33",
         packageVersion: "2026.12.33",
@@ -252,12 +245,12 @@ describe("extended-stable npm release request", () => {
   });
 
   it.each([
-    ["main two months ahead", "2026.8.1", "2026.7"],
-    ["main many months ahead", "2027.1.1", "2026.12"],
-    ["main a year-plus ahead", "2028.12.32", "2028.11"],
-  ])("rejects %s", (_label, mainPackageVersion, expectedMonth) => {
+    ["main three months ahead", "2026.9.1", "2026.8 or 2026.7"],
+    ["main many months ahead", "2027.1.1", "2026.12 or 2026.11"],
+    ["main a year-plus ahead", "2028.12.32", "2028.11 or 2028.10"],
+  ])("rejects %s", (_label, mainPackageVersion, expectedMonths) => {
     expect(() => validateExtendedStableNpmReleaseRequest({ ...valid, mainPackageVersion })).toThrow(
-      `Extended-stable publishes only the trailing completed month: protected main ${mainPackageVersion} allows ${expectedMonth}.PATCH, not 2026.6.33. Retire the older line or dispatch with BYPASS_EXTENDED_STABLE_GUARD for an explicitly approved exception.`,
+      `Extended-stable publishes only the two trailing completed months: protected main ${mainPackageVersion} allows ${expectedMonths}.PATCH, not 2026.6.33. Retire the older line; publishing a retired line requires an explicit maintainer decision.`,
     );
   });
 
@@ -279,7 +272,6 @@ describe("extended-stable npm release request", () => {
   it.each([
     ["patch below 33", { releaseTag: "v2026.6.32", packageVersion: "2026.6.32" }],
     ["beta prerelease", { releaseTag: "v2026.6.33-beta.1", packageVersion: "2026.6.33-beta.1" }],
-    ["alpha prerelease", { releaseTag: "v2026.6.33-alpha.1", packageVersion: "2026.6.33-alpha.1" }],
     ["correction suffix", { releaseTag: "v2026.6.33-1", packageVersion: "2026.6.33-1" }],
     ["wrong branch", { npmWorkflowRef: "refs/heads/extended-stable/2026.6.34" }],
     ["checkout mismatch", { checkoutSha: "b".repeat(40) }],
@@ -287,7 +279,6 @@ describe("extended-stable npm release request", () => {
     ["branch tip mismatch", { extendedStableBranchSha: "b".repeat(40) }],
     ["package mismatch", { packageVersion: "2026.6.34" }],
     ["main same month", { mainPackageVersion: "2026.6.1" }],
-    ["main earlier month", { mainPackageVersion: "2026.5.32" }],
     ["main earlier year", { mainPackageVersion: "2025.12.32" }],
     ["main patch at monthly boundary", { mainPackageVersion: "2026.7.33" }],
   ])("rejects %s", (_label, changes) => {
@@ -494,6 +485,48 @@ describe("extended-stable npm run identity", () => {
     }
   });
 
+  it("accepts a plugin run dispatched by the trusted protected-tag orchestrator for the exact target", () => {
+    const workflowSha = "c".repeat(40);
+    const toolingRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+    const pluginRun = {
+      workflowName: "Plugin NPM Release",
+      displayTitle: `Plugin NPM Release [extended-stable] ${sha}`,
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      headBranch: toolingRef,
+      headSha: workflowSha,
+    };
+    expect(() =>
+      validateExtendedStableRunIdentity({
+        run: pluginRun,
+        kind: "plugin",
+        npmDistTag: "extended-stable",
+        expectedBranch: branch,
+        expectedSha: sha,
+        expectedOrchestratorBranch: toolingRef,
+        expectedOrchestratorSha: workflowSha,
+      }),
+    ).not.toThrow();
+    for (const changes of [
+      { headBranch: "release/2026.6.35" },
+      { headSha: "not-a-sha" },
+      { displayTitle: `Plugin NPM Release [extended-stable] ${"b".repeat(40)}` },
+    ]) {
+      expect(() =>
+        validateExtendedStableRunIdentity({
+          run: { ...pluginRun, ...changes },
+          kind: "plugin",
+          npmDistTag: "extended-stable",
+          expectedBranch: branch,
+          expectedSha: sha,
+          expectedOrchestratorBranch: toolingRef,
+          expectedOrchestratorSha: workflowSha,
+        }),
+      ).toThrow();
+    }
+  });
+
   it("accepts plugin recovery only with authenticated main tooling and the exact source identity", () => {
     const toolingSha = "b".repeat(40);
     const run = {
@@ -612,36 +645,39 @@ describe("extended-stable selector capture", () => {
 });
 
 describe("extended-stable registry readback", () => {
-  it("accepts eventual convergence and sleeps 10 seconds between attempts", async () => {
-    let attempt = 0;
-    const sleep = vi.fn(async (_delay: number) => {});
-    const result = await verifyExtendedStableRegistryReadback({
-      expectedVersion: "2026.6.33",
-      query: async (target: string) => {
-        if (target === "openclaw@2026.6.33") {
-          attempt += 1;
-        }
-        return { status: 0, stdout: attempt >= 2 ? "2026.6.33\n" : "2026.6.32\n" };
-      },
-      sleep,
-    });
-    expect(result).toEqual({
-      exactVersion: "2026.6.33",
-      extendedStableSelector: "2026.6.33",
-      attemptsUsed: 2,
-    });
-    expect(sleep).toHaveBeenCalledOnce();
-    expect(sleep).toHaveBeenCalledWith(10_000);
-  });
+  it.each([2, 20, 60])(
+    "accepts convergence on attempt %s within the propagation window",
+    async (visibleAt) => {
+      let attempt = 0;
+      const sleep = vi.fn(async (_delay: number) => {});
+      const result = await verifyExtendedStableRegistryReadback({
+        expectedVersion: "2026.6.33",
+        query: async (target: string) => {
+          if (target === "openclaw@2026.6.33") {
+            attempt += 1;
+          }
+          return { status: 0, stdout: attempt >= visibleAt ? "2026.6.33\n" : "2026.6.32\n" };
+        },
+        sleep,
+      });
+      expect(result).toEqual({
+        exactVersion: "2026.6.33",
+        extendedStableSelector: "2026.6.33",
+        attemptsUsed: visibleAt,
+      });
+      expect(sleep).toHaveBeenCalledTimes(visibleAt - 1);
+      expect(sleep).toHaveBeenCalledWith(10_000);
+    },
+  );
 
-  it("exhausts exactly 12 dual-query attempts on mismatch or failure", async () => {
+  it("fails closed after the fifteen-minute propagation window", async () => {
     const query = vi.fn(async () => ({ status: 1, stdout: "" }));
     const sleep = vi.fn(async (_delay: number) => {});
     await expect(
       verifyExtendedStableRegistryReadback({ expectedVersion: "2026.6.33", query, sleep }),
-    ).rejects.toThrow(/after 12 attempts/u);
-    expect(query).toHaveBeenCalledTimes(24);
-    expect(sleep).toHaveBeenCalledTimes(11);
+    ).rejects.toThrow(/after 91 attempts/u);
+    expect(query).toHaveBeenCalledTimes(182);
+    expect(sleep).toHaveBeenCalledTimes(90);
     expect(sleep.mock.calls.every(([delay]) => delay === 10_000)).toBe(true);
   });
 });

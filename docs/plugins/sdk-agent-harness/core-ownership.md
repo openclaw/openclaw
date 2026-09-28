@@ -36,6 +36,31 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
+### Current input files for local execution
+
+A harness that has confirmed unsandboxed execution on the Gateway host may call
+`hostCapabilities.prepareInputAttachments({ placement: "local-host", maxChars, assertCurrent, signal })`.
+The host returns an execution-only note with verified readable document paths,
+using the admitted input and its captured media and tool policy. It retains the
+originals even when native image projection clears the ordinary media field.
+For steering, pass the current `turn: { media, userTurnTranscriptRecorder }`.
+Path metadata must fit the supplied native input budget. When the complete note
+cannot fit, the host omits it and preserves the original request and inline
+attachment context.
+Append the note to the current native input without rewriting OpenClaw's
+canonical prompt, transcript, or media references. This separation does not imply
+that a harness discards its native input after the turn: Codex retains it in its
+native conversation history. Prepared paths do not replace the existing
+execution and tool-policy admission for later turns.
+
+This optional addition preserves the shipped V2 host capability contract: older
+hosts omit it, so plugins retain ordinary inline attachment context when absent.
+It is not a fallback for remote transports, remote workspace roots, registered
+workspace adapters, sandboxes, or workspace-only/no-read policies. A harness must
+confirm placement from its effective connection, not infer it from the absence
+of a workspace adapter. The supplied current-turn guard and the captured host
+authority are checked across awaited preparation and before returning paths.
+
 ### Workspace files on the harness host
 
 A trusted host plugin can bind the existing `agents.files.list/get/set` methods
@@ -73,10 +98,53 @@ files. Other Memory plugins must declare `supportsWorkspaceMemoryReadSources`
 and consume the classifier's `readSources` input; otherwise automatic remote
 Memory context is excluded. Missing source metadata cannot select a local copy.
 
+Async Skill preparation can use the binding's optional `loadSkills` callback.
+It reads workspace-owned Skill roots on the Harness, while bundled and
+Gateway-installed plugin roots stay on Gateway. The callback returns native
+discovery facts and Harness platform/binary availability; Gateway still applies
+configuration and filters. Local workspaces and document-only bindings without
+`loadSkills` retain local discovery, including after the document service stops.
+Once a binding provides `loadSkills`, unavailable remote Skill access fails explicitly.
+
 This binding provides remote document and bootstrap access. It does not enable
 a remote OpenClaw worker or move its agent loop. Memory search and maintenance,
 skills, attachments, and host provisioning require separate integration and
 verification before removing workspace synchronization.
+
+### Input attachments for a remote workspace
+
+A trusted Gateway plugin can supply `prepareTurnAttachments` on its existing
+`AgentWorkspaceAccess` binding. Core calls `prepareAgentWorkspaceAttachments`
+from `openclaw/plugin-sdk/agent-workspace-runtime` to resolve admitted input files
+and invoke this capability before a harness attempt or Codex steering.
+It appends the returned Harness-path note only to execution input. Original media
+references and transcript text stay on Gateway for image hydration and replay.
+
+`createWorkspaceAttachmentPreparer` implements this callback over an existing
+filesystem bridge with `createFileExclusive`. It reads only Gateway's media
+store, transfers input files without replacing existing Harness copies, and
+preserves the existing 50 MiB staging allowance and higher configured limits.
+The host supplies `createBridge(assertCurrent, signal)` over its own backend;
+check that authority and signal before each transport command.
+
+A failed enabled transfer prevents dispatch. Bindings without this optional
+callback keep their existing input handling, including inline images; they do
+not gain automatic file transfer. Unconfigured local workspaces are unchanged. This interface does
+not provision a backend or acquire credentials. Each host adapter supplies its
+own authorized bridge.
+
+### Host-only execution
+
+A harness that launches an unsandboxed local application declares
+`executionEnvironment: "host-only"`. Core rejects sandbox-required, sandboxed,
+workspace-only, and unsupported session-permission contexts before native
+preparation and invocation. The harness does not implement a second sandbox
+policy or silently reinterpret a working directory as confinement.
+
+The Control UI may offer an administrator an explicit per-chat recovery action
+for optional sandboxing. The Gateway owns that mutation and revalidates the
+original session and permission state; the capability declaration never grants
+permission to remove a required sandbox or other configured restrictions.
 
 ### Native tool-policy enforcement
 
@@ -112,6 +180,11 @@ OpenClaw then visibly rejects explicitly restricted turns before invoking the
 harness. The operator can switch the session to the embedded runtime or upgrade
 the harness. Channel `/btw` side questions with a restrictive direct policy are
 rejected by core and are not covered by this declaration.
+
+For a known, actionable refusal, `AgentHarnessPreflightError` accepts an optional
+`userMessage`. Core renders this owner-authored public copy across chat surfaces
+without a verbose setting or generic retry/reset advice. Keep technical context
+in the error's `message` and `cause`; omit `userMessage` for diagnostic failures.
 
 ### Harness-owned auth bootstrap
 
@@ -157,6 +230,36 @@ Include `modelRef: { provider, model }` only when both values are known from tha
 same binding. Do not infer a missing value from outer configuration, credentials,
 or usage. Host-auth ownership requires this tuple before credential preparation;
 native-auth pending branches may omit it until their native owner selects a model.
+
+Declare `nativeModelPolicySupport: "exact"` only when the harness binds the actual
+native selection before every inference dispatch, including after resume. Use
+`hostCapabilities.bindModelExecution({ provider, model })` or the retained-source
+operation below. Observe the
+returned cancellation signal, recheck its assertion after awaited preparation and
+immediately before transport writes and result settlement, and release it after
+execution cleanup. The issuing host must be active when acquiring a binding.
+The issued binding retains the original source until release; host closure blocks
+new direct acquisitions without revoking accepted native work. Explicit Stop, session
+and transport authority, and real source or model-policy revocation still apply.
+A cached pre-resume model is not authority for a different resumed model. Missing
+support rejects native-owned inference when the operator has a model policy.
+The method returns `undefined` when the run has no operator source; ordinary
+host action checks and native turn settlement retain their existing lifetimes.
+The host exposes the direct model binder only for a harness declaring exact
+support. Other harnesses retain an unknown-model guard through their existing
+source capability; introducing a model policy cancels that unqualified work.
+
+For accepted work that can select models after foreground completion, acquire
+`hostCapabilities.retainSourceAuthority()` while the host is active. Its
+`bindModelExecution(...)` operation uses the same original source until that work
+releases the retained capability. Each model binding owns its retention and must
+be released after dispatch cleanup; closing the retained work cancels its model
+bindings. The live `modelPolicyRequired` fact supports connection preflight;
+an absent fact means unknown, not unrestricted. The live `sourceIdentity` is an
+opaque equality token for checking whether active inputs share the same original
+source; it never grants execution authority. Release retained authority when
+its work settles, rather than attaching the creator's authority permanently to a
+reusable native thread.
 
 Read the existing private binding synchronously. Call `assertCurrent()` before
 and after the read. Do not discover models, reclaim a generation, start a client,

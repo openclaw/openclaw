@@ -158,6 +158,10 @@ class RosterActivityStore {
       return;
     }
     const info = readSessionChangedEvent(event.payload);
+    // Recaps are absent from this roster's ordinary session-list projection.
+    if (event.event === "sessions.changed" && info?.reason === "activity-summary") {
+      return;
+    }
     const snapshotApplied =
       this.current.error === null &&
       !this.activeRequest &&

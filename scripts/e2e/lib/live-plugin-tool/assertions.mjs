@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "../../../lib/record-shared.mjs";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
@@ -94,6 +98,9 @@ function extractTranscriptText(value) {
 
 function extractTranscriptToolCalls(message) {
   const calls = [];
+  if (message.role !== "assistant") {
+    return calls;
+  }
   const content = message.content;
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -114,6 +121,7 @@ function extractTranscriptToolCalls(message) {
           normalizeToolCallId(block.toolCallId) ??
           normalizeToolCallId(block.toolUseId),
         tool,
+        input: block.arguments ?? block.input,
       });
     }
   }
@@ -136,6 +144,7 @@ function extractTranscriptToolCalls(message) {
         normalizeToolCallId(call.toolCallId) ??
         normalizeToolCallId(call.toolUseId),
       tool,
+      input: call.arguments ?? call.input ?? functionRecord?.arguments,
     });
   }
   return calls;
@@ -227,14 +236,84 @@ function resultLinksToolCall(call, result, targetCallCount) {
   return targetCallCount === 1;
 }
 
-function createToolEvidenceTracker(toolNames, expected) {
+function matchesNestedToolEvidence(message, toolName, expected, dispatcherCalls) {
+  if (
+    message.role !== "custom" ||
+    message.customType !== "openclaw.nested-tool.v1" ||
+    message.display !== true ||
+    message.excludeFromContext !== true ||
+    message.content !== ""
+  ) {
+    return false;
+  }
+  const details = message.details;
+  if (
+    !isRecord(details) ||
+    details.toolName !== toolName ||
+    details.isError !== false ||
+    !normalizeToolCallId(details.toolCallId) ||
+    !isRecord(details.result) ||
+    !Array.isArray(details.result.content)
+  ) {
+    return false;
+  }
+  const parentId = normalizeToolCallId(details.parentToolCallId);
+  const text = extractTranscriptText(details.result.content);
+  return Boolean(
+    parentId &&
+    dispatcherCalls.has(parentId) &&
+    text.includes(expected) &&
+    !isFailureLikeToolResult({ text }),
+  );
+}
+
+function dispatcherSelectsTool(input, toolSelectors) {
+  let params = input;
+  if (typeof params === "string") {
+    try {
+      params = JSON.parse(params);
+    } catch {
+      return false;
+    }
+  }
+  if (!isRecord(params)) {
+    return false;
+  }
+  const keys = ["id", "toolId", "name"];
+  if (!keys.some((key) => Object.hasOwn(params, key))) {
+    params = params.args ?? params.input;
+  }
+  if (!isRecord(params)) {
+    return false;
+  }
+  const selectors = keys.filter((key) => Object.hasOwn(params, key));
+  // Other aliases can be target arguments; the correlated receipt identifies what ran.
+  return selectors.some((key) => toolSelectors.has(readNonEmptyString(params[key])));
+}
+
+function createToolEvidenceTracker(toolName, expected) {
+  const toolNames = new Set([toolName, "exec", "wait"]);
+  const toolSelectors = new Set([toolName, `openclaw:${requireEnv("PLUGIN_ID")}:${toolName}`]);
   const calls = [];
+  const dispatcherCalls = new Set();
   return {
     recordMessage(message) {
       for (const call of extractTranscriptToolCalls(message)) {
-        if (toolNames.includes(call.tool)) {
+        if (toolNames.has(call.tool)) {
           calls.push(call);
         }
+        if (
+          call.id &&
+          call.tool === "tool_call" &&
+          dispatcherSelectsTool(call.input, toolSelectors)
+        ) {
+          dispatcherCalls.add(call.id);
+        }
+      }
+      // The package-only harness cannot import the core TS reader. Consume its
+      // durable terminal projection, never a marker echoed by the outer dispatcher.
+      if (matchesNestedToolEvidence(message, toolName, expected, dispatcherCalls)) {
+        return true;
       }
       for (const result of extractTranscriptToolResults(message)) {
         if (result.failure || !result.text.includes(expected)) {
@@ -261,8 +340,8 @@ function transcriptMessageFromLine(line) {
   }
 }
 
-function scanFileForToolEvidence(file, toolNames, expected) {
-  const tracker = createToolEvidenceTracker(toolNames, expected);
+function scanFileForToolEvidence(file, toolName, expected) {
+  const tracker = createToolEvidenceTracker(toolName, expected);
   let stat;
   try {
     stat = fs.statSync(file);
@@ -307,7 +386,7 @@ function scanFileForToolEvidence(file, toolNames, expected) {
   return false;
 }
 
-function scanSessionTranscripts(sessionsDir, toolNames, expected) {
+function scanSessionTranscripts(sessionsDir, toolName, expected) {
   const checkedFiles = [];
   let filesChecked = 0;
   let stat;
@@ -346,7 +425,7 @@ function scanSessionTranscripts(sessionsDir, toolNames, expected) {
         if (checkedFiles.length < SESSION_FILE_LIST_LIMIT) {
           checkedFiles.push(path.relative(sessionsDir, entryPath));
         }
-        if (scanFileForToolEvidence(entryPath, toolNames, expected)) {
+        if (scanFileForToolEvidence(entryPath, toolName, expected)) {
           return { checkedFiles, filesChecked, found: true, missingDir: false };
         }
       }
@@ -357,7 +436,7 @@ function scanSessionTranscripts(sessionsDir, toolNames, expected) {
   return { checkedFiles, filesChecked, found: false, missingDir: false };
 }
 
-function scanSqliteSessionTranscript(databasePath, sessionId, toolNames, expected) {
+function scanSqliteSessionTranscript(databasePath, sessionId, toolName, expected) {
   if (!fs.existsSync(databasePath)) {
     return { eventsChecked: 0, found: false };
   }
@@ -370,18 +449,17 @@ function scanSqliteSessionTranscript(databasePath, sessionId, toolNames, expecte
       return { eventsChecked: 0, found: false };
     }
     const rows = database
-      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT ?")
+      .prepare(
+        `SELECT ${sqliteTranscriptPayloadColumns(database)} FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT ?`,
+      )
       .all(sessionId, SESSION_SCAN_MAX_ENTRIES + 1);
     if (rows.length > SESSION_SCAN_MAX_ENTRIES) {
       throw new Error(`session transcript scan exceeded ${SESSION_SCAN_MAX_ENTRIES} SQLite events`);
     }
 
-    const tracker = createToolEvidenceTracker(toolNames, expected);
+    const tracker = createToolEvidenceTracker(toolName, expected);
     for (const row of rows) {
-      if (typeof row.event_json !== "string") {
-        continue;
-      }
-      const message = transcriptMessageFromLine(row.event_json);
+      const message = transcriptMessageFromLine(readSqliteTranscriptPayload(row));
       if (message && tracker.recordMessage(message)) {
         return { eventsChecked: rows.length, found: true };
       }
@@ -630,18 +708,15 @@ function assertAgentTurn() {
     );
   }
   const agentStateDir = path.join(stateDir(), "agents", "main");
-  // Code Mode exposes plugin tools behind exec/wait, so the durable transcript can
-  // record the outer exec call while the run summary names the nested plugin tool.
-  const transcriptToolNames = [toolName, "exec", "wait"];
   const sqliteScan = scanSqliteSessionTranscript(
     path.join(agentStateDir, "agent", "openclaw-agent.sqlite"),
     LIVE_PLUGIN_TOOL_SESSION_ID,
-    transcriptToolNames,
+    toolName,
     expected,
   );
   const fileScan = sqliteScan.found
     ? { checkedFiles: [], filesChecked: 0, found: false, missingDir: false }
-    : scanSessionTranscripts(path.join(agentStateDir, "sessions"), transcriptToolNames, expected);
+    : scanSessionTranscripts(path.join(agentStateDir, "sessions"), toolName, expected);
   if (!sqliteScan.found && !fileScan.found) {
     const checkedFiles =
       fileScan.checkedFiles.length > 0 ? fileScan.checkedFiles.join(", ") : "<none>";

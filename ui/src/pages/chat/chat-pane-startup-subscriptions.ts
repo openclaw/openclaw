@@ -2,7 +2,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
-import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { admitChatSubmission } from "./history-merge.ts";
 import { resolveChatSnapshotKey } from "./session-message-cache.ts";
@@ -20,7 +20,7 @@ export function subscribeChatPaneStartup(
       admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
       // Project the accepted initial turn before waking followers parked behind recovery.
       if (!parseCatalogSessionKey(state.sessionKey)) {
-        void retryReconnectableQueuedChatSends(state);
+        void resumeStoredChatOutboxes(state);
       }
       state.requestUpdate?.();
     }

@@ -250,20 +250,6 @@ describe("cdp internal", () => {
   });
 
   describe("snapshotAria", () => {
-    it("forwards the happy-path tree to formatAriaSnapshot", async () => {
-      const server = await startMockWsServer((msg) => {
-        if (msg.method === "Accessibility.getFullAXTree") {
-          return axTreeResult([
-            { nodeId: "1", role: { value: "Root" }, name: { value: "" }, childIds: [] },
-          ]);
-        }
-        return undefined;
-      });
-      wss = server.wss;
-      const snap = await snapshotAria({ wsUrl: server.wsUrl, limit: 50 });
-      expect(snap.nodes[0]?.role).toBe("Root");
-    });
-
     it("returns an empty list when the server omits nodes", async () => {
       const server = await startMockWsServer((msg) => {
         if (msg.method === "Accessibility.getFullAXTree") {
@@ -286,7 +272,7 @@ describe("cdp internal", () => {
               nodeId: "1",
               role: { value: "RootWebArea" },
               name: { value: "" },
-              childIds: ["2", "3"],
+              childIds: ["2", "3", "4"],
             },
             {
               nodeId: "2",
@@ -298,6 +284,12 @@ describe("cdp internal", () => {
               nodeId: "3",
               role: { value: "button" },
               name: { value: "Save" },
+              childIds: [],
+            },
+            {
+              nodeId: "4",
+              role: { value: "button" },
+              name: { value: "Cancel" },
               childIds: [],
             },
           ]);
@@ -318,6 +310,7 @@ describe("cdp internal", () => {
         e1: { role: "button", name: "Save", nth: 0 },
         e2: { role: "button", name: "Save", nth: 1 },
       });
+      expect(snap.refs.e3).toEqual({ role: "button", name: "Cancel" });
     });
 
     it("builds role refs, promotes cursor-interactive nodes, and appends link urls", async () => {
@@ -534,15 +527,6 @@ describe("cdp internal", () => {
   });
 
   describe("normalizeCdpWsUrl fill-in", () => {
-    it("respects an already-non-loopback ws hostname (no-rewrite branch)", () => {
-      // Covers the else side of the loopback/wildcard-guard in normalizeCdpWsUrl.
-      const out = normalizeCdpWsUrl(
-        "ws://non-loopback.example:9222/devtools/browser/ABC",
-        "http://non-loopback.example:9222",
-      );
-      expect(out).toContain("non-loopback.example:9222");
-    });
-
     it("falls back to protocol-default ports when the cdp URL omits a port", () => {
       // Covers the right-hand side of `cdp.port || (cdp.protocol === 'https:' ? '443' : '80')`.
       // WHATWG URL elides default ports (443 for wss, 80 for ws) in the

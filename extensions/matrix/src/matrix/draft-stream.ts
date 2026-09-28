@@ -1,5 +1,4 @@
-// Matrix plugin module implements draft stream behavior.
-import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
 import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix } from "./send.js";
@@ -7,24 +6,6 @@ import { MsgType } from "./send/types.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
 type MatrixDraftPreviewMode = "partial" | "quiet";
-
-function resolveDraftPreviewOptions(mode: MatrixDraftPreviewMode): {
-  msgtype: typeof MsgType.Text | typeof MsgType.Notice;
-  includeMentions?: boolean;
-} {
-  if (mode === "quiet") {
-    return {
-      msgtype: MsgType.Notice,
-      includeMentions: false,
-    };
-  }
-  // Drafts can contain partial model text and raw tool-progress paths; keep
-  // Matrix mentions inert until callers send a normal final message.
-  return {
-    msgtype: MsgType.Text,
-    includeMentions: false,
-  };
-}
 
 export function createMatrixDraftStream(params: {
   roomId: string;
@@ -39,11 +20,19 @@ export function createMatrixDraftStream(params: {
   log?: (message: string) => void;
 }) {
   const { roomId, client, cfg, threadId, accountId, log } = params;
-  const preview = resolveDraftPreviewOptions(params.mode ?? "partial");
   // MSC4357 live markers are only useful for "partial" mode where users see
   // the draft evolve. "quiet" mode uses m.notice for background previews
   // where a streaming animation would be unexpected.
   const useLive = params.mode !== "quiet";
+  const previewOptions = {
+    client,
+    cfg,
+    threadId,
+    accountId,
+    msgtype: useLive ? MsgType.Text : MsgType.Notice,
+    // Partial model text and tool-progress paths must not notify mentioned users.
+    includeMentions: false,
+  };
 
   let currentEventId: string | undefined;
   let lastSentText = "";
@@ -84,13 +73,8 @@ export function createMatrixDraftStream(params: {
     try {
       if (!currentEventId) {
         const result = await sendSingleTextMessageMatrix(roomId, preparedText.trimmedText, {
-          client,
-          cfg,
+          ...previewOptions,
           replyToId,
-          threadId,
-          accountId,
-          msgtype: preview.msgtype,
-          includeMentions: preview.includeMentions,
           live: useLive,
         });
         currentEventId = result.messageId;
@@ -99,12 +83,7 @@ export function createMatrixDraftStream(params: {
         log?.(`draft-stream: created message ${currentEventId}${useLive ? " (MSC4357 live)" : ""}`);
       } else {
         await editMessageMatrix(roomId, currentEventId, preparedText.trimmedText, {
-          client,
-          cfg,
-          threadId,
-          accountId,
-          msgtype: preview.msgtype,
-          includeMentions: preview.includeMentions,
+          ...previewOptions,
           live: useLive,
         });
         lastSentText = preparedText.trimmedText;
@@ -131,10 +110,26 @@ export function createMatrixDraftStream(params: {
     update,
     stop: stopDraft,
     discardPending,
-  } = createFinalizableDraftStreamControlsForState({
+    seal,
+    clear,
+    retire,
+    cleanupPending,
+  } = createFinalizableDraftLifecycle({
     throttleMs: DEFAULT_THROTTLE_MS,
     state: streamState,
     sendOrEditStreamMessage: sendOrEdit,
+    readMessageId: () => currentEventId,
+    clearMessageId: () => {
+      currentEventId = undefined;
+      lastSentText = "";
+      lastSentContent = "";
+    },
+    isValidMessageId: (id): id is string => typeof id === "string" && id.length > 0,
+    deleteMessage: async (id) => {
+      await client.redactEvent(roomId, id);
+    },
+    warn: log,
+    warnPrefix: "matrix draft preview cleanup failed",
   });
 
   log?.(`draft-stream: ready (throttleMs=${DEFAULT_THROTTLE_MS})`);
@@ -147,12 +142,7 @@ export function createMatrixDraftStream(params: {
       liveFinalized = true;
       try {
         await editMessageMatrix(roomId, currentEventId, lastSentText, {
-          client,
-          cfg,
-          threadId,
-          accountId,
-          msgtype: preview.msgtype,
-          includeMentions: preview.includeMentions,
+          ...previewOptions,
           live: false,
         });
         log?.(`draft-stream: finalized ${currentEventId} (MSC4357 stream ended)`);
@@ -195,10 +185,11 @@ export function createMatrixDraftStream(params: {
   const deleteCurrentMessage = async () => {
     loop.resetPending();
     await loop.waitForInFlight();
-    if (currentEventId) {
-      await client.redactEvent(roomId, currentEventId);
-    }
+    const retiredEventId = currentEventId;
     resetCurrentMessage();
+    if (retiredEventId) {
+      await retire(retiredEventId);
+    }
   };
 
   return {
@@ -206,6 +197,9 @@ export function createMatrixDraftStream(params: {
     flush: loop.flush,
     stop,
     discardPending,
+    seal,
+    clear,
+    cleanupPending,
     deleteCurrentMessage,
     finalizeLive,
     reset,

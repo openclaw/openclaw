@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle, type QaGatewayStopOptions } from "./gateway-child-lifecycle.js";
 import {
@@ -221,7 +222,7 @@ async function startOwnedGatewayChild(
   const { cfg, baseUrl, wsUrl, env: runningEnv } = launch;
   const signalActiveProcess = async (signal: NodeJS.Signals) => {
     if (active.identity && lifetime.controller) {
-      if (signal !== "SIGUSR1" && signal !== "SIGUSR2") {
+      if (signal !== "SIGUSR2" && signal !== "SIGQUIT") {
         throw new Error(`unsupported verified gateway signal: ${signal}`);
       }
       await lifetime.controller.signal(active.identity, signal);
@@ -273,11 +274,11 @@ async function startOwnedGatewayChild(
       throwActiveChildFailure();
       await signalActiveProcess(signal);
     },
-    async restart(signal: NodeJS.Signals = "SIGUSR1") {
+    async restart(signal: NodeJS.Signals = "SIGUSR2") {
       throwActiveChildFailure();
       const restartLogMark = output.mark();
       await signalActiveProcess(signal);
-      if (signal === "SIGUSR1") {
+      if (signal === "SIGUSR2") {
         await waitForQaGatewayRestartBoundary({
           readLogsSince: (mark) => output.readSince(mark),
           mark: restartLogMark,
@@ -298,6 +299,8 @@ async function startOwnedGatewayChild(
         throwActiveChildFailure();
         await stopAttempt();
         await mutateState({ configPath, runtimeEnv: runningEnv, stateDir, tempRoot });
+        // Mutation can reopen parent stores; release them before child startup maintenance.
+        await closeQaRuntimeStores(tempRoot);
         const replacementLogMark = output.mark();
         try {
           await launchReady(false);

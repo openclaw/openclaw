@@ -1,26 +1,34 @@
 import path from "node:path";
 import type { HealthCheck, HealthRepairContext } from "openclaw/plugin-sdk/health";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as managedBinary from "./crabbox-managed-binary.js";
+import { crabboxState } from "./crabbox-state.test-support.js";
 import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
   CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
   registerCrabboxWorkerProviderDoctorChecks,
+  type CrabboxDoctorRegistrationHost,
 } from "./doctor.js";
 
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
+const listPluginStateEntries: CrabboxDoctorRegistrationHost["listPluginStateEntries"] = <T>(
+  options: OpenKeyedStoreOptions,
+) => crabboxState.openKeyedStore<T>(options).entries();
 
 function captureCrabboxDoctorCheck(id = CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID): HealthCheck {
   const checks = new Map<string, HealthCheck>();
   registerCrabboxWorkerProviderDoctorChecks({
     openclawRoot: OPENCLAW_ROOT,
+    listPluginStateEntries,
     getHealthCheck: (key) => checks.get(key),
     registerHealthCheck(value) {
       checks.set(value.id, value);
@@ -140,7 +148,8 @@ describe("Crabbox worker doctor", () => {
 
 describe("Crabbox warm-image doctor", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
   });
@@ -258,6 +267,7 @@ describe("Crabbox warm-image doctor", () => {
       const registerHealthCheck = vi.fn((check: HealthCheck) => checks.set(check.id, check));
       const host = {
         openclawRoot: OPENCLAW_ROOT,
+        listPluginStateEntries,
         getHealthCheck: (id: string) => checks.get(id),
         registerHealthCheck,
       };

@@ -35,23 +35,16 @@ function extractTranscriptUsageSnapshot(
   message: unknown,
   source: TranscriptUsageSource,
 ): SessionTranscriptUsageSnapshot | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
+  if (!isRecord(message)) {
     return null;
   }
-  const record = message as {
-    api?: unknown;
-    model?: unknown;
-    provider?: unknown;
-    role?: unknown;
-    usage?: unknown;
-  };
+  const record = message;
   if (source === "artifact" && typeof record.role === "string" && record.role !== "assistant") {
     return null;
   }
-  const usageRaw =
-    record.usage && typeof record.usage === "object" && !Array.isArray(record.usage)
-      ? (record.usage as UsageLike & { cost?: { total?: unknown }; costUsd?: unknown })
-      : undefined;
+  const usageRaw = isRecord(record.usage)
+    ? (record.usage as UsageLike & { cost?: { total?: unknown }; costUsd?: unknown })
+    : undefined;
   const usage = normalizeUsage(usageRaw);
   const normalizedUsage = usage ?? {};
   const api =
@@ -135,16 +128,14 @@ function estimateTranscriptMessageChars(message: unknown): number {
 export function createSessionTranscriptUsageAccumulator(source: TranscriptUsageSource = "sqlite") {
   const aggregate: SessionTranscriptUsageSnapshot = {};
   let sawUsage = false;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  let costUsd = 0;
-  let sawInput = false;
-  let sawOutput = false;
-  let sawCacheRead = false;
-  let sawCacheWrite = false;
-  let sawCost = false;
+  const summedFields = [
+    "inputTokens",
+    "outputTokens",
+    "cacheRead",
+    "cacheWrite",
+    "costUsd",
+  ] as const;
+  const totals: Pick<SessionTranscriptUsageSnapshot, (typeof summedFields)[number]> = {};
   let estimatedTranscriptChars = 0;
   let sawEstimateModelIdentity = false;
   const add = (message: unknown): void => {
@@ -172,21 +163,11 @@ export function createSessionTranscriptUsageAccumulator(source: TranscriptUsageS
     if (snapshot.model) {
       aggregate.model = snapshot.model;
     }
-    if (typeof snapshot.inputTokens === "number") {
-      inputTokens += snapshot.inputTokens;
-      sawInput = true;
-    }
-    if (typeof snapshot.outputTokens === "number") {
-      outputTokens += snapshot.outputTokens;
-      sawOutput = true;
-    }
-    if (typeof snapshot.cacheRead === "number") {
-      cacheRead += snapshot.cacheRead;
-      sawCacheRead = true;
-    }
-    if (typeof snapshot.cacheWrite === "number") {
-      cacheWrite += snapshot.cacheWrite;
-      sawCacheWrite = true;
+    for (const field of summedFields) {
+      const value = snapshot[field];
+      if (typeof value === "number") {
+        totals[field] = (totals[field] ?? 0) + value;
+      }
     }
     if (snapshot.contextUsage) {
       aggregate.contextUsage = snapshot.contextUsage;
@@ -202,29 +183,16 @@ export function createSessionTranscriptUsageAccumulator(source: TranscriptUsageS
       aggregate.totalTokens = snapshot.totalTokens;
       aggregate.totalTokensFresh = true;
     }
-    if (typeof snapshot.costUsd === "number") {
-      costUsd += snapshot.costUsd;
-      sawCost = true;
-    }
   };
   const finish = (): SessionTranscriptUsageSnapshot | null => {
     if (!sawUsage) {
       return null;
     }
-    if (sawInput) {
-      aggregate.inputTokens = inputTokens;
-    }
-    if (sawOutput) {
-      aggregate.outputTokens = outputTokens;
-    }
-    if (sawCacheRead) {
-      aggregate.cacheRead = cacheRead;
-    }
-    if (sawCacheWrite) {
-      aggregate.cacheWrite = cacheWrite;
-    }
-    if (sawCost) {
-      aggregate.costUsd = costUsd;
+    for (const field of summedFields) {
+      const value = totals[field];
+      if (typeof value === "number") {
+        aggregate[field] = value;
+      }
     }
     if (
       source === "artifact" &&

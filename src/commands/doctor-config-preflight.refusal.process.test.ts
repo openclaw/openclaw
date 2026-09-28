@@ -4,17 +4,19 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
+import { writeExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { registerLegacyDriverTests } from "./doctor-config-preflight.legacy-driver.test-support.js";
 import {
   createBuiltRuntime,
   runBuiltRuntime,
-  runIsolatedModuleScript,
 } from "./doctor-config-preflight.process.test-support.js";
 
 const tempDirs = createFixtureLifetime();
@@ -33,7 +35,10 @@ describe("Doctor CLI migration refusal", () => {
       const shared = openOpenClawStateDatabase({ env }).path;
       createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, { env });
       closeOpenClawStateDatabaseForTest();
-      const runtimeRoot = createBuiltRuntime(root, undefined, { copyDirectories: true });
+      const runtimeRoot = createBuiltRuntime(root, undefined, {
+        copyDirectories: true,
+        emptyExtensions: true,
+      });
       const packagePath = path.join(runtimeRoot, "package.json");
       const manifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
       fs.writeFileSync(packagePath, JSON.stringify({ ...manifest, version: "2026.9.3" }));
@@ -136,20 +141,21 @@ describe("Doctor CLI migration refusal", () => {
         CI: "1",
       };
       const runtimeRoot = createBuiltRuntime(root);
-      await runIsolatedModuleScript(
-        env,
-        `
-      import { openOpenClawStateDatabase, closeOpenClawStateDatabaseForTest } from "./src/state/openclaw-state-db.ts";
-      import { resolveWorkspaceStateIdentity } from "./src/agents/workspace-state-identity.ts";
-      import { writeExecApprovalsConfigRow } from "./src/infra/exec-approvals-sqlite.ts";
-      const { db } = openOpenClawStateDatabase();
-      const identity = resolveWorkspaceStateIdentity(${JSON.stringify(workspaceDir)});
-      db.prepare("INSERT INTO workspace_setup_state (workspace_key, workspace_path, version, updated_at) VALUES (?, ?, 99, 1)").run(identity.workspaceKey, identity.workspacePath);
-      writeExecApprovalsConfigRow({ db, file: { version: 1, defaults: { security: "deny" }, agents: {} } });
-      closeOpenClawStateDatabaseForTest();
-    `,
-        { runtimeRoot, timeoutMs: DOCTOR_CHILD_TIMEOUT_MS },
-      );
+      const seeded = openOpenClawStateDatabase({ env });
+      try {
+        const identity = resolveWorkspaceStateIdentity(workspaceDir);
+        seeded.db
+          .prepare(
+            "INSERT INTO workspace_setup_state (workspace_key, workspace_path, version, updated_at) VALUES (?, ?, 99, 1)",
+          )
+          .run(identity.workspaceKey, identity.workspacePath);
+        writeExecApprovalsConfigRow({
+          db: seeded.db,
+          file: { version: 1, defaults: { security: "deny" }, agents: {} },
+        });
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+      }
       const result = await tempDirs.track(
         runBuiltRuntime(
           runtimeRoot,
@@ -185,7 +191,7 @@ describe("Doctor CLI migration refusal", () => {
         db.close();
       }
     },
-    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS, DOCTOR_CHILD_TIMEOUT_MS),
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
   );
 
   it.each([false, true])(
@@ -353,3 +359,14 @@ describe("Doctor CLI config recovery", () => {
     }
   }, 75_000);
 });
+
+registerLegacyDriverTests([
+  "managed pnpm missing metadata",
+  "managed pnpm partial metadata",
+  "managed pnpm missing metadata run",
+  "managed handoff mismatch",
+  "managed handoff missing",
+  "failed schema publication",
+  "terminal post-core run",
+  "missing post-core run",
+]);

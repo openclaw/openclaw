@@ -21,6 +21,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.applyPromptToolsAllow.mockReturnValue({
     activeToolNames: ["read"],
+    callableToolNames: ["read"],
     effectiveTools: [{ name: "read" }],
     uncompactedEffectiveTools: [{ name: "read" }],
     tools: [{ name: "read" }],

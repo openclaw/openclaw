@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -36,33 +38,26 @@ describe("Matrix client factory storage", () => {
   };
   beforeEach(() => resetPluginStateStoreForTests());
 
-  function setupStateDir() {
-    const stateDir = tempDirs.make("openclaw-matrix-factory-");
-    installMatrixTestRuntime({
-      stateDir,
-      logging: { getChildLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
-    });
-    return stateDir;
-  }
-  function seedStorageMeta(rootDir: string, value: Record<string, unknown>) {
-    createPluginStateSyncKeyedStoreForTests(
-      "matrix",
-      openMatrixStorageMetaStoreOptions(rootDir),
-    ).register("current", value);
-  }
   function writeJson(rootDir: string, filename: string, value: Record<string, unknown>) {
     fs.writeFileSync(path.join(rootDir, filename), JSON.stringify(value));
   }
-  it.each(["fresh", "canonical", "rotated", "legacy-import"])(
+  it.each(["fresh", "rotated", "legacy-import"])(
     "restores the %s token root through the client factory without host SQLite",
     async (rootKind) => {
-      const stateDir = setupStateDir();
+      const stateDir = tempDirs.make("openclaw-matrix-factory-");
+      installMatrixTestRuntime({
+        stateDir,
+        logging: { getChildLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
+      });
       const seeded = resolveMatrixAccountStorageRoot({
         ...defaultStorageAuth,
         stateDir,
       });
       if (rootKind !== "fresh") {
-        seedStorageMeta(seeded.rootDir, {
+        createPluginStateSyncKeyedStoreForTests(
+          "matrix",
+          openMatrixStorageMetaStoreOptions(seeded.rootDir),
+        ).register("current", {
           ...defaultStorageAuth,
           accountId: "default",
           accessTokenHash: seeded.tokenHash,
@@ -92,13 +87,7 @@ describe("Matrix client factory storage", () => {
         });
       }
       await closeOpenClawStateDatabaseAsync();
-      const sql = [
-        vi.spyOn(DatabaseSync.prototype, "prepare"),
-        vi.spyOn(DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(StatementSync.prototype, method),
-        ),
-      ];
+      const observation = observeHostDataSql();
       try {
         const client = await createMatrixClient({
           ...defaultStorageAuth,
@@ -124,16 +113,11 @@ describe("Matrix client factory storage", () => {
         }
         await client.stopWithoutPersist();
         await closeOpenClawStateDatabaseAsync();
-        console.log(
-          "matrix-storage-factory host SQL",
-          rootKind,
-          sql.map((method) => method.mock.calls.length),
-        );
-        for (const method of sql) {
+        for (const method of observation.calls) {
           expect(method).not.toHaveBeenCalled();
         }
       } finally {
-        sql.forEach((method) => method.mockRestore());
+        observation.restore();
       }
     },
   );

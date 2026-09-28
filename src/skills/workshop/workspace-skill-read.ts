@@ -75,15 +75,6 @@ export function listWritableWorkshopSkillSummaries(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-function resolveWritableWorkshopSkillSummary(
-  skillName: string,
-  options: WorkshopSkillReadOptions,
-): WritableWorkshopSkillSummary | undefined {
-  return (
-    resolveSkillStatusEntry(listWritableWorkshopSkillSummaries(options), skillName) ?? undefined
-  );
-}
-
 export async function readWritableWorkshopSkill(
   skillName: string,
   options: WorkshopSkillReadOptions,
@@ -99,7 +90,7 @@ export async function readWritableWorkshopSkill(
   if (!name) {
     throw new Error("Skill name is required.");
   }
-  const targetSkill = resolveWritableWorkshopSkillSummary(name, options);
+  const targetSkill = resolveSkillStatusEntry(listWritableWorkshopSkillSummaries(options), name);
   if (!targetSkill) {
     throw new Error(
       `Skill Workshop can only update skills it generated. No Workshop-generated skill matched: ${name}. Create it as a new skill, or edit the file directly.`,

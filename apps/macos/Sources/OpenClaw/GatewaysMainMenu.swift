@@ -292,7 +292,9 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             isPrimary: gateway.isPrimary,
             isFrontmost: AppNavigationActions.selectedGatewayTarget == gateway.target,
             shortcutNumber: gateway.shortcutNumber,
-            health: facts?.health ?? gateway.health,
+            // Probes still supply latency/version and health for unopened targets;
+            // a live dashboard owns connection health when its authority differs.
+            health: dashboard.dashboardHealth(for: gateway.target) ?? facts?.health ?? gateway.health,
             version: facts?.version,
             buildId: facts?.buildId,
             endpointLabel: labels?.endpointLabel,

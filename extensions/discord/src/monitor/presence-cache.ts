@@ -1,4 +1,3 @@
-// Discord plugin module implements presence cache behavior.
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 
 /**
@@ -13,7 +12,6 @@ function resolveAccountKey(accountId?: string): string {
   return accountId ?? "default";
 }
 
-/** Update cached presence for a user. */
 export function setPresence(
   accountId: string | undefined,
   userId: string,
@@ -26,7 +24,6 @@ export function setPresence(
     presenceCache.set(accountKey, accountCache);
   }
   accountCache.set(userId, data);
-  // Evict oldest entries if cache exceeds limit
   if (accountCache.size > MAX_PRESENCE_PER_ACCOUNT) {
     const oldest = accountCache.keys().next().value;
     if (oldest !== undefined) {
@@ -35,7 +32,6 @@ export function setPresence(
   }
 }
 
-/** Get cached presence for a user. Returns undefined if not cached. */
 export function getPresence(
   accountId: string | undefined,
   userId: string,
@@ -43,7 +39,6 @@ export function getPresence(
   return presenceCache.get(resolveAccountKey(accountId))?.get(userId);
 }
 
-/** Clear cached presence data. */
 export function clearPresences(accountId?: string): void {
   if (accountId) {
     presenceCache.delete(resolveAccountKey(accountId));
@@ -52,7 +47,6 @@ export function clearPresences(accountId?: string): void {
   presenceCache.clear();
 }
 
-/** Get the number of cached presence entries. */
 export function presenceCacheSize(): number {
   let total = 0;
   for (const accountCache of presenceCache.values()) {

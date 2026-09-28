@@ -8,7 +8,7 @@ import type {
   PendingApprovalView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
-import type { ExecApprovalResolved } from "./exec-approvals.js";
+import type { ExecApprovalResolved } from "./exec-approvals-core.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";
 import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
 
@@ -49,25 +49,28 @@ export type ChannelApprovalNativeAvailabilityAdapter = {
   ) => boolean;
 };
 
-/** Builds channel-native payloads for pending, resolved, and expired approval views. */
-export type ChannelApprovalNativePresentationAdapter<
+type ChannelApprovalNativePresentationAdapterForView<
   TPendingPayload = unknown,
   TFinalPayload = unknown,
+  TPendingEntry = unknown,
+  TPendingView extends PendingApprovalView = PendingApprovalView,
+  TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
+  TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
 > = {
   buildPendingPayload: (
     params: ChannelApprovalCapabilityHandlerContext & {
       request: ApprovalRequest;
       approvalKind: ChannelApprovalKind;
       nowMs: number;
-      view: PendingApprovalView;
+      view: TPendingView;
     },
   ) => TPendingPayload | Promise<TPendingPayload>;
   buildResolvedResult: (
     params: ChannelApprovalCapabilityHandlerContext & {
       request: ApprovalRequest;
       resolved: ApprovalResolved;
-      view: ResolvedApprovalView;
-      entry: unknown;
+      view: TResolvedView;
+      entry: TPendingEntry;
     },
   ) =>
     | ChannelApprovalNativeFinalAction<TFinalPayload>
@@ -75,13 +78,19 @@ export type ChannelApprovalNativePresentationAdapter<
   buildExpiredResult: (
     params: ChannelApprovalCapabilityHandlerContext & {
       request: ApprovalRequest;
-      view: ExpiredApprovalView;
-      entry: unknown;
+      view: TExpiredView;
+      entry: TPendingEntry;
     },
   ) =>
     | ChannelApprovalNativeFinalAction<TFinalPayload>
     | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
 };
+
+/** Builds channel-native payloads for pending, resolved, and expired approval views. */
+export type ChannelApprovalNativePresentationAdapter<
+  TPendingPayload = unknown,
+  TFinalPayload = unknown,
+> = ChannelApprovalNativePresentationAdapterForView<TPendingPayload, TFinalPayload>;
 
 type ChannelApprovalNativeTransportAdapterForView<
   TPreparedTarget = unknown,
@@ -284,35 +293,14 @@ export type ChannelApprovalNativeRuntimeSpec<
    */
   resolveApprovalKind?: (request: ApprovalRequest) => ChannelApprovalKind;
   availability: ChannelApprovalNativeAvailabilityAdapter;
-  presentation: {
-    buildPendingPayload: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        request: ApprovalRequest;
-        approvalKind: ChannelApprovalKind;
-        nowMs: number;
-        view: TPendingView;
-      },
-    ) => TPendingPayload | Promise<TPendingPayload>;
-    buildResolvedResult: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        request: ApprovalRequest;
-        resolved: ApprovalResolved;
-        view: TResolvedView;
-        entry: TPendingEntry;
-      },
-    ) =>
-      | ChannelApprovalNativeFinalAction<TFinalPayload>
-      | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
-    buildExpiredResult: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        request: ApprovalRequest;
-        view: TExpiredView;
-        entry: TPendingEntry;
-      },
-    ) =>
-      | ChannelApprovalNativeFinalAction<TFinalPayload>
-      | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
-  };
+  presentation: ChannelApprovalNativePresentationAdapterForView<
+    TPendingPayload,
+    TFinalPayload,
+    TPendingEntry,
+    TPendingView,
+    TResolvedView,
+    TExpiredView
+  >;
   transport: ChannelApprovalNativeTransportAdapterForView<
     TPreparedTarget,
     TPendingEntry,

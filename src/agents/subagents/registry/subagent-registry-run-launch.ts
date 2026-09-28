@@ -1,28 +1,31 @@
+import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-/** Owns subagent registration and queued collector launch transitions. */
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
-import {
-  createQueuedTaskRun,
-  createRunningTaskRun,
-  finalizeTaskRunByRunId,
-  startTaskRunByRunId,
-} from "../../../tasks/detached-task-runtime.js";
-import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
-import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
+import {
+  prepareTerminatedCollectorLaunch,
+  updateSwarmCollectorCompletion,
+} from "../swarm/swarm-collector.js";
 import { bindSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { createSubagentRegistrationRecord } from "./subagent-registry-run-launch-record.js";
+import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
+import {
+  createSubagentRegistrationRecord,
+  type RegisterSubagentRunParams,
+} from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
-import type { RegisterSubagentRunParams, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { RegisterSubagentRunOptions, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
@@ -52,8 +55,7 @@ function resolveSwarmWaitOwnerSessionKeys(
   return ownerSessionKeys;
 }
 
-export type { RegisterSubagentRunParams } from "./subagent-registry.types.js";
-
+/** Owns subagent registration and queued collector launch transitions. */
 export class SubagentLaunchManager extends SubagentRecoveryManager {
   private findRunByIdentity(runId: string): SubagentRunRecord | undefined {
     return (
@@ -62,133 +64,168 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     );
   }
 
-  readonly registerSubagentRun = (registerParams: RegisterSubagentRunParams): void => {
+  readonly registerSubagentRun = (
+    registerParams: RegisterSubagentRunParams,
+    options: RegisterSubagentRunOptions = {},
+  ): void | Promise<void> => {
     const runId = registerParams.runId.trim();
     const childSessionKey = registerParams.childSessionKey.trim();
     const requesterSessionKey = registerParams.requesterSessionKey.trim();
     if (!runId || !childSessionKey || !requesterSessionKey) {
       return;
     }
-    const now = Date.now();
-    const generation = nextSubagentRunGeneration(
-      this.options.getRunsForChildSession(childSessionKey),
-      childSessionKey,
-    );
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const cfg = this.options.getRuntimeConfig();
+    const now = Date.now();
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = this.options.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
+    const requesterAgentId = resolveSubagentRequesterAgentId(cfg, registerParams);
+    const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
+    const previous = this.options.runs.get(runId);
+    const previousGeneration = previous?.generation;
+    const previousCreatedAt = previous?.createdAt;
+    const requesterStorePath = previous
+      ? previous.requesterStorePath
+      : resolvePhysicalSessionStorePath(
+          { sessionKey: requesterSessionKey, agentId: requesterAgentId },
+          cfg,
+        );
+    const controllerStorePath = previous
+      ? previous.controllerStorePath
+      : resolvePhysicalSessionStorePath(
+          {
+            sessionKey: controllerSessionKey,
+            agentId: resolveAgentIdFromSessionKey(controllerSessionKey, requesterAgentId),
+          },
+          cfg,
+        );
     const queued = registerParams.queued === true;
-    const entry = createSubagentRegistrationRecord(registerParams, {
-      now,
-      generation,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
-      requesterOrigin,
-      swarmWaitOwnerSessionKeys:
-        registerParams.collect && registerParams.swarmRequesterSessionKey
-          ? resolveSwarmWaitOwnerSessionKeys(
-              this.options.getRunsForChildSession,
-              registerParams.swarmRequesterSessionKey,
-            )
-          : undefined,
-    });
-    this.options.runs.set(runId, entry);
-    bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);
-    const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);
-    const registeredKillReconciliationSnapshots = new Map(
-      [...killReconciliationSnapshots.keys()].map((candidate) => [
-        candidate,
-        structuredClone(candidate.killReconciliation),
-      ]),
-    );
-    const registeredRunIds = [
-      runId,
-      ...[...killReconciliationSnapshots.keys()].map((candidate) => candidate.runId),
-    ];
-    const rollbackRegistration = () => {
-      this.options.runs.delete(runId);
-      this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
-    };
-    const restoreDurableRegistration = () => {
-      this.options.runs.set(runId, entry);
-      this.restoreKillReconciliationSnapshots(registeredKillReconciliationSnapshots);
-    };
-    const activateRegistrationLifecycle = () => {
-      bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry, () => {
-        if (this.options.runs.get(entry.runId) === entry) {
-          emitSessionLifecycleEvent({ sessionKey: entry.childSessionKey, reason: "run-capacity" });
+    const queuedContext = queued ? captureOpenClawStateWorkerContext() : undefined;
+    const registrationOwnership = subagentRuns.captureRegistrationOwnership(childSessionKey);
+    const register = (
+      completionAuthority?: Awaited<
+        ReturnType<typeof captureOperatorToolGatewayContinuationContext>
+      >,
+    ): void | Promise<void> => {
+      let custodyTransferred = false;
+      try {
+        completionAuthority?.assertCurrent();
+        options.assertCurrent?.();
+        completionAuthority?.signal.throwIfAborted();
+        queuedContext?.admission.assertCurrent();
+        if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+          throw new Error("Subagent registration lifecycle changed during preparation");
         }
-      });
-      subagentRuns.commitOwnership(entry);
-      this.options.ensureListener();
-      // Session-mode and persistence-recovery runs also need TTL cleanup.
-      this.options.startSweeper();
-      if (!queued) {
-        void this.waitForSubagentCompletion(runId, waitTimeoutMs, entry);
+        if (
+          this.options.runs.get(runId) !== previous ||
+          previous?.generation !== previousGeneration ||
+          previous?.createdAt !== previousCreatedAt
+        ) {
+          throw new Error("Subagent registration owner changed during preparation");
+        }
+        registrationOwnership.assertCurrent();
+        const generation = nextSubagentRunGeneration(
+          this.options.getRunsForChildSession(childSessionKey),
+          childSessionKey,
+        );
+        const entry = createSubagentRegistrationRecord(registerParams, {
+          now,
+          generation,
+          lifecycleGeneration,
+          requesterAgentId,
+          requesterOrigin,
+          swarmWaitOwnerSessionKeys:
+            registerParams.collect && registerParams.swarmRequesterSessionKey
+              ? resolveSwarmWaitOwnerSessionKeys(
+                  this.options.getRunsForChildSession,
+                  registerParams.swarmRequesterSessionKey,
+                )
+              : undefined,
+        });
+        entry.requesterStorePath = requesterStorePath;
+        entry.controllerStorePath = controllerStorePath;
+        if (completionAuthority?.operatorAuthority) {
+          subagentRuns.bindCompletionAuthority(entry, completionAuthority);
+          custodyTransferred = true;
+        } else {
+          completionAuthority?.release();
+        }
+        this.options.runs.set(runId, entry);
+        bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);
+        const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);
+        const registeredRunIds = [
+          runId,
+          ...[...killReconciliationSnapshots.keys()].map((candidate) => candidate.runId),
+        ];
+        const rollbackRegistration = () => {
+          this.options.runs.delete(runId);
+          this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
+        };
+        const bindRegistrationReservation = () => {
+          bindSwarmRunReservation(entry.schedulerSlotId ?? runId, entry, () => {
+            if (this.options.runs.get(entry.runId) === entry) {
+              emitSessionLifecycleEvent({
+                sessionKey: entry.childSessionKey,
+                reason: "run-capacity",
+                scope: "runtime",
+              });
+            }
+          });
+        };
+        const activateRegistrationLifecycle = () => {
+          bindRegistrationReservation();
+          subagentRuns.commitOwnership(entry);
+          this.options.ensureListener();
+          // Session-mode and persistence-recovery runs also need TTL cleanup.
+          this.options.startSweeper();
+          if (!queued) {
+            void this.waitForSubagentCompletion(runId, waitTimeoutMs, entry);
+          }
+        };
+        if (queuedContext) {
+          return registerRequiredQueuedSubagent({
+            context: queuedContext,
+            entry,
+            manager: this.options,
+            originals: killReconciliationSnapshots,
+            bindReservation: bindRegistrationReservation,
+            activate: activateRegistrationLifecycle,
+            ...options,
+          });
+        }
+        try {
+          this.options.persistOrThrow(...registeredRunIds);
+        } catch (error) {
+          rollbackRegistration();
+          subagentRuns.releaseCompletionAuthority(entry);
+          throw error;
+        }
+        // Wait through Gateway RPC; the in-process lifecycle listener is the embedded fallback.
+        activateRegistrationLifecycle();
+      } catch (error) {
+        if (!custodyTransferred) {
+          completionAuthority?.release();
+        }
+        throw error;
+      } finally {
+        registrationOwnership.release();
       }
     };
     try {
-      this.options.persistOrThrow(...registeredRunIds);
+      const preparation = registerParams.collect
+        ? undefined
+        : captureOperatorToolGatewayContinuationContext();
+      return preparation
+        ? preparation.then(register, (error: unknown) => {
+            registrationOwnership.release();
+            throw error;
+          })
+        : register();
     } catch (error) {
-      rollbackRegistration();
+      registrationOwnership.release();
       throw error;
     }
-    if (registerParams.taskRowOwnership !== "gateway_best_effort") {
-      try {
-        const taskParams = {
-          runtime: "subagent",
-          sourceId: runId,
-          ownerKey: requesterSessionKey,
-          scopeKind: "session",
-          // Detached task runtimes are plugin-replaceable. Isolate their input so
-          // mutation cannot change the already-persisted registry record.
-          requesterOrigin: requesterOrigin ? structuredClone(requesterOrigin) : undefined,
-          childSessionKey,
-          runId,
-          label: registerParams.label,
-          task: registerParams.task,
-          agentId: registerParams.agentId,
-          requesterAgentId: resolveSubagentRequesterAgentId(cfg, registerParams),
-          deliveryStatus:
-            registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
-          detail: createSubagentTaskBackingDetail(generation),
-        } as const;
-        const task = queued
-          ? createQueuedTaskRun(taskParams)
-          : createRunningTaskRun({
-              ...taskParams,
-              startedAt: now,
-              lastEventAt: now,
-            });
-        if (!task) {
-          if (registerParams.taskRowOwnership === "required") {
-            throw new Error(`detached task runtime created no task row for run ${runId}`);
-          }
-          log.warn("Failed to persist background task for subagent run", { runId });
-        }
-      } catch (error) {
-        if (registerParams.taskRowOwnership !== "required") {
-          log.warn("Failed to create background task for subagent run", { runId, error });
-        } else {
-          // Direct dispatch suppressed Gateway's CLI fallback. Persist the rollback before
-          // asking the caller to abort; if that write fails, memory must match durable state.
-          rollbackRegistration();
-          try {
-            this.options.persistOrThrow(...registeredRunIds);
-          } catch (rollbackError) {
-            restoreDurableRegistration();
-            // Durable state still owns this registration. Keep reconciliation active so
-            // caller cleanup can terminalize it instead of leaving a phantom run.
-            activateRegistrationLifecycle();
-            throw rollbackError;
-          }
-          throw error;
-        }
-      }
-    }
-    // Wait through Gateway RPC; the in-process lifecycle listener is the embedded fallback.
-    activateRegistrationLifecycle();
   };
 
   readonly startQueuedSubagentRun = (
@@ -259,27 +296,19 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       // Acceptance is not a lifecycle start; preserve a raced start or leave its clock unset.
       const lifecycleStartedAt =
         entry.execution.status === "running" ? entry.execution.startedAt : undefined;
+      entry.execution = {
+        ...entry.execution,
+        status: "running",
+        acceptedAt,
+        lifecycleGeneration: acceptedLifecycleGeneration,
+        restartRecovery: undefined,
+        suppressSessionEffects: undefined,
+      };
       if (typeof lifecycleStartedAt === "number") {
         entry.sessionStartedAt ??= lifecycleStartedAt;
-        entry.execution = {
-          ...entry.execution,
-          status: "running",
-          acceptedAt,
-          lifecycleGeneration: acceptedLifecycleGeneration,
-          restartRecovery: undefined,
-          suppressSessionEffects: undefined,
-          startedAt: lifecycleStartedAt,
-        };
+        entry.execution.startedAt = lifecycleStartedAt;
       } else {
         delete entry.sessionStartedAt;
-        entry.execution = {
-          ...entry.execution,
-          status: "running",
-          acceptedAt,
-          lifecycleGeneration: acceptedLifecycleGeneration,
-          restartRecovery: undefined,
-          suppressSessionEffects: undefined,
-        };
         delete entry.execution.startedAt;
       }
     }
@@ -293,13 +322,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         return true;
       }
       persistedRunning = true;
-      startTaskRunByRunId({
-        runId: entry.taskRunId ?? entry.runId,
-        runtime: "subagent",
-        sessionKey: entry.childSessionKey,
-        startedAt: acceptedAt,
-        lastEventAt: acceptedAt,
-      });
     } catch (error) {
       restoreQueuedRun();
       if (persistedRunning) {
@@ -350,25 +372,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       this.restoreRunRecord(entry, snapshot);
       throw persistError;
     }
-    try {
-      finalizeTaskRunByRunId({
-        runId: entry.taskRunId ?? entry.runId,
-        runtime: "subagent",
-        sessionKey: entry.childSessionKey,
-        status: "failed",
-        endedAt,
-        lastEventAt: endedAt,
-        error,
-        suppressDelivery: true,
-      });
-    } catch (taskError) {
-      // Collector failure is already durable. Detached-task cleanup cannot
-      // turn it back into queued work or the scheduler could launch it twice.
-      log.warn("failed to finalize task after collector launch failure", {
-        runId: entry.runId,
-        error: taskError,
-      });
-    }
     return true;
   };
 
@@ -384,23 +387,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       return true;
     }
     const snapshot = structuredClone(entry);
-    entry.swarmLaunchPending = false;
-    entry.collectorLaunchCleanupPending = true;
-    entry.queuedLaunch = undefined;
-    entry.execution = {
-      ...entry.execution,
-      status: "terminal",
-      endedAt: entry.execution.endedAt,
-    };
-    entry.completion = {
-      required: false,
-      resultText:
-        entry.execution.outcome?.status === "error"
-          ? (entry.execution.outcome.error ?? error)
-          : error,
-      capturedAt: entry.execution.endedAt,
-    };
-    updateSwarmCollectorCompletion(entry, this.options.getRuntimeConfig());
+    prepareTerminatedCollectorLaunch(entry, entry.execution.endedAt, error, () =>
+      this.options.getRuntimeConfig(),
+    );
     try {
       this.options.persistOrThrow(entry.runId);
     } catch (persistError) {

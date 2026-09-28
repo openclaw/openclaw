@@ -22,51 +22,8 @@ export class CodexAppServerMessageDecoder {
     this.pending = undefined;
   }
 
-  /** Both transports supply LF-delimited JSON; keep UTF-8 decoding across pipe chunks. */
-  listen(input: NodeJS.ReadableStream, onMessage: (message: unknown) => void): () => void {
-    let fragments: string[] = [];
-    let closed = false;
-    const onLine = (line: string) => {
-      let completeLine = line;
-      if (fragments.length) {
-        fragments.push(line);
-        completeLine = fragments.join("");
-        fragments = [];
-      }
-      onMessage(this.parse(completeLine));
-    };
-    const onData = (chunk: string) => {
-      let start = 0;
-      let end: number;
-      while ((end = chunk.indexOf("\n", start)) !== -1) {
-        if (closed) {
-          return;
-        }
-        onLine(chunk.slice(start, end));
-        start = end + 1;
-      }
-      if (!closed && start < chunk.length) {
-        fragments.push(chunk.slice(start));
-      }
-    };
-    const onEnd = () => {
-      if (fragments.length) {
-        onLine("");
-      }
-      close();
-    };
-    const close = () => {
-      closed = true;
-      fragments = [];
-      this.clear();
-      input.off("data", onData);
-      input.off("end", onEnd);
-      input.pause();
-    };
-    input.setEncoding("utf8");
-    input.on("data", onData);
-    input.once("end", onEnd);
-    return close;
+  get hasPending(): boolean {
+    return this.pending !== undefined;
   }
 
   parse(line: string): unknown {

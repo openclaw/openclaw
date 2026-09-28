@@ -37,6 +37,17 @@ import { claimAgentSessionWriter, prepareInitialSessionWriter } from "./session-
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const userMessage = { role: "user" as const, content: "First user turn", timestamp: 1 };
+const initialWriteKinds = ["message", "model", "thinking"] as const;
+async function appendInitial(
+  kind: (typeof initialWriteKinds)[number],
+  manager: SessionManager,
+): Promise<string> {
+  return kind === "model"
+    ? manager.appendModelChange("test-provider", "test-model")
+    : kind === "thinking"
+      ? manager.appendThinkingLevelChange("high")
+      : manager.appendMessage(userMessage);
+}
 
 type InitialWriterFixture = {
   admission: PreparedAgentRunAdmission;
@@ -263,7 +274,7 @@ describe("admitted lazy session writer", () => {
           });
           expect(Boolean(loadSessionEntry(target))).toBe(existing);
           expect(
-            preparePersistedCurrentUserTurn({
+            await preparePersistedCurrentUserTurn({
               sessionManager: manager,
               message,
               recorder,
@@ -286,16 +297,18 @@ describe("admitted lazy session writer", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains the exact committed writer for later mutations (existing=%s)",
-    async (existing) => {
+  it.each(
+    [false, true].flatMap((existing) => initialWriteKinds.map((kind) => ({ existing, kind }))),
+  )(
+    "retains the exact committed writer for later mutations (existing=$existing initial=$kind)",
+    async ({ existing, kind }) => {
       await withInitialWriter(
         async ({ manager, promptState, runParams, target }) => {
           expect(Boolean(promptState.sessionWriterFence)).toBe(existing);
           expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(
             !existing,
           );
-          manager.appendMessage(userMessage);
+          await appendInitial(kind, manager);
           const entry = loadSessionEntry({ ...target, readConsistency: "latest" });
           expect(entry).toMatchObject({
             sessionId: target.sessionId,
@@ -312,9 +325,9 @@ describe("admitted lazy session writer", () => {
           expect(loadTranscriptEventsSync(target)).toHaveLength(3);
           await claimAgentSessionWriter({ ...runParams, runId: "new-writer" });
           const before = loadTranscriptEventsSync(target);
-          expect(() =>
-            runWithoutOwnedSessionTranscriptWrites(() => manager.appendMessage(userMessage)),
-          ).toThrow(SessionTranscriptWriterClaimReboundError);
+          await expect(
+            runWithoutOwnedSessionTranscriptWrites(() => appendInitial(kind, manager)),
+          ).rejects.toThrow(SessionTranscriptWriterClaimReboundError);
           expect(loadTranscriptEventsSync(target)).toEqual(before);
           expect(loadSessionEntry(target)).toMatchObject({ activeWriterRunId: "new-writer" });
         },
@@ -353,9 +366,13 @@ describe("admitted lazy session writer", () => {
     },
   );
 
-  it.each(["same-session", "copied-writer", "other-session"] as const)(
-    "rejects a competing first row without adopting its %s identity",
-    async (kind) => {
+  it.each(
+    (["same-session", "copied-writer", "other-session"] as const).flatMap((kind) =>
+      initialWriteKinds.map((initial) => ({ kind, initial })),
+    ),
+  )(
+    "rejects a competing first row without adopting its $kind identity (initial=$initial)",
+    async ({ kind, initial }) => {
       await withInitialWriter(async ({ manager, promptState, runParams, target }) => {
         const competing: InternalSessionEntry = {
           sessionId: kind === "other-session" ? "competing-session" : target.sessionId,
@@ -364,7 +381,7 @@ describe("admitted lazy session writer", () => {
         };
         runWithoutOwnedSessionTranscriptWrites(() => replaceSessionEntrySync(target, competing));
         const before = loadSessionEntry(target);
-        expect(() => manager.appendMessage(userMessage)).toThrow(
+        await expect(appendInitial(initial, manager)).rejects.toThrow(
           SessionTranscriptWriterClaimReboundError,
         );
         expect(promptState.sessionWriterFence).toBeUndefined();
@@ -411,34 +428,37 @@ describe("admitted lazy session writer", () => {
     });
   });
 
-  it("captures the committed claim before identity-observer cancellation stops the first transcript append", async () => {
-    await withInitialWriter(async ({ controller, manager, promptState, runParams, target }) => {
-      const callerError = new Error("caller cancelled from committed identity observer");
-      let observedFence: typeof promptState.sessionWriterFence;
-      const unsubscribe = onSessionIdentityMutation((event) => {
-        if (event.kind !== "create" || event.current.sessionId !== target.sessionId) {
-          return;
+  it.each(initialWriteKinds)(
+    "captures the committed claim before identity-observer cancellation stops the first %s append",
+    async (kind) => {
+      await withInitialWriter(async ({ controller, manager, promptState, runParams, target }) => {
+        const callerError = new Error("caller cancelled from committed identity observer");
+        let observedFence: typeof promptState.sessionWriterFence;
+        const unsubscribe = onSessionIdentityMutation((event) => {
+          if (event.kind !== "create" || event.current.sessionId !== target.sessionId) {
+            return;
+          }
+          observedFence = promptState.sessionWriterFence;
+          controller.abort(callerError);
+        });
+        try {
+          await expect(appendInitial(kind, manager)).rejects.toThrow(callerError);
+          expect(observedFence).toEqual({
+            expectedLifecycleRevision: undefined,
+            expectedWriterRunId: runParams.runId,
+          });
+          expect(promptState.sessionWriterFence).toEqual(observedFence);
+          expect(loadSessionEntry(target)).toMatchObject({
+            sessionId: target.sessionId,
+            activeWriterRunId: runParams.runId,
+          });
+          expect(loadTranscriptEventsSync(target)).toEqual([]);
+        } finally {
+          unsubscribe();
         }
-        observedFence = promptState.sessionWriterFence;
-        controller.abort(callerError);
       });
-      try {
-        expect(() => manager.appendMessage(userMessage)).toThrow(callerError);
-        expect(observedFence).toEqual({
-          expectedLifecycleRevision: undefined,
-          expectedWriterRunId: runParams.runId,
-        });
-        expect(promptState.sessionWriterFence).toEqual(observedFence);
-        expect(loadSessionEntry(target)).toMatchObject({
-          sessionId: target.sessionId,
-          activeWriterRunId: runParams.runId,
-        });
-        expect(loadTranscriptEventsSync(target)).toEqual([]);
-      } finally {
-        unsubscribe();
-      }
-    });
-  });
+    },
+  );
 
   it.each(["active", "closed", "replaced"] as const)(
     "uses the original manager admission for transcript rewrites (%s)",
@@ -461,12 +481,12 @@ describe("admitted lazy session writer", () => {
             }),
           );
         if (state === "active") {
-          expect(rewrite().changed).toBe(true);
+          expect((await rewrite()).changed).toBe(true);
           expect(SessionManager.open(target).getBranch()).toMatchObject([
             { type: "message", message: { content: "Rewritten user turn" } },
           ]);
         } else {
-          expect(rewrite).toThrow();
+          await expect(rewrite()).rejects.toThrow();
           expect(loadTranscriptEventsSync(target)).toEqual(before);
           expect(manager.getBranch()).toMatchObject([{ type: "message", message: userMessage }]);
         }

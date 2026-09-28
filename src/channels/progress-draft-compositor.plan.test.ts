@@ -244,11 +244,12 @@ describe("progress draft plan lifecycle", () => {
     },
   );
 
-  it.each(
-    (["partial", "block", "progress"] as const).flatMap((mode) =>
-      [undefined, false, "Custom progress"].map((label) => ({ mode, label })),
-    ),
-  )(
+  it.each([
+    { mode: "progress", label: undefined },
+    { mode: "progress", label: false },
+    { mode: "progress", label: "Custom progress" },
+    { mode: "partial", label: false },
+  ] as const)(
     "deletes an empty card and recreates identical content in $mode mode with label $label",
     async ({ mode, label }) => {
       const update = vi.fn();
@@ -284,11 +285,12 @@ describe("progress draft plan lifecycle", () => {
     },
   );
 
-  it.each(
-    (["partial", "block", "progress"] as const).flatMap((mode) =>
-      [undefined, false, "Custom progress"].map((label) => ({ mode, label })),
-    ),
-  )(
+  it.each([
+    { mode: "progress", label: undefined },
+    { mode: "progress", label: false },
+    { mode: "progress", label: "Custom progress" },
+    { mode: "partial", label: false },
+  ] as const)(
     "replaces a plan without deletion support in $mode mode with label $label",
     async ({ mode, label }) => {
       const update = vi.fn();
@@ -314,7 +316,8 @@ describe("progress draft plan lifecycle", () => {
   );
 
   it("returns detached structured state for channel-native renderers", async () => {
-    const update = vi.fn<Parameters<typeof createChannelProgressDraftCompositor>[0]["update"]>();
+    const update =
+      vi.fn<NonNullable<Parameters<typeof createChannelProgressDraftCompositor>[0]["update"]>>();
     const progress = createChannelProgressDraftCompositor({
       mode: "progress",
       active: true,

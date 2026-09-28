@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   countSessionLogMentions,
@@ -25,7 +26,6 @@ import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
   assertToolSearchBatchLaneResult,
   assertToolSearchLaneResults,
-  fetchJson,
   readToolSearchGatewayFetchLimits,
   runToolSearchGatewayLane,
 } from "./tool-search-gateway.fixture.js";
@@ -34,7 +34,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("tool search gateway e2e fetch helper", () => {
+describe("tool search gateway fetch configuration", () => {
   it("builds and validates mock request cursor reads", () => {
     expect(readQaMockRequestCursor({ cursor: 42 })).toBe(42);
     expect(qaMockRequestCursorUrl("http://mock.test/")).toBe(
@@ -70,63 +70,6 @@ describe("tool search gateway e2e fetch helper", () => {
     ).toEqual({
       bodyMaxBytes: 4096,
       timeoutMs: 5_000,
-    });
-  });
-
-  it("aborts requests that never resolve", async () => {
-    let signal: AbortSignal | undefined;
-    await expect(
-      fetchJson("https://qa.example.invalid/debug/requests", undefined, {
-        timeoutMs: 25,
-        fetchImpl: async (_url, init) => {
-          signal = init.signal as AbortSignal | undefined;
-          return new Promise<Response>(() => {});
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "ETIMEDOUT",
-      message: "HTTP request to https://qa.example.invalid/debug/requests timed out after 25ms",
-    });
-    expect(signal?.aborted).toBe(true);
-  });
-
-  it("times out while reading stalled response bodies", async () => {
-    await expect(
-      fetchJson("https://qa.example.invalid/v1/responses", undefined, {
-        timeoutMs: 25,
-        fetchImpl: async () =>
-          new Response(new ReadableStream<Uint8Array>({ start() {} }), {
-            status: 200,
-          }),
-      }),
-    ).rejects.toMatchObject({
-      code: "ETIMEDOUT",
-      message: "HTTP request to https://qa.example.invalid/v1/responses timed out after 25ms",
-    });
-  });
-
-  it("parses successful JSON responses", async () => {
-    await expect(
-      fetchJson("https://qa.example.invalid/debug/requests", undefined, {
-        timeoutMs: 25,
-        fetchImpl: async () => new Response('{"ok":true}', { status: 200 }),
-      }),
-    ).resolves.toEqual({ ok: true });
-  });
-
-  it("bounds oversized response bodies", async () => {
-    await expect(
-      fetchJson("https://qa.example.invalid/debug/requests", undefined, {
-        maxBodyBytes: 16,
-        timeoutMs: 1000,
-        fetchImpl: async () =>
-          new Response(JSON.stringify({ ok: true, padding: "x".repeat(128) }), {
-            status: 200,
-          }),
-      }),
-    ).rejects.toMatchObject({
-      code: "ETOOBIG",
-      message: "HTTP response from https://qa.example.invalid/debug/requests exceeded 16 bytes",
     });
   });
 });
@@ -169,91 +112,109 @@ describe("tool search gateway e2e session log scanner", () => {
           sessionsDir,
           needles: {
             fake_plugin_tool_17: "fake_plugin_tool_17",
-            tool_search_code: "tool_search_code",
+            tool_call: "tool_call",
           },
         }),
       ).resolves.toEqual({
         fake_plugin_tool_17: 2,
-        tool_search_code: 0,
+        tool_call: 0,
       });
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("counts target mentions from SQLite transcript rows", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-sqlite-"));
-    const sqlitePath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
-    await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
-    const db = new DatabaseSync(sqlitePath);
-    try {
-      const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
-      db.exec(`
+  it.each(["legacy", "zstd"])(
+    "counts target mentions from %s SQLite transcript rows",
+    async (storage) => {
+      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-sqlite-"));
+      const sqlitePath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
+      await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+      const db = new DatabaseSync(sqlitePath);
+      try {
+        const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
+        db.exec(`
         CREATE TABLE transcript_events (
           session_id TEXT NOT NULL,
           seq INTEGER NOT NULL,
-          event_json TEXT NOT NULL,
+          event_json TEXT,
           created_at INTEGER NOT NULL,
           PRIMARY KEY (session_id, seq)
         );
       `);
-      const insert = db.prepare(
-        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-      );
-      insert.run(
-        "sqlite-session",
-        1,
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: "tool search qa check target=fake_plugin_tool_17",
-          },
-        }),
-        1,
-      );
-      insert.run(
-        "sqlite-session",
-        2,
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: 'FAKE_PLUGIN_OK fake_plugin_tool_17 via tool_search_code quoted_call("alpha")',
-          },
-        }),
-        2,
-      );
-      insert.run(
-        "sqlite-session",
-        3,
-        JSON.stringify({
-          message: {
-            role: "toolResult",
-            toolName: "fake_plugin_tool_17",
-            content: [{ type: "text", text: "FAKE_PLUGIN_OK" }],
-          },
-        }),
-        3,
-      );
+        const insert = db.prepare(
+          "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+        );
+        insert.run(
+          "sqlite-session",
+          1,
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: "tool search qa check target=fake_plugin_tool_17",
+            },
+          }),
+          1,
+        );
+        insert.run(
+          "sqlite-session",
+          2,
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: 'FAKE_PLUGIN_OK fake_plugin_tool_17 via tool_call quoted_call("alpha")',
+            },
+          }),
+          2,
+        );
+        insert.run(
+          "sqlite-session",
+          3,
+          JSON.stringify({
+            message: {
+              role: "toolResult",
+              toolName: "fake_plugin_tool_17",
+              content: [{ type: "text", text: "FAKE_PLUGIN_OK" }],
+            },
+          }),
+          3,
+        );
 
-      await expect(
-        countSessionLogMentions({
-          sessionsDir,
-          needles: {
-            fake_plugin_tool_17: "fake_plugin_tool_17",
-            quoted_call: 'quoted_call("alpha")',
-            tool_search_code: "tool_search_code",
-          },
-        }),
-      ).resolves.toEqual({
-        fake_plugin_tool_17: 2,
-        quoted_call: 1,
-        tool_search_code: 1,
-      });
-    } finally {
-      db.close();
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  });
+        if (storage === "zstd") {
+          db.exec(
+            "ALTER TABLE transcript_events ADD COLUMN event_zstd BLOB; ALTER TABLE transcript_events ADD COLUMN event_utf8_bytes INTEGER",
+          );
+          const update = db.prepare(
+            "UPDATE transcript_events SET event_json = NULL, event_zstd = ?, event_utf8_bytes = ? WHERE seq = ?",
+          );
+          for (const row of db.prepare("SELECT seq, event_json FROM transcript_events").all()) {
+            if (typeof row.event_json !== "string" || typeof row.seq !== "number") {
+              throw new Error("Invalid transcript fixture row");
+            }
+            const bytes = Buffer.from(row.event_json, "utf8");
+            update.run(zstdCompressSync(bytes), bytes.byteLength, row.seq);
+          }
+        }
+        await expect(
+          countSessionLogMentions({
+            sessionsDir,
+            needles: {
+              fake_plugin_tool_17: "fake_plugin_tool_17",
+              quoted_call: 'quoted_call("alpha")',
+              tool_call: "tool_call",
+            },
+          }),
+        ).resolves.toEqual({
+          fake_plugin_tool_17: 2,
+          quoted_call: 1,
+          tool_call: 1,
+        });
+      } finally {
+        db.close();
+        await fs.rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("tool search gateway e2e lane result", () => {
@@ -309,7 +270,7 @@ describe("tool search gateway e2e lane result", () => {
     return { configPath, env, gatewayCall, tempRoot };
   }
 
-  it("preserves surrogate pairs in provider request snippets", async () => {
+  it("preserves wire-stage evidence and surrogate pairs in provider request snippets", async () => {
     const { configPath, env, gatewayCall, tempRoot } = await createLaneHarness();
     const inputPrefix = "i".repeat(499);
     const searchOutput = '{"results":[{"query":"first"}]}';
@@ -327,14 +288,14 @@ describe("tool search gateway e2e lane result", () => {
           },
           {
             body: { tools: [] },
-            plannedToolName: "tool_call",
+            plannedToolName: "fake_plugin_tool_17",
+            plannedWireToolName: "tool_call",
             raw: "{}",
             toolOutput: searchOutput,
           },
           {
             allInputText: `${inputPrefix}😀tail\n### Deferred Tool Schemas\n- fake_plugin_tool_17: Fake plugin target`,
             body: { tools: [] },
-            plannedToolName: "fake_plugin_tool_17",
             raw: "{}",
             toolOutput,
           },
@@ -346,10 +307,12 @@ describe("tool search gateway e2e lane result", () => {
       const result = await runToolSearchGatewayLane({
         env,
         fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
-        lane: "code",
+        lane: "tools",
       });
 
       expect(result.providerInputSnippet).toBe(inputPrefix);
+      expect(result.providerPlannedTools).toEqual(["tool_search", "tool_call"]);
+      expect(result.providerToolSearchResult).toEqual(JSON.parse(searchOutput));
       expect(result.providerToolOutputSnippet).toBe(
         `${searchOutput}\n${"o".repeat(4_000 - searchOutput.length - 1)}`,
       );
@@ -361,7 +324,7 @@ describe("tool search gateway e2e lane result", () => {
       expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(gatewayCall).toHaveBeenCalledWith(
         "tools.effective",
-        { sessionKey: "tool-search-gateway-code" },
+        { sessionKey: "tool-search-gateway-tools" },
         { timeoutMs: expect.any(Number) },
       );
       const laneConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
@@ -398,7 +361,7 @@ describe("tool search gateway e2e lane result", () => {
           logs.push(
             "stdout",
             Buffer.from(
-              `${logMode === "rolled" ? "old-log-line\n".repeat(6_000) : ""}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_search_code\nfake_plugin_tool_17-variant\n`,
+              `${logMode === "rolled" ? "old-log-line\n".repeat(6_000) : ""}OPENAI_API_KEY=${gatewaySecret}\n${promptSecret}\n${toolOutputSecret}\ntool_call\nfake_plugin_tool_17-variant\n`,
             ),
           );
           await fs.mkdir(sessionsDir, { recursive: true });
@@ -407,7 +370,7 @@ describe("tool search gateway e2e lane result", () => {
             `${JSON.stringify({
               message: {
                 role: "assistant",
-                content: "tool_search_code tool_describe fake_plugin_tool_17-variant",
+                content: "tool_call tool_describe fake_plugin_tool_17-variant",
               },
             })}\n`,
             "utf8",
@@ -418,9 +381,9 @@ describe("tool search gateway e2e lane result", () => {
           return jsonResponse([
             {
               body: {
-                tools: [{ type: "function", name: "tool_search_code" }],
+                tools: [{ type: "function", name: "tool_call" }],
               },
-              plannedToolName: "tool_search_code",
+              plannedToolName: "tool_call",
               raw: responseSecret,
               prompt: promptSecret,
               toolOutput: `${toolOutputSecret} FAKE_PLUGIN_OK fake_plugin_tool_17`,
@@ -439,7 +402,7 @@ describe("tool search gateway e2e lane result", () => {
               await runToolSearchGatewayLane({
                 env,
                 fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
-                lane: "code",
+                lane: "tools",
               });
             },
           },
@@ -447,15 +410,15 @@ describe("tool search gateway e2e lane result", () => {
 
         expect(scenario.status).toBe("fail");
         const renderedError = scenario.details ?? "";
-        expect(renderedError).toContain("Tool Search code lane gateway request failed (HTTP 502)");
+        expect(renderedError).toContain("Tool Search tools lane gateway request failed (HTTP 502)");
         expect(renderedError).toContain(
-          'providerRequests=[{"plannedToolName":"tool_search_code","declaredToolCount":1,"targetDeclared":false,"bridgeDeclared":true,"targetResultObserved":true}]',
+          'providerRequests=[{"plannedToolName":"tool_call","declaredToolCount":1,"targetDeclared":false,"targetResultObserved":true}]',
         );
         expect(renderedError).toContain(
-          'sessionMentions={"tool_search_code":1,"tool_search":0,"tool_describe":1,"tool_call":0,"fake_plugin_tool_17":0}',
+          'sessionMentions={"tool_search":0,"tool_describe":1,"tool_call":1,"fake_plugin_tool_17":0}',
         );
         expect(renderedError).toContain(
-          `gatewayLogFacts={"captured":${logMode !== "unavailable"},"mentions":{"tool_search_code":${logMode !== "unavailable"},"tool_search":false,"tool_describe":false,"tool_call":false,"fake_plugin_tool_17":false}}`,
+          `gatewayLogFacts={"captured":${logMode !== "unavailable"},"mentions":{"tool_search":false,"tool_describe":false,"tool_call":${logMode !== "unavailable"},"fake_plugin_tool_17":false}}`,
         );
         expect(renderedError).not.toContain(gatewaySecret);
         expect(renderedError).not.toContain(responseSecret);
@@ -518,23 +481,35 @@ describe("tool search gateway e2e lane assertions", () => {
     targetToolIdentity,
   };
 
-  it("accepts code lane proof only when the target plugin tool output is present", () => {
+  const groupedSearchResult = {
+    results: [
+      { query: targetTool, candidates: [{ name: targetTool }] },
+      {
+        query: QA_TOOL_SEARCH_SECONDARY_TARGET,
+        candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
+      },
+    ],
+  };
+  const tools: Parameters<typeof assertToolSearchBatchLaneResult>[0]["tools"] = {
+    targetToolIdentity,
+    gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+    providerDirectoryContainsTarget: true,
+    providerRawBytes: 4_000,
+    status: "completed",
+    providerToolCallResult,
+    providerDeclaredToolCount: 3,
+    providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
+    providerPlannedTools: ["tool_search", "tool_call"],
+    providerToolSearchResult: groupedSearchResult,
+    sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
+  };
+
+  it("accepts structured lane proof only when the target plugin tool output is present", () => {
     expect(() =>
       assertToolSearchLaneResults({
         normal,
         targetTool,
-        code: {
-          targetToolIdentity,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 1,
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search_code"],
-          providerRawBytes: 4_000,
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
-        },
+        tools,
       }),
     ).not.toThrow();
   });
@@ -544,38 +519,8 @@ describe("tool search gateway e2e lane assertions", () => {
       assertToolSearchBatchLaneResult({
         targetTool,
         tools: {
-          status: "completed",
-          targetToolIdentity,
-          providerToolCallResult,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 3,
-          providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search", "tool_call"],
-          providerRawBytes: 4_000,
-          providerToolOutputSnippet: JSON.stringify({
-            results: [
-              { query: targetTool, candidates: [{ name: targetTool }] },
-              {
-                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-              },
-            ],
-          }),
-          providerToolSearchResult: {
-            results: [
-              { query: targetTool, candidates: [{ name: targetTool }] },
-              {
-                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-              },
-            ],
-          },
-          sessionLogToolMentions: {
-            tool_search: 1,
-            tool_call: 1,
-            [targetTool]: 1,
-          },
+          ...tools,
+          providerToolOutputSnippet: JSON.stringify(groupedSearchResult),
         },
       }),
     ).not.toThrow();
@@ -586,15 +531,8 @@ describe("tool search gateway e2e lane assertions", () => {
       assertToolSearchBatchLaneResult({
         targetTool,
         tools: {
-          status: "completed",
-          targetToolIdentity,
-          providerToolCallResult,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 3,
-          providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
-          providerDirectoryContainsTarget: true,
+          ...tools,
           providerPlannedTools: ["tool_search", "tool_search", "tool_call"],
-          providerRawBytes: 4_000,
           providerToolOutputSnippet: JSON.stringify({
             results: [{ query: targetTool, candidates: [{ name: targetTool }] }],
           }),
@@ -650,31 +588,15 @@ describe("tool search gateway e2e lane assertions", () => {
       label: "calls before searching",
       status: "completed",
       plannedTools: ["tool_call", "tool_search"],
-      result: {
-        results: [
-          { query: targetTool, candidates: [{ name: targetTool }] },
-          {
-            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-          },
-        ],
-      },
+      result: groupedSearchResult,
       mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
       error: "did not use one batch search followed by one catalog call",
     },
     {
-      label: "omits bridge telemetry",
+      label: "omits structured telemetry",
       status: "completed",
       plannedTools: ["tool_search", "tool_call"],
-      result: {
-        results: [
-          { query: targetTool, candidates: [{ name: targetTool }] },
-          {
-            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-          },
-        ],
-      },
+      result: groupedSearchResult,
       mentions: { tool_search: 0, tool_call: 0, [targetTool]: 1 },
       error: "session log did not record search and call mentions",
     },
@@ -682,15 +604,7 @@ describe("tool search gateway e2e lane assertions", () => {
       label: "returns an incomplete response",
       status: "incomplete",
       plannedTools: ["tool_search", "tool_call"],
-      result: {
-        results: [
-          { query: targetTool, candidates: [{ name: targetTool }] },
-          {
-            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-          },
-        ],
-      },
+      result: groupedSearchResult,
       mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
       error: "did not complete successfully",
     },
@@ -701,15 +615,9 @@ describe("tool search gateway e2e lane assertions", () => {
         assertToolSearchBatchLaneResult({
           targetTool,
           tools: {
+            ...tools,
             status,
-            targetToolIdentity,
-            providerToolCallResult,
-            gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-            providerDeclaredToolCount: 3,
-            providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
-            providerDirectoryContainsTarget: true,
             providerPlannedTools: plannedTools,
-            providerRawBytes: 4_000,
             providerToolOutputSnippet: JSON.stringify(result),
             providerToolSearchResult: result,
             sessionLogToolMentions: mentions,
@@ -731,29 +639,14 @@ describe("tool search gateway e2e lane assertions", () => {
       directoryContainsTarget: false,
     },
   ])("rejects structured proof that $label", ({ declaredToolNames, directoryContainsTarget }) => {
-    const result = {
-      results: [
-        { query: targetTool, candidates: [{ name: targetTool }] },
-        {
-          query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-          candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-        },
-      ],
-    };
     expect(() =>
       assertToolSearchBatchLaneResult({
         targetTool,
         tools: {
-          status: "completed",
-          targetToolIdentity,
-          providerToolCallResult,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          ...tools,
           providerDeclaredToolCount: declaredToolNames.length,
           providerDeclaredToolNames: declaredToolNames,
           providerDirectoryContainsTarget: directoryContainsTarget,
-          providerPlannedTools: ["tool_search", "tool_call"],
-          providerRawBytes: 4_000,
-          providerToolSearchResult: result,
           sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
         },
       }),
@@ -761,28 +654,12 @@ describe("tool search gateway e2e lane assertions", () => {
   });
 
   it("rejects structured proof without a typed target tool result", () => {
-    const result = {
-      results: [
-        { query: targetTool, candidates: [{ name: targetTool }] },
-        {
-          query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-          candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-        },
-      ],
-    };
     expect(() =>
       assertToolSearchBatchLaneResult({
         targetTool,
         tools: {
-          status: "completed",
-          targetToolIdentity,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 3,
-          providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search", "tool_call"],
-          providerRawBytes: 4_000,
-          providerToolSearchResult: result,
+          ...tools,
+          providerToolCallResult: undefined,
           sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 2 },
         },
       }),
@@ -790,29 +667,12 @@ describe("tool search gateway e2e lane assertions", () => {
   });
 
   it("rejects structured tools.effective ownership outside the fixture plugin", () => {
-    const result = {
-      results: [
-        { query: targetTool, candidates: [{ name: targetTool }] },
-        {
-          query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-          candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-        },
-      ],
-    };
     expect(() =>
       assertToolSearchBatchLaneResult({
         targetTool,
         tools: {
-          status: "completed",
+          ...tools,
           targetToolIdentity: { source: "core", pluginId: "" },
-          providerToolCallResult,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 3,
-          providerDeclaredToolNames: ["tool_search", "tool_describe", "tool_call"],
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search", "tool_call"],
-          providerRawBytes: 4_000,
-          providerToolSearchResult: result,
           sessionLogToolMentions: { tool_search: 1, tool_call: 1, [targetTool]: 2 },
         },
       }),
@@ -822,7 +682,7 @@ describe("tool search gateway e2e lane assertions", () => {
   it("preserves surrogate pairs in both lane debug output snippets", () => {
     const outputPrefix = `FAKE_PLUGIN_OK ${targetTool} `;
     const normalOutput = `${outputPrefix}${"n".repeat(299 - outputPrefix.length)}`;
-    const codeOutput = `${outputPrefix}${"c".repeat(299 - outputPrefix.length)}`;
+    const toolsOutput = `${outputPrefix}${"c".repeat(299 - outputPrefix.length)}`;
     const assertInvalidLaneResults = () =>
       assertToolSearchLaneResults({
         targetTool,
@@ -830,64 +690,42 @@ describe("tool search gateway e2e lane assertions", () => {
           ...normal,
           gatewayOutputText: `${normalOutput}😀tail`,
         },
-        code: {
-          targetToolIdentity,
-          gatewayOutputText: `${codeOutput}😀tail`,
-          providerDeclaredToolCount: 1,
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search_code", targetTool],
-          providerRawBytes: 4_000,
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
+        tools: {
+          ...tools,
+          gatewayOutputText: `${toolsOutput}😀tail`,
+          providerPlannedTools: ["tool_call", targetTool],
         },
       });
 
     expect(assertInvalidLaneResults).toThrow(`"output": "${normalOutput}"`);
-    expect(assertInvalidLaneResults).toThrow(`"output": "${codeOutput}"`);
+    expect(assertInvalidLaneResults).toThrow(`"output": "${toolsOutput}"`);
   });
 
-  it("rejects code lane output that only echoes the target tool name", () => {
+  it("rejects structured lane output that only echoes the target tool name", () => {
     expect(() =>
       assertToolSearchLaneResults({
         normal,
         targetTool,
-        code: {
-          targetToolIdentity,
+        tools: {
+          ...tools,
           gatewayOutputText: targetTool,
-          providerDeclaredToolCount: 1,
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search_code"],
-          providerRawBytes: 4_000,
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
         },
       }),
-    ).toThrow(`code lane did not bridge-call ${targetTool}`);
+    ).toThrow(`structured lane did not call ${targetTool}`);
   });
 
-  it("rejects code lane proof that also exposes the direct target tool", () => {
+  it("rejects structured lane proof that also exposes the direct target tool", () => {
     expect(() =>
       assertToolSearchLaneResults({
         normal,
         targetTool,
-        code: {
-          targetToolIdentity,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+        tools: {
+          ...tools,
           providerDeclaredToolCount: 2,
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search_code", targetTool],
-          providerRawBytes: 4_000,
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
+          providerPlannedTools: ["tool_call", targetTool],
         },
       }),
-    ).toThrow(`code lane exposed direct provider tool ${targetTool}`);
+    ).toThrow(`structured lane exposed direct provider tool ${targetTool}`);
   });
 
   it("rejects normal lane output that only echoes the target tool name", () => {
@@ -900,69 +738,35 @@ describe("tool search gateway e2e lane assertions", () => {
             [targetTool]: 0,
           },
         },
-        code: {
-          targetToolIdentity,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 1,
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search_code"],
-          providerRawBytes: 4_000,
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
-        },
+        tools,
       }),
     ).toThrow(`normal lane did not call ${targetTool}`);
   });
 
-  it("rejects normal lane proof that uses the Tool Search bridge", () => {
+  it("rejects normal lane proof that uses structured Tool Search", () => {
     expect(() =>
       assertToolSearchLaneResults({
         targetTool,
         normal: {
           ...normal,
-          providerPlannedTools: [targetTool, "tool_search_code"],
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
+          providerPlannedTools: [targetTool, "tool_call"],
         },
-        code: {
-          targetToolIdentity,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 1,
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search_code"],
-          providerRawBytes: 4_000,
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
-        },
+        tools,
       }),
-    ).toThrow("normal lane unexpectedly used Tool Search bridge");
+    ).toThrow("normal lane unexpectedly used structured Tool Search");
   });
 
-  it("rejects code lane proof without the automatically advertised capability directory", () => {
+  it("rejects structured lane proof without the automatically advertised capability directory", () => {
     expect(() =>
       assertToolSearchLaneResults({
         normal,
         targetTool,
-        code: {
-          targetToolIdentity,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 1,
+        tools: {
+          ...tools,
           providerDirectoryContainsTarget: false,
-          providerPlannedTools: ["tool_search_code"],
-          providerRawBytes: 4_000,
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
         },
       }),
-    ).toThrow(`code lane did not advertise ${targetTool} in the capability directory`);
+    ).toThrow(`structured lane did not advertise ${targetTool} in the capability directory`);
   });
 
   it("rejects a Tool Search capability directory in the direct lane", () => {
@@ -970,18 +774,7 @@ describe("tool search gateway e2e lane assertions", () => {
       assertToolSearchLaneResults({
         normal: { ...normal, providerDirectoryContainsTarget: true },
         targetTool,
-        code: {
-          targetToolIdentity,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 1,
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search_code"],
-          providerRawBytes: 4_000,
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
-        },
+        tools,
       }),
     ).toThrow("normal lane unexpectedly advertised a Tool Search capability directory");
   });
@@ -994,18 +787,7 @@ describe("tool search gateway e2e lane assertions", () => {
           targetToolIdentity: { source: "core", pluginId: "" },
         },
         targetTool,
-        code: {
-          targetToolIdentity,
-          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
-          providerDeclaredToolCount: 1,
-          providerDirectoryContainsTarget: true,
-          providerPlannedTools: ["tool_search_code"],
-          providerRawBytes: 4_000,
-          sessionLogToolMentions: {
-            tool_search_code: 1,
-            [targetTool]: 1,
-          },
-        },
+        tools,
       }),
     ).toThrow(`tools.effective did not attribute ${targetTool} to plugin tool-search-e2e-fixture`);
   });

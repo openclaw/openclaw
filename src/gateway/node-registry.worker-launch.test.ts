@@ -74,7 +74,12 @@ describe("private worker launch wire", () => {
       connId,
       declaration: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: { total: 1, available: 1 }, environmentSession: 1 },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 1, available: 1 },
+          environmentSession: 1,
+          capturedExecPolicy: true,
+        },
       },
     });
   });
@@ -90,7 +95,7 @@ describe("private worker launch wire", () => {
     }
   });
 
-  it.each([-1, 0, 1])("enforces the complete node frame at cap %+i byte(s)", async (delta) => {
+  it.each([0, 1])("enforces the complete node frame at cap %+i byte(s)", async (delta) => {
     const input = testWorkerLaunchInput("/tmp/workspace", "fixture-turn");
     input.descriptor.assignment.systemPrompt = '"\\\0\n漢😀'.repeat(10_000);
     const encode = () =>

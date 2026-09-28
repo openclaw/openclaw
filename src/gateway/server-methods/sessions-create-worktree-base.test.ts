@@ -5,7 +5,10 @@ import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+} from "../../config/sessions/session-accessor.js";
 import { refreshProjectClone } from "../../projects/project-clone.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
@@ -360,3 +363,88 @@ test.each(["local", "remote"] as const)(
     }
   },
 );
+
+test("sessions.create recovers a failed worktree in the same session with an explicit project", async () => {
+  const root = tempDirs.make("openclaw-session-worktree-source-recovery-");
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace);
+  await execFileAsync("git", ["init", "-b", "main", workspace]);
+  const repository = await initializeRepository(root, "project");
+  const project = await registerProjectRegistry({ path: repository, name: "Recovery" });
+  testState.agentConfig = { workspace };
+  const { storePath } = await createSessionStoreDir();
+  const context = {
+    broadcast: vi.fn(),
+    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+  };
+  const options = { ...controlUiClient, context };
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+  const created = await directSessionReq<{ key: string }>(
+    "sessions.create",
+    { agentId: "main", message: "Investigate the retained evidence", worktree: true },
+    options,
+  );
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  const sessionKey = created.payload!.key;
+  const target = { agentId: "main", sessionKey, storePath };
+  try {
+    await settleWorkspaceRuns(context, storePath, sessionKey);
+    const failed = loadSessionEntry(target)!;
+    expect(failed).toMatchObject({
+      status: "failed",
+      lastRunError: expect.stringContaining("has no commits"),
+      pendingWorktree: { workspace },
+    });
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    const transcriptScope = { ...target, sessionId: failed.sessionId };
+    const history = loadTranscriptEventsSync(transcriptScope);
+    const selection = { agentId: "main", key: sessionKey, projectId: project.id, worktree: true };
+    const rejected = await directSessionReq(
+      "sessions.create",
+      { ...selection, worktreeBaseRef: "missing-base" },
+      options,
+    );
+    expect(rejected.ok).toBe(false);
+    expect(loadSessionEntry(target)).toEqual(failed);
+    expect(loadTranscriptEventsSync(transcriptScope)).toEqual(history);
+    const recovered = await directSessionReq("sessions.create", selection, options);
+    expect(recovered.ok, JSON.stringify(recovered.error)).toBe(true);
+    const bound = loadSessionEntry(target)!;
+    expect(bound).toMatchObject({
+      sessionId: failed.sessionId,
+      projectId: project.id,
+      lastRunError: failed.lastRunError,
+      worktree: { repoRoot: repository },
+    });
+    expect(bound).not.toHaveProperty("pendingWorktree");
+    expect(bound).not.toHaveProperty("pendingProjectGitUrl");
+    expect(loadTranscriptEventsSync(transcriptScope)).toEqual(history);
+    const resumed = await directSessionReq(
+      "chat.send",
+      {
+        agentId: "main",
+        sessionKey,
+        message: "Continue the original investigation",
+        idempotencyKey: "recovered-worktree-turn",
+      },
+      options,
+    );
+    expect(resumed.ok, JSON.stringify(resumed.error)).toBe(true);
+    await settleWorkspaceRuns(context, storePath, sessionKey);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    expect(loadSessionEntry(target)?.sessionId).toBe(failed.sessionId);
+  } finally {
+    await settleWorkspaceRuns(context, storePath, sessionKey, true);
+    const owned = managedWorktrees.findLiveByOwner("session", sessionKey);
+    if (owned) {
+      await managedWorktrees.remove({
+        id: owned.id,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
+    }
+  }
+});

@@ -10,17 +10,13 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
+import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
+import { getPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
-import {
-  hasPluginMessagingDeliveryId,
-  isDeliveredMessagingToolResult,
-} from "../embedded-agent-message-tool-source-reply.js";
-import {
-  isMessagingToolSendAction,
-  isPluginNativeMessagingTool,
-} from "../embedded-agent-messaging.js";
+import { isDeliveredMessagingToolResult } from "../embedded-agent-message-tool-source-reply.js";
+import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
 import { isToolResultError } from "../tool-result-error.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -374,13 +370,12 @@ function buildDeliveredMessagingFailureFallback(
   );
   const delivered = deliveryFact
     ? deliveryFact.status === "settled"
-    : isPluginNativeMessagingTool(event.toolName) &&
-      isDeliveredMessagingToolResult({
+    : isDeliveredMessagingToolResult({
         toolName: event.toolName,
         args: event.args,
         result,
-      }) &&
-      hasPluginMessagingDeliveryId(result);
+        requirePluginDeliveryId: true,
+      });
   if (
     event.isError === true ||
     isToolResultError(result) ||
@@ -408,11 +403,31 @@ function reconcileDeliveredMessagingFailure(
     : result;
 }
 
+/**
+ * A run resolves middleware once. When a handler's own plugin was retired and is
+ * gone from its Gateway's current registry, its post-processing no longer applies. The runner
+ * checks this before choosing a path and again before each call, so a skipped
+ * plugin never runs and cannot have touched the result.
+ */
+function isRemovedPluginMiddleware(handler: AgentToolResultMiddleware): boolean {
+  const instance = getPluginValueInstance(handler);
+  if (!instance?.owner || (!instance.disposing && instance.acceptingCalls)) {
+    return false;
+  }
+  // Decide against the plugin's own Gateway; without that owner a stale handler fails closed.
+  const successor = getPluginRegistryGatewayOwner(instance.owner.registry)?.current();
+  return (
+    successor !== undefined &&
+    !successor.plugins.some(
+      (record) => record.id === instance.pluginId && record.enabled && record.status === "loaded",
+    )
+  );
+}
+
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
 ) {
-  let resolvedHandlers = handlers;
   const resolvedHandlersLoader = createLazyPromiseLoader(async () => {
     const { loadAgentToolResultMiddlewaresForRuntime } =
       await import("../../plugins/agent-tool-result-middleware-loader.js");
@@ -420,18 +435,15 @@ export function createAgentToolResultMiddlewareRunner(
       runtime: ctx.runtime,
     });
   });
-  const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
-    if (resolvedHandlers) {
-      return resolvedHandlers;
-    }
-    resolvedHandlers = await resolvedHandlersLoader.load();
-    return resolvedHandlers;
-  };
   return {
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
     ): Promise<OpenClawAgentToolResult> {
-      const handlersForRun = await resolveHandlers();
+      // Drop removed plugins' handlers before choosing a path, so a run whose
+      // only middleware was removed keeps the untouched no-middleware result.
+      const handlersForRun = (await (handlers ?? resolvedHandlersLoader.load())).filter(
+        (handler) => !isRemovedPluginMiddleware(handler),
+      );
       // Fast path: with no middleware registered the result is delivered
       // unchanged; skip validation entirely so tool emitters that produce
       // dependency payloads on `details` (SDK objects with methods, cycles)
@@ -447,6 +459,10 @@ export function createAgentToolResultMiddlewareRunner(
       );
       let current = sanitizeToolResultForMiddleware(event.result);
       for (const handler of handlersForRun) {
+        // An earlier handler can await while a later handler's plugin is removed.
+        if (isRemovedPluginMiddleware(handler)) {
+          continue;
+        }
         try {
           const next = await handler({ ...event, result: current }, ctx);
           // Middleware may mutate event.result in place for legacy runtime parity.

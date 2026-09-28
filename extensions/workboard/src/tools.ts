@@ -1,5 +1,4 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-// Workboard plugin module implements tools behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -11,6 +10,7 @@ import {
   claimTokenField,
   createWorkboardMoveTool,
   strictObject,
+  workspaceField,
 } from "./tools-card-mutations.js";
 import { createWorkboardOrchestrationTools } from "./tools-orchestration.js";
 
@@ -259,13 +259,7 @@ export function createWorkboardTools(params: {
         ),
         idempotencyKey: Type.Optional(Type.String({ description: "Idempotent create key." })),
         skills: Type.Optional(Type.Array(Type.String(), { description: "Suggested skills." })),
-        workspace: Type.Optional(
-          strictObject({
-            kind: Type.String({ description: "scratch, dir, or worktree." }),
-            path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-            branch: Type.Optional(Type.String({ description: "Suggested branch." })),
-          }),
-        ),
+        workspace: workspaceField(),
         maxRuntimeSeconds: Type.Optional(Type.Number({ description: "Run timeout seconds." })),
         maxRetries: Type.Optional(Type.Number({ description: "Retry budget." })),
         scheduledAt: Type.Optional(Type.Number({ description: "Unix epoch milliseconds." })),
@@ -491,7 +485,9 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(await store.addAttachment(id, record, scope));
+        return redactedCardResult(
+          await store.addAttachment(id, record, scope, params.context?.assertInputCommitAllowed),
+        );
       },
     },
     {

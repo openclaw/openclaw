@@ -32,6 +32,11 @@ Plugin, account, Computer Use, and MCP approval classification runs before
 ordinary input handling. A denied policy or unmappable approval schema returns
 an explicit decline and never becomes a general-purpose form.
 
+For native app tools, see the
+[approval decision order](/plugins/codex-native-plugins#approval-decision-order)
+for OpenClaw defaults, native per-tool overrides, remembered approvals, and
+how eligible hosted app tools reach consent while disabled tools remain blocked.
+
 OpenClaw supports app-server MCP elicitation modes `form`, `openai/form`, and
 `url`. Standard and extended forms can contain at most 12 fields. OpenClaw
 normalizes field names to Gateway-safe question IDs, retains the original names
@@ -44,6 +49,11 @@ characters. String length, `email`, `uri`, `date`, and
 `date-time` constraints and numeric or array bounds are validated before an
 accepted response is returned. Optional fields, required fields, and valid
 defaults retain their schema meaning.
+
+Forms with no fields show the original request message with **Allow** and
+**Decline** choices. OpenClaw returns an empty content object only after an
+explicit Allow answer. Declining or cancelling the prompt never confirms the
+request, and late answers cannot confirm a request whose turn has ended.
 
 `openai/form` also supports a single-select `openai/imagePicker` field with up
 to four bounded item IDs and titles. OpenClaw uses only those IDs and titles; it

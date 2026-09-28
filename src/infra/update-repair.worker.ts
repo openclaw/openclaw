@@ -1,54 +1,91 @@
-import { createDeferredCore } from "../shared/deferred.js";
+import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { toErrorObject } from "./errors.js";
-import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import {
   UPDATE_REPAIR_IPC_MAX_BYTES,
   updateRepairParentMessageSchema,
   type UpdateRepairWorkerMessage,
-  type UpdateRepairValidation,
 } from "./update-repair-protocol.js";
-import {
-  createManagedUpdateRequesterAuthority,
-  UpdateRequesterRevokedError,
-} from "./update-requester-authority.js";
-import { getUpdateRun } from "./update-run-ledger.js";
 
+// Released updaters invoke this entry before their update has settled. Keep the
+// wire contract, but leave inference and operator state to post-failure triage.
+const deferredReason =
+  "Inference repair is deferred until after the update has failed. Updates do not require inference.";
 const controller = new AbortController();
-// Capture admission before any rehearsal projection. Copied state is inference
-// input, never the authority for requester policy or update-run liveness.
-const ledgerEnv = { ...process.env };
+// Capture authority admission before a rehearsal target can project different state paths.
+const admissionEnv = { ...process.env };
 let started = false;
-let requestId = 0;
-let pending:
-  | {
-      id: number;
-      resolve: (validation: UpdateRepairValidation) => void;
-      reject: (error: Error) => void;
-    }
-  | undefined;
+let finished = false;
+
+function handleSendFailure(error: Error): void {
+  if (!started || finished) {
+    process.exit(1);
+  }
+  controller.abort(error);
+}
 
 function send(message: UpdateRepairWorkerMessage, complete?: () => void): void {
-  if (!process.connected || !process.send) {
-    controller.abort(new Error("Repair orchestrator disconnected."));
-    return;
-  }
-  if (Buffer.byteLength(JSON.stringify(message)) > UPDATE_REPAIR_IPC_MAX_BYTES) {
-    controller.abort(new Error("Repair response exceeded its bounded diagnostic budget."));
+  if (
+    !process.connected ||
+    !process.send ||
+    Buffer.byteLength(JSON.stringify(message)) > UPDATE_REPAIR_IPC_MAX_BYTES
+  ) {
+    handleSendFailure(new Error("Repair orchestrator disconnected."));
     return;
   }
   process.send(message, (error) => {
     if (error) {
-      controller.abort(error);
-    } else {
-      complete?.();
+      handleSendFailure(error);
+      return;
     }
+    complete?.();
   });
 }
 
-process.once("disconnect", () => controller.abort(new Error("Repair orchestrator disconnected.")));
+async function finishTurn(
+  result: Extract<UpdateRepairWorkerMessage, { type: "turn-result" }>["result"],
+) {
+  if (finished) {
+    return;
+  }
+  finished = true;
+  await closeOpenClawStateDatabaseAsync();
+  send({ type: "turn-result", result }, () => process.exit(0));
+}
+
+function finish(status: "unavailable" | "aborted", reason: string): void {
+  if (finished) {
+    return;
+  }
+  finished = true;
+  send({ type: "event", event: { type: "stopped", status, reason } });
+  send(
+    {
+      type: "result",
+      result: {
+        status,
+        attempts: [],
+        finalValidation: { ok: false, score: 0, summary: reason },
+        reason,
+      },
+    },
+    () => process.exit(0),
+  );
+}
+
+process.once("disconnect", () => {
+  if (!started || finished) {
+    process.exit(0);
+  }
+  controller.abort(new Error("Repair orchestrator disconnected."));
+});
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.once(signal, () => controller.abort(new Error("Repair worker cancelled.")));
+  process.once(signal, () => {
+    const error = new Error("Repair worker cancelled.");
+    controller.abort(error);
+    if (!started) {
+      finish("aborted", error.message);
+    }
+  });
 }
 process.on("message", (raw: unknown) => {
   try {
@@ -58,81 +95,41 @@ process.on("message", (raw: unknown) => {
     const message = updateRepairParentMessageSchema.parse(raw);
     if (message.type === "cancel") {
       controller.abort(new Error(message.reason));
-    } else if (message.type === "validation-result" || message.type === "validation-error") {
-      if (pending?.id === message.id) {
-        if (message.type === "validation-result") {
-          pending.resolve(message.validation);
-        } else {
-          pending.reject(new Error(message.reason));
-        }
+      if (!started) {
+        finish("aborted", message.reason);
       }
-    } else {
-      if (started) {
-        throw new Error("Repair worker already owns an execution.");
-      }
-      started = true;
-      void (async () => {
-        const runtime = await import("./update-repair-agent.runtime.js");
-        const requester = message.requester;
-        const requesterAuthority = requester
-          ? await runtime.withUpdateRepairEnvironment(message.target, () =>
-              createManagedUpdateRequesterAuthority(requester, ledgerEnv),
-            )
-          : undefined;
-        return runUpdateRepairLoop({
-          target: message.target,
-          context: {
-            ...message.failure,
-            ...message.context,
-            phase: message.context.phase ?? "verifying",
-          },
-          budget: message.budget,
-          signal: controller.signal,
-          isCurrent: () => {
-            if (!process.connected || controller.signal.aborted) {
-              return false;
-            }
-            if (requesterAuthority?.isCurrent() === false) {
-              throw new UpdateRequesterRevokedError();
-            }
-            if (!message.runId) {
-              return true;
-            }
-            const run = getUpdateRun(message.runId, { env: ledgerEnv });
-            return run?.status === "running" && run.phase === "repairing";
-          },
-          onEvent: (event) => send({ type: "event", event }),
-          validate: async (signal) => {
-            signal.throwIfAborted();
-            const id = ++requestId;
-            const deferred = createDeferredCore<UpdateRepairValidation>();
-            const abort = () => {
-              send({ type: "cancel-validation", id });
-              deferred.reject(toErrorObject(signal.reason, "Repair validation cancelled."));
-            };
-            pending = { id, ...deferred };
-            signal.addEventListener("abort", abort, { once: true });
-            try {
-              send({ type: "validate", id });
-              return await deferred.promise;
-            } finally {
-              signal.removeEventListener("abort", abort);
-              pending = undefined;
-            }
-          },
-        });
-      })()
-        .then(async (result) => {
-          await closeOpenClawStateDatabaseAsync();
-          send({ type: "result", result }, () => process.exit(0));
-        })
-        .catch(() => process.exit(1));
+      return;
     }
-  } catch (error) {
-    controller.abort(error);
-    if (!started) {
-      process.exit(1);
+    if (message.type === "validation-result" || message.type === "validation-error") {
+      throw new Error("Repair worker did not request validation.");
     }
+    if (started) {
+      throw new Error("Repair worker already owns an execution.");
+    }
+    started = true;
+    if (message.type === "start") {
+      finish("unavailable", deferredReason);
+      return;
+    }
+    void import("./update-repair-turn-worker.js")
+      .then(({ runDelegatedUpdateRepairTurn }) =>
+        runDelegatedUpdateRepairTurn(message, admissionEnv, controller.signal, (route) =>
+          send({ type: "event", event: { type: "route-selected", ...route } }),
+        ),
+      )
+      .then((result) => finishTurn(result))
+      .catch(() => process.exit(1));
+  } catch {
+    process.exit(1);
   }
 });
-send({ type: "ready", candidateRehearsal: true });
+void withCliProcessScope(retainCliProcessJobUntilExit).then(
+  () =>
+    send({
+      type: "ready",
+      candidateRehearsal: true,
+      repairTurns: true,
+      executorDelegation: "pid-start-v1",
+    }),
+  () => process.exit(1),
+);

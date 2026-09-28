@@ -9,39 +9,47 @@ import type {
   AcpSessionStatus,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
 } from "./manager.types.js";
 import { requireReadySessionMeta } from "./manager.utils.js";
 import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
 
 /** Reads a fresh ACP session status and reconciles runtime identifiers from the status response. */
 export async function runManagerGetSessionStatus(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
   signal?: AbortSignal;
   throwIfAborted: (signal?: AbortSignal) => void;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
   isCurrentActor?: () => boolean;
 }): Promise<AcpSessionStatus> {
   const isCurrentActor = params.isCurrentActor ?? (() => true);
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.throwIfAborted(params.signal);
-  const resolution = params.resolveSession({
+  const assertCurrent = () => {
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
+    params.assertActive?.();
+    params.throwIfAborted(params.signal);
+  };
+  assertCurrent();
+  const resolution = await params.resolveSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    assertCurrent,
   });
+  assertCurrent();
   const resolvedMeta = requireReadySessionMeta(resolution);
   const {
     runtime,
     handle: ensuredHandle,
     meta: initialMeta,
   } = await params.ensureRuntimeHandle({
+    assertActive: params.assertActive,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -49,6 +57,7 @@ export async function runManagerGetSessionStatus(params: {
     isCurrentActor,
   });
   let handle = ensuredHandle;
+  params.assertActive?.();
   const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
   if (!isCurrentActor()) {
     throw createSupersededActorError(params.sessionKey);
@@ -58,6 +67,7 @@ export async function runManagerGetSessionStatus(params: {
     runtimeStatus = await withAcpRuntimeErrorBoundary({
       run: async () => {
         params.throwIfAborted(params.signal);
+        params.assertActive?.();
         const status = await runtime.getStatus!({
           handle,
           ...(params.signal ? { signal: params.signal } : {}),

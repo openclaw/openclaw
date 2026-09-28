@@ -5,6 +5,7 @@ import {
   patchLiveQaGatewayConfig,
   readLiveQaGatewayConfig,
 } from "../shared/live-gateway-config.runtime.js";
+import type { SlackNativeWrite } from "./slack-live.capture.js";
 import { buildSlackQaConfig } from "./slack-live.config.js";
 import type {
   SlackAuthIdentity,
@@ -32,10 +33,11 @@ export type SlackQaScenarioEnvironment = {
   }>;
   context: Omit<SlackQaScenarioContext, "sentTs">;
   gatewayDebugDirPath: string;
-  getMessageWriteCursor: () => number;
+  getMessageWriteCursor: () => Promise<number>;
   observedMessages: SlackObservedMessage[];
   readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
   outputDir: string;
+  readNativeWrites: () => Promise<SlackNativeWrite[]>;
   scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
   sutAccountId: string;
@@ -61,8 +63,9 @@ export function createSlackQaScenarioEnvironment(params: {
   channelId: string;
   driverBotUserId: string;
   driverClient: WebClient;
-  getMessageWriteCursor: () => number;
+  getMessageWriteCursor: () => Promise<number>;
   readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
+  readNativeWrites: () => Promise<SlackNativeWrite[]>;
   sutAppToken: string;
   sutBotToken: string;
   sutIdentity: SlackAuthIdentity;
@@ -129,6 +132,7 @@ export function createSlackQaScenarioEnvironment(params: {
         getMessageWriteCursor: params.getMessageWriteCursor,
         observedMessages,
         readMessageWrites: params.readMessageWrites,
+        readNativeWrites: params.readNativeWrites,
         outputDir: input.outputDir,
         scenario: {
           id: input.scenarioId,

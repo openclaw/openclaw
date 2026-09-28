@@ -555,7 +555,7 @@ export default {
               ).stdout.trim();
               const current = await readProcess(row.pid);
               expect(current?.startTimeTicks).toBe(row.startTimeTicks);
-              expect(version).toBe("codex-cli 0.154.0");
+              expect(version).toBe("codex-cli 0.155.1");
               binaryIdentities.push({
                 pid: row.pid,
                 startTimeTicks: row.startTimeTicks,

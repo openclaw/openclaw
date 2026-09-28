@@ -14,7 +14,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
-import { HISTORY_CONTEXT_MARKER } from "./history.js";
+import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 export type { BuildMentionRegexesOptions } from "./mentions.types.js";
 export { CURRENT_MESSAGE_MARKER } from "./history.js";
@@ -266,14 +266,7 @@ const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
 const log = createSubsystemLogger("mentions");
 
 function normalizeMentionPattern(pattern: string): string {
-  if (!pattern.includes(BACKSPACE_CHAR)) {
-    return pattern;
-  }
-  return pattern.split(BACKSPACE_CHAR).join("\\b");
-}
-
-function normalizeMentionPatterns(patterns: string[]): string[] {
-  return patterns.map(normalizeMentionPattern);
+  return pattern.replaceAll(BACKSPACE_CHAR, "\\b");
 }
 
 function warnRejectedMentionPattern(
@@ -364,7 +357,7 @@ export function buildMentionRegexes(
     return [];
   }
   const resolved = resolveMentionPatterns(cfg, agentId);
-  const patterns = normalizeMentionPatterns(resolved.patterns);
+  const patterns = resolved.patterns.map(normalizeMentionPattern);
   return compileMentionPatternsCached({
     patterns,
     flags: resolved.unicode ? "iu" : "i",
@@ -413,17 +406,17 @@ export function stripStructuralPrefixes(text: string): string {
   }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
-  if (text.trimStart().startsWith(HISTORY_CONTEXT_MARKER)) {
+  if (
+    text.trimStart().startsWith(HISTORY_CONTEXT_MARKER) ||
+    text.trimStart().startsWith(RECENT_HISTORY_CONTEXT_MARKER)
+  ) {
     // Flat history has no trustworthy current-message range when users can quote
     // marker text. Leave it non-command-shaped instead of guessing a boundary.
     return text.trim();
   }
-  const afterMarker = text;
-  const afterEnvelope = afterMarker.replace(/^(?:[ \t]*\[[^\]\n]+\][ \t]*)+/, "");
+  const afterEnvelope = text.replace(/^(?:[ \t]*\[[^\]\n]+\][ \t]*)+/, "");
   const senderPrefixPattern =
-    afterEnvelope === afterMarker
-      ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm
-      : /^[ \t]*[^\n:]{1,120}:\s+/gm;
+    afterEnvelope === text ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm : /^[ \t]*[^\n:]{1,120}:\s+/gm;
 
   const stripped = afterEnvelope.replace(senderPrefixPattern, "").replace(/\\n/g, " ").trim();
   if (stripped.startsWith("/")) {
@@ -449,7 +442,7 @@ export function stripMentions(
     : undefined;
   const resolvedPatterns = resolveMentionPatterns(cfg, agentId);
   const configRegexes = compileMentionPatternsCached({
-    patterns: normalizeMentionPatterns(resolvedPatterns.patterns),
+    patterns: resolvedPatterns.patterns.map(normalizeMentionPattern),
     flags: resolvedPatterns.unicode ? "giu" : "gi",
     cache: mentionStripRegexCompileCache,
     warnRejected: true,
@@ -457,8 +450,8 @@ export function stripMentions(
   const providerRegexes =
     providerMentions?.stripRegexes?.({ ctx, cfg, agentId }) ??
     compileMentionPatternsCached({
-      patterns: normalizeMentionPatterns(
-        providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? [],
+      patterns: (providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? []).map(
+        normalizeMentionPattern,
       ),
       flags: "gi",
       cache: mentionStripRegexCompileCache,

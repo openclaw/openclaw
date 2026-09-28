@@ -1,13 +1,14 @@
-// Openrouter provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import {
+  readGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  pollProviderOperation,
   postJsonRequest,
-  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
@@ -201,15 +202,7 @@ function resolveDurationSeconds(
   });
 }
 
-function resolveResolution(resolution: VideoGenerationRequest["resolution"]): string | undefined {
-  const normalized = normalizeOptionalString(resolution);
-  return normalized ? normalized.toLowerCase() : undefined;
-}
-
 function resolveSeed(seed: unknown): number | undefined {
-  if (seed === undefined) {
-    return undefined;
-  }
   if (typeof seed !== "number") {
     return undefined;
   }
@@ -234,7 +227,7 @@ function buildRequestBody(req: VideoGenerationRequest, model: string): Record<st
   if (duration != null) {
     body.duration = duration;
   }
-  const resolution = resolveResolution(req.resolution);
+  const resolution = normalizeOptionalString(req.resolution)?.toLowerCase();
   if (resolution) {
     body.resolution = resolution;
   }
@@ -284,25 +277,6 @@ function resolveVideoJobState(status: string | undefined): "active" | "completed
   throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
 }
 
-async function fetchOpenRouterJson(params: {
-  url: string;
-  baseUrl: string;
-  headers: Headers;
-  timeoutMs: number;
-  allowPrivateNetwork: boolean;
-  dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
-  errorContext: string;
-  auditContext: string;
-}): Promise<OpenRouterVideoResponse> {
-  const { response, release } = await fetchOpenRouterVideoGet(params);
-  try {
-    await assertOkOrThrowHttpError(response, params.errorContext);
-    return readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
-  } finally {
-    await release();
-  }
-}
-
 async function pollOpenRouterVideo(params: {
   pollingUrl: string;
   baseUrl: string;
@@ -316,44 +290,36 @@ async function pollOpenRouterVideo(params: {
     label: "OpenRouter video generation",
   });
 
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const payload = await fetchOpenRouterJson({
-      url: params.pollingUrl,
-      baseUrl: params.baseUrl,
-      headers: params.headers,
-      timeoutMs: resolveProviderOperationTimeoutMs({
-        deadline,
-        defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-      }),
-      allowPrivateNetwork: params.allowPrivateNetwork,
-      dispatcherPolicy: params.dispatcherPolicy,
-      errorContext: "OpenRouter video status request failed",
-      auditContext: "openrouter-video-status",
-    });
-    const status = normalizeOptionalString(payload.status);
-    const state = resolveVideoJobState(status);
-    if (state === "completed") {
-      return payload;
-    }
-    if (state === "failure") {
-      throw new Error(
-        normalizeOptionalString(payload.error) ?? `OpenRouter video generation ${status}`,
-      );
-    }
-    await waitProviderOperationPollInterval({
-      deadline,
-      pollIntervalMs: POLL_INTERVAL_MS,
-    });
-  }
-
-  throw new Error("OpenRouter video generation did not finish in time");
-}
-
-function resolveOpenRouterContentUrl(params: { baseUrl: string; jobId: string }): string {
-  return resolveOpenRouterVideoUrl(
-    `videos/${encodeURIComponent(params.jobId)}/content?index=0`,
-    params.baseUrl,
-  );
+  return await pollProviderOperation({
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    timeoutMessage: "OpenRouter video generation did not finish in time",
+    wait: () => waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS }),
+    read: async () => {
+      const { response, release } = await fetchOpenRouterVideoGet({
+        url: params.pollingUrl,
+        baseUrl: params.baseUrl,
+        headers: params.headers,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+        }),
+        allowPrivateNetwork: params.allowPrivateNetwork,
+        dispatcherPolicy: params.dispatcherPolicy,
+        auditContext: "openrouter-video-status",
+      });
+      try {
+        await assertOkOrThrowHttpError(response, "OpenRouter video status request failed");
+        return readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
+      } finally {
+        await release();
+      }
+    },
+    isComplete: (payload) => resolveVideoJobState(payload.status) === "completed",
+    getFailureMessage: (payload) =>
+      resolveVideoJobState(payload.status) === "failure"
+        ? payload.error || `OpenRouter video generation ${payload.status}`
+        : undefined,
+  });
 }
 
 function resolveDeliverableOpenRouterVideoUrl(value: string | undefined): string | undefined {
@@ -385,35 +351,13 @@ async function downloadOpenRouterVideo(params: {
   });
   try {
     await assertOkOrThrowHttpError(response, "OpenRouter generated video download failed");
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const fileName = `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`;
-    let exceededMaxBytes = false;
-    let buffer: Buffer;
-    const downloadLabel = "OpenRouter generated video download";
-    try {
-      buffer = await readProviderBinaryResponse(response, downloadLabel, "video", {
-        maxBytes: params.maxBytes,
-        chunkTimeoutMs: 0,
-        onOverflow: ({ maxBytes }) => {
-          exceededMaxBytes = true;
-          return new Error(`${downloadLabel} exceeds ${maxBytes} bytes`);
-        },
-      });
-    } catch (error) {
-      if (exceededMaxBytes && params.deliveryUrl) {
-        return {
-          url: params.deliveryUrl,
-          mimeType,
-          fileName,
-        };
-      }
-      throw error;
-    }
-    return {
-      buffer,
-      mimeType,
-      fileName,
-    };
+    return await readGeneratedVideoAsset(response, {
+      label: "OpenRouter generated video download",
+      maxBytes: params.maxBytes,
+      validateBinaryResponse: true,
+      overflowUrl: params.deliveryUrl,
+      readOptions: { chunkTimeoutMs: 0 },
+    });
   } finally {
     await release();
   }
@@ -523,7 +467,11 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
         const completedJobId = normalizeOptionalString(completed.id) ?? jobId;
         const unsignedUrl = completed.unsigned_urls?.find((url) => normalizeOptionalString(url));
         const videoUrl =
-          unsignedUrl ?? resolveOpenRouterContentUrl({ baseUrl, jobId: completedJobId });
+          unsignedUrl ??
+          resolveOpenRouterVideoUrl(
+            `videos/${encodeURIComponent(completedJobId)}/content?index=0`,
+            baseUrl,
+          );
         const video = await downloadOpenRouterVideo({
           url: videoUrl,
           deliveryUrl: resolveDeliverableOpenRouterVideoUrl(unsignedUrl),

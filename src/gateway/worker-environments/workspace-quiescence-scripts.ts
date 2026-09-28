@@ -1,3 +1,10 @@
+const REMOTE_QUIESCENCE_CONTEXT_JS = String.raw`const childProcess = require("node:child_process");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const root = fs.realpathSync(process.argv[1]);`;
+
 const REMOTE_QUIESCENCE_PS_JS = String.raw`function createProcessProbe() {
   // Share 30s across probes: tolerate multi-second stalls on slow hosts while leaving
   // the node transport's 60s command deadline room to deliver the failure and cleanup.
@@ -141,6 +148,13 @@ function parseLease(raw, expectedNonce, options = {}) {
   }
   return lease;
 }
+function parseWindowsLease(raw, nonce, options) {
+  const lease = parseLease(raw, nonce, options);
+  if (lease.sharedHost !== true || lease.processes.length !== 0 || lease.watchdog !== null) {
+    throw new Error("invalid Windows shared-host workspace quiescence lease");
+  }
+  return lease;
+}
 function persistLease(targetPath, lease, verifyCurrent) {
   const fs = require("node:fs");
   const crypto = require("node:crypto");
@@ -182,12 +196,7 @@ function withWindowsWorkspaceLease(databasePath, workspaceKey, run) {
 // unsignalable, e.g. macOS SIP-protected same-uid processes on shared static-ssh dev hosts)
 // must not crash cleanup/resume paths, but a freeze target that returns EPERM stays counted
 // as live so quiescence fails closed instead of reporting a still-running process as frozen.
-export const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`const childProcess = require("node:child_process");
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const root = fs.realpathSync(process.argv[1]);
+export const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`${REMOTE_QUIESCENCE_CONTEXT_JS}
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 const leaseDirectory = path.join(os.homedir(), ".openclaw-worker", "quiescence");
 fs.mkdirSync(leaseDirectory, { recursive: true, ...(process.platform === "win32" ? {} : { mode: 0o700 }) });
@@ -209,14 +218,7 @@ if (process.platform === "win32" && sharedHost) {
       if (!/^[a-f0-9]{32}$/.test(parsed?.nonce || "")) {
         throw new Error("invalid Windows shared-host workspace quiescence lease");
       }
-      const candidate = parseLease(raw, parsed.nonce);
-      if (
-        candidate.sharedHost !== true ||
-        candidate.processes.length !== 0 ||
-        candidate.watchdog !== null
-      ) {
-        throw new Error("invalid Windows shared-host workspace quiescence lease");
-      }
+      const candidate = parseWindowsLease(raw, parsed.nonce);
       if (candidate.expiresAtMs > Date.now()) {
         throw new Error("workspace quiescence lease is already active");
       }
@@ -469,12 +471,7 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
 process.stdout.write("quiesced " + nonce + "\n");
 `;
 
-export const REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS = String.raw`const childProcess = require("node:child_process");
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const root = fs.realpathSync(process.argv[1]);
+export const REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS = String.raw`${REMOTE_QUIESCENCE_CONTEXT_JS}
 const nonce = process.argv[2];
 const timeoutMs = Number(process.argv[3] || 12 * 60 * 1000);
 const validationMode = process.argv[4] || "final";
@@ -492,13 +489,10 @@ ${REMOTE_QUIESCENCE_LEASE_JS}
 if (process.platform === "win32" && sharedHost) {
   withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
     if (raw === null) throw new Error("workspace quiescence lease is no longer active");
-    const input = parseLease(raw, nonce, {
+    const input = parseWindowsLease(raw, nonce, {
       minimumRemainingMs: 5000,
       errorMessage: "workspace quiescence lease is no longer active",
     });
-    if (input.sharedHost !== true || input.processes.length !== 0 || input.watchdog !== null) {
-      throw new Error("invalid Windows shared-host workspace quiescence lease");
-    }
     const renewed = { ...input, expiresAtMs: Date.now() + timeoutMs };
     return JSON.stringify(renewed);
   });
@@ -603,12 +597,7 @@ if (confirmed.nonce !== nonce || confirmed.expiresAtMs !== renewed.expiresAtMs) 
 process.stdout.write("renewed " + nonce + "\n");
 `;
 
-export const REMOTE_WORKSPACE_RESUME_JS = String.raw`const childProcess = require("node:child_process");
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const root = fs.realpathSync(process.argv[1]);
+export const REMOTE_WORKSPACE_RESUME_JS = String.raw`${REMOTE_QUIESCENCE_CONTEXT_JS}
 const nonce = process.argv[2];
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
 const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
@@ -619,10 +608,7 @@ ${REMOTE_QUIESCENCE_LEASE_JS}
 if (process.platform === "win32") {
   withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
     if (raw === null) return;
-    const input = parseLease(raw, nonce);
-    if (input.sharedHost !== true || input.processes.length !== 0 || input.watchdog !== null) {
-      throw new Error("invalid Windows shared-host workspace quiescence lease");
-    }
+    parseWindowsLease(raw, nonce);
     return null;
   });
   process.exit(0);

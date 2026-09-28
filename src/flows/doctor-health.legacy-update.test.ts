@@ -5,10 +5,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import { createGatewayCloseTransportError } from "../gateway/transport-error.js";
 import * as legacyGatewayLock from "../infra/gateway-lock-legacy.js";
 import * as packageJson from "../infra/package-json.js";
 import * as builtRuntime from "../infra/update-git-runtime.js";
@@ -31,6 +33,7 @@ function managedService(
 ) {
   let running = initiallyRunning;
   let pid = 4200;
+  mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
   const stop = vi.fn(async () => {
     events.push("stop");
     running = false;
@@ -166,8 +169,19 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
             healthy: false,
             staleGatewayPids: [],
             gatewayVersion: null,
-            probeError:
-              "gateway closed (1011): gateway message handler unavailable\\nGateway target: ws://127.0.0.1:18789",
+            staleConnection: "legacy-handler-unavailable",
+            probeError: sanitizeTerminalText(
+              createGatewayCloseTransportError({
+                code: 1011,
+                reason: "gateway message handler unavailable",
+                connectionDetails: {
+                  url: "ws://127.0.0.1:18789",
+                  urlSource: "local loopback",
+                  message: "Gateway target: ws://127.0.0.1:18789",
+                },
+                requestDispatched: false,
+              }).message,
+            ),
           }));
         }
         mocks.waitForGatewayHealthyRestart.mockImplementation(async (params) => {
@@ -337,7 +351,8 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
         const run = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
 
         await expect(run).rejects.toMatchObject({
-          name: "UpdateDoctorError",
+          name: "DoctorMaintenanceRefusalError",
+          refusal: { kind: "data-at-risk", reason: "gateway-state-unverified" },
           failureFacts: expect.arrayContaining([
             expect.objectContaining({ check: "gateway-stop", code: "stale-gateway-stop-failed" }),
           ]),
@@ -355,6 +370,7 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
           result: expect.objectContaining({
             status: "error",
             configHash: "unchanged",
+            maintenanceRefusal: { kind: "data-at-risk", reason: "gateway-state-unverified" },
             failureFacts: expect.arrayContaining([
               expect.objectContaining({ check: "gateway-stop", code: "stale-gateway-stop-failed" }),
             ]),
@@ -420,68 +436,89 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
     });
   });
 
-  it("refuses repair behind a live legacy tempfile lock when native inspection is unavailable", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await state.writeConfig({});
-      const configBefore = fs.readFileSync(state.configPath);
-      const resultPath = state.path("doctor-result.json");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
-      const legacyTmpDir = state.path("legacy-tmp");
-      const uid = process.getuid?.();
-      const lockDir = path.join(legacyTmpDir, uid === undefined ? "openclaw" : `openclaw-${uid}`);
-      fs.mkdirSync(lockDir, { recursive: true });
-      const configHash = createHash("sha256").update(state.configPath).digest("hex").slice(0, 8);
-      const lockPath = path.join(lockDir, `gateway.${configHash}.lock`);
-      const startTime = getFileLockProcessStartTime(process.pid);
-      expect(startTime).not.toBeNull();
-      // 6.33's lock has no port or role; Linux uses the real /proc starttime.
-      const lockBefore = JSON.stringify({
-        pid: process.pid,
-        startTime,
-        createdAt: new Date().toISOString(),
-        configPath: state.configPath,
-      });
-      fs.writeFileSync(lockPath, lockBefore);
-      const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(legacyTmpDir);
-      const service = managedService(state, true);
-      service.readCommand = async () => {
-        throw new Error("synthetic native manager unavailable");
-      };
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-
-      try {
-        const run = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
-        await expect(run).rejects.toMatchObject({
-          name: "UpdateDoctorError",
-          failureFacts: expect.arrayContaining([
-            expect.objectContaining({ code: "stale-gateway-service-unverified" }),
-          ]),
-        });
-        await expect(run).rejects.toThrow(
-          formatCliCommand("openclaw gateway status --deep", state.env),
-        );
-
-        expect(service.stop).not.toHaveBeenCalled();
-        expect(service.restart).not.toHaveBeenCalled();
-        expect(mocks.config).not.toHaveBeenCalled();
-        expect(mocks.runContributions).not.toHaveBeenCalled();
-        expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
-        expect(fs.readFileSync(lockPath, "utf8")).toBe(lockBefore);
-        expect(fs.existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
-        expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
-          resultPath,
-          result: expect.objectContaining({
-            status: "error",
-            configHash: "unchanged",
-            failureFacts: expect.arrayContaining([
-              expect.objectContaining({ code: "stale-gateway-service-unverified" }),
-            ]),
-          }),
-        });
-        expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
-      } finally {
-        tmpdir.mockRestore();
+  it.each([false, true])(
+    "refuses repair behind a live legacy tempfile lock (external=%s)",
+    async (external) => {
+      if (external) {
+        vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
       }
-    });
-  });
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await state.writeConfig({});
+        const configBefore = fs.readFileSync(state.configPath);
+        const resultPath = state.path("doctor-result.json");
+        vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
+        const legacyTmpDir = state.path("legacy-tmp");
+        const uid = process.getuid?.();
+        const lockDir = path.join(legacyTmpDir, uid === undefined ? "openclaw" : `openclaw-${uid}`);
+        fs.mkdirSync(lockDir, { recursive: true });
+        const configHash = createHash("sha256").update(state.configPath).digest("hex").slice(0, 8);
+        const lockPath = path.join(lockDir, `gateway.${configHash}.lock`);
+        const startTime = getFileLockProcessStartTime(process.pid);
+        expect(startTime).not.toBeNull();
+        // 6.33's lock has no port or role; Linux uses the real /proc starttime.
+        const lockBefore = JSON.stringify({
+          pid: process.pid,
+          startTime,
+          createdAt: new Date().toISOString(),
+          configPath: state.configPath,
+        });
+        fs.writeFileSync(lockPath, lockBefore);
+        const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(legacyTmpDir);
+        const service = managedService(state, true);
+        service.readCommand = async () => {
+          throw new Error("synthetic native manager unavailable");
+        };
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+        try {
+          const run = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+          await expect(run).rejects.toMatchObject({
+            name: "DoctorMaintenanceRefusalError",
+            refusal: { kind: "data-at-risk", reason: "gateway-state-unverified" },
+            failureFacts: external
+              ? []
+              : expect.arrayContaining([
+                  expect.objectContaining({ code: "stale-gateway-service-unverified" }),
+                ]),
+          });
+          await expect(run).rejects.toThrow(
+            formatCliCommand(
+              external ? "openclaw doctor --fix" : "openclaw gateway status --deep",
+              state.env,
+            ),
+          );
+
+          expect(service.stop).not.toHaveBeenCalled();
+          expect(service.restart).not.toHaveBeenCalled();
+          expect(mocks.config).not.toHaveBeenCalled();
+          expect(mocks.runContributions).not.toHaveBeenCalled();
+          expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+          expect(fs.readFileSync(lockPath, "utf8")).toBe(lockBefore);
+          expect(fs.existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
+          expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+            resultPath,
+            result: expect.objectContaining({
+              status: "error",
+              configHash: "unchanged",
+              maintenanceRefusal: { kind: "data-at-risk", reason: "gateway-state-unverified" },
+              failureFacts: external
+                ? [
+                    expect.objectContaining({
+                      check: "doctor",
+                      code: "doctor-failed",
+                      message: expect.stringContaining("Legacy Gateway lock"),
+                    }),
+                  ]
+                : expect.arrayContaining([
+                    expect.objectContaining({ code: "stale-gateway-service-unverified" }),
+                  ]),
+            }),
+          });
+          expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+        } finally {
+          tmpdir.mockRestore();
+        }
+      });
+    },
+  );
 });

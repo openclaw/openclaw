@@ -35,7 +35,10 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { readDeferredPluginSessionImport } from "./deferred-plugin-session-sources.js";
+import {
+  readDeferredPluginSessionImport,
+  resolveVerifiedSessionSource,
+} from "./deferred-plugin-session-sources.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import type { PluginDoctorRepairAuthority } from "./state-migrations.types.js";
 
@@ -90,7 +93,17 @@ function hasUnimportedSessionIdentity(params: {
           },
           sqlitePath,
           env: params.env,
+          purpose: "canonical",
         });
+        if (receipt) {
+          const index = receipt.sources.find((source) => source.path === path.resolve(storePath));
+          if (
+            !index ||
+            !resolveVerifiedSessionSource(index, { agentId, storePath, sqlitePath }, params.env)
+          ) {
+            throw new Error(`Retained plugin session index requires Doctor repair: ${storePath}`);
+          }
+        }
         const parsed = readSessionStoreJson5(storePath);
         const after = fs.statSync(storePath, { throwIfNoEntry: false, bigint: true });
         if (
@@ -195,8 +208,6 @@ function resolveDoctorSessionIdentityEvidence(params: {
     ) {
       return { ...request, state: "unknown" };
     }
-    // Raw sources remain authoritative until their canonical import was verified.
-    // Receipt conflicts propagate; they cannot authorize either deletion or fallback creation.
     const unimported =
       current.length === 0 &&
       hasUnimportedSessionIdentity({
@@ -210,93 +221,6 @@ function resolveDoctorSessionIdentityEvidence(params: {
       ? { ...request, state: "current", sessionKey: current[0].sessionKey }
       : { ...request, state: unimported ? "unknown" : "absent" };
   });
-}
-
-/** Re-assert the caller's authority before every write, so a queue handle retained
- *  past the locked repair section fails instead of mutating durable rows. */
-function guardIngressQueueMutations<TPayload, TMetadata, TCompletedMetadata>(
-  queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>,
-  assertCurrent: () => void,
-): ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> {
-  const guarded: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata> = {
-    ...queue,
-    enqueue: (...args) => {
-      assertCurrent();
-      return queue.enqueue(...args);
-    },
-    claimNext: (...args) => {
-      assertCurrent();
-      return queue.claimNext(...args);
-    },
-    claim: (...args) => {
-      assertCurrent();
-      return queue.claim(...args);
-    },
-    complete: (...args) => {
-      assertCurrent();
-      return queue.complete(...args);
-    },
-    release: (...args) => {
-      assertCurrent();
-      return queue.release(...args);
-    },
-    fail: (...args) => {
-      assertCurrent();
-      return queue.fail(...args);
-    },
-    delete: (...args) => {
-      assertCurrent();
-      return queue.delete(...args);
-    },
-    // Recovery predicates may await, so asserting once at call time is not enough: a
-    // migration could start recovery, return, release the section, and only then let a
-    // predicate resolve into the tombstone or claim-release write. Re-assert after every
-    // predicate settles, immediately before the write it authorizes.
-    recoverStaleClaims: (recoverOptions) => {
-      assertCurrent();
-      if (!recoverOptions) {
-        return queue.recoverStaleClaims();
-      }
-      const { shouldRecover, shouldRecoverCorrupt, ...rest } = recoverOptions;
-      const guardedRecovery: typeof recoverOptions = { ...rest };
-      if (shouldRecover) {
-        guardedRecovery.shouldRecover = async (claim) => {
-          const decision = await shouldRecover(claim);
-          assertCurrent();
-          return decision;
-        };
-      }
-      if (shouldRecoverCorrupt) {
-        guardedRecovery.shouldRecoverCorrupt = async (claim) => {
-          const decision = await shouldRecoverCorrupt(claim);
-          assertCurrent();
-          return decision;
-        };
-      }
-      return queue.recoverStaleClaims(guardedRecovery);
-    },
-    prune: (...args) => {
-      assertCurrent();
-      return queue.prune(...args);
-    },
-  };
-  // Optional members stay optional: bind the receiver up front so the wrapper needs
-  // neither a detached method reference nor a type assertion to call it.
-  const refreshClaim = queue.refreshClaim?.bind(queue);
-  if (refreshClaim) {
-    guarded.refreshClaim = (...args) => {
-      assertCurrent();
-      return refreshClaim(...args);
-    };
-  }
-  const resubmit = queue.resubmit?.bind(queue);
-  if (resubmit) {
-    guarded.resubmit = (...args) => {
-      assertCurrent();
-      return resubmit(...args);
-    };
-  }
-  return guarded;
 }
 
 /** Build a genuinely read-only object rather than a narrowed view of the queue.
@@ -324,13 +248,17 @@ function buildChannelIngressQueueAccess(
     const open = <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       openOptions: { accountId?: string } | undefined,
       access: "read-write" | "read-only",
+      assertCurrent?: () => void,
     ) =>
-      createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-        channelId,
-        ...(openOptions?.accountId === undefined ? {} : { accountId: openOptions.accountId }),
-        stateDir,
-        access,
-      });
+      createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>(
+        {
+          channelId,
+          ...(openOptions?.accountId === undefined ? {} : { accountId: openOptions.accountId }),
+          stateDir,
+          access,
+        },
+        assertCurrent,
+      );
     const access: PluginDoctorChannelIngressQueueAccess = {
       channelId,
       // Detection runs before exclusive ownership, so it reads through the
@@ -344,10 +272,8 @@ function buildChannelIngressQueueAccess(
     };
     if (mutation) {
       const assertCurrent = () => mutation.assertCurrent();
-      access.openChannelIngressQueue = (openOptions) => {
-        assertCurrent();
-        return guardIngressQueueMutations(open(openOptions, "read-write"), assertCurrent);
-      };
+      access.openChannelIngressQueue = (openOptions) =>
+        open(openOptions, "read-write", assertCurrent);
     }
     return access;
   });
@@ -366,6 +292,7 @@ export function createPluginDoctorStateMigrationContext(params: {
   env: NodeJS.ProcessEnv;
   config: OpenClawConfig;
   repairAuthority?: PluginDoctorRepairAuthority;
+  trustedForDurableStores?: boolean;
   channelIngress?: PluginDoctorChannelIngressAccessOptions;
 }): PluginDoctorStateMigrationContext {
   const { pluginId, env } = params;
@@ -409,6 +336,25 @@ export function createPluginDoctorStateMigrationContext(params: {
   };
   if (params.channelIngress) {
     context.channelIngressQueues = buildChannelIngressQueueAccess(params.channelIngress);
+  }
+  if (params.trustedForDurableStores) {
+    context.inspectCronJobs = async () => {
+      params.repairAuthority?.assertCurrent();
+      const { inspectCronJobsForDoctor } = await import("../cron/store/doctor.js");
+      params.repairAuthority?.assertCurrent();
+      const inventory = await inspectCronJobsForDoctor(params);
+      params.repairAuthority?.assertCurrent();
+      return inventory;
+    };
+    if (params.repairAuthority) {
+      const authority = params.repairAuthority;
+      context.repairCronJobs = async (inventory, changes) => {
+        authority.assertCurrent();
+        const { repairCronJobsForDoctor } = await import("../cron/store/doctor.js");
+        authority.assertCurrent();
+        return repairCronJobsForDoctor(params, authority, inventory, changes);
+      };
+    }
   }
   if (params.repairAuthority) {
     const authority = params.repairAuthority;

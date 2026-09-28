@@ -13,7 +13,7 @@ How OpenClaw starts and reaches the Codex app-server, and every `appServer` fiel
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.154.0`):
+with the official plugin (currently `@openai/codex` `0.155.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -110,6 +110,7 @@ managed stdio or the local Unix control socket for production workloads.
 | `approvalsReviewer`              | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                                                                                                                                                                                                                                                      |
 | `defaultWorkspaceDir`            | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                                                                                                                                           |
 | `serviceTier`                    | unset                                                  | Native Codex app-server preference only. Any non-empty string passes through for forward compatibility; documented values are `"priority"` and `"flex"`. `null` clears the override, and legacy `"fast"` normalizes to `"priority"`. This is neither the shared Fast-mode setting nor a direct embedded OpenAI setting. A shared Fast run control supersedes it with `priority` or `null`, or decides per model call in auto mode. |
+| `enableUltrafast`                | `false`                                                | Upgrade Codex turns to `ultrafast` only when the authenticated app-server catalog advertises it for the selected native model. Unsupported models and unavailable catalogs keep the current tier; shared Fast off remains off.                                                                                                                                                                                                     |
 | `networkProxy`                   | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                                                                |
 | `experimental.sandboxExecServer` | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with the supported Codex app-server so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                                                               |
 
@@ -144,6 +145,15 @@ conversation preference for later conversation-bound turns and does not change
 the shared OpenClaw session policy. These values describe native configuration
 and preference state, not observed provider routing.
 
+Set `appServer.enableUltrafast: true` to prefer Ultrafast for supported models.
+OpenClaw checks the selected model's `serviceTiers` through the actual turn's
+Codex app-server connection before requesting `ultrafast`. Models without access,
+custom model providers, and unavailable catalogs retain the existing tier.
+The setting does not change `appServer.serviceTier` or shared Fast-mode policy:
+Fast off and inactive auto remain off, while active auto can use Ultrafast.
+Without a shared Fast control or an explicit tier, enabled Ultrafast applies only
+to models that advertise support. Disabling the setting restores normal tier selection.
+
 `appServer.networkProxy` is explicit because it changes the Codex sandbox
 contract. When enabled, OpenClaw also sets `features.network_proxy.enabled` and
 `default_permissions` in the Codex thread config so the generated permission
@@ -159,6 +169,7 @@ required.
       codex: {
         config: {
           appServer: {
+            approvalPolicy: "never",
             sandbox: "workspace-write",
             networkProxy: {
               enabled: true,
@@ -166,8 +177,6 @@ required.
                 "api.openai.com": "allow",
                 "blocked.example.com": "deny",
               },
-              allowUpstreamProxy: true,
-              proxyUrl: "http://127.0.0.1:3128",
             },
           },
         },
@@ -177,12 +186,18 @@ required.
 }
 ```
 
+Hosts absent from the effective native allowlist are denied. The example's
+`approvalPolicy: "never"` prevents approval-based exceptions; native system
+requirements can still contribute allowed domains. These restrictions apply to
+Codex sandbox commands. See the [network proxy configuration reference](/plugins/codex-harness/config-fields)
+for matching, policy inheritance, scope, and explicit Doctor repair of blank optional fields after updates.
+
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.154.0`. Explicit custom
+The plugin manages stable Codex app-server `0.155.1`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning

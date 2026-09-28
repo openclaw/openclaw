@@ -1,8 +1,10 @@
+import path from "node:path";
 import { resolveGroupThreadMentionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
   createAutomaticSourceDeliveryContext,
@@ -14,6 +16,7 @@ import {
 } from "./message-handler.process.test-harness.js";
 
 registerDiscordProcessTestLifecycle();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Discord group-thread participant delivery", () => {
   it.each([
@@ -22,13 +25,14 @@ describe("Discord group-thread participant delivery", () => {
     { name: "parallel participants", agents: ["alice", "bob"] },
     { name: "deferred warning", agents: ["alice"], warning: true },
   ])("binds delivery to the $name", async ({ agents, warning }) => {
+    const workspaceRoot = tempDirs.make("discord-group-thread-workspaces-");
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
         entries: {
-          main: { workspace: "/tmp/.openclaw/workspace-main" },
-          alice: { workspace: "/tmp/.openclaw/workspace-alice" },
-          bob: { workspace: "/tmp/.openclaw/workspace-bob" },
+          main: { workspace: path.join(workspaceRoot, "workspace-main") },
+          alice: { workspace: path.join(workspaceRoot, "workspace-alice") },
+          bob: { workspace: path.join(workspaceRoot, "workspace-bob") },
         },
       },
       broadcast: agents ? { "discord:c1": agents } : undefined,
@@ -57,7 +61,7 @@ describe("Discord group-thread participant delivery", () => {
           dispatcher.sendBlockReply({
             text: `Reasoning from ${agentId}`,
             isReasoning: true,
-            mediaUrl: `/tmp/.openclaw/workspace-${agentId}/reasoning.txt`,
+            mediaUrl: path.join(workspaceRoot, `workspace-${agentId}`, "reasoning.txt"),
           });
           const queuedFinal = dispatcher.sendFinalReply(
             warning
@@ -67,7 +71,7 @@ describe("Discord group-thread participant delivery", () => {
                 )
               : {
                   text: `Answer from ${agentId}`,
-                  mediaUrl: `/tmp/.openclaw/workspace-${agentId}/answer.txt`,
+                  mediaUrl: path.join(workspaceRoot, `workspace-${agentId}`, "answer.txt"),
                 },
           );
           return { queuedFinal, counts: dispatcher.getQueuedCounts() };
@@ -87,14 +91,20 @@ describe("Discord group-thread participant delivery", () => {
             target: "channel:c1",
             accountId: "default",
             sessionKey: `agent:${agentId}:discord:channel:c1`,
-            mediaLocalRoots: expect.arrayContaining([`/tmp/.openclaw/workspace-${agentId}`]),
+            mediaLocalRoots: expect.arrayContaining([
+              path.join(workspaceRoot, `workspace-${agentId}`),
+            ]),
             kind,
             replies: [
               expect.objectContaining(
                 warning && kind === "final"
                   ? { text: "The attachment could not be processed." }
                   : {
-                      mediaUrl: `/tmp/.openclaw/workspace-${agentId}/${kind === "block" ? "reasoning" : "answer"}.txt`,
+                      mediaUrl: path.join(
+                        workspaceRoot,
+                        `workspace-${agentId}`,
+                        `${kind === "block" ? "reasoning" : "answer"}.txt`,
+                      ),
                     },
               ),
             ],

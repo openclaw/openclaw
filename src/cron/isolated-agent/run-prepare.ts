@@ -1,6 +1,7 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
+import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -89,7 +90,7 @@ import {
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
-import { loadCronSessionEntryLatest, resolveCronSession } from "./session.js";
+import { loadCronSessionEntryLatest, prepareCronSession } from "./session.js";
 
 export type PreparedCronRunContext = {
   input: RunCronAgentTurnParams;
@@ -117,6 +118,10 @@ export type PreparedCronRunContext = {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
+  /** Trusted delivery-channel formatting metadata; absent without a resolved chat delivery. */
+  deliverySystemPrompt?: string;
+  /** Message-tool formatting contract for a run without a reply route; applied once tools resolve. */
+  messageToolFormatPrompt?: string;
   sourceDelivery: SourceDeliveryPlan;
   suppressExecNotifyOnExit: boolean;
   skillsSnapshot: SkillSnapshot;
@@ -228,7 +233,7 @@ export async function prepareCronRunContext(params: {
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
   const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
-  const cronSession = resolveCronSession({
+  const cronSession = await prepareCronSession({
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
     sourceSessionKey,
@@ -289,6 +294,11 @@ export async function prepareCronRunContext(params: {
         throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
+  });
+
+  clearBootstrapSnapshotOnSessionRollover({
+    sessionKey: agentSessionKey,
+    previousSessionId: cronSession.previousSessionId,
   });
 
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
@@ -504,12 +514,18 @@ export async function prepareCronRunContext(params: {
       agentRuntime: effectiveAgentRuntime,
       toolsAllowProvenance: input.job.toolsAllowProvenance,
     });
-    const { deliveryPlan, deliveryRequested, resolvedDelivery, sourceDelivery } =
-      await resolveCronDeliveryContext({
-        cfg: cfgWithAgentDefaults,
-        job: input.job,
-        agentId,
-      });
+    const {
+      deliveryPlan,
+      deliveryRequested,
+      resolvedDelivery,
+      sourceDelivery,
+      deliverySystemPrompt,
+      messageToolFormatPrompt,
+    } = await resolveCronDeliveryContext({
+      cfg: cfgWithAgentDefaults,
+      job: input.job,
+      agentId,
+    });
 
     const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
     // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
@@ -597,6 +613,7 @@ export async function prepareCronRunContext(params: {
       cronSession,
     });
     const authSelection = await resolveCronAuthSelection({
+      agentId,
       cfg: cfgWithAgentDefaults,
       provider,
       modelId: model,
@@ -639,6 +656,7 @@ export async function prepareCronRunContext(params: {
           toolsAllowExecTarget: input.job.toolsAllowExecTarget,
           toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
           cliSessionBindingFacts: {
+            extraSystemPromptStatic: deliverySystemPrompt,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
           },
@@ -685,6 +703,8 @@ export async function prepareCronRunContext(params: {
         deliveryPlan,
         resolvedDelivery,
         deliveryRequested,
+        deliverySystemPrompt,
+        messageToolFormatPrompt,
         sourceDelivery,
         suppressExecNotifyOnExit: deliveryPlan.mode === "none",
         skillsSnapshot,

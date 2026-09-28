@@ -1,7 +1,10 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ClientOptions, WebSocket } from "ws";
+import { z } from "zod";
+import type {
+  GatewayWebSocketClientOptions,
+  WebSocket,
+} from "../../packages/gateway-client/src/websocket.js";
 import type {
   WorkerConnectParams,
   WorkerHeartbeatParams,
@@ -10,7 +13,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { hasExactOwnKeys } from "./protocol-record.js";
+import { workerProtocolObject } from "./protocol-record.js";
 import type { WorkerConnectionEndpoint } from "./worker-connection-endpoint.js";
 
 const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
@@ -48,7 +51,7 @@ export type WorkerConnectionOptions = {
   admissionTimeoutMs?: number;
   admissionDeadlineMs?: number;
   requestTimeoutMs?: number;
-  createSocket?: (url: string, options: ClientOptions) => WebSocket;
+  createSocket?: (url: string, options: GatewayWebSocketClientOptions) => WebSocket;
   heartbeatStatus?: () => WorkerHeartbeatParams["status"];
   /** The connect frame was written; this does not establish admission. */
   onAdmissionRequestSent?: () => void;
@@ -92,28 +95,21 @@ export class WorkerAdmissionDeadlineExceededError extends Error {
 
 // Only the initial admission boundary can author this result. A reconnect deadline
 // after execution started cannot prove that replaying the turn is safe.
-export type WorkerAdmissionDeadlineResult = {
-  status: "not-started";
-  reason: "admission-deadline";
-  errorText: string;
-};
+export const WorkerAdmissionDeadlineResultSchema = workerProtocolObject({
+  status: z.literal("not-started"),
+  reason: z.literal("admission-deadline"),
+  errorText: z
+    .string()
+    .min(1)
+    .refine((value) => Buffer.byteLength(value, "utf8") <= 4_096 && !/[\r\n\0]/u.test(value)),
+});
+export type WorkerAdmissionDeadlineResult = z.infer<typeof WorkerAdmissionDeadlineResultSchema>;
 
 export function parseWorkerAdmissionDeadlineResult(
   value: unknown,
 ): WorkerAdmissionDeadlineResult | undefined {
-  if (
-    isRecord(value) &&
-    hasExactOwnKeys(value, ["status", "reason", "errorText"]) &&
-    value.status === "not-started" &&
-    value.reason === "admission-deadline" &&
-    typeof value.errorText === "string" &&
-    value.errorText.length > 0 &&
-    Buffer.byteLength(value.errorText, "utf8") <= 4_096 &&
-    !/[\r\n\0]/u.test(value.errorText)
-  ) {
-    return { status: value.status, reason: value.reason, errorText: value.errorText };
-  }
-  return undefined;
+  const parsed = WorkerAdmissionDeadlineResultSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export class WorkerFencedError extends Error {
@@ -133,10 +129,6 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
   return value;
 }
 
-export function toWorkerConnectionError(error: unknown): Error {
-  return toStructuredErrorObject(error);
-}
-
 export function formatWorkerConnectionFailure(
   options: WorkerConnectionOptions,
   error: unknown,
@@ -151,7 +143,7 @@ export function formatWorkerConnectionFailure(
     address = endpoint.socketPath;
   }
   const target = truncateUtf16Safe(address, 128);
-  let detail = toWorkerConnectionError(error).message;
+  let detail = toStructuredErrorObject(error).message;
   const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
   const credentials = [
     options.connectParams.admission.credential,

@@ -1,8 +1,4 @@
-// Whatsapp plugin module implements inbound policy behavior.
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -13,14 +9,18 @@ import type {
   GroupPolicy,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+} from "openclaw/plugin-sdk/runtime-group-policy";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
 import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
 import type { AdmittedWebInboundMessage } from "./inbound/types.js";
-import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
-import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
+import { getWhatsAppRuntime } from "./runtime.js";
+import { isSelfChatMode } from "./targets-runtime.js";
 
 type ResolvedWhatsAppInboundPolicy = {
   account: ResolvedWhatsAppAccount;
@@ -42,20 +42,6 @@ function normalizeWhatsAppIngressPhone(value: string): string | null {
     return null;
   }
   return normalizeE164(trimmed);
-}
-
-function buildResolvedWhatsAppGroupConfig(params: {
-  groupPolicy: GroupPolicy;
-  groups: ResolvedWhatsAppAccount["groups"];
-}): OpenClawConfig {
-  return {
-    channels: {
-      whatsapp: {
-        groupPolicy: params.groupPolicy,
-        groups: params.groups,
-      },
-    },
-  } as OpenClawConfig;
 }
 
 export function resolveWhatsAppInboundPolicy(params: {
@@ -80,15 +66,14 @@ export function resolveWhatsAppInboundPolicy(params: {
     (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined) ??
     [];
   const defaultGroupPolicy = resolveDefaultGroupPolicy(params.cfg);
-  const { groupPolicy, providerMissingFallbackApplied } = resolveWhatsAppRuntimeGroupPolicy({
+  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.whatsapp !== undefined,
     groupPolicy: account.groupPolicy,
     defaultGroupPolicy,
   });
-  const resolvedGroupCfg = buildResolvedWhatsAppGroupConfig({
-    groupPolicy,
-    groups: account.groups,
-  });
+  const resolvedGroupCfg: OpenClawConfig = {
+    channels: { whatsapp: { groupPolicy, groups: account.groups } },
+  };
   const isSamePhone = (value?: string | null) =>
     typeof value === "string" && typeof params.selfE164 === "string" && value === params.selfE164;
   return {
@@ -126,7 +111,7 @@ export async function resolveWhatsAppIngressAccess(params: {
   includeCommand?: boolean;
   contextBinding?: ChannelIngressContextBinding;
 }) {
-  return await resolveStableChannelMessageIngress({
+  return await getWhatsAppRuntime().channel.inbound.ingress.resolveStable({
     channelId: "whatsapp",
     accountId: params.policy.account.accountId,
     identity: {
@@ -169,11 +154,6 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   policy?: ResolvedWhatsAppInboundPolicy;
   authDir?: string;
 }): Promise<boolean> {
-  const useAccessGroups = true;
-  if (!useAccessGroups) {
-    return true;
-  }
-
   const self = getSelfIdentity(params.msg, params.authDir);
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const policy =

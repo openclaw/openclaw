@@ -26,9 +26,9 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import {
   deliveryContextFromSession,
-  normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   bindOutboundSessionEntry,
   captureOutboundSessionBinding,

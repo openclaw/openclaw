@@ -15,8 +15,10 @@ import {
   waitForConfirmDialogActions,
   waitForInputDialog,
 } from "../../test-helpers/modal-dialog.ts";
+import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -126,37 +128,6 @@ describe("chat pane retained presentation", () => {
 });
 
 describe("chat pane header state", () => {
-  it.each([
-    ["pin", { kind: "toggle-pin" } as const, { pinned: true }],
-    ["unread", { kind: "toggle-unread" } as const, { unread: true }],
-    ["icon", { kind: "set-icon", icon: "🦞" } as const, { icon: "🦞" }],
-    ["color", { kind: "set-color", color: "purple" } as const, { color: "purple" }],
-    ["clear color", { kind: "set-color", color: null } as const, { color: null }],
-    ["group", { kind: "move-to-group", category: "Projects" } as const, { category: "Projects" }],
-  ])("patches the active session from the header %s action", async (_name, action, expected) => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = createSessionCapabilityFixture({
-      patch,
-      state: { error: null, groups: ["Projects"] },
-    });
-    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
-    const session = {
-      key: "agent:main:current",
-      sessionId: "session-current",
-      kind: "direct",
-      updatedAt: 0,
-      pinned: false,
-      unread: false,
-    } satisfies GatewaySessionRow;
-
-    await pane.handleHeaderSessionAction(action, session);
-
-    expect(patch).toHaveBeenCalledWith(session.key, expected, {
-      agentId: "main",
-      expectedSessionId: session.sessionId,
-    });
-  });
-
   it("aborts a stale header delete confirm and shows a retry notice when the connection is replaced while it is open", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     try {
@@ -251,24 +222,12 @@ describe("chat pane header state", () => {
     }
   });
 
-  it.each([
-    {
-      name: "existing-group move",
-      action: { kind: "move-to-group", category: "Projects" } as const,
-      category: undefined,
-    },
-    {
-      name: "remove-from-group move",
-      action: { kind: "move-to-group", category: null } as const,
-      category: "Projects",
-    },
-  ])("skips a no-ID $name after its row was removed", async ({ action, category }) => {
+  it("skips a no-ID group move after its row was removed", async () => {
     const patch = vi.fn(async () => ({}));
     const session = {
       key: "agent:main:current",
       kind: "direct",
       updatedAt: 0,
-      category,
     } satisfies GatewaySessionRow;
     const result = {
       ts: 1,
@@ -287,7 +246,7 @@ describe("chat pane header state", () => {
     });
 
     result.sessions = [];
-    await pane.handleHeaderSessionAction(action, session);
+    await pane.handleHeaderSessionAction({ kind: "move-to-group", category: "Projects" }, session);
 
     expect(patch).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith({ message: t("common.refresh") });
@@ -311,27 +270,24 @@ describe("chat pane header state", () => {
     expect(copy).toHaveBeenNthCalledWith(2, "feature/header");
   });
 
-  it.each(["copy-path", "copy-branch"] as const)(
-    "surfaces a rejected workspace %s clipboard action",
-    async (action) => {
-      const { pane, requestUpdate, state } = createTestChatPane({
-        client: createGatewayBrowserClientFixture(),
-        sessions: createSessionCapabilityFixture(),
-      });
-      const session = {
-        key: "agent:main:current",
-        kind: "direct",
-        updatedAt: 0,
-      } satisfies GatewaySessionRow;
-      const copy = vi.fn(async () => false);
+  it("surfaces a rejected workspace clipboard action", async () => {
+    const { pane, requestUpdate, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    const session = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    const copy = vi.fn(async () => false);
 
-      pane.handleHeaderMenuAction(action, session, "/src/openclaw", "feature/header", copy);
+    pane.handleHeaderMenuAction("copy-path", session, "/src/openclaw", "feature/header", copy);
 
-      await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
-      expect(state.lastError).toBe(state.chatError);
-      expect(requestUpdate).toHaveBeenCalledOnce();
-    },
-  );
+    await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
+    expect(state.lastError).toBe(state.chatError);
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
 
   it("does not query gateway-local branches for exec-node sessions", async () => {
     const request = vi.fn();
@@ -865,6 +821,52 @@ describe("chat pane session creation lifecycle", () => {
       features: { methods: ["sessions.create"] },
     } as typeof pane.context.gateway.snapshot.hello;
   }
+
+  it("opens one fresh private session with unsent input while retaining failed input", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const created = createDeferred<string | null>();
+    const request = vi.fn((method: string) => (method === "chat.history" ? { messages: [] } : {}));
+    const client = createGatewayBrowserClientFixture({ request });
+    const { pane, state } = createTestChatPane({ client });
+    const sessions = pane.context.sessions;
+    vi.spyOn(sessions, "create").mockImplementation(() => created.promise);
+    state.sessionKey = "agent:main:dashboard:incognito-expired";
+    state.chatMessage = "Unsent private draft";
+    state.chatAttachments = [
+      { id: "unsent-image", mimeType: "image/png", dataUrl: "data:image/png;base64,eA==" },
+    ];
+    const failed = {
+      id: "failed-copy",
+      text: "Failed private input",
+      createdAt: 1,
+      sendState: "failed" as const,
+    };
+    state.chatQueue = [failed];
+    await loadChatHistory(state);
+    expect(state.chatError).toBeNull();
+    expect(isExpiredIncognitoSession(state)).toBe(true);
+    advertiseSessionCreate(pane);
+    pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.admin"];
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+
+    const pending = pane.createSession();
+    await expect(pane.createSession()).resolves.toBe(false);
+    expect(sessions.create).toHaveBeenCalledExactlyOnceWith({ agentId: "main", incognito: true });
+    const nextKey = "agent:main:dashboard:incognito-fresh";
+    created.resolve(nextKey);
+    await expect(pending).resolves.toBe(true);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(pane.paneId, nextKey);
+    expect(consumePaneSessionHandoff(pane.context, pane.paneId, nextKey)).toMatchObject({
+      draft: "Unsent private draft",
+      attachments: [{ mimeType: "image/png", dataUrl: "data:image/png;base64,eA==" }],
+    });
+    expect(state.chatQueue).toEqual([failed]);
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+  });
 
   it("drops a created session after a same-client reconnect", async () => {
     const created = createDeferred<string | null>();

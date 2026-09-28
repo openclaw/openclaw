@@ -1,8 +1,5 @@
 import type { SkillResourceDelivery } from "../../packages/gateway-protocol/src/schema/skill-resources.js";
-import type {
-  WorkerLiveEvent,
-  WorkerTranscriptMessage,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerTranscriptMessage } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceContext,
   WorkerInferenceModelRef,
@@ -12,7 +9,7 @@ import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.j
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
 import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
-import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.js";
+import { isApplyPatchAllowedForModel } from "../agents/apply-patch-policy.js";
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
@@ -37,10 +34,11 @@ import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/t
 import { materializeSkillResources } from "../skills/runtime/resources.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerComputerTool } from "./computer-runtime.js";
-import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
+import { createWorkerLiveRuntime, type WorkerLiveClient } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
   toWorkerInferenceContext,
+  type WorkerTranscriptClient,
 } from "./embedded-agent-transcript.runtime.js";
 import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
 import {
@@ -71,15 +69,6 @@ type WorkerEmbeddedInferenceClient = {
   ) => AssistantMessageEventStreamLike | Promise<AssistantMessageEventStreamLike>;
 };
 
-type WorkerEmbeddedTranscriptClient = {
-  commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
-};
-
-type WorkerEmbeddedLiveClient = {
-  enqueuePreview: (event: WorkerLiveEvent) => boolean;
-  emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
-};
-
 type RunWorkerEmbeddedTurnParams = {
   skillResources?: SkillResourceDelivery;
   skillAuthoring?: import("../../packages/gateway-protocol/src/schema/worker-skill-workshop.js").WorkerSkillWorkshopBinding;
@@ -96,8 +85,8 @@ type RunWorkerEmbeddedTurnParams = {
   prompt: WorkerLaunchPlan["assignment"]["prompt"];
   modelRef: WorkerInferenceModelRef;
   inference: WorkerEmbeddedInferenceClient;
-  transcript: WorkerEmbeddedTranscriptClient;
-  live: WorkerEmbeddedLiveClient;
+  transcript: WorkerTranscriptClient;
+  live: WorkerLiveClient;
   sessions?: Parameters<typeof createWorkerSessionTools>[0];
   initialMessages?: WorkerTranscriptMessage[];
   suppressPromptTranscript?: boolean;
@@ -187,7 +176,7 @@ async function runWorkerEmbeddedTurnWithResources(
     baseSessionManager.appendMessage(structuredClone(message));
   }
 
-  const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript);
+  const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript, params.signal);
   const sessionManager = guardSessionManager(baseSessionManager, {
     suppressNextUserMessagePersistence: params.suppressPromptTranscript,
     onMessagePersisted: transcriptRuntime.onMessagePersisted,
@@ -251,6 +240,7 @@ async function runWorkerEmbeddedTurnWithResources(
         modelId: params.modelRef.model,
       }),
     applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
+    applyPatchContainmentSource: permissionToolPolicy ? "session" : "worker",
     execDefaults: {
       bypassHostApprovalFloors:
         permissionToolPolicy?.bypassHostApprovalFloors && execSecurity === "full",

@@ -12,19 +12,10 @@ import {
   resolveRealtimeVoiceInterruptResponseOnInputAudio,
   resolveRealtimeVoiceMinBargeInAudioEndMs,
   resolveRealtimeVoiceSessionPolicy,
-  type RealtimeVoiceProviderConfig,
   type RealtimeVoiceTranscriptEntry,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { discordRealtimeVoiceSecretOwnerId } from "../secret-config-contract.js";
-import { buildProviderConfigs, buildProviderConfigOverrides } from "./config.js";
-
-function readProviderConfigString(
-  config: RealtimeVoiceProviderConfig,
-  key: string,
-): string | undefined {
-  const value = config[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 /** Resolve the same provider, voice catalog, and policies for initial and replacement connections. */
 export function resolveDiscordRealtimeSpeakerConfig(params: {
@@ -57,11 +48,16 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
       );
     }
   }
+  const configuredVoice = realtimeConfig?.speakerVoice || realtimeConfig?.speakerVoiceId;
   const resolved = resolveConfiguredRealtimeVoiceProvider({
     configuredProviderId: realtimeConfig?.provider,
-    providerConfigs: buildProviderConfigs(realtimeConfig),
+    providerConfigs: { ...realtimeConfig?.providers },
     providerConfigOverrides: {
-      ...buildProviderConfigOverrides(realtimeConfig),
+      ...(realtimeConfig?.model ? { model: realtimeConfig.model } : {}),
+      ...(configuredVoice ? { voice: configuredVoice } : {}),
+      ...(typeof realtimeConfig?.minBargeInAudioEndMs === "number"
+        ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
+        : {}),
       ...(params.voiceOverride
         ? { voice: params.voiceOverride, speakerVoice: params.voiceOverride }
         : {}),
@@ -90,7 +86,7 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
   );
   const capabilities = resolved.capabilities;
   const model =
-    readProviderConfigString(resolved.providerConfig, "model") ?? resolved.provider.defaultModel;
+    normalizeOptionalString(resolved.providerConfig.model) ?? resolved.provider.defaultModel;
   const voices = [
     ...(capabilities?.voices ??
       (model ? capabilities?.voicesByModel?.[model] : undefined) ??
@@ -103,8 +99,8 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
     config: {
       model,
       voice:
-        readProviderConfigString(resolved.providerConfig, "speakerVoice") ??
-        readProviderConfigString(resolved.providerConfig, "voice"),
+        normalizeOptionalString(resolved.providerConfig.speakerVoice) ??
+        normalizeOptionalString(resolved.providerConfig.voice),
     },
   });
   const selection = {
@@ -173,6 +169,6 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
     bargeIn,
     minBargeInAudioEndMs,
     resolvedModel: model,
-    resolvedVoice: readProviderConfigString(resolved.providerConfig, "voice"),
+    resolvedVoice: normalizeOptionalString(resolved.providerConfig.voice),
   };
 }

@@ -1,6 +1,6 @@
 import type { IdentifierAuthentication } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SENDER_STRENGTHS = [
   "mutable",
@@ -35,12 +35,6 @@ export type ImapAccountConfig = {
 };
 
 export type ImapPluginConfig = { accounts: Record<string, ImapAccountConfig> };
-
-function stringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-}
 
 export function resolveImapConfig(
   value: unknown,
@@ -98,21 +92,21 @@ export function resolveImapConfig(
         mode: mode === "idle" || mode === "interval" ? mode : "auto",
         pollSeconds: Math.max(15, typeof watch?.pollSeconds === "number" ? watch.pollSeconds : 60),
       },
-      allowedSenders: stringList(account.allowedSenders),
+      allowedSenders: filterStringEntries(account.allowedSenders),
       senderAuth: {
         // The predicate requires every SDK strength to remain in the local config values.
         min:
           SENDER_STRENGTHS.find(
             (strength): strength is IdentifierAuthentication => strength === min,
           ) ?? "verified",
-        trustedAuthservIds: stringList(senderAuth?.trustedAuthservIds),
+        trustedAuthservIds: filterStringEntries(senderAuth?.trustedAuthservIds),
         acceptTrustedAuthservId: senderAuth?.acceptTrustedAuthservId === true,
       },
       addressTokens: Array.isArray(account.addressTokens)
         ? account.addressTokens.flatMap((entry) => {
             const tokenEntry = asNonArrayRecord(entry);
             return typeof tokenEntry?.token === "string"
-              ? [{ token: tokenEntry.token, senders: stringList(tokenEntry.senders) }]
+              ? [{ token: tokenEntry.token, senders: filterStringEntries(tokenEntry.senders) }]
               : [];
           })
         : [],

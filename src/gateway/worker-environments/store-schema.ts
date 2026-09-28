@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -32,5 +33,19 @@ export function ensureWorkerEnvironmentStoreSchema(database: OpenClawStateDataba
     { database },
     { operationLabel: "worker-environments.companion.schema.ensure" },
   );
-  ensuredDatabases.add(database.db);
+  const remember = () => {
+    ensuredDatabases.add(database.db);
+  };
+  // An ensure inside a worker mutation must retry if that mutation rolls back.
+  if (
+    !stageSqliteTransactionState(database.db, {
+      stage: remember,
+      rollback: () => {
+        ensuredDatabases.delete(database.db);
+      },
+      commit: remember,
+    })
+  ) {
+    remember();
+  }
 }

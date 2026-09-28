@@ -167,6 +167,7 @@ function mockCombinedStore(
           agentId,
           entry: store[key],
           readSourceEntry,
+          resolveSourceKey: (sourceKey: string) => sourceKey,
           storeTarget: { agentId, storePath: `/tmp/agents/${agentId}/agent/openclaw-agent.sqlite` },
         },
       ]),
@@ -223,7 +224,7 @@ describe("sessions.usage", () => {
 
     expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      { agentId: "main", projection: "full" },
+      { agentId: "main", projection: "list" },
     );
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
@@ -241,7 +242,7 @@ describe("sessions.usage", () => {
 
     expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      { projection: "full" },
+      { projection: "list" },
     );
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
     expect(
@@ -280,7 +281,7 @@ describe("sessions.usage", () => {
 
     expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      { agentId: "opus", projection: "full" },
+      { agentId: "opus", projection: "list" },
     );
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
@@ -467,7 +468,7 @@ describe("sessions.usage", () => {
 
     expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      { agentId: "codex", projection: "full" },
+      { agentId: "codex", projection: "list" },
     );
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
@@ -636,41 +637,6 @@ describe("sessions.usage", () => {
           ]),
         }),
       );
-    });
-  });
-
-  it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
-    const storeKey = "agent:opus:slack:dm:u123";
-
-    await withUsageState(async (writeSessionFile) => {
-      writeSessionFile("s-opus.jsonl");
-      mockStoredSession(storeKey, "s-opus");
-
-      // Swap the store mock for this test: the canonical key differs from the discovered key
-      // but points at the same sessionId.
-      mockCombinedStore(
-        {
-          [storeKey]: {
-            sessionId: "s-opus",
-            sessionFile: "s-opus.jsonl",
-            label: "Named session",
-            updatedAt: 999,
-          },
-        },
-        [[storeKey, "opus"]],
-      );
-
-      // Query via discovered key: agent:<id>:<sessionId>
-      const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, key: "agent:opus:s-opus" });
-      const sessions = expectSuccessfulSessionsUsage(respond);
-      expect(sessions).toHaveLength(1);
-      expect(sessions[0]?.key).toBe(storeKey);
-      expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalled();
-      expect(
-        vi
-          .mocked(loadSessionCostSummariesFromCache)
-          .mock.calls.some((call) => call[0]?.agentId === "opus"),
-      ).toBe(true);
     });
   });
 
@@ -906,6 +872,7 @@ describe("sessions.usage", () => {
       expect(sessions[0]?.key).toBe(preferredKey);
       expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
         expect.objectContaining({
+          agentId: "opus",
           sessions: expect.arrayContaining([
             expect.objectContaining({ sessionFile: expect.stringMatching(/^sqlite:/) }),
           ]),
@@ -972,6 +939,7 @@ describe("sessions.usage", () => {
       expect(mockArg(respond, 0, 0)).toBe(true);
       expect(vi.mocked(loadGatewaySessionEntryReadOnly)).toHaveBeenCalledWith("global", {
         agentId: "ops",
+        projection: "list",
       });
       expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: "ops" }),

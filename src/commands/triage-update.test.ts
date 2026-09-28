@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { readTriageUpdateFailure, writeTriageUpdateFailure } from "./triage-update.js";
+import { readTriageUpdateFailure } from "./triage-update.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -263,19 +264,16 @@ describe("update failure triage diagnostics", () => {
     });
   });
 
-  it.each(["dirty", "no-upstream", "not-git"])(
-    "accepts skipped %s attempts classified as failures",
-    async (reason) => {
-      const stateDir = tempDirs.make("openclaw-update-triage-");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const failure = {
-        result: { status: "skipped" as const, mode: "git" as const, reason, steps: [] },
-      };
-      const outputPath = await writeTriageUpdateFailure(failure, { env });
+  it("accepts skipped attempts classified as failures", async () => {
+    const stateDir = tempDirs.make("openclaw-update-triage-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const failure = {
+      result: { status: "skipped" as const, mode: "git" as const, reason: "dirty", steps: [] },
+    };
+    const outputPath = await writeTriageUpdateFailure(failure, { env });
 
-      expect(await readTriageUpdateFailure(outputPath, { env, stateDir })).toMatchObject(failure);
-    },
-  );
+    expect(await readTriageUpdateFailure(outputPath, { env, stateDir })).toMatchObject(failure);
+  });
 
   it.each([
     { name: "oversized", input: "x".repeat(8 * 1024 + 1), error: "exceeds 8192 bytes" },

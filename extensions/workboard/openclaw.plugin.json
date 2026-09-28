@@ -1,5 +1,11 @@
 {
   "id": "workboard",
+  "uiCapabilities": [
+    "page",
+    "navigation",
+    "accessory",
+    "widget"
+  ],
   "categories": [
     "productivity"
   ],
@@ -223,9 +229,9 @@
     "properties": {}
   },
   "controlUi": {
-    "entry": "dist/control-ui/2b8d2424cd1dd0a443522f86675f5b3e327eb3a111cdac71e865e2cfc744c61c/index.js",
+    "entry": "dist/control-ui/a9dbc52045dce53f452b72df071cc7fabf0476cc1ce7a089cd945f192d6f2638/index.js",
     "styles": [
-      "dist/control-ui/2b8d2424cd1dd0a443522f86675f5b3e327eb3a111cdac71e865e2cfc744c61c/index.css"
+      "dist/control-ui/a9dbc52045dce53f452b72df071cc7fabf0476cc1ce7a089cd945f192d6f2638/index.css"
     ]
   }
 }

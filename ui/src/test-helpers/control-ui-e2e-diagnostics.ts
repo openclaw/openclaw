@@ -9,6 +9,14 @@ import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
 const controlUiE2ePageDiagnostics = new WeakMap<Page, ControlUiE2eDiagnosticEvent[]>();
 const controlUiE2eUnhandledRejectionPages = new WeakSet<Page>();
+type ControlUiE2ePageLifecycle = {
+  registeredAt: string;
+  firstCrashAt: string | null;
+  firstCloseAt: string | null;
+  firstBrowserDisconnectAt: string | null;
+};
+// Retain only fixed host facts after close; missing events mean unobserved since registration.
+const controlUiE2ePageLifecycles = new WeakMap<Page, ControlUiE2ePageLifecycle>();
 
 export type ControlUiE2eDiagnosticEvent = {
   at: string;
@@ -21,6 +29,27 @@ export function installControlUiE2ePageDiagnosticRing(page: Page): ControlUiE2eD
   if (existing) {
     return existing;
   }
+  // A closed page loses its raw ring, but must not acquire new browser listeners.
+  if (controlUiE2ePageLifecycles.has(page)) {
+    return [];
+  }
+  const lifecycle: ControlUiE2ePageLifecycle = {
+    registeredAt: new Date().toISOString(),
+    firstCrashAt: null,
+    firstCloseAt: null,
+    firstBrowserDisconnectAt: null,
+  };
+  controlUiE2ePageLifecycles.set(page, lifecycle);
+  if (page.isClosed()) {
+    return [];
+  }
+  const browser = page.context().browser();
+  const onCrash = () => {
+    lifecycle.firstCrashAt ??= new Date().toISOString();
+  };
+  const onBrowserDisconnect = () => {
+    lifecycle.firstBrowserDisconnectAt ??= new Date().toISOString();
+  };
   const events: ControlUiE2eDiagnosticEvent[] = [];
   const push = (event: ControlUiE2eDiagnosticEvent) => {
     events.push(event);
@@ -74,7 +103,14 @@ export function installControlUiE2ePageDiagnosticRing(page: Page): ControlUiE2eD
   page.on("framenavigated", onFrameNavigated);
   page.on("pageerror", onPageError);
   page.on("requestfailed", onRequestFailed);
+  page.once("crash", onCrash);
+  if (browser?.isConnected()) {
+    browser.once("disconnected", onBrowserDisconnect);
+  }
   page.once("close", () => {
+    lifecycle.firstCloseAt ??= new Date().toISOString();
+    page.off("crash", onCrash);
+    browser?.off("disconnected", onBrowserDisconnect);
     page.off("console", onConsole);
     page.off("framenavigated", onFrameNavigated);
     page.off("pageerror", onPageError);
@@ -273,6 +309,14 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
   const captureErrors: string[] = [];
   let browserState: unknown = null;
   let summary: unknown = { available: false };
+  // These cached host flags survive an unavailable renderer; sample before the renderer read.
+  const hostBeforeRead = {
+    capturedAt: new Date().toISOString(),
+    pageClosed: page.isClosed(),
+    browserConnected: page.context().browser()?.isConnected() ?? null,
+  };
+  const rendererDeadlineError = new Error("page.evaluate diagnostics timed out");
+  let rendererRead: "completed" | "rejected" | "deadline" = "completed";
   try {
     const readBrowserState = page.evaluate(() => {
       const copy = (value: unknown): unknown => {
@@ -361,8 +405,54 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       const agentPath = window.location.pathname.match(
         /^\/settings\/agents\/([^/]+)\/(overview|files|tools|skills|channels|cron)$/u,
       );
+      const groupMode = document.querySelector<HTMLElement>(
+        "wa-dropdown.session-group-defaults__mode-dropdown",
+      );
+      const groupMenu = groupMode?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const groupPopup = groupMode?.shadowRoot?.querySelector<HTMLElement>("wa-popup");
+      const groupPopupSurface =
+        groupPopup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
+      const groupFolderPicker = document.querySelector<HTMLElement>(
+        "wa-popover.session-group-defaults__folder-popover",
+      );
       return {
         failureSummary: {
+          sessionGroupDefaults: groupMode
+            ? {
+                open: Reflect.get(groupMode, "open") === true,
+                expanded: safeValue(
+                  groupMode.querySelector('[slot="trigger"]')?.getAttribute("aria-expanded"),
+                  ["true", "false"],
+                ),
+                menuInert: groupMenu?.inert ?? null,
+                menuVisible: groupMenu?.checkVisibility({ visibilityProperty: true }) ?? null,
+                popupActive: groupPopup ? Reflect.get(groupPopup, "active") === true : null,
+                nativePopupOpen: groupPopupSurface?.matches(":popover-open") ?? null,
+                folderPickerOpen: groupFolderPicker
+                  ? Reflect.get(groupFolderPicker, "open") === true
+                  : null,
+                folderDialogOpen:
+                  groupFolderPicker?.shadowRoot?.querySelector<HTMLDialogElement>("dialog")?.open ??
+                  null,
+                items: ["local", "worktree"].map((value) => {
+                  const item = groupMode.querySelector<HTMLElement>(
+                    `wa-dropdown-item[value="${value}"]`,
+                  );
+                  return {
+                    value,
+                    present: Boolean(item),
+                    role: safeValue(item?.getAttribute("role"), [
+                      "menuitem",
+                      "menuitemcheckbox",
+                      "menuitemradio",
+                    ]),
+                    visible: item?.checkVisibility({ visibilityProperty: true }) ?? null,
+                    rectCount: item?.getClientRects().length ?? 0,
+                    iconCount: item?.querySelectorAll('[slot="icon"]').length ?? 0,
+                  };
+                }),
+              }
+            : null,
           canvasWidgets: [...document.querySelectorAll("openclaw-canvas-widget-view")]
             .slice(0, 8)
             .map((widget) => ({
@@ -516,11 +606,12 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     const { failureSummary, ...state } = await withTimeout(
       readBrowserState,
       Math.max(1, deadline - performance.now()),
-      "page.evaluate diagnostics",
+      { createError: () => rendererDeadlineError },
     );
     summary = failureSummary;
     browserState = state;
   } catch (evaluateError) {
+    rendererRead = evaluateError === rendererDeadlineError ? "deadline" : "rejected";
     captureErrors.push(`page.evaluate: ${String(evaluateError)}`);
   }
   const models = modelResponses ? summarizeRecordedModelResponses(modelResponses) : null;
@@ -554,6 +645,9 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
               ? "error"
               : "unknown",
     browser: summary,
+    hostBeforeRead,
+    lifecycle: controlUiE2ePageLifecycles.get(page) ?? null,
+    rendererRead,
     models,
     gatewayRpc: controlUiRpcDiagnostics.get(page) ?? [],
     frameDepthCounts,

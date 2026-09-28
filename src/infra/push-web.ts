@@ -15,7 +15,6 @@ import {
   insertVapidKeyPairIfAbsent,
   isValidWebPushEndpoint,
   isValidWebPushKey,
-  listBoundWebPushSubscriptions,
   listWebPushSubscriptions,
   withWebPushSubscriptions,
   readPersistedVapidKeyPair,
@@ -27,16 +26,12 @@ import {
   type WebPushMutationGuard,
 } from "./push-web-store.js";
 
-// --- Types ---
-
 type WebPushSendResult = {
   ok: boolean;
   subscriptionId: string;
   statusCode?: number;
   error?: string;
 };
-
-// --- Constants ---
 
 const LEGACY_WEB_PUSH_PATHS = ["push/web-push-subscriptions.json", "push/vapid-keys.json"] as const;
 
@@ -49,7 +44,6 @@ type WebPushDeliveryOptions = Pick<
 
 export {
   WebPushSubscriptionBindingError,
-  listBoundWebPushSubscriptions,
   hasBoundWebPushSubscriptions,
   setWebPushSubscriptionPreferences,
 };
@@ -83,15 +77,13 @@ function assertLegacyWebPushMigrationComplete(baseDir?: string): void {
   }
 }
 
-// --- VAPID keys ---
-
 export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> {
   assertLegacyWebPushMigrationComplete(baseDir);
 
   // Env vars take precedence — allows operators to share a stable VAPID
   // identity across multiple gateway instances.
-  const envPublic = resolveVapidPublicKeyFromEnv();
-  const envPrivate = resolveVapidPrivateKeyFromEnv();
+  const envPublic = normalizeOptionalString(process.env.OPENCLAW_VAPID_PUBLIC_KEY);
+  const envPrivate = normalizeOptionalString(process.env.OPENCLAW_VAPID_PRIVATE_KEY);
   if (envPublic && envPrivate) {
     return {
       publicKey: envPublic,
@@ -126,16 +118,6 @@ function resolveVapidSubjectFromEnv(): string {
     normalizeOptionalString(process.env.OPENCLAW_VAPID_SUBJECT) ?? DEFAULT_WEB_PUSH_VAPID_SUBJECT
   );
 }
-
-function resolveVapidPublicKeyFromEnv(): string | undefined {
-  return normalizeOptionalString(process.env.OPENCLAW_VAPID_PUBLIC_KEY);
-}
-
-function resolveVapidPrivateKeyFromEnv(): string | undefined {
-  return normalizeOptionalString(process.env.OPENCLAW_VAPID_PRIVATE_KEY);
-}
-
-// --- Subscription CRUD ---
 
 type RegisterWebPushParams = {
   endpoint: string;
@@ -185,8 +167,6 @@ export async function clearBoundWebPushSubscription(params: {
   });
 }
 
-// --- Sending ---
-
 type WebPushPayload = {
   title: string;
   body?: string;
@@ -194,10 +174,6 @@ type WebPushPayload = {
   tag?: string;
   url?: string;
 };
-
-function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
-  webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-}
 
 async function sendPreparedWebPushNotification(
   webPush: WebPushRuntime,
@@ -311,7 +287,7 @@ export async function prepareWebPushNotificationSender(
   assertLegacyWebPushMigrationComplete(baseDir);
   const vapidKeys = await resolveVapidKeys(baseDir);
   const webPush = await loadWebPushRuntime();
-  applyVapidDetails(webPush, vapidKeys);
+  webPush.setVapidDetails(vapidKeys.subject, vapidKeys.publicKey, vapidKeys.privateKey);
   return (params) => sendPreparedWebPushNotifications({ ...params, webPush, baseDir });
 }
 

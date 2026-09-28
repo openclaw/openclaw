@@ -60,11 +60,7 @@ export function flattenChromeMcpSnapshotToAriaResult(
   let truncated = false;
 
   const visit = (node: ChromeMcpSnapshotNode, depth: number) => {
-    if (out.length >= boundedLimit) {
-      truncated = true;
-      return;
-    }
-    if (depth > ROLE_SNAPSHOT_MAX_DEPTH) {
+    if (out.length >= boundedLimit || depth > ROLE_SNAPSHOT_MAX_DEPTH) {
       truncated = true;
       return;
     }

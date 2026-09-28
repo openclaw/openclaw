@@ -143,6 +143,10 @@ export function createMeetingRuntimeFacade<
       return await this.#sessions.startTranscriptSource(request);
     }
 
+    reconcileTranscriptPolicy(enabled: boolean): Promise<void> {
+      return this.#sessions.reconcileTranscriptPolicy(enabled);
+    }
+
     async stopTranscriptSource(request: TranscriptStopRequest) {
       return await this.#sessions.stopTranscriptSource(request);
     }

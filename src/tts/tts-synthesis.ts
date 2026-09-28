@@ -80,17 +80,7 @@ export function shouldDeliverTtsAsVoice(params: {
 }
 
 export async function textToSpeechCore(
-  params: {
-    text: string;
-    cfg: OpenClawConfig;
-    prefsPath?: string;
-    channel?: string;
-    overrides?: TtsDirectiveOverrides;
-    disableFallback?: boolean;
-    timeoutMs?: number;
-    agentId?: string;
-    accountId?: string;
-  },
+  params: SpeechSynthesisParams,
   persistTtsAudio: TtsAudioPersistence,
 ): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
@@ -264,15 +254,7 @@ async function synthesizeSpeechInternal(
         prepareProviderRegistry: setup.prepareProviderRegistry,
         selectOperation: ({ resolvedProvider }) => ({
           kind: "ready",
-          synthesize: ({ prepared, cfg: runtimeCfg, target: synthesisTarget, timeoutMs }) =>
-            resolvedProvider.provider.synthesize({
-              text: prepared.text,
-              cfg: runtimeCfg,
-              providerConfig: prepared.providerConfig,
-              target: synthesisTarget,
-              providerOverrides: prepared.providerOverrides,
-              timeoutMs,
-            }),
+          synthesize: (request) => resolvedProvider.provider.synthesize(request),
         }),
         buildSuccess: ({ synthesis, ...metadata }) => ({
           success: true,

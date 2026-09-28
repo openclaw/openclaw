@@ -1,10 +1,11 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   parseCommandArgs,
   substituteArgs,
 } from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
+import { walkDirectorySync } from "../../infra/fs-safe.js";
 /**
  * Prompt template discovery and loading.
  *
@@ -70,33 +71,17 @@ function loadTemplatesFromDir(
 ): PromptTemplate[] {
   const templates: PromptTemplate[] = [];
 
-  if (!existsSync(dir)) {
-    return templates;
-  }
-
   try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-
+    const { entries } = walkDirectorySync(dir, {
+      maxDepth: 1,
+      symlinks: "follow",
+      include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+    });
     for (const entry of entries) {
       const fullPath = join(dir, entry.name);
-
-      // For symlinks, check if they point to a file
-      let isFile = entry.isFile();
-      if (entry.isSymbolicLink()) {
-        try {
-          const stats = statSync(fullPath);
-          isFile = stats.isFile();
-        } catch {
-          // Broken symlink, skip it
-          continue;
-        }
-      }
-
-      if (isFile && entry.name.endsWith(".md")) {
-        const template = loadTemplateFromFile(fullPath, getSourceInfo(fullPath));
-        if (template) {
-          templates.push(template);
-        }
+      const template = loadTemplateFromFile(fullPath, getSourceInfo(fullPath));
+      if (template) {
+        templates.push(template);
       }
     }
   } catch {

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements group session key behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,

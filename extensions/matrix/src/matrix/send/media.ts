@@ -1,4 +1,3 @@
-// Matrix plugin module implements media behavior.
 import { parseBuffer, type IFileInfo } from "music-metadata";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -51,23 +50,16 @@ export function buildMediaContent(params: {
   imageInfo?: DimensionalFileInfo;
   file?: EncryptedFile;
 }): MatrixMediaContent {
-  const info = buildMatrixMediaInfo({
-    size: params.size,
-    mimetype: params.mimetype,
-    durationMs: params.durationMs,
-    imageInfo: params.imageInfo,
-  });
   const base: MatrixMediaContent = {
     msgtype: params.msgtype,
     body: params.body,
     filename: params.filename,
-    info: info ?? undefined,
+    info: buildMatrixMediaInfo(params),
   };
   // Encrypted media should only include the "file" payload, not top-level "url".
   if (!params.file && params.url) {
     base.url = params.url;
   }
-  // For encrypted files, add the file object
   if (params.file) {
     base.file = params.file;
   }

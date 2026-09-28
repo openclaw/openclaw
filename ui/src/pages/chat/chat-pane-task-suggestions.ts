@@ -1,10 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  TaskSuggestion,
-  TaskSuggestionEvent,
-  TaskSuggestionsAcceptResult,
-  TaskSuggestionsListResult,
+import {
+  GatewayErrorDetailCodes,
+  type ProjectsListResult,
+  type TaskSuggestion,
+  type TaskSuggestionEvent,
+  type TaskSuggestionsAcceptResult,
+  type TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import {
   hasOperatorAdminAccess,
@@ -31,6 +34,7 @@ type TaskSuggestionOperation =
       resolved: boolean;
       suggestion: TaskSuggestion;
       mode: TaskSuggestionStartMode;
+      cwd?: string;
       canDisplay: () => boolean;
       isCurrent: () => boolean;
       outcome: TaskSuggestionAcceptance;
@@ -198,7 +202,8 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
   protected readonly acceptTaskSuggestion = (
     suggestion: TaskSuggestion,
     mode: TaskSuggestionStartMode = "local",
-  ): Promise<void> => this.resolveTaskSuggestion(suggestion, "accept", mode);
+    cwd?: string,
+  ): Promise<void> => this.resolveTaskSuggestion(suggestion, "accept", mode, cwd);
 
   protected readonly dismissTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
     this.resolveTaskSuggestion(suggestion, "dismiss");
@@ -292,9 +297,28 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         canWrite && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.dismiss") === true,
       taskSuggestionCopiedIds: this.taskSuggestionCopiedIds,
       onCopyTaskSuggestionPrompt: this.copyTaskSuggestionPrompt,
-      onAcceptTaskSuggestion: (suggestion: TaskSuggestion, mode: TaskSuggestionStartMode) => {
+      onChangeTaskRepository: (
+        suggestion: TaskSuggestion,
+        patch: { cwd?: string; open?: boolean },
+      ) => {
+        const operation = this.taskSuggestionOperations.get(suggestion.id);
+        if (
+          ownsDisplayedOperation(suggestion) &&
+          operation?.action === "accept" &&
+          operation.outcome.phase === "failed" &&
+          operation.outcome.repository
+        ) {
+          Object.assign(operation.outcome.repository, patch);
+          this.requestUpdate();
+        }
+      },
+      onAcceptTaskSuggestion: (
+        suggestion: TaskSuggestion,
+        mode: TaskSuggestionStartMode,
+        cwd?: string,
+      ) => {
         return ownsDisplayedOperation(suggestion)
-          ? this.acceptTaskSuggestion(suggestion, mode)
+          ? this.acceptTaskSuggestion(suggestion, mode, cwd)
           : undefined;
       },
       onDismissTaskSuggestion: (suggestion: TaskSuggestion) => {
@@ -309,6 +333,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     suggestion: TaskSuggestion,
     action: "accept" | "dismiss",
     mode: TaskSuggestionStartMode = "local",
+    cwd?: string,
   ): Promise<void> {
     const scope = this.captureConnectionScope();
     if (!scope || !this.suggestionMatchesCurrentSession(suggestion)) {
@@ -376,6 +401,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
             resolved: false,
             suggestion: previous?.suggestion ?? suggestion,
             mode: previous?.mode ?? mode,
+            cwd: cwd ?? previous?.cwd,
             canDisplay,
             isCurrent: ownsScope,
             outcome: { phase: "starting" },
@@ -395,7 +421,11 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       if (operation.action === "accept") {
         const result = await scope.client.request<TaskSuggestionsAcceptResult>(
           "taskSuggestions.accept",
-          { taskId: suggestion.id, mode: operation.mode },
+          {
+            taskId: suggestion.id,
+            mode: operation.mode,
+            ...(operation.cwd ? { cwd: operation.cwd } : {}),
+          },
         );
         if (!isCurrent()) {
           return;
@@ -433,7 +463,40 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         }
         restoreDismissed = originalIndex >= 0;
       } else {
-        operation.outcome = { phase: "failed", error: formatUiError(error) };
+        const details = error instanceof GatewayRequestError ? error.details : undefined;
+        const repositoryRequired =
+          operation.mode === "worktree" &&
+          details &&
+          typeof details === "object" &&
+          "code" in details &&
+          details.code === GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED;
+        const repository: Extract<TaskSuggestionAcceptance, { phase: "failed" }>["repository"] =
+          repositoryRequired
+            ? { cwd: operation.cwd ?? operation.suggestion.cwd, open: true, projects: [] }
+            : undefined;
+        operation.outcome = {
+          phase: "failed",
+          error: formatUiError(error),
+          ...(repository ? { repository } : {}),
+        };
+        if (repository) {
+          void scope.client
+            .request<ProjectsListResult>("projects.list", {})
+            .then((result) => {
+              if (
+                !isCurrent() ||
+                operation.outcome.phase !== "failed" ||
+                operation.outcome.repository !== repository
+              ) {
+                return;
+              }
+              repository.projects = result.projects.filter((project) => Boolean(project.repoRoot));
+              this.requestUpdate();
+            })
+            .catch(() => {
+              // An explicit path remains usable when the optional project catalog is unavailable.
+            });
+        }
       }
       scope.state.lastError = formatUiError(error);
       scope.state.chatError = scope.state.lastError;

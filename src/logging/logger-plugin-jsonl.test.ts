@@ -571,3 +571,18 @@ it("registered plugin service logger never restores a secret after a zero-width 
   expect(result.records[0]["1"].value).toBe("FIRST_…7890 ***SECOND_PRIVATE_VALUE");
   expect(result.console[0].value).toBe("FIRST_…7890 ***SECOND_PRIVATE_VALUE");
 });
+
+it("registered plugin logger projects one capture across scalars before the next rule", async () => {
+  const result = await logFromPlugin(
+    "cross-scalar capture",
+    { alpha: "SYNTHETIC_A", beta: "SYNTHETIC_B", next: "SYNTHETIC_NEXT", safe: "visible" },
+    [
+      String.raw`/"alpha":"(SYNTHETIC_A","beta":"SYNTHETIC_B)"/g`,
+      String.raw`/"alpha":"\*\*\*","\*\*\*":"\*\*\*","next":"(SYNTHETIC_NEXT)"/g`,
+    ],
+  );
+  const expected = { alpha: "***", "***": "***", next: "***", safe: "visible" };
+  expect(result.records[0]["1"]).toEqual(expected);
+  expect(result.console[0]).toMatchObject(expected);
+  expect(JSON.stringify(result)).not.toMatch(/SYNTHETIC_(?:A|B|NEXT)/);
+});

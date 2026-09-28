@@ -1,10 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Subsystem logger helpers create scoped loggers with subsystem-specific filters.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { isVerbose } from "../global-state.js";
+import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
+import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import {
   formatConsoleTimestamp,
@@ -12,7 +13,7 @@ import {
   getConsoleSettings,
   shouldLogSubsystemToConsole,
 } from "./console.js";
-import { type LogLevel, levelToMinLevel } from "./levels.js";
+import { type LogLevel, isLogLevelEnabled } from "./levels.js";
 import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
 import { redactLogRecordForTransport, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
@@ -38,18 +39,6 @@ function normalizeSubsystemLabel(subsystem?: string | null): string {
   }
   const normalized = subsystem.trim();
   return normalized.length > 0 ? normalized : "unknown";
-}
-
-function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boolean {
-  if (level === "silent") {
-    return false;
-  }
-  if (settings.level === "silent") {
-    return false;
-  }
-  const current = levelToMinLevel(level);
-  const min = levelToMinLevel(settings.level);
-  return current >= min;
 }
 
 type ChalkInstance = InstanceType<typeof Chalk>;
@@ -410,14 +399,30 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     resolvedSubsystem === "model-fallback" ||
     resolvedSubsystem.startsWith("model-fallback/");
   let fileChild: TsLogger<LogObj> | undefined;
+  let fileChildWithoutStack: TsLogger<LogObj> | undefined;
   let formatConsoleLine: ReturnType<typeof createConsoleLineFormatter> | undefined;
 
-  const getFileLogger = () => (fileChild ??= getChildLogger({ subsystem: resolvedSubsystem }));
+  const getFileLogger = (level: LogLevel) => {
+    fileChild ??= getChildLogger({ subsystem: resolvedSubsystem });
+    if (
+      level === "error" ||
+      level === "fatal" ||
+      (areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("log.record"))
+    ) {
+      return fileChild;
+    }
+    if (!fileChildWithoutStack) {
+      fileChildWithoutStack = fileChild.getSubLogger({ stack: { capture: "off" } });
+      // Preserve the subsystem's logger ancestry across capture variants.
+      fileChildWithoutStack.settings.parentNames = fileChild.settings.parentNames;
+    }
+    return fileChildWithoutStack;
+  };
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
-      shouldLogToConsole(level, { level: consoleSettings.level }) &&
+      isLogLevelEnabled(level, consoleSettings.level) &&
       shouldLogSubsystemToConsole(resolvedSubsystem);
     const fileEnabled = isFileLogLevelEnabled(level);
     if (!consoleEnabled && !fileEnabled) {
@@ -435,7 +440,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      logToFile(getFileLogger(), level, message, fileMeta);
+      logToFile(getFileLogger(level), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -479,7 +484,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     subsystem: resolvedSubsystem,
     isEnabled(level, target = "any") {
       const isConsoleEnabled =
-        shouldLogToConsole(level, { level: getConsoleSettings().level }) &&
+        isLogLevelEnabled(level, getConsoleSettings().level) &&
         shouldLogSubsystemToConsole(resolvedSubsystem);
       const isFileEnabled = isFileLogLevelEnabled(level);
       if (target === "console") {
@@ -510,11 +515,11 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        logToFile(getFileLogger(), "info", message, { raw: true });
+        logToFile(getFileLogger("info"), "info", message, { raw: true });
       }
       const consoleSettings = getConsoleSettings();
       if (
-        shouldLogToConsole("info", { level: consoleSettings.level }) &&
+        isLogLevelEnabled("info", consoleSettings.level) &&
         shouldLogSubsystemToConsole(resolvedSubsystem)
       ) {
         if (
@@ -575,11 +580,4 @@ export function runtimeForLogger(
     },
     exit,
   };
-}
-
-export function createSubsystemRuntime(
-  subsystem: string,
-  exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): OutputRuntimeEnv {
-  return runtimeForLogger(createSubsystemLogger(subsystem), exit);
 }

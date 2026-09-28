@@ -1,4 +1,3 @@
-// Voice Call plugin module implements cli behavior.
 import path from "node:path";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

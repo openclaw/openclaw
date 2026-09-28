@@ -33,6 +33,10 @@ type ProviderFault =
   | { status: 402 }
   | { status: 413 }
   | { status: 429; window: "short" | "long" }
+  // A 429 whose message matches no usage-window keyword and carries the reset only
+  // in a Retry-After header of `retryAfterSeconds`, capped by retry.provider
+  // .maxRetryDelayMs. This is Anthropic's session-window shape (#148558/#143274).
+  | { status: 429; window: "header-floor"; retryAfterSeconds: number; maxRetryDelayMs: number }
   | { status: 500 }
   | { status: "context_overflow" };
 
@@ -195,6 +199,29 @@ function makeAttemptForFault(
         model: ref.model,
         stopReason: "stop",
         content: [{ type: "text", text: fault.text }],
+      }),
+    });
+  }
+  if (fault.status === 429 && fault.window === "header-floor") {
+    // Anthropic's session-window 429 arrives as an assistant error whose text
+    // avoids weekly/usage/quota wording; only errorBody.headers["retry-after"]
+    // reveals the multi-hour floor. buildAssistantFailoverSignal reads exactly
+    // that, so resolveRetryAfterMs returns the header seconds while the text
+    // guard stays quiet. providerRetryMaxDelayMs rides on the attempt as the
+    // real runtime attaches the prepared session setting.
+    return makeEmbeddedRunnerAttempt({
+      providerRetryMaxRetries: 3,
+      providerRetryMaxDelayMs: fault.maxRetryDelayMs,
+      lastAssistant: buildEmbeddedRunnerAssistant({
+        provider: ref.provider,
+        model: ref.model,
+        stopReason: "error",
+        errorMessage:
+          "This request would exceed your account's rate limit. Please try again later.",
+        errorType: "rate_limit_error",
+        // errorBody is the raw provider response body string, which is what the
+        // runtime stores; resolveRetryAfterMs parses it back to the same record.
+        errorBody: JSON.stringify({ headers: { "retry-after": String(fault.retryAfterSeconds) } }),
       }),
     });
   }
@@ -552,6 +579,50 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       expect(usageStats["openai:p2"]?.cooldownReason).toMatch(/^auth/);
       expect(usageStats["openai:p2"]?.failureCounts?.auth).toBe(1);
       expect(usageStats["groq:p1"]?.cooldownUntil).toBeUndefined();
+    });
+  });
+
+  it("fails over a header-only multi-hour 429 past retry.provider.maxRetryDelayMs instead of sleeping it", async () => {
+    // The regression: Anthropic's session-window 429 carries the reset only in
+    // Retry-After and matches no usage-window keyword, so the controller slept
+    // the full ~2.75h floor in-turn and the configured fallback never ran
+    // (#148558/#143274). With the cap wired through, the run fails over to the
+    // model fallback and completes, and the floor is never handed to the sleep.
+    await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
+      writeProfiles(agentDir, { openai: 1, groq: true });
+      const observations: AttemptObservation[] = [];
+      installFaultScript(
+        [
+          { status: 429, window: "header-floor", retryAfterSeconds: 9897, maxRetryDelayMs: 30_000 },
+          { status: 200, text: "fallback after header floor" },
+        ],
+        observations,
+      );
+
+      const outcome = expectResult(
+        await runScenario({
+          agentDir,
+          workspaceDir,
+          config: makeProviderConfig(["groq/mock-2"]),
+          runId: "header-floor-failover",
+        }),
+      );
+
+      // The single openai attempt failed over to the groq fallback: the floor was
+      // declined, not slept, and no same-model retry sat between them.
+      expect(observations.map(({ provider, model }) => [provider, model])).toEqual([
+        ["openai", "mock-1"],
+        ["groq", "mock-2"],
+      ]);
+      // Nothing slept the 9,897,000ms floor; the only sleeps are the backoff
+      // controller's between-candidate waits, never the provider floor.
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).not.toContain(9_897_000);
+      expect(outcome.provider).toBe("groq");
+      expect(outcome.model).toBe("mock-2");
+      expect(outcome.result.payloads?.[0]?.text).toContain("fallback after header floor");
+
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownReason).toBe("rate_limit");
     });
   });
 

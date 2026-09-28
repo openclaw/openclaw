@@ -1,4 +1,4 @@
-import { currentCodexCatalogListDiagnostics } from "./session-catalog-diagnostics.js";
+import { startCodexCatalogListTiming } from "./session-catalog-diagnostics.js";
 import { CodexCatalogListRequest } from "./session-catalog-list-request.js";
 import {
   filterCatalogPageByTitle,
@@ -65,11 +65,7 @@ export class CodexCatalogVisiblePage {
     }
     const params = this.params;
     params.signal?.throwIfAborted();
-    const diagnostics = currentCodexCatalogListDiagnostics();
-    const started = diagnostics ? performance.now() : 0;
-    if (diagnostics) {
-      diagnostics.fields.controlPageCalls++;
-    }
+    const finishTiming = startCodexCatalogListTiming("controlWaitSumMs", "controlPageCalls");
     let rawPage: CodexSessionCatalogPage;
     try {
       rawPage = await params.control.listPage({
@@ -79,10 +75,7 @@ export class CodexCatalogVisiblePage {
         ...(params.cwd ? { cwd: params.cwd } : {}),
       });
     } finally {
-      if (diagnostics && !diagnostics.closed) {
-        diagnostics.fields.controlWaitSumMs =
-          (diagnostics.fields.controlWaitSumMs ?? 0) + performance.now() - started;
-      }
+      finishTiming();
     }
     this.request.assertActive();
     params.signal?.throwIfAborted();

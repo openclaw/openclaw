@@ -1,17 +1,16 @@
-import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
-import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
+import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 export async function collectRuntimeToolSchemaFindingsWithRuntime(
-  ctx: HealthCheckContext & {
-    runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
-  },
+  ctx: DoctorHealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  const runtime = await import("./doctor-core-checks.runtime.js");
-  const { runWithPluginMetadataSnapshot } = ctx;
+  const runtime = await import("./doctor-tool-schema-runtime.js");
+  const { runWithPluginMetadataSnapshot, deferInspectionDisposal } = ctx;
   return runtime.collectRuntimeToolSchemaFindings(ctx.cfg, {
     mode: ctx.mode,
     env: ctx.env,
     ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
+    ...(deferInspectionDisposal ? { deferInspectionDisposal } : {}),
   });
 }
 

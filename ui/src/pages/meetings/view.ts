@@ -11,6 +11,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import MarkdownIt from "markdown-it";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -71,7 +72,6 @@ export type TranscriptReadState = {
   pages: TranscriptsGetResult[];
   loading: boolean;
   error: unknown;
-  trimmed: boolean;
 };
 
 type TranscriptsViewProps = {
@@ -87,13 +87,13 @@ type TranscriptsViewProps = {
   listError: unknown;
   reader: TranscriptReadState;
   readerTab: "text" | "summary";
+  summaryGeneration?: { kind: "idle" | "loading" | "done" | "error"; message?: string };
+  onSummaryRetry?: () => void;
   exportState: { kind: "idle" | "loading" | "done" | "error"; message?: string };
   onNavigate: (patch: Record<string, string | null>) => void;
   onRefresh: () => void;
   onReaderRetry: () => void;
   onReaderTab: (tab: "text" | "summary") => void;
-  onLoadMore: () => void;
-  onReaderStart: () => void;
   onDownload: (format: TranscriptsExportParams["format"]) => void;
 };
 
@@ -264,7 +264,7 @@ function renderLibrary(props: TranscriptsViewProps) {
   }
   return html` ${
       days.size
-        ? html`<div class="meetings-timeline" aria-label=${t("meetings.listLabel")}>
+        ? html`<section class="meetings-timeline" aria-label=${t("meetings.listLabel")}>
             <p class="transcripts-caption">${t("meetings.newestFirst")}</p>
             ${repeat(
               days,
@@ -280,7 +280,7 @@ function renderLibrary(props: TranscriptsViewProps) {
                 </ol>
               </section>`,
             )}
-          </div>`
+          </section>`
         : html`<div class="transcripts-notice" role="status">
             <h2>
               ${t(TRANSCRIPT_FILTER_KEYS.some((key) => new URLSearchParams(props.search).has(key)) ? "meetings.noResults" : "meetings.emptyTitle")}
@@ -315,7 +315,7 @@ function renderLibrary(props: TranscriptsViewProps) {
     </nav>`;
 }
 
-function renderSummary(page: TranscriptsGetResult) {
+function renderSummary(page: TranscriptsGetResult, props: TranscriptsViewProps) {
   const summary = page.summary;
   const titleLine = `# ${page.session.title || page.session.sessionId}\n`;
   // The reader header already renders the stored summary's leading title.
@@ -338,9 +338,22 @@ function renderSummary(page: TranscriptsGetResult) {
               ${unsafeHTML(toSanitizedMarkdownHtml(markdown, { mode: "document", remoteImages: false }))}
             </div>
             <p class="transcripts-caption">${t("transcripts.summaryHint")}</p>`
-        : html`<p role="status">
-            ${t(page.session.active ? "meetings.activeNotes" : "transcripts.noSummary")}
-          </p>`
+        : props.summaryGeneration?.kind === "loading"
+          ? renderLoading(t("transcripts.generatingSummary"))
+          : props.summaryGeneration?.kind === "error"
+            ? html`<div role="alert">
+                <p>${t("transcripts.summaryError")} ${props.summaryGeneration.message}</p>
+                <button class="btn" @click=${props.onSummaryRetry}>${t("common.retry")}</button>
+              </div>`
+            : html`<p role="status">
+                ${t(
+                  page.session.utteranceCount === 0
+                    ? page.session.active
+                      ? "meetings.waitingForSpeech"
+                      : "meetings.noSpeech"
+                    : "transcripts.noSummary",
+                )}
+              </p>`
     }
   </section>`;
 }
@@ -463,7 +476,7 @@ function renderReader(props: TranscriptsViewProps) {
               ${
                 props.readerTab === "summary"
                   ? props.reader.summary
-                    ? renderSummary(props.reader.summary)
+                    ? renderSummary(props.reader.summary, props)
                     : nothing
                   : html`
                       <form
@@ -513,16 +526,6 @@ function renderReader(props: TranscriptsViewProps) {
                             </p>`
                           : nothing
                       }
-                      ${
-                        props.reader.trimmed
-                          ? html`<p class="transcripts-caption">
-                              ${t("transcripts.windowHint")}
-                              <button class="btn btn--xs" @click=${props.onReaderStart}>
-                                ${t("transcripts.readerStart")}
-                              </button>
-                            </p>`
-                          : nothing
-                      }
                       <ol class="transcripts-utterances">
                         ${props.reader.pages
                           .flatMap((result) => result.utterances ?? [])
@@ -557,17 +560,7 @@ function renderReader(props: TranscriptsViewProps) {
                             </p>`
                           : nothing
                       }
-                      ${
-                        transcriptPage?.nextCursor
-                          ? html`<button
-                              class="btn"
-                              ?disabled=${props.reader.loading}
-                              @click=${props.onLoadMore}
-                            >
-                              ${t("transcripts.loadMore")}
-                            </button>`
-                          : nothing
-                      }
+                      ${props.reader.loading && transcriptPage?.nextCursor ? renderLoading(t("meetings.loadingTranscript")) : nothing}
                     `
               }
             </div>
@@ -581,7 +574,10 @@ export function renderTranscripts(props: TranscriptsViewProps) {
   const selected = Boolean(new URLSearchParams(props.search).get("selector"));
   const captureTarget = SETTINGS_SEARCH_TARGETS.meetingCapture;
   return html`<section class="transcripts-workspace">
-    <header class="content-header content-header--page">
+    <header
+      class="content-header content-header--page"
+      ${shellLayoutTraits({ toolbarHeader: true })}
+    >
       <div>
         <h1 class="page-title">${t("tabs.meetings")}</h1>
         <p class="page-sub">${t("subtitles.meetings")}</p>

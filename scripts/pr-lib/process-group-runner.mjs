@@ -78,6 +78,7 @@ writeFileSync(
 for (const relative of [
   "pr-lib/github.sh",
   "pr-lib/github.mjs",
+  "pr-lib/gh-api-preflight.mjs",
   "lib/plain-gh.mjs",
   "lib/direct-run.mjs",
 ]) {

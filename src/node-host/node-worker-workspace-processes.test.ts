@@ -26,6 +26,7 @@ const fs = require("node:fs");
 const server = require("node:http").createServer((req, res) => res.end(fs.existsSync("page.txt") ? fs.readFileSync("page.txt") : process.env.DISPLAY));
 server.listen(0, "127.0.0.1", () => console.log("http://127.0.0.1:" + server.address().port));
 `;
+const runtimeExecutableName = path.basename(process.execPath);
 function fixture() {
   const root = tempDirs.make("node-workspace-preview-");
   const workspace = new NodeWorkerWorkspaceRuntime({
@@ -40,7 +41,7 @@ function fixture() {
   workspaces.push(workspace);
   const start: NodeWorkerWorkspaceExecInput = {
     ...identity,
-    argv: ["node", "-e", serverScript],
+    argv: [runtimeExecutableName, "-e", serverScript],
     process: { action: "start", processId: "preview-server" },
   };
   const control = (action: "status" | "stop", extra: Partial<typeof identity> = {}) =>
@@ -89,7 +90,7 @@ describe("conversation-owned preview processes", () => {
     await workspace.exec({
       ...start,
       process: { action: "start", processId: "missing-app" },
-      argv: ["node", "-e", "process.exit(0)"],
+      argv: [runtimeExecutableName, "-e", "process.exit(0)"],
     });
   });
 
@@ -102,7 +103,11 @@ describe("conversation-owned preview processes", () => {
     turn.abort();
     await workspace.exec({
       ...identity,
-      argv: ["node", "-e", 'require("node:fs").writeFileSync("page.txt", "updated preview")'],
+      argv: [
+        runtimeExecutableName,
+        "-e",
+        'require("node:fs").writeFileSync("page.txt", "updated preview")',
+      ],
     });
     expect(await (await fetch(url)).text()).toBe("updated preview");
     const retried = await workspace.exec(start);
@@ -110,7 +115,10 @@ describe("conversation-owned preview processes", () => {
     expect(retried.stdout.trim()).toBe(url);
     expect(retried.workspaceDir).toBe(started.workspaceDir);
     await expect(
-      workspace.exec({ ...start, argv: ["node", "-e", "setInterval(() => {}, 1000)"] }),
+      workspace.exec({
+        ...start,
+        argv: [runtimeExecutableName, "-e", "setInterval(() => {}, 1000)"],
+      }),
     ).rejects.toThrow("different command");
     const stopped = await control("stop");
     expect(stopped.process?.state).toBe("exited");
@@ -133,7 +141,7 @@ describe("conversation-owned preview processes", () => {
         sequence: 1,
         retain: [],
       },
-      () => [],
+      async () => [],
     );
     expect(fs.existsSync(launched.workspaceDir)).toBe(true);
     expect((await fetch(url)).ok).toBe(true);
@@ -148,7 +156,7 @@ describe("conversation-owned preview processes", () => {
         sequence: 2,
         retain: [],
       },
-      () => [],
+      async () => [],
     );
     expect(fs.existsSync(launched.workspaceDir)).toBe(false);
   });
@@ -161,7 +169,7 @@ describe("conversation-owned preview processes", () => {
     await workspace.exec({
       ...start,
       argv: [
-        "node",
+        runtimeExecutableName,
         "-e",
         'process.stdout.write("界".repeat(20000)); process.stderr.write("界".repeat(20000))',
       ],

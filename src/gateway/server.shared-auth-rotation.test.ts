@@ -227,44 +227,41 @@ describe("gateway shared auth rotation", () => {
     expect(connection.hellos()).toBe(1);
   });
 
-  it("disconnects issuer-tagged device-token websocket sessions after shared token rotation", async () => {
-    await startGateway();
-    const connection = await openDeviceTokenClient({
-      issuerGeneration: requiredSharedGeneration(),
-    });
-    await rotateSharedToken(connection.client);
-    await expectAuthChangedClose(connection);
-  });
-
   it.each([
     { label: "browser", browserClient: true },
     { label: "non-browser", browserClient: false },
-  ])("preserves issuer-tagged $label device tokens on reconnect", async ({ browserClient }) => {
-    await startGateway();
-    const issuerGeneration = requiredSharedGeneration();
-    const { deviceId, hello } = await openDeviceTokenClient({ issuerGeneration, browserClient });
-    const token = hello.auth?.deviceToken;
-    expect(token).toBeTypeOf("string");
-    if (typeof token !== "string") {
-      throw new Error("expected hello device token");
-    }
-    expect((await getPairedDevice(deviceId))?.tokens?.operator?.issuer).toEqual({
-      kind: "shared-gateway-auth",
-      generation: issuerGeneration,
-    });
-    await expect(
-      verifyDeviceToken({
-        deviceId,
-        token,
-        role: "operator",
-        scopes: ["operator.admin"],
-        requiredSharedGatewaySessionGeneration: issuerGeneration,
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      issuer: { kind: "shared-gateway-auth", generation: issuerGeneration },
-    });
-  });
+  ])(
+    "preserves $label token issuers on reconnect and revokes sessions on rotation",
+    async ({ browserClient }) => {
+      await startGateway();
+      const issuerGeneration = requiredSharedGeneration();
+      const connection = await openDeviceTokenClient({ issuerGeneration, browserClient });
+      const { deviceId, hello } = connection;
+      const token = hello.auth?.deviceToken;
+      expect(token).toBeTypeOf("string");
+      if (typeof token !== "string") {
+        throw new Error("expected hello device token");
+      }
+      expect((await getPairedDevice(deviceId))?.tokens?.operator?.issuer).toEqual({
+        kind: "shared-gateway-auth",
+        generation: issuerGeneration,
+      });
+      await expect(
+        verifyDeviceToken({
+          deviceId,
+          token,
+          role: "operator",
+          scopes: ["operator.admin"],
+          requiredSharedGatewaySessionGeneration: issuerGeneration,
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        issuer: { kind: "shared-gateway-auth", generation: issuerGeneration },
+      });
+      await rotateSharedToken(connection.client);
+      await expectAuthChangedClose(connection);
+    },
+  );
 
   it("disconnects shared-auth websocket sessions when config.apply rewrites a SecretRef token", async () => {
     setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);

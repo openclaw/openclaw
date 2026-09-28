@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
@@ -246,7 +245,21 @@ describe("ReefTrustStore", () => {
       const now = 1_800_000_000_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       onTestFinished(() => clock.mockRestore());
-      const store = openReefTrustStore(runtime(), config());
+      const mockRuntime = runtime();
+      const openStore = mockRuntime.state.openSyncKeyedStore;
+      let peerReads = 0;
+      mockRuntime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) => {
+        const keyedStore = openStore<T>(options);
+        if (options.namespace === "peer-state") {
+          const lookup = keyedStore.lookup.bind(keyedStore);
+          keyedStore.lookup = (key) => {
+            peerReads += 1;
+            return lookup(key);
+          };
+        }
+        return keyedStore;
+      };
+      const store = openReefTrustStore(mockRuntime, config());
       const trust = peerTrust();
       const recipient = reefPeerIdentity(trust);
       const binding = { bodyHash: "a".repeat(64), recipient };
@@ -269,25 +282,10 @@ describe("ReefTrustStore", () => {
         kind === "overdue"
           ? store.overdueOutboundDeliveries(600_000, Date.now() + 601_000)
           : store.pendingOutboundRejections();
-      const reads = [
-        vi.spyOn(StatementSync.prototype, "get"),
-        vi.spyOn(StatementSync.prototype, "all"),
-        vi.spyOn(StatementSync.prototype, "iterate"),
-      ];
-      try {
-        expect(scan().map((entry) => entry.id)).toEqual([ids[0], ids[1], ids[2], ids[4], ids[5]]);
-        const peerReads = reads.reduce(
-          (count, spy) =>
-            count + spy.mock.calls.filter((params) => params.includes("peer-state")).length,
-          0,
-        );
-        expect(peerReads).toBeGreaterThan(0);
-        expect(peerReads).toBeLessThanOrEqual(3);
-      } finally {
-        for (const spy of reads) {
-          spy.mockRestore();
-        }
-      }
+      peerReads = 0;
+      expect(scan().map((entry) => entry.id)).toEqual([ids[0], ids[1], ids[2], ids[4], ids[5]]);
+      expect(peerReads).toBeGreaterThan(0);
+      expect(peerReads).toBeLessThanOrEqual(3);
       store.remove("clawd");
       expect(scan().map((entry) => entry.id)).toEqual([ids[2], ids[5]]);
       store.set("stranger", trust);

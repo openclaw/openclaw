@@ -10,7 +10,9 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
@@ -28,6 +30,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
+    await closeOpenClawAgentDatabasesAsync(dir);
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
@@ -931,3 +934,53 @@ it.each([false, true])(
     ).toHaveLength(34);
   },
 );
+
+it("prepares an oversized mirrored tool frame without losing the incoming request or native evidence", async () => {
+  const fixture = await writeSqliteSession();
+  const { settledMessages } = settledFixture();
+  const oversized = "completed-tool-evidence:" + "x".repeat(32_768);
+  for (const message of settledMessages) {
+    if (message.role === "toolResult") {
+      message.content = [{ type: "text", text: oversized }];
+    }
+    await appendSessionTranscriptMessageByIdentity({ ...fixture.sessionTarget, message });
+  }
+  const nativeBefore = readCodexSessionContext(fixture.sessionTarget, (messages) =>
+    JSON.stringify(Array.from(messages)),
+  );
+  const prepared = await readCodexMirroredSessionHistoryMessages(
+    {
+      sessionFile: fixture.marker,
+      sessionId: fixture.sessionTarget.sessionId,
+      sessionKey: fixture.sessionKey,
+      sessionTarget: fixture.sessionTarget,
+    },
+    undefined,
+    undefined,
+    512,
+  );
+  expect(prepared).toMatchObject([
+    { role: "user", content: "Send the synthetic update." },
+    { role: "assistant", content: [{ type: "toolCall", id: "sent", name: "message" }] },
+    {
+      role: "toolResult",
+      toolCallId: "sent",
+      content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
+    },
+  ]);
+  const currentRequest = "Newest request: report the earlier operation without repeating it.";
+  const projection = await projectContextEngineAssemblyForCodex({
+    assembledMessages: prepared ?? [],
+    prompt: currentRequest,
+    toolPayloadMode: "preserve",
+  });
+  expect(projection.promptText).toContain("Send the synthetic update.");
+  expect(projection.promptText).toContain("body omitted");
+  expect(projection.promptText.endsWith(currentRequest)).toBe(true);
+  expect(
+    readCodexSessionContext(fixture.sessionTarget, (messages) =>
+      JSON.stringify(Array.from(messages)),
+    ),
+  ).toBe(nativeBefore);
+  expect(nativeBefore).toContain(oversized);
+});

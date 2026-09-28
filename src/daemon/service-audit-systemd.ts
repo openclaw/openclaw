@@ -6,6 +6,11 @@ import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import {
+  isInstallerServiceDescription,
+  serviceDefinitionPreserved,
+  serviceDefinitionUnknown,
+} from "./service-audit-preservation.js";
 import type {
   GatewayServiceCommand,
   ServiceConfigIssue,
@@ -119,6 +124,7 @@ export async function auditSystemdUnit(
   timeoutMs?: number,
   command?: GatewayServiceCommand,
   definitionDrift?: ServiceDefinitionDrift[],
+  inspectRewrite = false,
 ) {
   const unitPath = resolveSystemdUnitPath(env);
   let definitionDriftError =
@@ -142,7 +148,14 @@ export async function auditSystemdUnit(
   const directives = readUnitDirectives(content);
   if (definitionDrift && !definitionDriftError) {
     try {
-      await auditSystemdDefinition(env, unitPath, directives, command, definitionDrift);
+      await auditSystemdDefinition(
+        env,
+        unitPath,
+        directives,
+        command,
+        definitionDrift,
+        inspectRewrite,
+      );
       if (!command?.definitionPaths?.length || command.reloadPending) {
         definitionDriftError =
           "Systemd drop-in paths could not be fully inspected or a daemon reload is pending; definition audit is incomplete.";
@@ -236,6 +249,7 @@ async function auditSystemdDefinition(
   directives: UnitDirective[],
   command: GatewayServiceCommand | undefined,
   findings: ServiceDefinitionDrift[],
+  inspectRewrite: boolean,
 ) {
   const definitions = new Map([[unitPath, directives]]);
   for (const file of command?.definitionPaths ?? []) {
@@ -282,6 +296,20 @@ async function auditSystemdDefinition(
       const expected = SYSTEMD_FIXED_POLICY[key];
       const current = values.get(key);
       if (
+        inspectRewrite &&
+        sourcePath === unitPath &&
+        key === "Unit.Description" &&
+        current?.some((value) => !isInstallerServiceDescription(value, env))
+      ) {
+        findings.push(
+          serviceDefinitionUnknown(
+            key,
+            "The installer would replace custom service metadata.",
+            sourcePath,
+          ),
+        );
+      }
+      if (
         preserved.has(key) ||
         (key === "Service.EnvironmentFile" && current?.every((value) => value === environmentFile))
       ) {
@@ -307,16 +335,18 @@ async function auditSystemdDefinition(
               sourcePath,
               message: `Systemd ${key} differs from the installer value ${expected}.`,
             }
-          : {
-              kind: "unknown-edit",
-              key,
-              sourcePath,
-              reason:
-                sourcePath === unitPath
-                  ? "Unrecognized directive or value in the managed unit."
-                  : "Operator drop-in overrides installer policy.",
-              message: `Systemd ${key} contains an unrecognized setting.`,
-            },
+          : sourcePath === unitPath && expected !== undefined
+            ? serviceDefinitionPreserved(key, sourcePath)
+            : {
+                kind: "unknown-edit",
+                key,
+                sourcePath,
+                reason:
+                  sourcePath === unitPath
+                    ? "Unrecognized directive or value in the managed unit."
+                    : "Operator drop-in overrides installer policy.",
+                message: `Systemd ${key} contains an unrecognized setting.`,
+              },
       );
     }
   }

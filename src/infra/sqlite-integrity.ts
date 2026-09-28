@@ -17,17 +17,27 @@ export type SqliteIntegrityCheckTiming = {
   syncElapsedMs?: number;
   workerCheckElapsedMs?: number;
   workerLifetimeElapsedMs?: number;
+  tables?: Array<SqliteIntegrityTableCheck & { elapsedMs: number }>;
 };
+
+export type SqliteIntegrityTableCheck = { table: string; check: SqliteCheckPragma };
 
 export type SqliteIntegrityCheck = {
   database: DatabaseSync;
   databaseLabel: string;
   timing?: SqliteIntegrityCheckTiming;
+  tables?: SqliteIntegrityTableCheck[];
 };
 
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
+  integrityGateReason?: "revoked" | "stale-lease" | "dirty-receipt" | "no-proof" | "lease-class";
+  integrityGateMode?: "full" | "tables";
+  integrityTableTimings?: SqliteIntegrityCheckTiming["tables"];
+  integrityTableTotals?: Partial<
+    Record<SqliteCheckPragma, { tableCount: number; elapsedMs: number }>
+  >;
   integrityGateMs?: number;
   integrityGateOutcome?: "healthy" | "failed" | "cached";
   integrityCheckSyncMs?: number;
@@ -44,11 +54,15 @@ export function* sqliteIntegrityCheckSteps(
   database: DatabaseSync,
   databaseLabel: string,
   diagnostics?: SqliteIntegrityDiagnostics,
+  tables?: SqliteIntegrityTableCheck[],
 ): SqliteIntegrityOperation<void> {
   const startedAt = performance.now();
-  const check: SqliteIntegrityCheck = { database, databaseLabel };
+  const check: SqliteIntegrityCheck = { database, databaseLabel, tables };
   if (diagnostics) {
     check.timing = {};
+    diagnostics.integrityGateMode = tables ? "tables" : "full";
+    delete diagnostics.integrityTableTimings;
+    delete diagnostics.integrityTableTotals;
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
@@ -69,6 +83,20 @@ export function* sqliteIntegrityCheckSteps(
   } finally {
     if (diagnostics) {
       diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
+      if (check.timing?.tables) {
+        diagnostics.integrityTableTotals = {};
+        for (const table of check.timing.tables) {
+          const total = (diagnostics.integrityTableTotals[table.check] ??= {
+            tableCount: 0,
+            elapsedMs: 0,
+          });
+          total.tableCount += 1;
+          total.elapsedMs += table.elapsedMs;
+        }
+        diagnostics.integrityTableTimings = check.timing.tables
+          .toSorted((left, right) => right.elapsedMs - left.elapsedMs)
+          .slice(0, 10);
+      }
       if (check.timing?.syncElapsedMs !== undefined) {
         diagnostics.integrityCheckSyncMs = Math.floor(check.timing.syncElapsedMs);
         diagnostics.integrityOutsideCheckMs =
@@ -91,7 +119,13 @@ export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
   const timing = check.timing;
   const startedAt = timing ? performance.now() : 0;
   try {
-    assertSqliteIntegrity(check.database, check.databaseLabel);
+    assertSqliteIntegrity(
+      check.database,
+      check.databaseLabel,
+      "integrity_check",
+      check.tables,
+      timing,
+    );
   } finally {
     if (timing) {
       timing.syncElapsedMs = performance.now() - startedAt;
@@ -123,7 +157,7 @@ export type SqliteIntegrityConfirmation =
   | { status: "failed"; error: Error; generation: SqliteFileGeneration; terminal: true }
   | { status: "healthy"; generation: SqliteFileGeneration };
 
-type SqliteCheckPragma = "integrity_check";
+type SqliteCheckPragma = "integrity_check" | "quick_check";
 type SqliteForeignKeyViolation = {
   fkid: bigint;
   parent: string;
@@ -133,6 +167,9 @@ type SqliteForeignKeyViolation = {
 
 const MAX_REPORTED_FOREIGN_KEY_VIOLATIONS = 5;
 
+// Released pre-v19 databases can reach updater-ledger admission with this exact
+// orphan relation. Keep classification separate from permission: only the
+// update admission or fenced v19 migration owner may accept this typed refusal.
 export class SqliteRepairableForeignKeyError extends Error {
   readonly repair: Readonly<{
     kind: "task-delivery-orphans";
@@ -143,7 +180,7 @@ export class SqliteRepairableForeignKeyError extends Error {
 
   constructor(databaseLabel: string, orphanCount: number) {
     super(
-      `SQLite foreign_key_check failed for ${databaseLabel}: repairable task_delivery_state.task_id references task_runs.task_id cascade-owned orphans (${orphanCount} rows). Run openclaw doctor --fix to preserve and repair these rows before retrying.`,
+      `SQLite foreign_key_check failed for ${databaseLabel}: repairable task_delivery_state.task_id references task_runs.task_id cascade-owned orphans (${orphanCount} rows). Run openclaw doctor --fix to migrate this legacy state before retrying.`,
     );
     this.name = "SqliteRepairableForeignKeyError";
     this.repair = {
@@ -172,23 +209,28 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
 export function assertSqliteIntegrity(
   database: DatabaseSync,
   databaseLabel: string,
+  check: SqliteCheckPragma = "integrity_check",
+  tables?: SqliteIntegrityTableCheck[],
+  timing?: SqliteIntegrityCheckTiming,
 ): SqliteIntegrityChecks {
-  const integrityCheck = runSqliteCheck(database, databaseLabel, "integrity_check");
+  if (tables) {
+    if (timing) {
+      timing.tables = [];
+    }
+    for (const entry of tables) {
+      const startedAt = performance.now();
+      try {
+        runSqliteCheck(database, databaseLabel, entry.check, entry.table);
+        runSqliteForeignKeyCheck(database, databaseLabel, entry.table);
+      } finally {
+        timing?.tables?.push({ ...entry, elapsedMs: Math.floor(performance.now() - startedAt) });
+      }
+    }
+    return { integrityCheck: "ok" };
+  }
+  const integrityCheck = runSqliteCheck(database, databaseLabel, check);
   runSqliteForeignKeyCheck(database, databaseLabel);
   return { integrityCheck };
-}
-
-/** Run integrity checks and preserve whether a failure proves persistent damage. */
-function confirmSqliteIntegrity(
-  database: DatabaseSync,
-  databaseLabel: string,
-): UnboundSqliteIntegrityConfirmation {
-  try {
-    assertSqliteIntegrity(database, databaseLabel);
-    return { status: "healthy" };
-  } catch (error) {
-    return failedSqliteIntegrityConfirmation(error);
-  }
 }
 
 /** Reconfirm an advisory failure against the database currently at a closed path. */
@@ -213,17 +255,13 @@ export function confirmSqliteFileIntegrity(
       return unboundSqliteIntegrityFailure(error);
     }
 
-    let opened: SqliteFileGeneration;
+    let opened: SqliteFileGeneration | undefined;
     try {
       opened = readStableSqliteFileGeneration(pathname);
     } catch {
-      const closeError = closeSqliteDatabase(database);
-      if (closeError) {
-        return unboundSqliteIntegrityFailure(closeError);
-      }
-      continue;
+      // A missing generation follows the same native cleanup as a changed one.
     }
-    if (!sameSqliteFileGeneration(initial, opened)) {
+    if (!opened || !sameSqliteFileGeneration(initial, opened)) {
       const closeError = closeSqliteDatabase(database);
       if (closeError) {
         return unboundSqliteIntegrityFailure(closeError);
@@ -231,7 +269,13 @@ export function confirmSqliteFileIntegrity(
       continue;
     }
 
-    let confirmation = confirmSqliteIntegrity(database, databaseLabel);
+    let confirmation: UnboundSqliteIntegrityConfirmation;
+    try {
+      assertSqliteIntegrity(database, databaseLabel);
+      confirmation = { status: "healthy" };
+    } catch (error) {
+      confirmation = failedSqliteIntegrityConfirmation(error);
+    }
     const closeError = closeSqliteDatabase(database);
     if (closeError && confirmation.status === "healthy") {
       confirmation = failedSqliteIntegrityConfirmation(closeError);
@@ -246,24 +290,16 @@ export function confirmSqliteFileIntegrity(
     if (!sameSqliteFileGeneration(opened, final)) {
       continue;
     }
-    return bindSqliteIntegrityConfirmation(confirmation, final);
+    if (confirmation.status === "healthy") {
+      return { status: "healthy", generation: final };
+    }
+    return confirmation.terminal
+      ? { ...confirmation, generation: final, terminal: true }
+      : { ...confirmation, terminal: false };
   }
   return unboundSqliteIntegrityFailure(
     new Error(`SQLite file generation did not stabilize during confirmation: ${pathname}`),
   );
-}
-
-function bindSqliteIntegrityConfirmation(
-  confirmation: UnboundSqliteIntegrityConfirmation,
-  generation: SqliteFileGeneration,
-): SqliteIntegrityConfirmation {
-  if (confirmation.status === "healthy") {
-    return { status: "healthy", generation };
-  }
-  if (confirmation.terminal) {
-    return { ...confirmation, generation, terminal: true };
-  }
-  return { ...confirmation, terminal: false };
 }
 
 function failedSqliteIntegrityConfirmation(error: unknown): UnboundSqliteIntegrityConfirmation {
@@ -320,10 +356,16 @@ function runSqliteCheck(
     return "ok";
   }
   const details = results.map((result) => String(result)).join("; ") || "no result";
-  throw createSqliteIntegrityError(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
+  throw createSqliteIntegrityError(
+    `SQLite ${pragma} failed for ${databaseLabel}: ${details}. Run openclaw doctor --fix for explicit repair; if repair is refused, preserve the database and WAL and restore a verified backup.`,
+  );
 }
 
-function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
+function runSqliteForeignKeyCheck(
+  database: DatabaseSync,
+  databaseLabel: string,
+  table?: string,
+): void {
   let violationCount = 0;
   let repairable = true;
   let taskDeliveryForeignKeyId: bigint | undefined;
@@ -331,7 +373,8 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   try {
     // Use direct PRAGMA syntax because a real schema object can shadow the
     // table-valued pragma name and make a corrupt database appear clean.
-    const statement = database.prepare("PRAGMA foreign_key_check;");
+    const argument = table ? `('${table.replaceAll("'", "''")}')` : "";
+    const statement = database.prepare(`PRAGMA foreign_key_check${argument};`);
     statement.setReadBigInts(true);
     // OpenClaw's Node >=24.16.0 floor includes iterate(), added in Node 22.13.
     for (const violation of statement.iterate() as Iterable<SqliteForeignKeyViolation>) {

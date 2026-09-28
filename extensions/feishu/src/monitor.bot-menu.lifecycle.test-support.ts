@@ -19,6 +19,7 @@ import {
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
+  stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
 
 const {
@@ -110,9 +111,13 @@ describe("Feishu bot-menu lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    restoreFeishuLifecycleStateDir(originalStateDir);
+  afterEach(async () => {
+    try {
+      await stopFeishuLifecycleMonitors();
+      restoreFeishuLifecycleStateDir(originalStateDir);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("opens one launcher card across duplicate quick-actions replay", async () => {

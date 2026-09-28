@@ -1,6 +1,6 @@
 import type { ApiClientOptions } from "grammy";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractTelegramApiMethod } from "./api-root.js";
 import type { TelegramTransport } from "./fetch.js";
 import {
   isTelegramMisdirectedRequestError,
@@ -49,34 +49,6 @@ function isTelegramAbortSignalLike(value: unknown): value is TelegramAbortSignal
   );
 }
 
-function readRequestUrl(input: TelegramFetchInput): string | null {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (input instanceof Request) {
-    return input.url;
-  }
-  return null;
-}
-
-function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
-  const url = readRequestUrl(input);
-  if (!url) {
-    return null;
-  }
-  try {
-    const pathname = new URL(url).pathname;
-    const segments = pathname.split("/").filter(Boolean);
-    const method = segments.length > 0 ? (segments.at(-1) ?? null) : null;
-    return normalizeOptionalLowercaseString(method) ?? null;
-  } catch {
-    return null;
-  }
-}
-
 const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
   "deletemycommands",
   "deletewebhook",
@@ -88,40 +60,6 @@ const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
 
 function shouldRetryTimedOutTelegramControlRequest(method: string | null): boolean {
   return method !== null && TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method);
-}
-
-export function resolveTelegramClientTimeoutSeconds(params: {
-  value: unknown;
-  minimum?: number;
-}): number | undefined {
-  const { value, minimum } = params;
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const configured = Math.max(1, Math.floor(value));
-  if (typeof minimum !== "number" || !Number.isFinite(minimum)) {
-    return configured;
-  }
-  return Math.max(configured, Math.max(1, Math.floor(minimum)));
-}
-
-export function resolveTelegramClientTimeoutMinimumSeconds(
-  values: readonly (number | undefined)[],
-) {
-  let minimum: number | undefined;
-  for (const value of values) {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      continue;
-    }
-    const normalized = Math.max(1, Math.ceil(value));
-    minimum = minimum === undefined ? normalized : Math.max(minimum, normalized);
-  }
-  return minimum;
-}
-
-export function resolveTelegramOutboundClientTimeoutFloorSeconds(timeoutSeconds: unknown) {
-  const timeoutMs = resolveTelegramRequestTimeoutMs("sendmessage", timeoutSeconds);
-  return timeoutMs === undefined ? undefined : timeoutMs / 1000;
 }
 
 export function createTelegramClientFetch(params: {
@@ -140,7 +78,7 @@ export function createTelegramClientFetch(params: {
   const isRawSourceFetch =
     params.transport?.sourceFetch !== undefined &&
     params.fetchImpl === asTelegramClientFetch(params.transport.sourceFetch);
-  const wrappedFetch = async (input: TelegramFetchInput, init?: TelegramFetchInit) => {
+  return async (input: TelegramFetchInput, init?: TelegramFetchInit) => {
     const assertCurrent = getTelegramRequestAuthority(init);
     const method = extractTelegramApiMethod(input);
     const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method, params.timeoutSeconds);
@@ -254,6 +192,4 @@ export function createTelegramClientFetch(params: {
       throw err;
     }
   };
-
-  return wrappedFetch;
 }

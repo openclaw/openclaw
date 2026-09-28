@@ -253,12 +253,7 @@ final class ComputerActionExecutionQueue {
             }
             self.currentActionTask = operationTask
 
-            let outcome: Result<OpenClawComputerActResult, Error>
-            do {
-                outcome = try await .success(operationTask.value)
-            } catch {
-                outcome = .failure(error)
-            }
+            let outcome = await operationTask.result
 
             let cancellation = queued.cancellationState.finish()
             if cancellation.needsRelease {
@@ -367,37 +362,7 @@ struct ComputerControlPermissionSnapshot: Equatable, Sendable {
         case missing
     }
 
-    enum Bucket: Equatable, Sendable {
-        case accessibility
-        case postEvent
-        case screenCapture
-
-        var displayName: String {
-            switch self {
-            case .accessibility: "Accessibility"
-            case .postEvent: "Event Posting"
-            case .screenCapture: "Screen Recording"
-            }
-        }
-    }
-
     enum Diagnostic: Equatable, Sendable {
-        case granted
-        case missing([Bucket])
-        case accessibilityGrantMayBeStale
-
-        var detailText: String {
-            switch self {
-            case .granted:
-                "Accessibility, Event Posting, and Screen Recording are granted."
-            case let .missing(buckets):
-                "Missing: \(buckets.map(\.displayName).joined(separator: ", ")). "
-                    + "Grant access in System Settings → Privacy & Security, then reopen OpenClaw."
-            case .accessibilityGrantMayBeStale:
-                Self.staleAccessibilityRemediation
-            }
-        }
-
         static let staleAccessibilityRemediation = """
         OpenClaw may already appear enabled under System Settings → Privacy & Security → Accessibility. \
         If so, the grant is pinned to an older build: select OpenClaw, remove it with −, then re-add \
@@ -423,21 +388,6 @@ struct ComputerControlPermissionSnapshot: Equatable, Sendable {
             postEvent: CGPreflightPostEventAccess() ? .granted : .missing,
             screenCapture: PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
                 ? .granted : .missing)
-    }
-
-    var diagnostic: Diagnostic {
-        // Capture granted + AX denied is the observed stale cdhash signature after an app rebuild.
-        if self.accessibility == .missing, self.screenCapture == .granted {
-            return .accessibilityGrantMayBeStale
-        }
-        let missing = [
-            (Bucket.accessibility, self.accessibility),
-            (.postEvent, self.postEvent),
-            (.screenCapture, self.screenCapture),
-        ].compactMap { bucket, access in
-            access == .missing ? bucket : nil
-        }
-        return missing.isEmpty ? .granted : .missing(missing)
     }
 
     var inputAccess: InputAccess {

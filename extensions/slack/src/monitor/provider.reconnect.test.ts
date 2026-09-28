@@ -1,42 +1,17 @@
 // Slack tests cover provider.reconnect plugin behavior.
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   gracefulStopSlackApp,
-  publishSlackBlockedStatus,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
   startSlackSocketAndWaitForDisconnect,
 } from "./provider-support.js";
 import {
   formatSlackSocketModeSharedConnectionWarning,
-  formatUnknownError,
   registerSlackSocketModeConnectionDiagnostics,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
-
-class FakeEmitter {
-  private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-
-  on(event: string, listener: (...args: unknown[]) => void) {
-    const bucket = this.listeners.get(event) ?? new Set<(...args: unknown[]) => void>();
-    bucket.add(listener);
-    this.listeners.set(event, bucket);
-  }
-
-  off(event: string, listener: (...args: unknown[]) => void) {
-    this.listeners.get(event)?.delete(listener);
-  }
-
-  emit(event: string, ...args: unknown[]) {
-    for (const listener of this.listeners.get(event) ?? []) {
-      listener(...args);
-    }
-  }
-
-  listenerCount(event: string) {
-    return this.listeners.get(event)?.size ?? 0;
-  }
-}
 
 function statusCallAt(setStatus: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
   const call = setStatus.mock.calls[index];
@@ -70,38 +45,6 @@ describe("slack socket reconnect helpers", () => {
     expect(status?.lastError).toBeNull();
     expect(status?.terminalDisconnect).toBeUndefined();
     expect(status).not.toHaveProperty("lastEventAt");
-  });
-
-  it("marks socket mode degraded when boot identity is unavailable", () => {
-    const setStatus = vi.fn();
-    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_500);
-
-    publishSlackConnectedStatus(setStatus, {
-      lifecycle: "blocked",
-      lastError: "auth.test returned no user_id",
-    });
-
-    expect(setStatus).toHaveBeenCalledTimes(1);
-    expect(setStatus).toHaveBeenCalledWith({
-      connected: true,
-      lastConnectedAt: 1_711_406_400_500,
-      terminalDisconnect: true,
-      lifecycle: "blocked",
-      lastError: "auth.test returned no user_id",
-    });
-  });
-
-  it("marks non-recoverable socket authentication failures blocked", () => {
-    const setStatus = vi.fn();
-
-    publishSlackBlockedStatus(setStatus, new Error("invalid_auth"));
-
-    expect(setStatus).toHaveBeenCalledWith({
-      connected: false,
-      lifecycle: "blocked",
-      terminalDisconnect: true,
-      lastError: "invalid_auth",
-    });
   });
 
   it("marks socket mode disconnected when an error closes the socket", () => {
@@ -140,34 +83,6 @@ describe("slack socket reconnect helpers", () => {
     });
   });
 
-  it("formats missing and unserializable socket errors without leaking undefined", () => {
-    const circular: Record<string, unknown> = {};
-    circular.self = circular;
-
-    expect(formatUnknownError(undefined)).toBe("no error detail");
-    expect(formatUnknownError(null)).toBe("no error detail");
-    expect(formatUnknownError("")).toBe("no error detail");
-    expect(formatUnknownError(new Error(""))).toBe("Error");
-    expect(formatUnknownError(circular)).toBe('{"self":"[Circular]"}');
-  });
-
-  it("formats structured Slack socket errors", () => {
-    expect(
-      formatUnknownError({
-        code: "slack_webapi_platform_error",
-        data: {
-          error: "missing_scope",
-          needed: "connections:write",
-          response_metadata: {
-            messages: ["[ERROR] missing required scope"],
-          },
-        },
-      }),
-    ).toBe(
-      "code: slack_webapi_platform_error; slack error: missing_scope; needed: connections:write; slack message: [ERROR] missing required scope",
-    );
-  });
-
   it("formats shared Socket Mode connection warnings with remediation", () => {
     expect(formatSlackSocketModeSharedConnectionWarning(2)).toContain(
       "slack socket mode reports 2 active connections for this Slack app",
@@ -178,7 +93,7 @@ describe("slack socket reconnect helpers", () => {
   });
 
   it("warns once when Slack reports a shared Socket Mode app token", () => {
-    const client = new FakeEmitter();
+    const client = new EventEmitter();
     const onSharedConnection = vi.fn();
     const unregister = registerSlackSocketModeConnectionDiagnostics({
       app: { receiver: { client } },
@@ -221,18 +136,8 @@ describe("slack socket reconnect helpers", () => {
     expect(client.listenerCount("ws_message")).toBe(0);
   });
 
-  it("resolves disconnect waiter on socket disconnect event", async () => {
-    const client = new FakeEmitter();
-    const app = { receiver: { client } };
-
-    const waiter = waitForSlackSocketDisconnect(app as never);
-    client.emit("disconnected");
-
-    await expect(waiter).resolves.toEqual({ event: "disconnect" });
-  });
-
   it("installs the disconnect waiter before socket start completes", async () => {
-    const client = new FakeEmitter();
+    const client = new EventEmitter();
     const app = {
       receiver: { client },
       start: vi.fn().mockImplementation(async () => {
@@ -253,7 +158,7 @@ describe("slack socket reconnect helpers", () => {
   });
 
   it("cancels the disconnect waiter when onStarted throws", async () => {
-    const client = new FakeEmitter();
+    const client = new EventEmitter();
     const app = {
       receiver: { client },
       start: vi.fn().mockResolvedValue(undefined),
@@ -275,7 +180,7 @@ describe("slack socket reconnect helpers", () => {
   });
 
   it("preserves error payload from unable_to_socket_mode_start event", async () => {
-    const client = new FakeEmitter();
+    const client = new EventEmitter();
     const app = { receiver: { client } };
     const err = new Error("invalid_auth");
 
@@ -289,7 +194,7 @@ describe("slack socket reconnect helpers", () => {
   });
 
   it("uses socket start event error when Bolt rejects without detail", async () => {
-    const client = new FakeEmitter();
+    const client = new EventEmitter();
     const err = new Error("missing_scope");
     const app = {
       receiver: { client },

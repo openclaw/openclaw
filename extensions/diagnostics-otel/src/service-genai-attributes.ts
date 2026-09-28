@@ -1,9 +1,8 @@
-import { SpanKind } from "@opentelemetry/api";
 import { GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT } from "@opentelemetry/semantic-conventions/incubating";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { asFiniteNumber, asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { DiagnosticEventPayload } from "../api.js";
-import { redactSensitiveText } from "../api.js";
 import {
   GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
   OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
@@ -219,10 +218,6 @@ export function modelCallSpanName(evt: {
   return operationName === GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT
     ? operationName
     : `${operationName} ${normalizeDiagnosticValue(evt.model)}`;
-}
-
-export function modelCallSpanKind(): SpanKind | undefined {
-  return SpanKind.CLIENT;
 }
 
 export function addUpstreamRequestIdSpanEvent(

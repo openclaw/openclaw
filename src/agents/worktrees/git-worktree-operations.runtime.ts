@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   estimateCheckoutObjectBytes,
@@ -18,7 +19,11 @@ import {
   normalizeProvisionedRelativePath,
   resolveGitPath,
 } from "./provisioned-file-inspection.js";
-import { inspectNestedRepository, snapshotWorktree } from "./snapshot-inventory.js";
+import {
+  inspectNestedRepository,
+  snapshotWorktree,
+  verifyExactStateSnapshot,
+} from "./snapshot-inventory.js";
 
 async function inspectProvisioning(
   sourceRoot: string,
@@ -26,6 +31,11 @@ async function inspectProvisioning(
   const includePath = path.join(sourceRoot, ".worktreeinclude");
   if (!(await worktreePathExists(includePath))) {
     return { paths: [], estimatedBytes: 0 };
+  }
+  // Git can silently ignore non-file exclude inputs instead of reporting an error.
+  // Resolve symlinks as Git does, while rejecting an invalid manifest explicitly.
+  if (!(await fs.stat(includePath)).isFile()) {
+    throw new Error(".worktreeinclude must resolve to a regular file");
   }
   const included = splitNullBuffer(
     await requireGitBuffer(sourceRoot, [
@@ -110,6 +120,8 @@ export async function executeGitWorktreeOperation(
   operation: GitWorktreeOperation,
 ): Promise<GitWorktreeOperationResult> {
   switch (operation.type) {
+    case "worktree.snapshot-verify-exact":
+      return await verifyExactStateSnapshot(operation.input);
     case "worktree.snapshot":
       return await snapshotWorktree(operation.input);
     case "worktree.provisioning-inspection":

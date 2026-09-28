@@ -20,6 +20,35 @@ import {
 export { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.codex.js";
 export type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.codex.js";
 
+function migrateVllmThinkingParams(
+  owner: Record<string, unknown> | null | undefined,
+  sourcePath: string,
+  changes: string[],
+  resolveTargets: (
+    format: NonNullable<ReturnType<typeof vllm.getLegacyVllmQwenThinkingFormat>>,
+  ) => ReturnType<typeof vllm.listExistingVllmModelTargets> | undefined,
+): void {
+  const params = getRecord(owner?.params);
+  const legacyFormat = params ? vllm.getLegacyVllmQwenThinkingFormat(params) : undefined;
+  if (!owner || !params || !legacyFormat) {
+    return;
+  }
+  const targets = resolveTargets(legacyFormat);
+  if (!targets) {
+    return;
+  }
+  vllm.applyLegacyVllmQwenThinkingFormatToTargets({
+    sourcePath,
+    legacyParams: params,
+    targets,
+    legacyFormat,
+    changes,
+  });
+  if (Object.keys(params).length === 0) {
+    delete owner.params;
+  }
+}
+
 /** Legacy config migration specs for model/provider runtime config compatibility. */
 const LEGACY_DEFAULT_MODEL_MIGRATION = defineLegacyConfigMigration({
   id: "defaultModel->agents.defaults.model",
@@ -185,37 +214,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
     apply: (raw, changes) => {
       const agentsDefaults = getRecord(getRecord(raw.agents)?.defaults);
       const defaultModels = getRecord(agentsDefaults?.models);
-      if (defaultModels) {
-        for (const [key, entry] of Object.entries(defaultModels)) {
-          const modelId = vllm.parseVllmAgentModelKey(key);
-          const entryRecord = getRecord(entry);
-          const params = getRecord(entryRecord?.params);
-          if (!modelId || !entryRecord || !params) {
-            continue;
-          }
-
-          const legacyFormat = vllm.getLegacyVllmQwenThinkingFormat(params);
-          if (!legacyFormat) {
-            continue;
-          }
-
-          const target = legacyFormat.compat
-            ? vllm.findOrCreateVllmModelEntry(raw, modelId)
-            : undefined;
-          if (legacyFormat.compat && !target) {
-            continue;
-          }
-          vllm.applyLegacyVllmQwenThinkingFormat({
-            sourcePath: `agents.defaults.models.${JSON.stringify(key)}.params`,
-            legacyParams: params,
-            target: target ?? { model: {}, index: -1 },
-            legacyFormat,
-            changes,
-          });
-          if (Object.keys(params).length === 0) {
-            delete entryRecord.params;
-          }
+      for (const [key, entry] of Object.entries(defaultModels ?? {})) {
+        const modelId = vllm.parseVllmAgentModelKey(key);
+        if (!modelId) {
+          continue;
         }
+        migrateVllmThinkingParams(
+          getRecord(entry),
+          `agents.defaults.models.${JSON.stringify(key)}.params`,
+          changes,
+          (format) => {
+            const target = format.compat
+              ? vllm.findOrCreateVllmModelEntry(raw, modelId)
+              : { model: {}, index: -1 };
+            return target ? [target] : undefined;
+          },
+        );
       }
 
       const vllmProvider = vllm.findVllmProvider(getRecord(getRecord(raw.models)?.providers));
@@ -223,23 +237,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
       if (Array.isArray(vllmModels)) {
         for (const [index, model] of vllmModels.entries()) {
           const modelRecord = getRecord(model);
-          const params = getRecord(modelRecord?.params);
-          if (!modelRecord || !params) {
-            continue;
-          }
-          const legacyFormat = vllm.getLegacyVllmQwenThinkingFormat(params);
-          if (!legacyFormat) {
-            continue;
-          }
-          vllm.applyLegacyVllmQwenThinkingFormat({
-            sourcePath: `models.providers.vllm.models[${index}].params`,
-            legacyParams: params,
-            target: { model: modelRecord, index },
-            legacyFormat,
-            changes,
-          });
-          if (Object.keys(params).length === 0) {
-            delete modelRecord.params;
+          if (modelRecord) {
+            migrateVllmThinkingParams(
+              modelRecord,
+              `models.providers.vllm.models[${index}].params`,
+              changes,
+              () => [{ model: modelRecord, index }],
+            );
           }
         }
       }
@@ -251,81 +255,32 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
           ...vllm.collectVllmModelIdsFromSelection(agentsDefaults?.model),
           ...vllm.collectVllmModelIdsFromAgentModelMap(defaultModels),
         ]);
-      const providerParams = getRecord(vllmProvider?.params);
-      if (providerParams) {
-        const providerLegacyFormat = vllm.getLegacyVllmQwenThinkingFormat(providerParams);
-        if (providerLegacyFormat) {
-          const providerModelIds = [
+      migrateVllmThinkingParams(vllmProvider, "models.providers.vllm.params", changes, () =>
+        vllm.combineVllmModelTargets(
+          vllm.listExistingVllmModelTargets(raw),
+          vllm.createVllmModelTargets(raw, [
             ...getDefaultModelIds(),
             ...vllm.collectVllmModelIdsFromAgentRoster(raw),
-          ];
-          const targets = vllm.combineVllmModelTargets(
-            vllm.listExistingVllmModelTargets(raw),
-            vllm.createVllmModelTargets(raw, providerModelIds),
-          );
-          vllm.applyLegacyVllmQwenThinkingFormatToTargets({
-            sourcePath: "models.providers.vllm.params",
-            legacyParams: providerParams,
-            targets,
-            legacyFormat: providerLegacyFormat,
-            changes,
-          });
-          if (Object.keys(providerParams).length === 0) {
-            delete vllmProvider?.params;
-          }
-        }
-      }
-
-      const defaultParams = getRecord(agentsDefaults?.params);
-      if (defaultParams) {
-        const defaultLegacyFormat = vllm.getLegacyVllmQwenThinkingFormat(defaultParams);
-        if (defaultLegacyFormat) {
-          const defaultModelIds = getDefaultModelIds();
-          const targets =
-            defaultModelIds.length > 0
-              ? vllm.createVllmModelTargets(raw, defaultModelIds)
-              : vllm.listExistingVllmModelTargets(raw);
-          vllm.applyLegacyVllmQwenThinkingFormatToTargets({
-            sourcePath: "agents.defaults.params",
-            legacyParams: defaultParams,
-            targets,
-            legacyFormat: defaultLegacyFormat,
-            changes,
-          });
-          if (Object.keys(defaultParams).length === 0) {
-            delete agentsDefaults?.params;
-          }
-        }
-      }
-
+          ]),
+        ),
+      );
+      const targetsForSelection = (modelIds: string[]) =>
+        modelIds.length > 0
+          ? vllm.createVllmModelTargets(raw, modelIds)
+          : vllm.listExistingVllmModelTargets(raw);
+      migrateVllmThinkingParams(agentsDefaults, "agents.defaults.params", changes, () =>
+        targetsForSelection(getDefaultModelIds()),
+      );
       visitAgentEntries(raw, (agentRecord, path) => {
-        const agentParams = getRecord(agentRecord.params);
-        const agentLegacyFormat = agentParams
-          ? vllm.getLegacyVllmQwenThinkingFormat(agentParams)
-          : undefined;
-        if (!agentParams || !agentLegacyFormat) {
-          return;
-        }
-        const explicitAgentModelIds = [
-          ...vllm.collectVllmModelIdsFromSelection(agentRecord.model),
-          ...vllm.collectVllmModelIdsFromAgentModelMap(agentRecord.models),
-        ];
-        const agentModelIds =
-          explicitAgentModelIds.length > 0 ? explicitAgentModelIds : getDefaultModelIds();
-        const targets =
-          agentModelIds.length > 0
-            ? vllm.createVllmModelTargets(raw, agentModelIds)
-            : vllm.listExistingVllmModelTargets(raw);
-        vllm.applyLegacyVllmQwenThinkingFormatToTargets({
-          sourcePath: `${path}.params`,
-          legacyParams: agentParams,
-          targets,
-          legacyFormat: agentLegacyFormat,
-          changes,
+        migrateVllmThinkingParams(agentRecord, `${path}.params`, changes, () => {
+          const explicitAgentModelIds = [
+            ...vllm.collectVllmModelIdsFromSelection(agentRecord.model),
+            ...vllm.collectVllmModelIdsFromAgentModelMap(agentRecord.models),
+          ];
+          return targetsForSelection(
+            explicitAgentModelIds.length > 0 ? explicitAgentModelIds : getDefaultModelIds(),
+          );
         });
-        if (Object.keys(agentParams).length === 0) {
-          delete agentRecord.params;
-        }
       });
     },
   }),
@@ -334,32 +289,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
     describe: "Remove unrecognized compat.thinkingFormat values from provider model entries",
     legacyRules: [vllm.INVALID_THINKING_FORMAT_RULE],
     apply: (raw, changes) => {
-      const providers = getRecord(getRecord(raw.models)?.providers);
-      if (!providers) {
-        return;
-      }
-
-      for (const [providerId, provider] of Object.entries(providers)) {
-        const models = getRecord(provider)?.models;
-        if (!Array.isArray(models)) {
+      for (const { providerId, modelIndex, model } of catalog.providerModelEntries(
+        getRecord(raw.models)?.providers,
+      )) {
+        const compat = getRecord(model.compat);
+        const thinkingFormat = compat?.thinkingFormat;
+        if (
+          !compat ||
+          typeof thinkingFormat !== "string" ||
+          isModelThinkingFormat(thinkingFormat)
+        ) {
           continue;
         }
-
-        for (const [index, model] of models.entries()) {
-          const compat = getRecord(getRecord(model)?.compat);
-          if (!compat) {
-            continue;
-          }
-          const thinkingFormat = compat.thinkingFormat;
-          if (typeof thinkingFormat !== "string" || isModelThinkingFormat(thinkingFormat)) {
-            continue;
-          }
-
-          delete compat.thinkingFormat;
-          changes.push(
-            `Removed models.providers.${providerId}.models.${index}.compat.thinkingFormat (unrecognized value ${JSON.stringify(thinkingFormat)}; runtime default applies).`,
-          );
-        }
+        delete compat.thinkingFormat;
+        changes.push(
+          `Removed models.providers.${providerId}.models.${modelIndex}.compat.thinkingFormat (unrecognized value ${JSON.stringify(thinkingFormat)}; runtime default applies).`,
+        );
       }
     },
   }),
@@ -368,40 +313,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
     describe: "Repair stale contextWindow values to match catalog defaults",
     legacyRules: [vllm.STALE_CONTEXT_WINDOW_RULE],
     apply: (raw, changes) => {
-      const providers = getRecord(getRecord(raw.models)?.providers);
-      if (!providers) {
-        return;
-      }
-
-      for (const [providerId, provider] of Object.entries(providers)) {
-        const models = getRecord(provider)?.models;
-        if (!Array.isArray(models)) {
+      for (const { providerId, modelIndex, model } of catalog.providerModelEntries(
+        getRecord(raw.models)?.providers,
+      )) {
+        const modelId = typeof model.id === "string" ? model.id : undefined;
+        const contextWindow = model.contextWindow;
+        if (!modelId || typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
           continue;
         }
-
-        for (const [index, model] of models.entries()) {
-          if (!getRecord(model)) {
-            continue;
-          }
-          const modelId = typeof model.id === "string" ? model.id : undefined;
-          if (!modelId) {
-            continue;
-          }
-          const contextWindow = model.contextWindow;
-          if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
-            continue;
-          }
-
-          const fix = catalog.resolveStaleContextWindowFix({ providerId, modelId, contextWindow });
-          if (!fix) {
-            continue;
-          }
-
-          model.contextWindow = fix.correct;
-          changes.push(
-            `Repaired models.providers.${providerId}.models[${index}].${modelId}.contextWindow (${contextWindow} → ${fix.correct} to match catalog default).`,
-          );
+        const fix = catalog.resolveStaleContextWindowFix({ providerId, modelId, contextWindow });
+        if (!fix) {
+          continue;
         }
+        model.contextWindow = fix.correct;
+        changes.push(
+          `Repaired models.providers.${providerId}.models[${modelIndex}].${modelId}.contextWindow (${contextWindow} → ${fix.correct} to match catalog default).`,
+        );
       }
     },
   }),

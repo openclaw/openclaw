@@ -59,13 +59,19 @@ describe("sessions_yield orchestration", () => {
       const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
       const transcriptOwner = await import("../assistant-error-transcript.js");
       const registry = await import("../subagents/registry/subagent-registry.test-helpers.js");
+      const gateway = await import("../../gateway/call.js");
+      const requesterSettlement =
+        await import("../subagents/announce/subagent-announce.requester-settle-wake.js");
       const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
       const { onSubagentRegistryPersisted, persistSubagentRunsToDiskOrThrow } =
         await import("../subagents/registry/subagent-registry-state.js");
       const { loadSubagentRegistryFromSqlite } =
         await import("../subagents/registry/subagent-registry.store.sqlite.js");
-      const { writeSubagentSessionEntry, settleSubagentRegistryPersistenceWork } =
-        await import("../subagents/registry/subagent-registry.persistence.test-support.js");
+      const {
+        gateSubagentRequesterSettlement,
+        writeSubagentSessionEntry,
+        settleSubagentRegistryPersistenceWork,
+      } = await import("../subagents/registry/subagent-registry.persistence.test-support.js");
       const { testing: deliveryTesting } =
         await import("../subagents/announce/subagent-announce-delivery.test-support.js");
       const params = { ...createOverflowRunParams(state), runId: `cleanup-parent-${owner}` };
@@ -73,6 +79,10 @@ describe("sessions_yield orchestration", () => {
       const replacement = prepareSystemAgentRunAdmission({}, params.runId, "main", "replacement");
       const cleanupEntered = createDeferred();
       const releaseCleanup = createDeferred();
+      const settlementEntered = createDeferred();
+      const settlement = gateSubagentRequesterSettlement(
+        requesterSettlement.maybeWakeRequesterAfterAllChildrenSettled,
+      );
       const gatewayCalls = vi
         .fn<(request: Parameters<typeof runtimeCallGateway>[0]) => Promise<unknown>>()
         .mockResolvedValue({
@@ -86,7 +96,14 @@ describe("sessions_yield orchestration", () => {
         request: Parameters<typeof runtimeCallGateway>[0],
       ): Promise<T> => (await gatewayCalls(request)) as T;
       deliveryTesting.setDepsForTest({ callGateway });
-      registry.testing.setDepsForTest({ callGateway });
+      const gatewaySpy = vi.spyOn(gateway, "callGateway").mockImplementation(callGateway);
+      const settlementSpy = vi
+        .spyOn(requesterSettlement, "maybeWakeRequesterAfterAllChildrenSettled")
+        .mockImplementation((settlementParams) => {
+          const pending = settlement.run(settlementParams);
+          settlementEntered.resolve();
+          return pending;
+        });
       registry.resetSubagentRegistryForTests({ persist: false });
       registry.initSubagentRegistry();
       const child = createSubagentRunRecord({
@@ -169,6 +186,8 @@ describe("sessions_yield orchestration", () => {
         releaseCleanup.resolve();
         if (owner === "active") {
           expect((await run).requesterContinuationSettled).toBe(true);
+          await settlementEntered.promise;
+          await settlement.release();
           await settleSubagentRegistryPersistenceWork();
           expect(gatewayCalls).toHaveBeenCalledWith(
             expect.objectContaining({
@@ -198,15 +217,20 @@ describe("sessions_yield orchestration", () => {
         }
       } finally {
         releaseCleanup.resolve();
-        await run.catch(() => {});
-        await settleSubagentRegistryPersistenceWork();
-        unsubscribe();
-        factorySpy.mockRestore();
-        admission.close();
-        replacement.close();
-        registry.resetSubagentRegistryForTests({ persist: false });
-        registry.testing.setDepsForTest();
-        deliveryTesting.setDepsForTest();
+        try {
+          await run.catch(() => {});
+          await settlement.release();
+          await settleSubagentRegistryPersistenceWork();
+        } finally {
+          unsubscribe();
+          factorySpy.mockRestore();
+          admission.close();
+          replacement.close();
+          registry.resetSubagentRegistryForTests({ persist: false });
+          settlementSpy.mockRestore();
+          gatewaySpy.mockRestore();
+          deliveryTesting.setDepsForTest();
+        }
       }
     },
   );

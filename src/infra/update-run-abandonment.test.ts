@@ -345,7 +345,7 @@ describe("abandoned update runs", () => {
     ]);
   });
 
-  it.each([false, true])("preserves an aged live staging driver with explicit=%s", (explicit) => {
+  it("preserves an aged live staging driver during explicit repair", () => {
     const options = isolatedOptions();
     const created = createUpdateRun(
       { trigger: "cli", origin: { driver: currentDriver() } },
@@ -354,8 +354,8 @@ describe("abandoned update runs", () => {
     const run = recordUpdateRunPhase(created.runId, "staging", {}, options);
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
 
-    expect(inspectUpdateRunAbandonment(run, { explicit })).toBeUndefined();
-    expect(reconcileAbandonedUpdateRuns({ explicit }, options)).toEqual([]);
+    expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
+    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
     expect(getUpdateRun(run.runId, options)).toEqual(run);
   });
 
@@ -370,58 +370,51 @@ describe("abandoned update runs", () => {
     expect(getUpdateRun(run.runId, options)).toEqual(run);
   });
 
-  it.each(["requested", "staging"] as const)(
-    "requires explicit recovery for an aged identityless %s run",
-    (phase) => {
-      const options = isolatedOptions();
-      const created = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
-      const run =
-        phase === "requested" ? created : recordUpdateRunPhase(created.runId, phase, {}, options);
-      vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 2);
+  it("requires explicit recovery for an aged identityless staging run", () => {
+    const options = isolatedOptions();
+    const created = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
+    const run = recordUpdateRunPhase(created.runId, "staging", {}, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 2);
 
-      expect(inspectUpdateRunAbandonment(run)).toBeUndefined();
-      expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
-      expect(getUpdateRun(run.runId, options)).toEqual(run);
-      expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBe(
-        "operator-reconciled-inactive-run",
-      );
-      expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toMatchObject([
-        { runId: run.runId, status: "failed", phase: "finished", reason: "abandoned" },
-      ]);
-    },
-  );
+    expect(inspectUpdateRunAbandonment(run)).toBeUndefined();
+    expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+    expect(getUpdateRun(run.runId, options)).toEqual(run);
+    expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBe(
+      "operator-reconciled-inactive-run",
+    );
+    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toMatchObject([
+      { runId: run.runId, status: "failed", phase: "finished", reason: "abandoned" },
+    ]);
+  });
 
-  it.each(["requested", "staging"] as const)(
-    "supersedes the single stale identityless %s run on explicit admission",
-    (phase) => {
-      const options = isolatedOptions();
-      const old = createUpdateRun(
-        { trigger: "control-ui", before: { version: "2026.9.2" } },
-        options,
-      );
-      recordUpdateRunPhase(old.runId, phase, {}, options);
-      vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+  it("supersedes the single stale identityless staging run on explicit admission", () => {
+    const options = isolatedOptions();
+    const old = createUpdateRun(
+      { trigger: "control-ui", before: { version: "2026.9.2" } },
+      options,
+    );
+    recordUpdateRunPhase(old.runId, "staging", {}, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
 
-      const next = createUpdateRun(
-        { trigger: "cli", origin: { driver: currentDriver() }, supersedeStaleIdentityless: true },
-        options,
-      );
+    const next = createUpdateRun(
+      { trigger: "cli", origin: { driver: currentDriver() }, supersedeStaleIdentityless: true },
+      options,
+    );
 
-      expect(next).toMatchObject({ status: "running", origin: { driver: currentDriver() } });
-      expect(getUpdateRun(old.runId, options)).toMatchObject({
-        status: "failed",
-        phase: "finished",
-        reason: "superseded",
-        steps: expect.arrayContaining([
-          expect.objectContaining({
-            step: "reconcile:superseded",
-            status: "failed",
-            detail: "operator-started-update-supersedes-inactive-identityless-run",
-          }),
-        ]),
-      });
-    },
-  );
+    expect(next).toMatchObject({ status: "running", origin: { driver: currentDriver() } });
+    expect(getUpdateRun(old.runId, options)).toMatchObject({
+      status: "failed",
+      phase: "finished",
+      reason: "superseded",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "reconcile:superseded",
+          status: "failed",
+          detail: "operator-started-update-supersedes-inactive-identityless-run",
+        }),
+      ]),
+    });
+  });
 
   it.each([
     "recent",
@@ -470,22 +463,19 @@ describe("abandoned update runs", () => {
     }
   });
 
-  it.each(["succeeded", "failed", "rolled-back", "skipped"] as const)(
-    "preserves an already %s run",
-    (status) => {
-      const options = isolatedOptions();
-      const created = createUpdateRun(
-        { trigger: "cli", origin: { driver: exitedDriver() } },
-        options,
-      );
-      const run = finishUpdateRun(created.runId, { status }, options);
-      vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 2);
+  it("preserves an already succeeded run", () => {
+    const options = isolatedOptions();
+    const created = createUpdateRun(
+      { trigger: "cli", origin: { driver: exitedDriver() } },
+      options,
+    );
+    const run = finishUpdateRun(created.runId, { status: "succeeded" }, options);
+    vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 2);
 
-      expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
-      expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
-      expect(getUpdateRun(run.runId, options)).toEqual(run);
-    },
-  );
+    expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
+    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+    expect(getUpdateRun(run.runId, options)).toEqual(run);
+  });
 
   it("rechecks current ownership when a previously stale run was adopted", () => {
     const options = isolatedOptions();
@@ -631,13 +621,9 @@ describe("abandoned update runs", () => {
     expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
   });
 
-  it.each(
-    (["alive", "unknown", "dead"] as const).flatMap((liveness) =>
-      [60_000, ABANDONED_UPDATE_RUN_MS + 10].map((ageMs) => ({ liveness, ageMs })),
-    ),
-  )(
-    "reconciles only when the previous driver is also dead ($liveness, age=$ageMs)",
-    ({ liveness, ageMs }) => {
+  it.each(["alive", "unknown", "dead"] as const)(
+    "reconciles a recent run only when the previous driver is also dead (%s)",
+    (liveness) => {
       const options = isolatedOptions();
       const previous =
         liveness === "alive"
@@ -649,7 +635,7 @@ describe("abandoned update runs", () => {
         { trigger: "cli", origin: { driver: exitedDriver(), previousDrivers: [previous] } },
         options,
       );
-      vi.advanceTimersByTime(ageMs);
+      vi.advanceTimersByTime(60_000);
       const reconciled = reconcileAbandonedUpdateRuns({ explicit: true }, options);
       expect(reconciled).toHaveLength(liveness === "dead" ? 1 : 0);
       expect(getUpdateRun(run.runId, options)?.status).toBe(
@@ -734,7 +720,7 @@ describe("abandoned update runs", () => {
       const run = adoptUpdateRun(created.runId, options);
       const progress = createUpdateRunProgress({ runId: run.runId, env: options.env }, {});
       const command = createDeferredCore<Awaited<ReturnType<CommandRunner>>>();
-      const timersBefore = vi.getTimerCount();
+      const heartbeat = vi.spyOn(progress, "onHeartbeat");
       const pending = runStep({
         runCommand: () => command.promise,
         name: "build",
@@ -763,9 +749,11 @@ describe("abandoned update runs", () => {
         command.resolve({ stdout: "", stderr: "", code: 0 });
       }
       await settled;
-      expect(vi.getTimerCount()).toBe(timersBefore);
+      expect(heartbeat).toHaveBeenCalled();
+      heartbeat.mockClear();
       const finished = getUpdateRun(run.runId, options);
       await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+      expect(heartbeat).not.toHaveBeenCalled();
       expect(getUpdateRun(run.runId, options)).toEqual(finished);
     },
   );

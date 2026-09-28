@@ -33,7 +33,7 @@ scenario:
   successCriteria:
     - A naturally fired main-session systemEvent creates a successful native child through sessions_spawn.
     - An OpenClaw background exec finishes only after its initiating model turn ends, and its completion event creates a second successful native child.
-    - Each parent transcript records a successful sessions_spawn call, and the matching child task reaches succeeded.
+    - Each parent transcript records a successful sessions_spawn call, and the matching native child run completes successfully.
     - Each child successfully reads and returns a fresh marker that was absent from every parent instruction.
   docsRefs:
     - docs/automation/cron-jobs.md
@@ -260,10 +260,7 @@ flow:
                   - lambda:
                       async: true
                       expr: |-
-                        (async () => {
-                          const result = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true });
-                          return (result.tasks ?? []).find((task) => task.label === childLabel && task.requesterSessionKey === config.parentSessionKey && task.createdAt >= attemptStartedAt && task.status === 'succeeded' && typeof task.childSessionKey === 'string' && Number.isFinite(task.endedAt));
-                        })()
+                        (await readNativeQaSubagentRuns(env, config.parentSessionKey)).find((run) => run.label === childLabel && run.requesterSessionKey === config.parentSessionKey && run.createdAt >= attemptStartedAt && run.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && typeof run.childSessionKey === 'string' && Number.isFinite(run.execution.endedAt))
                   - expr: liveTurnTimeoutMs(env, 300000)
                   - 1000
               - call: readSessionTranscriptSummary
@@ -287,7 +284,7 @@ flow:
                   message:
                     expr: "`${eventKind} child did not read and return its hidden marker: ${JSON.stringify({ tools: childTranscript.successfulToolCallCounts, finalText: childTranscript.finalText })}`"
               - assert:
-                  expr: "(parentAfter.successfulToolCallEvents ?? []).some((event) => event.name === 'sessions_spawn' && event.timestamp >= attemptStartedAt && event.timestamp <= completedChild.endedAt && (eventKind !== 'exec' || event.timestamp >= processCompletion.completedAt))"
+                  expr: "(parentAfter.successfulToolCallEvents ?? []).some((event) => event.name === 'sessions_spawn' && event.timestamp >= attemptStartedAt && event.timestamp <= completedChild.execution.endedAt && (eventKind !== 'exec' || event.timestamp >= processCompletion.completedAt))"
                   message: Child spawn chronology does not follow the real event producer.
               - set: appendVerdict
                 value:

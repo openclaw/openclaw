@@ -333,4 +333,221 @@ suite.define(() => {
     },
     60000,
   );
+
+  it("protects and reviews a private draft after the Gateway rejects a stale UI build", async () => {
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
+      viewport: { width: 2400, height: 1000 },
+      permissions: ["clipboard-read", "clipboard-write"],
+    });
+    const page = await context.newPage();
+    const privateKey = "agent:main:dashboard:incognito-update-draft";
+    const ordinaryKey = "agent:main:ordinary-sibling";
+    const privateDraft = "QA832 private unsent draft — café 雪 🦞.";
+    const siblingDraft = "QA445 protected ordinary sibling";
+    await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+    const gateway = await installMockGateway(page, {
+      sessions: [
+        { key: ordinaryKey, label: "Ordinary draft", kind: "direct", updatedAt: 1 },
+        { key: privateKey, label: "Private draft", incognito: true, kind: "direct", updatedAt: 1 },
+      ],
+      sessionTranscripts: {
+        [privateKey]: {
+          messages: [{ role: "assistant", content: "Synthetic private conversation." }],
+        },
+      },
+    });
+    let reloads = 0;
+    try {
+      await page.goto(`${suite.server.baseUrl}chat/main/dashboard/incognito-update-draft`);
+      const privatePane = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"][data-mcp-app-owner-key*="incognito-update-draft"]',
+      );
+      const siblingPane = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"][data-mcp-app-owner-key*="ordinary-sibling"]',
+      );
+      const composer = ".agent-chat__composer-combobox textarea";
+      await privatePane.locator(composer).waitFor();
+      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      await page.locator(".chat-split-view__cell").first().locator(composer).click();
+      await page
+        .locator(`[data-session-key="${ordinaryKey}"] a.sidebar-recent-session__link`)
+        .click();
+      await siblingPane.locator(composer).fill(siblingDraft);
+      await privatePane.locator(composer).fill(privateDraft);
+      await privatePane.locator(".agent-chat__file-input").setInputFiles({
+        name: "private-note.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("QA832 staged private attachment — 雪"),
+      });
+      await privatePane.getByText("private-note.txt", { exact: true }).first().waitFor();
+      page.on("domcontentloaded", () => {
+        reloads += 1;
+      });
+      const automaticReload = page.waitForEvent("domcontentloaded");
+      await gateway.setOnline(false);
+      await gateway.deferNext("connect");
+      const previous = (await gateway.getRequests("connect")).length;
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("connect", { after: previous });
+      await gateway.rejectDeferred("connect", {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: "PROTOCOL_MISMATCH",
+          gatewayBuildId: "qa832-replacement-build",
+          reloadRequired: true,
+        },
+        retryable: false,
+      });
+      const refresh = page.getByRole("button", { name: /Server updated/u });
+      const dialog = page.locator('openclaw-modal-dialog[label="Unsent Incognito draft"]');
+      const recovery = await Promise.race([
+        automaticReload.then(() => "reloaded" as const),
+        (async () => {
+          await refresh.click();
+          await page.getByRole("button", { name: "Review private draft", exact: true }).click();
+          await dialog.waitFor();
+          return "held" as const;
+        })(),
+      ]);
+      if (recovery === "reloaded") {
+        await privatePane.locator(composer).waitFor();
+        await page.screenshot({
+          path: `${suite.artifactDir}/private-draft-lost-on-update.png`,
+          fullPage: true,
+        });
+        expect(
+          await privatePane.locator(composer).inputValue(),
+          "automatic build recovery must retain unsent private input",
+        ).toBe(privateDraft);
+      }
+      expect(reloads).toBe(0);
+      expect(
+        await dialog.getByRole("textbox", { name: "Draft text", exact: true }).inputValue(),
+      ).toBe(privateDraft);
+      expect(await siblingPane.locator(composer).inputValue()).toBe(siblingDraft);
+      await dialog.getByRole("button", { name: "Copy text", exact: true }).click();
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(privateDraft);
+      const downloaded = page.waitForEvent("download");
+      await dialog.getByRole("button", { name: "Download private-note.txt", exact: true }).click();
+      const download = await downloaded;
+      expect(download.suggestedFilename()).toBe("private-note.txt");
+      await page.screenshot({
+        path: `${suite.artifactDir}/private-draft-update-review.png`,
+        fullPage: true,
+      });
+      await dialog.getByRole("button", { name: "Keep in this tab", exact: true }).click();
+      expect(reloads).toBe(0);
+      expect(await privatePane.locator(composer).inputValue()).toBe(privateDraft);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await refresh.click();
+      await page.getByRole("button", { name: "Review private draft", exact: true }).click();
+      const reloaded = page.waitForEvent("domcontentloaded");
+      await dialog
+        .getByRole("button", { name: "Discard this draft and refresh", exact: true })
+        .click();
+      await reloaded;
+      expect(reloads).toBe(1);
+      await siblingPane.locator(composer).waitFor();
+      expect(await siblingPane.locator(composer).inputValue()).toBe(siblingDraft);
+    } catch (error) {
+      await page.screenshot({
+        path: `${suite.artifactDir}/private-draft-update-failure.png`,
+        fullPage: true,
+      });
+      console.log(JSON.stringify({ reloads, url: page.url() }));
+      throw error;
+    }
+  });
+
+  it.each([false, true])(
+    "protects an unsent Incognito New Session draft during an update (in Settings: %s)",
+    async (settings) => {
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.getByRole("switch", { name: "Incognito", exact: true }).click();
+      const composer = page.locator(".new-session-page textarea");
+      const text = "Private New Session draft — café 雪 🦞";
+      await composer.fill(text);
+      await page.locator(".new-session-page .agent-chat__file-input").setInputFiles({
+        name: "private-start.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Private New Session attachment"),
+      });
+      await page.getByText("private-start.txt", { exact: true }).first().waitFor();
+      if (settings) {
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await sidebar.locator(".sidebar-identity-card").click();
+        await sidebar
+          .locator("wa-dropdown.sidebar-identity-menu")
+          .getByRole("menuitem", { name: "Settings", exact: true })
+          .click();
+        await page
+          .locator(".settings-sidebar")
+          .getByRole("link", { name: "Appearance", exact: true })
+          .click();
+        await page.getByRole("heading", { name: "Typography", exact: true }).waitFor();
+      }
+      const automaticReload = page.waitForEvent("domcontentloaded");
+      await gateway.setOnline(false);
+      await gateway.deferNext("connect");
+      const previous = (await gateway.getRequests("connect")).length;
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("connect", { after: previous });
+      await gateway.rejectDeferred("connect", {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: "PROTOCOL_MISMATCH",
+          gatewayBuildId: "private-new-session-build",
+          reloadRequired: true,
+        },
+        retryable: false,
+      });
+      const dialog = page.locator('openclaw-modal-dialog[label="Unsent Incognito draft"]');
+      const outcome = await Promise.race([
+        automaticReload.then(() => "reloaded" as const),
+        (async () => {
+          await page.getByRole("button", { name: /Server updated/u }).click();
+          await page.getByRole("button", { name: "Review private draft", exact: true }).click();
+          await dialog.waitFor();
+          return "held" as const;
+        })(),
+      ]);
+      if (outcome === "reloaded") {
+        await page.screenshot({
+          path: `${suite.artifactDir}/private-new-session-lost-${settings}.png`,
+          fullPage: true,
+        });
+      }
+      expect(outcome, "a private New Session draft must hold automatic document replacement").toBe(
+        "held",
+      );
+      expect(
+        await dialog.getByRole("textbox", { name: "Draft text", exact: true }).inputValue(),
+      ).toBe(text);
+      await dialog
+        .getByRole("button", { name: "Download private-start.txt", exact: true })
+        .waitFor();
+      if (settings) {
+        await page.setViewportSize({ width: 520, height: 900 });
+      }
+      await page.screenshot({
+        path: `${suite.artifactDir}/private-new-session-review-${settings}.png`,
+        fullPage: true,
+      });
+      await dialog.getByRole("button", { name: "Keep in this tab", exact: true }).click();
+      await page.getByRole("button", { name: /Server updated/u }).click();
+      await page.getByRole("button", { name: "Review private draft", exact: true }).click();
+      const reloaded = page.waitForEvent("domcontentloaded");
+      await dialog
+        .getByRole("button", { name: "Discard this draft and refresh", exact: true })
+        .click();
+      await reloaded;
+    },
+  );
 });

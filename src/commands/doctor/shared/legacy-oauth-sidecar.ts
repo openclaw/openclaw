@@ -4,6 +4,7 @@ import { createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -12,7 +13,6 @@ import { LEGACY_OAUTH_REF_PROVIDER } from "../../../agents/auth-profiles/legacy-
 import type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
 import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
-import { isPathInside } from "../../../infra/path-safety.js";
 
 export { isLegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 export type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
@@ -115,39 +115,19 @@ function uniquePaths(paths: Array<string | undefined>): string[] {
 }
 
 function resolveLegacyOAuthSecretKeyFileCandidates(env: NodeJS.ProcessEnv): string[] {
+  const home = (process.platform === "win32" ? env.USERPROFILE : env.HOME)?.trim() || os.homedir();
+  let root: string | undefined;
+  let directory = "OpenClaw";
   if (process.platform === "win32") {
-    const home = env.USERPROFILE?.trim() || os.homedir();
-    const root = env.APPDATA?.trim() || (home ? path.join(home, "AppData", "Roaming") : undefined);
-    return uniquePaths([
-      root ? path.join(root, "OpenClaw", LEGACY_OAUTH_SECRET_KEY_FILE_NAME) : undefined,
-      home
-        ? path.join(home, ".openclaw-auth-profile-secrets", LEGACY_OAUTH_SECRET_KEY_FILE_NAME)
-        : undefined,
-    ]);
+    root = env.APPDATA?.trim() || (home ? path.join(home, "AppData", "Roaming") : undefined);
+  } else if (process.platform === "darwin") {
+    root = home ? path.join(home, "Library", "Application Support") : undefined;
+  } else {
+    root = env.XDG_CONFIG_HOME?.trim() || (home ? path.join(home, ".config") : undefined);
+    directory = "openclaw";
   }
-
-  if (process.platform === "darwin") {
-    const home = env.HOME?.trim() || os.homedir();
-    return uniquePaths([
-      home
-        ? path.join(
-            home,
-            "Library",
-            "Application Support",
-            "OpenClaw",
-            LEGACY_OAUTH_SECRET_KEY_FILE_NAME,
-          )
-        : undefined,
-      home
-        ? path.join(home, ".openclaw-auth-profile-secrets", LEGACY_OAUTH_SECRET_KEY_FILE_NAME)
-        : undefined,
-    ]);
-  }
-
-  const home = env.HOME?.trim() || os.homedir();
-  const root = env.XDG_CONFIG_HOME?.trim() || (home ? path.join(home, ".config") : undefined);
   return uniquePaths([
-    root ? path.join(root, "openclaw", LEGACY_OAUTH_SECRET_KEY_FILE_NAME) : undefined,
+    root ? path.join(root, directory, LEGACY_OAUTH_SECRET_KEY_FILE_NAME) : undefined,
     home
       ? path.join(home, ".openclaw-auth-profile-secrets", LEGACY_OAUTH_SECRET_KEY_FILE_NAME)
       : undefined,

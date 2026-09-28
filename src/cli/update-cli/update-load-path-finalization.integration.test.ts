@@ -178,10 +178,12 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           });
           expect(getUpdateRun(parent.runId)?.status).toBe("running");
           if (!recordsWarning) {
+            const reason =
+              command === "resume-unowned"
+                ? "Cannot verify a live parent for the inherited update history."
+                : "synthetic update history is busy";
             expect(errors).toHaveBeenCalledWith(
-              expect.stringContaining(
-                "Post-core update evidence could not be saved to update history",
-              ),
+              `Post-core update evidence could not be saved: ${reason} Update completion may require Doctor verification.`,
             );
           }
           // Published parents close their run without projecting plugin warning rows.

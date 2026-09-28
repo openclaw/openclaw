@@ -1,6 +1,3 @@
-/**
- * Estimates prompt pressure and decides pre-prompt compaction routing.
- */
 import { resolveCompactionReplayPressure } from "@openclaw/ai/transports";
 import type { Model } from "@openclaw/llm-core";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
@@ -94,7 +91,6 @@ function resolveProviderContextBoundary(
   return undefined;
 }
 
-/** Estimates token pressure from serialized tool definitions sent alongside the prompt. */
 export function estimateToolSchemaTokenPressure(
   tools: Parameters<typeof estimateToolSchemaTokens>[0],
 ): number {
@@ -313,7 +309,6 @@ function resolveCompactionPressureDecision(
   };
 }
 
-/** Formats the compact operator log line for one pre-prompt budget check. */
 export function formatPrePromptPrecheckLog(params: {
   result: PreemptiveCompactionDecision;
   sessionKey?: string;
@@ -346,7 +341,6 @@ export function formatPrePromptPrecheckLog(params: {
   );
 }
 
-/** Converts the pre-prompt decision into the persisted session context-budget status record. */
 export function buildPrePromptContextBudgetStatus(params: {
   result: PreemptiveCompactionDecision;
   provider: string;

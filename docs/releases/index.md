@@ -9,6 +9,8 @@ who contributed, with links to the source changes.
 
 ## Releases
 
+- [v2026.9.6](/releases/2026.9.6) - Start background tasks from the command palette, create personal themes, follow live meeting notes, and retain Telegram group history.
+- [v2026.9.5](/releases/2026.9.5) - Install supported plugins without restarting, set up teams of specialist agents, and use GPT Live in meetings and calls.
 - [v2026.9.4](/releases/2026.9.4) - Plugin and skill discovery, visible skill learning, cloud-worker controls, GPT Image 2.5, and terminal questions.
 - [v2026.9.3](/releases/2026.9.3) - Clean update recovery, faster session reconnects, live browser automation, revocable chat links, searchable meeting transcripts, and repository-backed cloud work. Also includes persistent Workshop skills, native Mac tabs, and provider account controls.
 - [v2026.9.2](/releases/2026.9.2) - Reliability and recovery improvements, OpenAI GPT-6 Astra and Meta Muse Spark 1.3 support, and flexible task workspaces.

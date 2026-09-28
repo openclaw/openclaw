@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
 import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
@@ -14,20 +13,10 @@ import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js"
 
 const skillsLogger = createSubsystemLogger("skills");
 
-type WorkspaceSkillBuildOptions = {
-  executionWorkspaceDir?: string;
-  librarySelections?: SkillSnapshot["librarySelections"];
-  config?: OpenClawConfig;
-  managedSkillsDir?: string;
-  bundledSkillsDir?: string;
-  entries?: SkillEntry[];
-  agentId?: string;
-  skillFilter?: string[];
-  skillOverrides?: Record<string, boolean>;
-  eligibility?: SkillEligibilityContext;
+type WorkspaceSkillBuildOptions = NonNullable<
+  Parameters<typeof resolveWorkspaceSkillPromptEntries>[1]
+> & {
   preserveEntryOrder?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  assertCurrent?: () => void;
 };
 
 async function resolveWorkspaceSkillPromptState(
@@ -76,6 +65,7 @@ export async function buildSkillSnapshot(
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
+      gatewayFilePath: entry.skill.fileHost === "gateway" ? entry.skill.filePath : undefined,
       skillKey: resolveSkillKey(entry.skill, entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),

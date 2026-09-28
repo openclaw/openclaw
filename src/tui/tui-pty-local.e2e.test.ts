@@ -6,7 +6,6 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, type TestFunction } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import {
@@ -24,8 +23,8 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import {
-  acquireSessionCostUsageRefreshLock,
   isSessionCostUsageRefreshRunning,
+  prepareSessionCostUsageRefreshLock,
 } from "../infra/session-cost-usage-cache.sqlite.js";
 import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.js";
 import { runExec } from "../process/exec.js";
@@ -51,6 +50,7 @@ import {
   registerIdempotentCleanup,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
+import { buildTuiProcessArgs } from "./tui-pty-process-test-support.js";
 import { startRuntimePty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 type MockModelServer = {
@@ -448,28 +448,6 @@ async function startMockModelServer(
   return await startRoutedMockModelServer({
     "gpt-5.5": { replyText, ...opts },
   });
-}
-
-function buildTuiCliScript(args: string[]) {
-  const tuiCliModuleUrl = pathToFileURL(path.join(process.cwd(), "src/cli/tui-cli.ts")).href;
-  return [
-    `import { Command } from "commander";`,
-    `import { registerTuiCli } from ${JSON.stringify(tuiCliModuleUrl)};`,
-    `const program = new Command();`,
-    `program.exitOverride();`,
-    `registerTuiCli(program);`,
-    `program.parseAsync([process.execPath, "openclaw", ...${JSON.stringify(args)}], { from: "node" }).catch((error) => {`,
-    `  console.error(error);`,
-    `  process.exit(1);`,
-    `});`,
-  ].join("\n");
-}
-
-function buildTuiProcessArgs(args: string[]) {
-  if (process.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI === "1") {
-    return [path.join(process.cwd(), "openclaw.mjs"), ...args];
-  }
-  return ["--import", "tsx", "--eval", buildTuiCliScript(args)];
 }
 
 function buildMockModelProvider(baseUrl: string, modelIds: string[]): ModelProviderConfig {
@@ -1248,9 +1226,7 @@ describe("TUI PTY real backends", () => {
         );
         const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env: fixture.env });
         const selectedSession = { agentId, sessionKey, storePath: databasePath };
-        let refreshOwner:
-          | Awaited<ReturnType<typeof acquireSessionCostUsageRefreshLock>>
-          | undefined;
+        let refreshOwner: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
         // Repeated teardown must not reopen the removed root through release().
         cleanupState.run = createIdempotentCleanup(() =>
           runQaGatewayFixture(
@@ -1270,8 +1246,8 @@ describe("TUI PTY real backends", () => {
               // An empty existing row still makes the direct Session reader wait.
               expect(loadSessionEntry(selectedSession)).toBeUndefined();
               if (cacheState === "refreshing") {
-                refreshOwner = await acquireSessionCostUsageRefreshLock(agentId, databasePath);
-                expect(refreshOwner.acquired).toBe(true);
+                refreshOwner = prepareSessionCostUsageRefreshLock(agentId, databasePath);
+                expect(await refreshOwner.acquire()).toBe(true);
               }
               expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
                 cacheState === "refreshing",
@@ -2774,7 +2750,7 @@ export default {
   );
 
   registerGatewayTest(
-    "collects two TUI-client prompts into one real Gateway followup turn",
+    "preserves separate authorized TUI-client turns in FIFO order under collect mode",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("collect", onTestFinished);
       const queueClient = new GatewayChatClient({
@@ -2783,24 +2759,11 @@ export default {
       });
       try {
         let queueClientConnected = false;
-        const admittedRunIds = new Set<string>();
+        const terminalObserver = createChatTerminalObserver();
         queueClient.onConnected = () => {
           queueClientConnected = true;
         };
-        // Retain admission events that arrive before both chat.send ACKs settle.
-        queueClient.onEvent = ({ event, payload }) => {
-          if (event !== "chat" || !payload || typeof payload !== "object") {
-            return;
-          }
-          const chatEvent = payload as { runId?: unknown; sessionKey?: unknown; state?: unknown };
-          if (
-            chatEvent.state === "final" &&
-            chatEvent.sessionKey === fixture.sessionKey &&
-            typeof chatEvent.runId === "string"
-          ) {
-            admittedRunIds.add(chatEvent.runId);
-          }
-        };
+        queueClient.onEvent = terminalObserver.onEvent;
         queueClient.start();
         await waitFor({
           timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
@@ -2821,34 +2784,38 @@ export default {
                 fixture.run.output(),
             ),
         });
-        const alphaSend = queueClient.sendChat({
-          sessionKey: fixture.sessionKey,
-          message: "collect prompt alpha",
-        });
-        const betaSend = queueClient.sendChat({
-          sessionKey: fixture.sessionKey,
-          message: "collect prompt beta",
-        });
-        const sendResults = await Promise.all([alphaSend, betaSend]);
-        expect(sendResults.map((result) => result.status)).toEqual(["started", "started"]);
-        const expectedRunIds = sendResults.map(({ runId }) => runId);
-        await waitFor({
-          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (expectedRunIds.every((runId) => admittedRunIds.has(runId)) ? true : null),
-          onTimeout: () =>
-            new Error(
-              `queued prompts were not admitted: expected ${expectedRunIds.join(", ")}; ` +
-                `observed ${[...admittedRunIds].join(", ")}\n${fixture.gateway.logs()}\n` +
-                fixture.run.output(),
-            ),
-        });
+        // Each authenticated turn retains its own skill-authoring capability.
+        // Admit alpha before submitting beta so the test observes a defined FIFO order.
+        for (const message of ["collect prompt alpha", "collect prompt beta"]) {
+          const result = await queueClient.sendChat({ sessionKey: fixture.sessionKey, message });
+          expect(result.status).toBe("started");
+          await terminalObserver.waitForFinal({
+            runId: result.runId,
+            sessionKey: fixture.sessionKey,
+            timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+            onTimeout: () =>
+              new Error(
+                `queued prompt was not admitted: expected ${result.runId}; ` +
+                  `observed ${JSON.stringify(terminalObserver.readFinals(fixture.sessionKey))}\n${fixture.gateway.logs()}\n` +
+                  fixture.run.output(),
+              ),
+          });
+        }
         fixture.mockModel.releaseFirstResponse();
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          read: () =>
+            fixture.mockModel.requests().length === 3 &&
+            terminalObserver
+              .readFinals(fixture.sessionKey)
+              .filter((terminal) =>
+                extractTextFromMessage(terminal.message).includes("FOLLOWUP_RUN_COMPLETE"),
+              ).length === 2
+              ? true
+              : null,
           onTimeout: () =>
             new Error(
-              `collected prompt did not reach the model\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+              `queued prompts did not both complete\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
             ),
         });
         await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
@@ -2863,10 +2830,11 @@ export default {
             null,
             2,
           )}\n${fixture.gateway.logs()}`,
-        ).toHaveLength(2);
-        const collectedBody = JSON.stringify(fixture.mockModel.requests()[1]?.body);
-        expect(collectedBody).toContain("collect prompt alpha");
-        expect(collectedBody).toContain("collect prompt beta");
+        ).toHaveLength(3);
+        const alphaBody = JSON.stringify(requests[1]?.body);
+        expect(alphaBody).toContain("collect prompt alpha");
+        expect(alphaBody).not.toContain("collect prompt beta");
+        expect(JSON.stringify(requests[2]?.body)).toContain("collect prompt beta");
       } finally {
         await queueClient.stop();
         await fixture.cleanup();

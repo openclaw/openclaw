@@ -5,6 +5,12 @@ import type { GatewayRequestContext } from "../server-methods/types.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import type { AgentTurnIo } from "./types.js";
 
+export class AgentRequestReservationEndedError extends Error {
+  constructor() {
+    super("Agent request reservation is no longer active.");
+  }
+}
+
 export function resolveAgentDedupeKeys(params: {
   idempotencyKey: string;
   execApprovalFollowupApprovalId?: string;
@@ -48,6 +54,21 @@ export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
     payload !== null &&
     (payload as { status?: unknown }).status === "accepted"
   );
+}
+
+export function resolveAgentWaitSource(
+  context: Pick<GatewayRequestContext, "chatAbortControllers" | "dedupe">,
+  runId: string,
+): "agent" | "chat" | undefined {
+  const activeChatEntry = context.chatAbortControllers.get(runId);
+  if (activeChatEntry) {
+    return activeChatEntry.kind === "agent" ? "agent" : "chat";
+  }
+  // Cancellation can retire the controller before dispatch publishes its result;
+  // sessionless admissions also retain their RPC owner in the accepted dedupe.
+  return isAcceptedAgentDedupePayload(context.dedupe.get(`agent:${runId}`)?.payload)
+    ? "agent"
+    : undefined;
 }
 
 function isPreRegistrationAbortedAgentDedupePayload(payload: unknown): payload is {
@@ -122,6 +143,23 @@ export function setGatewayDedupeEntries(params: {
   }
 }
 
+export function buildAbortedAgentPayload(
+  runId: string,
+  stopReason: string,
+  session?: { agentId?: string; sessionKey?: string },
+) {
+  return {
+    runId,
+    ...(session?.agentId ? { agentId: session.agentId } : {}),
+    ...(session?.sessionKey ? { sessionKey: session.sessionKey } : {}),
+    status: "timeout" as const,
+    summary: "aborted",
+    stopReason,
+    timeoutPhase: "queue" as const,
+    providerStarted: false,
+  };
+}
+
 export function setAbortedAgentDedupeEntries(params: {
   dedupe: GatewayRequestContext["dedupe"];
   keys: readonly string[];
@@ -138,16 +176,7 @@ export function setAbortedAgentDedupeEntries(params: {
     entry: {
       ts: Date.now(),
       ok: true,
-      payload: {
-        runId: params.runId,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        status: "timeout" as const,
-        summary: "aborted",
-        stopReason: params.stopReason,
-        timeoutPhase: "queue",
-        providerStarted: false,
-      },
+      payload: buildAbortedAgentPayload(params.runId, params.stopReason, params),
     },
   });
 }
@@ -155,7 +184,7 @@ export function setAbortedAgentDedupeEntries(params: {
 export function replayAgentTurnIfCached(params: {
   acceptedOnly?: boolean;
   preflight: { agentDedupeKeys: readonly string[]; runId: string };
-  context: GatewayRequestContext;
+  context: Pick<GatewayRequestContext, "dedupe" | "chatAbortControllers">;
   io: AgentTurnIo;
 }): boolean {
   const { agentDedupeKeys, runId } = params.preflight;
@@ -200,7 +229,10 @@ export function replayAgentTurnIfCached(params: {
       { cached: true, runId: cachedRunId },
     );
   } else {
-    params.io.emitAcceptance([cached.ok, cached.payload, cached.error], { cached: true });
+    params.io.emitAcceptance([cached.ok, cached.payload, cached.error], {
+      cached: true,
+      ...(cached.incognito && cached.error ? { errorMessage: "Incognito agent error." } : {}),
+    });
   }
   return true;
 }

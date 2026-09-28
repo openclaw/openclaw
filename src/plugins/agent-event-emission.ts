@@ -34,15 +34,10 @@ function normalizePluginEventData(params: {
   pluginName?: string;
   data: PluginJsonValue;
 }): Record<string, unknown> {
-  if (params.data && typeof params.data === "object" && !Array.isArray(params.data)) {
-    return {
-      ...params.data,
-      pluginId: params.pluginId,
-      ...(params.pluginName ? { pluginName: params.pluginName } : {}),
-    };
-  }
   return {
-    value: params.data,
+    ...(params.data && typeof params.data === "object" && !Array.isArray(params.data)
+      ? params.data
+      : { value: params.data }),
     pluginId: params.pluginId,
     ...(params.pluginName ? { pluginName: params.pluginName } : {}),
   };

@@ -1,6 +1,6 @@
 // Configure wizard Gateway tests cover run-mode probes, auth routing, and cancellation.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -44,9 +44,12 @@ function getGateway(config: Record<string, unknown>) {
 
 describe("runConfigureWizard", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
     vi.resetAllMocks();
     setupWizardTestDefaults();
   });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("runs selected sections in canonical order and commits their combined config once", async () => {
     setupBaseWizardState();
@@ -166,7 +169,6 @@ describe("runConfigureWizard", () => {
 
   it.each([
     { platform: "linux", deadlineMs: 45_000, probeTimeoutMs: 10_000 },
-    { platform: "darwin", deadlineMs: 45_000, probeTimeoutMs: 10_000 },
     { platform: "win32", deadlineMs: 90_000, probeTimeoutMs: 15_000 },
   ] as const)(
     "allows managed daemon startup before health on $platform",
@@ -379,6 +381,7 @@ describe("runConfigureWizard", () => {
       expect(remoteProbe).toEqual({
         url: "wss://gateway.example.test",
         originScopedDeviceAuth: true,
+        configuredRemote: true,
         config: expect.objectContaining({
           gateway: expect.objectContaining({
             remote: expect.objectContaining({

@@ -12,8 +12,10 @@ import {
   runDiskSpaceHealth,
   runLegacyCronHealth,
   runLegacyPluginManifestHealth,
+  runLegacyPluginSourceCapturesHealth,
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
+  runRetainedUpdateRuntimesHealth,
   runSandboxHealth,
   runSessionSnapshotsHealth,
   runSessionTranscriptHeadersHealth,
@@ -114,7 +116,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthChecks: {
         description: "Auth profile cooldown, expiry, missing credential, and legacy override state",
         defaultEnabled: false,
@@ -160,7 +162,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:structured-health-repairs",
       label: "Plugin health inspection and repair",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       run: params.runStructuredHealthRepairs,
     }),
     createDoctorHealthContribution({
@@ -311,6 +313,32 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:legacy-plugin-source-captures",
+      label: "Legacy plugin captures",
+      updateWork: { kind: "startup" },
+      run: runLegacyPluginSourceCapturesHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:retained-update-runtimes",
+      label: "Updater runtimes",
+      updateWork: { kind: "startup" },
+      run: runRetainedUpdateRuntimesHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:update-snapshots",
+      label: "Retained update database snapshots",
+      updateWork: { kind: "standalone" },
+      healthChecks: {
+        description: "Retained npm update database snapshots need operator review before removal.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectUpdateSnapshotHealthFindings } =
+            await import("../commands/doctor-update-snapshots.js");
+          return collectUpdateSnapshotHealthFindings(ctx.env);
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",
       label: "UI protocol freshness",
       healthCheckIds: ["core/doctor/ui-protocol-freshness"],
@@ -420,7 +448,8 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Session snapshots",
       updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
-        description: "Stale cached session snapshot paths are represented as findings.",
+        description:
+          "Historical session snapshot paths are advisory findings; originals are preserved.",
         defaultEnabled: false,
         async detect(ctx) {
           const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToHealthFinding } =
@@ -429,13 +458,6 @@ export function resolveInitialDoctorHealthContributions(params: {
             sessionSnapshotIssueToHealthFinding,
           );
         },
-        repair: legacyOwnedRepair(async (ctx) => {
-          const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToRepairEffect } =
-            await import("../commands/doctor-session-snapshots.js");
-          return (await detectSessionSnapshotHealthIssues({ cfg: ctx.cfg, env: process.env })).map(
-            sessionSnapshotIssueToRepairEffect,
-          );
-        }, "legacy doctor session snapshot contribution owns snapshot rewrites"),
       },
       run: runSessionSnapshotsHealth,
     }),

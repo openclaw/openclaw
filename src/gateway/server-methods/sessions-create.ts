@@ -1,7 +1,6 @@
 // Session creation, initial turns, and managed-worktree provisioning.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -23,9 +22,12 @@ import { assertPreparedSkillLibrarySelection } from "../../skills/library/select
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
+import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
-import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
-import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
+import { createGatewaySession } from "../session-create-service.js";
+import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import {
   loadGatewaySessionEntryReadOnly,
@@ -36,13 +38,14 @@ import {
   validateSessionWorktreeSelection,
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
+import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
-import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { registerCreatedSessionCategory } from "./session-create-category.js";
+import { registerCommittedSessionCategory } from "./session-create-category.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import {
   resolveSessionCreateInitialTurn,
@@ -60,6 +63,10 @@ import {
 } from "./session-create-root.js";
 import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import {
+  bindGatewayRequestHandlerMutationAuthority,
+  readGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { prepareSessionModelAccountAccess } from "./users-model-account-access.js";
@@ -67,21 +74,37 @@ import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
-  "sessions.create": async ({
-    req,
-    params,
-    respond,
-    context,
-    client,
-    isWebchatConnect,
-    sessionMutationCommitGuard,
-    sessionMutationAuthorization,
-    signal,
-  }) => {
+  "sessions.create": idempotentSessionCreate(async (options) => {
+    using diagnostics = startSessionCreateDiagnostics();
+    const {
+      params,
+      respond,
+      context,
+      client,
+      sessionMutationAuthorization,
+      signal,
+      hasCurrentClientAuthority,
+    } = options;
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
       return;
     }
-    const p = params;
+    const uploadError = gatewayClientUploadPolicyError({
+      method: "sessions.create",
+      requestParams: params,
+      client,
+      context,
+    });
+    if (uploadError) {
+      respond(false, undefined, uploadError);
+      return;
+    }
+    const p = structuredClone(params);
+    const requestAuthority = readGatewayRequestMutationAuthority(options);
+    const getCurrentConfig = context.getRuntimeConfig;
+    const requestingOperatorProfileId = client?.authenticatedUserProfile?.profileId;
+    const operatorRoleActor = client?.internal?.operatorRoleActor
+      ? { ...client.internal.operatorRoleActor }
+      : undefined;
     const emptyWorkspace = p.worktreeSource === "empty";
     const worktreeSelectionError = validateSessionWorktreeSelection(p);
     if (worktreeSelectionError) {
@@ -107,12 +130,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedModel = normalizeOptionalString(p.model);
-    let personalAccounts: ReturnType<typeof prepareSessionModelAccountAccess>;
+    let personalAccounts: Awaited<ReturnType<typeof prepareSessionModelAccountAccess>>;
     try {
-      personalAccounts = prepareSessionModelAccountAccess(
-        { client, context, signal },
-        requestedModel,
-      );
+      personalAccounts = await prepareSessionModelAccountAccess(options, requestedModel);
     } catch (error) {
       if (!(error instanceof ModelAccountConnectAuthorityError)) {
         throw error;
@@ -121,17 +141,30 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
-    const cfg = context.getRuntimeConfig();
+    const cfg = getCurrentConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     // Both uncommitted selections must remain authorized after awaited preparation.
     const commitGuard = () => {
-      sessionMutationCommitGuard?.();
+      requestAuthority.assertCurrent();
       authority.commitGuard?.();
       sessionMutationAuthorization?.assertCurrent();
       assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
       personalModelSelection?.assertCurrent();
       personalAccountDefaults?.assertCurrent();
     };
+    await using operatorCapture = {
+      preparation: captureGatewayOperatorRunAuthority({
+        client,
+        context,
+        hasCurrentClientAuthority,
+        invocationAuthority: { assertCurrent: commitGuard, signal },
+      }),
+      async [Symbol.asyncDispose]() {
+        const captured = await this.preparation.catch(() => undefined);
+        captured?.release();
+      },
+    };
+    void operatorCapture.preparation.catch(() => {});
     const catalogId = normalizeOptionalString(p.catalogId);
     const catalogError = resolveSessionCreateCatalogSelectionError(p);
     if (catalogError) {
@@ -268,7 +301,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const clientScopes = Array.isArray(client?.connect?.scopes) ? [...client.connect.scopes] : [];
     if (p.permissionMode === "full" && client !== null && !clientScopes.includes(ADMIN_SCOPE)) {
       respond(
         false,
@@ -359,7 +392,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         : prepareSessionCreateFilesystemRoot({
             cfg,
             enforceSandboxContainment: Boolean(
-              sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true),
+              sessionCwd && !requestedExecNode && p.worktree !== true,
             ),
             requestedExecNode,
             requestedProjectId,
@@ -462,8 +495,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
-    const created = await createGatewaySession({
+    const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
+      getCurrentConfig,
+      onPhase: diagnostics?.mark,
+      operatorAuthority: operatorCapture.preparation,
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
@@ -481,12 +517,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       pendingProjectGitUrl: normalizeSessionProjectGitUrl(requestedProjectGitUrl),
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
-      ...(client?.authenticatedUserProfile
-        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
-        : {}),
-      ...(client?.internal?.operatorRoleActor
-        ? { operatorRoleActor: client.internal.operatorRoleActor }
-        : {}),
+      ...(requestingOperatorProfileId ? { requestingOperatorProfileId } : {}),
+      ...(operatorRoleActor ? { operatorRoleActor } : {}),
       visibility: p.visibility,
       allowExistingModelSelection,
       parentSessionKey,
@@ -527,6 +559,21 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       loadGatewayModelCatalogSnapshot: () =>
         context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
       commitGuard,
+      afterSessionCommitted: (entry, source) =>
+        registerCommittedSessionCategory(
+          entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,
+          context,
+          source,
+        ),
+      onCreatedSessionCommitted: (committed) => {
+        sessionMutationAuthorization?.recordCreatedSession?.({
+          agentId: committed.agentId,
+          sessionKey: committed.key,
+          storePath: committed.storePath,
+          sessionId: committed.entry.sessionId,
+          lifecycleRevision: committed.entry.lifecycleRevision,
+        });
+      },
       afterCreate: async (session) => {
         if (!authority.hasActive()) {
           return;
@@ -535,32 +582,34 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;
         }
-        const sendChat = expectDefined(chatHandlers["chat.send"], "chat.send handler");
-        await sendChat({
-          req,
-          params: {
-            sessionKey: session.key,
-            agentId: session.agentId,
-            message: message ?? "",
-            idempotencyKey: initialRunId,
-            ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
-            ...(p.mentions ? { mentions: p.mentions } : {}),
-            ...(attachments ? { attachments } : {}),
+        const sendOptions = bindGatewayRequestHandlerMutationAuthority(
+          options,
+          {
+            ...options,
+            params: {
+              sessionKey: session.key,
+              agentId: session.agentId,
+              message: message ?? "",
+              idempotencyKey: initialRunId,
+              ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
+              ...(p.mentions ? { mentions: p.mentions } : {}),
+              ...(attachments ? { attachments } : {}),
+            },
+            respond: (ok, payload, error, meta) => {
+              if (ok && payload && typeof payload === "object") {
+                runPayload = payload as Record<string, unknown>;
+              } else {
+                runError = error;
+              }
+              runMeta = meta;
+            },
           },
-          respond: (ok, payload, error, meta) => {
-            if (ok && payload && typeof payload === "object") {
-              runPayload = payload as Record<string, unknown>;
-            } else {
-              runError = error;
-            }
-            runMeta = meta;
-          },
-          context,
-          client,
-          isWebchatConnect,
-        });
+          undefined,
+        );
+        await handleDirectExternalChatSend(sendOptions);
       },
-    }).catch((error: unknown) => {
+    };
+    const created = await createGatewaySession(createParams).catch((error: unknown) => {
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return undefined;
@@ -577,7 +626,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (created.postCommit.status === "failed") {
       runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
-    registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
     const createdWorktree = preparedWorktree?.worktree
       ? {
           id: preparedWorktree.worktree.id,
@@ -595,6 +643,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         cached: runMeta?.cached === true,
       });
 
+    diagnostics?.mark("response");
     respond(true, {
       ok: true,
       key: created.key,
@@ -606,6 +655,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       resolved: created.resolved,
       ...(createdWorktree ? { worktree: createdWorktree } : {}),
     });
+    diagnostics?.mark("handlerExit");
     emitSessionsChanged(context, {
       sessionKey: created.key,
       agentId: created.agentId,
@@ -618,9 +668,5 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         reason: "send",
       });
     }
-  },
+  }),
 };
-
-sessionCreateHandlers["sessions.create"] = idempotentSessionCreate(
-  expectDefined(sessionCreateHandlers["sessions.create"], "sessions.create handler"),
-);

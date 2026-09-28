@@ -98,8 +98,8 @@ type OpenAIInternalRealtimeVoiceProviderApi = {
   }) => {
     config: RealtimeVoiceProviderConfig;
     clientHints?: {
-      modelSource: "gateway";
-      gatewayRelaySupported: false;
+      modelSource?: "gateway";
+      gatewayRelaySupported: boolean;
     };
   };
   validateGatewayRelayLaunch?: (ctx: {
@@ -507,20 +507,10 @@ export function buildOpenAIRealtimeVoiceProvider(
       return new OpenAIRealtimeBridge(
         {
           ...req,
-          apiKey: config.apiKey,
-          model: config.model,
+          ...config,
           voice: normalizeOpenAIRealtimeVoice(config.voice),
-          temperature: config.temperature,
-          vadThreshold: config.vadThreshold,
-          silenceDurationMs: config.silenceDurationMs,
-          prefixPaddingMs: config.prefixPaddingMs,
           interruptResponseOnInputAudio:
             req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
-          minBargeInAudioEndMs: config.minBargeInAudioEndMs,
-          reasoningEffort: config.reasoningEffort,
-          azureEndpoint: config.azureEndpoint,
-          azureDeployment: config.azureDeployment,
-          azureApiVersion: config.azureApiVersion,
           logger: options?.logger ?? { warn: () => undefined },
         },
         context,

@@ -312,7 +312,10 @@ Media understanding is auto-resolved from the configured Qwen auth; no extra
 config is needed. Make sure you are on a Standard (pay-as-you-go) endpoint for
 media understanding to work.
 
-To make Qwen the default video provider:
+### Video generation
+
+Use `QWEN_API_KEY` from a Standard endpoint. To make Qwen the default video
+provider:
 
 ```json5
 {
@@ -324,7 +327,10 @@ To make Qwen the default video provider:
 }
 ```
 
-Each Wan model advertises only its matching runtime mode:
+With exactly one reference image and no video, `wan2.6-t2v` automatically
+uses `wan2.6-i2v`; the result reports the resolved model. This routing applies
+only when a same-generation image-to-video sibling exists in the known model
+catalog. Other requests use the selected model's mode:
 
 | Mode                         | Models                           | Reference limits                      | Max duration | Supported controls                                                   |
 | ---------------------------- | -------------------------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
@@ -338,9 +344,12 @@ documented exact `size`. Wan 2.6 image-to-video sends the `resolution` tier and
 uses the input image's aspect ratio. Wan 2.7 reference-to-video sends
 `media`, `resolution`, and `ratio` and always generates audio.
 
-Reference image/video inputs require remote http(s) URLs; local file paths are
-rejected up front because the DashScope video endpoint does not accept uploaded
-local buffers for those references.
+Image-to-video and Wan 2.7 reference images accept local files or remote
+`http(s)` URLs. Local images are sent as base64 data URIs with a maximum of
+20 MB per image before encoding, matching the [Wan image input
+limit](https://www.alibabacloud.com/help/en/model-studio/image-to-video-api-reference).
+Reference videos and Wan 2.6 reference-to-video images still require remote
+`http(s)` URLs.
 
 <Note>
 See [Video generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.

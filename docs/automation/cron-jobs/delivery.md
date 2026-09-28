@@ -21,6 +21,12 @@ Where a finished run sends its output, what happens when a run or a delivery fai
 
 A successful primary webhook run with no nonblank summary intentionally skips the POST and records `deliverySuppressionReason: "empty"`, matching announce delivery's optional-output contract. Execution errors still send the error event even without a summary.
 
+Primary webhooks record delivery after an HTTP 2xx acknowledgment. An HTTP rejection
+records **Not delivered**. If the request may have reached the receiver but its
+response is lost or times out, delivery stays **Unknown**; the transport does not
+retry that ambiguous send. Required delivery also leaves completion unknown,
+while best-effort delivery can complete successfully without claiming delivery.
+
 When `gateway.publicOrigin` is configured and the Control UI is enabled, chat
 notifications include an `Inspect` link into the Control UI. Command and script
 completion announcements open the automation run; isolated agent announcements
@@ -39,6 +45,8 @@ If the bound conversation is an external channel, OpenClaw also performs its nor
 When the bound conversation has no external channel route — WebChat/Control UI conversations, or a gateway with no channel plugins configured — the session commit alone completes delivery and the run succeeds without attempting an external send. If the conversation does name an external route that cannot be resolved at run time, the committed result stays in the conversation and the run records the resolution failure as its delivery error: a delivery failure, not a turn failure.
 
 For current agent-turn jobs, configuring unrelated external channels does not change this behavior. An explicit delivery channel, recipient, account, or thread still uses normal channel resolution. If that resolution fails, the report remains in the conversation and the run records the delivery error, even when no external channel could be selected.
+
+From WebChat, create a current-session agent-turn job with `delivery: { mode: "announce" }` (or omit `delivery`). The tool does not copy internal WebChat conversation coordinates into an external announce route. Do not set `delivery.channel: "webchat"`; explicit channels still must pass normal configured-channel validation. Condition triggers use the same delivery rules.
 
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
@@ -64,6 +72,8 @@ services. Leaving the policy unset keeps strict behavior.
 </Warning>
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
+
+For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
 
 On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
 

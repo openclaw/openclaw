@@ -6,7 +6,7 @@ import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/op
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  countPluginStateLiveEntries,
+  getPluginStateCapacity,
   createPluginStateKeyedStore,
   pluginStateEntriesInKeyRange,
   resetPluginStateStoreForTests,
@@ -21,18 +21,8 @@ async function expectPluginStateReadFailure(
   promise: Promise<unknown>,
   expected: { operation: "entries" | "lookup" | "count"; path: string },
 ): Promise<void> {
-  let storeError: unknown;
-  try {
-    await promise;
-  } catch (error) {
-    storeError = error;
-  }
-  expect(storeError).toBeInstanceOf(PluginStateStoreError);
-  expect(storeError).toMatchObject({
-    code: "PLUGIN_STATE_READ_FAILED",
-    operation: expected.operation,
-    path: expected.path,
-  });
+  await expect(promise).rejects.toBeInstanceOf(PluginStateStoreError);
+  await expect(promise).rejects.toMatchObject({ code: "PLUGIN_STATE_READ_FAILED", ...expected });
 }
 
 describe("plugin state fresh-store reads", () => {
@@ -63,7 +53,7 @@ describe("plugin state fresh-store reads", () => {
             env: state.env,
           }),
         ).toEqual([]);
-        expect(countPluginStateLiveEntries("discord", state.env)).toBe(0);
+        expect(getPluginStateCapacity("discord", state.env).liveEntries).toBe(0);
 
         const verify = new DatabaseSync(databasePath, { readOnly: true });
         try {

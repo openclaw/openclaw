@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
+import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import * as records from "./session-row-projection-record.js";
@@ -49,21 +50,25 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
     indexes: { byKey, byStore, byAgent },
     scope,
   } = params;
+  const storePaths =
+    !query.key && query.storePath
+      ? (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath])
+      : undefined;
   const candidates = query.key
     ? byKey.get(`${kind}:${query.key}`)
-    : query.storePath
-      ? new Set(
-          (scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath]).flatMap(
-            (storePath) => Array.from(byStore.get(storePath) ?? []),
-          ),
-        )
+    : storePaths
+      ? storePaths.length === 1
+        ? byStore.get(storePaths[0]!)
+        : new Set(storePaths.flatMap((storePath) => Array.from(byStore.get(storePath) ?? [])))
       : query.agentId
         ? byAgent.get(query.agentId)
         : rows.keys();
+  if (!candidates) {
+    return [];
+  }
   const matches = createSessionRowScopeMatcher(query, scope);
-  const ids = Array.from(candidates ?? []);
   const selected: T[] = [];
-  for (const id of ids) {
+  for (const id of candidates) {
     const row = rows.get(id);
     if (row !== undefined && matches(row)) {
       selected.push(row);
@@ -77,6 +82,7 @@ export function prepareSessionRowScopes(
   cfg: OpenClawConfig,
   agentIds: Iterable<string>,
   residentPaths: ReadonlyMap<string, string>,
+  discovery?: GatewaySessionStoreDiscovery,
 ) {
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
@@ -85,6 +91,7 @@ export function prepareSessionRowScopes(
     try {
       const resolved = resolveGatewaySessionStoreTargets(cfg, {
         ...options,
+        discovery,
         includeIncognito: false,
       });
       for (const [identity, physical] of resolved.physicalTargets) {
@@ -143,7 +150,8 @@ export function prepareSessionRowScopes(
   return {
     select,
     physicalPaths(locator: string, agentId?: string) {
-      const normalized = residentPath(path.resolve(locator));
+      // Resident physical locators were normalized when the topology was prepared.
+      const normalized = filenames.has(locator) ? locator : residentPath(path.resolve(locator));
       const owners = aliases.get(normalized);
       return agentId
         ? [owners?.get(normalizeAgentId(agentId)) ?? normalized]
@@ -165,6 +173,7 @@ export function selectSessionRowEntries(
     dirty: ReadonlySet<string>;
     matching: (query: records.Query, kind?: string) => records.Row[];
     acquire: (row: records.Row) => records.Row | undefined;
+    referenced: (reference: string) => records.Row | undefined;
   },
   query: records.Query,
 ) {
@@ -176,7 +185,9 @@ export function selectSessionRowEntries(
   const children = new Set<string>();
   if (parent) {
     for (const ref of [
-      ...[...agents].map((agentId) => records.parentReference(cfg, parent, agentId)),
+      ...[...agents].map((agentId) =>
+        records.parentReference(cfg, parent, agentId, undefined, params.referenced),
+      ),
       ...matching({ ...query, key: parent }).map((row) =>
         records.physical(row.storeTarget.storePath, parent),
       ),
@@ -205,8 +216,19 @@ export function selectSessionRowEntries(
     : parent
       ? [...children].map((id) => rows.get(id))
       : matching(query);
-  const selected = candidates
-    .map((row) => (row && !sessionIdOrKey && dirty.has(records.identity(row)) ? acquire(row) : row))
-    .filter((row): row is records.EntryRow => records.hasEntry(row) && matches(row));
-  return records.sort(selected, query.sortBy);
+  const acquired =
+    sessionIdOrKey || dirty.size === 0
+      ? candidates
+      : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
+  // Each candidate path returns an owned array. Finish all acquisitions before
+  // compacting it, since acquiring one dirty row can update another row's facts.
+  let selectedCount = 0;
+  acquired.forEach((row) => {
+    if (records.hasEntry(row) && matches(row)) {
+      acquired[selectedCount++] = row;
+    }
+  });
+  acquired.length = selectedCount;
+  // SAFETY: The compacted prefix contains only rows accepted by records.hasEntry.
+  return records.sort(acquired as records.EntryRow[], query.sortBy);
 }

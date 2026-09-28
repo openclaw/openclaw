@@ -1,14 +1,23 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  validateGatewaySuspendStatusParams,
+  validateGatewaySuspendResumeParams,
   GatewaySuspendBlockerSchema,
-  GatewaySuspendPrepareResultSchema,
-  GatewaySuspendStatusResultSchema,
+  validateGatewaySuspendPrepareResult,
+  validateGatewaySuspendStatusResult,
   validateGatewaySuspendPrepareParams,
   validateGatewaySuspendHandoffParams,
 } from "./index.js";
 
 describe("gateway suspension protocol", () => {
+  it("opts into status metadata without extending resume parameters", () => {
+    const params = { suspensionId: "held-lease", includeLifecycle: true };
+    expect(validateGatewaySuspendStatusParams(params)).toBe(true);
+    expect(validateGatewaySuspendStatusParams({ ...params, includeLifecycle: "true" })).toBe(false);
+    expect(validateGatewaySuspendResumeParams(params)).toBe(false);
+    expect(validateGatewaySuspendResumeParams({ suspensionId: "held-lease" })).toBe(true);
+  });
   it("requires an exact handoff target and rejects unrelated interruption policy", () => {
     const target = { pid: 1, processInstanceId: "gateway-process" };
     const params = { suspensionId: "held-lease", target };
@@ -81,12 +90,10 @@ describe("gateway suspension protocol", () => {
       blockers: [{ kind: "terminal-session", count: 1, message: "1 open terminal session" }],
     };
 
-    expect(Value.Check(GatewaySuspendPrepareResultSchema, draining)).toBe(true);
-    expect(Value.Check(GatewaySuspendPrepareResultSchema, { ...draining, unexpected: true })).toBe(
-      false,
-    );
+    expect(validateGatewaySuspendPrepareResult(draining)).toBe(true);
+    expect(validateGatewaySuspendPrepareResult({ ...draining, unexpected: true })).toBe(false);
     expect(
-      Value.Check(GatewaySuspendPrepareResultSchema, {
+      validateGatewaySuspendPrepareResult({
         status: "busy",
         reason: "active-work",
         retryAfterMs: 250,
@@ -95,7 +102,7 @@ describe("gateway suspension protocol", () => {
       }),
     ).toBe(true);
     expect(
-      Value.Check(GatewaySuspendPrepareResultSchema, {
+      validateGatewaySuspendPrepareResult({
         status: "ready",
         suspensionId: "suspension-1",
         expiresAtMs: 2_000,
@@ -114,13 +121,90 @@ describe("gateway suspension protocol", () => {
       blockers: [{ kind: "terminal-persistence", count: 1, message: "1 pending terminal write" }],
     };
 
-    expect(Value.Check(GatewaySuspendStatusResultSchema, draining)).toBe(true);
-    expect(Value.Check(GatewaySuspendStatusResultSchema, { ...draining, suspensionId: "id" })).toBe(
-      false,
-    );
-    expect(Value.Check(GatewaySuspendStatusResultSchema, { status: "running" })).toBe(true);
-    expect(
-      Value.Check(GatewaySuspendStatusResultSchema, { status: "ready", expiresAtMs: 2_000 }),
-    ).toBe(true);
+    expect(validateGatewaySuspendStatusResult(draining)).toBe(true);
+    expect(validateGatewaySuspendStatusResult({ ...draining, suspensionId: "id" })).toBe(false);
+    expect(validateGatewaySuspendStatusResult({ status: "running" })).toBe(true);
+    expect(validateGatewaySuspendStatusResult({ status: "ready", expiresAtMs: 2_000 })).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "prepare busy",
+      validate: validateGatewaySuspendPrepareResult,
+      result: {
+        status: "busy",
+        reason: "active-work",
+        retryAfterMs: 250,
+        activeCount: 1,
+        blockers: [{ kind: "session-mutation", count: 1, message: "1 pending write" }],
+      },
+    },
+    {
+      name: "prepare draining",
+      validate: validateGatewaySuspendPrepareResult,
+      result: {
+        status: "draining",
+        suspensionId: "held-lease",
+        expiresAtMs: 2_000,
+        retryAfterMs: 250,
+        activeCount: 1,
+        blockers: [{ kind: "session-mutation", count: 1, message: "1 pending write" }],
+      },
+    },
+    {
+      name: "prepare ready",
+      validate: validateGatewaySuspendPrepareResult,
+      result: {
+        status: "ready",
+        suspensionId: "held-lease",
+        expiresAtMs: 2_000,
+        activeCount: 0,
+        blockers: [],
+      },
+    },
+    {
+      name: "status draining",
+      validate: validateGatewaySuspendStatusResult,
+      result: {
+        status: "draining",
+        expiresAtMs: 2_000,
+        retryAfterMs: 250,
+        activeCount: 1,
+        blockers: [{ kind: "session-mutation", count: 1, message: "1 pending write" }],
+      },
+    },
+    {
+      name: "status ready",
+      validate: validateGatewaySuspendStatusResult,
+      result: { status: "ready", expiresAtMs: 2_000 },
+    },
+  ])("validates $name custody without erasing unknown or held evidence", ({ validate, result }) => {
+    expect(validate(result)).toBe(true);
+    expect(result).not.toHaveProperty("writeCustody");
+    for (const writeCustody of [
+      [],
+      [{ phase: "backup", count: 0 }],
+      [{ phase: "migration", count: 1 }],
+      [{ phase: "future-owner-phase", count: 2 }],
+    ]) {
+      const response = { ...result, writeCustody };
+      const original = structuredClone(response);
+      expect(validate(response)).toBe(true);
+      expect(response).toEqual(original);
+    }
+    for (const writeCustody of [
+      null,
+      {},
+      [null],
+      [{ count: 1 }],
+      [{ phase: "", count: 1 }],
+      [{ phase: "backup", count: -1 }],
+      [{ phase: "backup", count: 0.5 }],
+      [{ phase: "backup", count: "1" }],
+      [{ phase: "backup", count: 1, extra: true }],
+    ]) {
+      expect(validate({ ...result, writeCustody })).toBe(false);
+      expect(validate.errors).not.toBeNull();
+    }
   });
 });

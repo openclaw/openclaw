@@ -54,22 +54,6 @@ struct WatchExecApprovalSnapshotMessage: Codable, Equatable {
     var snapshotId: String?
     var requestId: String?
     var requestGatewayStableID: String?
-
-    init(
-        approvals: [WatchExecApprovalItem],
-        gatewayStableID: String? = nil,
-        sentAtMs: Int64? = nil,
-        snapshotId: String? = nil,
-        requestId: String? = nil,
-        requestGatewayStableID: String? = nil)
-    {
-        self.approvals = approvals
-        self.gatewayStableID = gatewayStableID
-        self.sentAtMs = sentAtMs
-        self.snapshotId = snapshotId
-        self.requestId = requestId
-        self.requestGatewayStableID = requestGatewayStableID
-    }
 }
 
 typealias WatchExecApprovalSnapshotRequestMessage = OpenClawWatchExecApprovalSnapshotRequestMessage
@@ -490,7 +474,7 @@ struct WatchChatSessionIdentity: Hashable {
     var deliveryContext: OpenClawWatchChatDeliveryContext?
 }
 
-struct WatchAppSnapshotMessage: Codable, Equatable {
+struct WatchAppSnapshotMessage: Equatable {
     var gatewayStatus: OpenClawWatchAppStatus
     var gatewayConnected: Bool
     var agentName: String
@@ -524,45 +508,9 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
             sessionKey: WatchOpaqueUTF8Key(self.sessionKey),
             deliveryContext: self.validatedChatDeliveryContext)
     }
+}
 
-    init(
-        gatewayStatus: OpenClawWatchAppStatus,
-        gatewayConnected: Bool,
-        agentName: String,
-        agentAvatarURL: String?,
-        agentAvatarText: String?,
-        sessionKey: String,
-        gatewayStableID: String?,
-        talkStatus: OpenClawWatchAppStatus,
-        talkEnabled: Bool,
-        talkListening: Bool,
-        talkSpeaking: Bool,
-        pendingApprovalCount: Int,
-        chatItems: [WatchChatItem]?,
-        chatStatus: OpenClawWatchAppStatus?,
-        sentAtMs: Int64?,
-        snapshotId: String?,
-        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil)
-    {
-        self.gatewayStatus = gatewayStatus
-        self.gatewayConnected = gatewayConnected
-        self.agentName = agentName
-        self.agentAvatarURL = agentAvatarURL
-        self.agentAvatarText = agentAvatarText
-        self.sessionKey = sessionKey
-        self.gatewayStableID = gatewayStableID
-        self.talkStatus = talkStatus
-        self.talkEnabled = talkEnabled
-        self.talkListening = talkListening
-        self.talkSpeaking = talkSpeaking
-        self.pendingApprovalCount = pendingApprovalCount
-        self.chatItems = chatItems
-        self.chatStatus = chatStatus
-        self.sentAtMs = sentAtMs
-        self.snapshotId = snapshotId
-        self.chatDeliveryContext = chatDeliveryContext
-    }
-
+extension WatchAppSnapshotMessage: Codable {
     static func parsePayload(_ payload: [String: Any]) -> Self? {
         guard let type = payload["type"] as? String,
               type == WatchPayloadType.appSnapshot.rawValue
@@ -827,7 +775,7 @@ struct WatchNotifyMessage: Codable {
     var chatDeliveryContext: OpenClawWatchChatDeliveryContext?
 }
 
-struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
+struct WatchExecApprovalRecord: Equatable, Identifiable {
     var approval: WatchExecApprovalItem
     var transport: String
     var sourceSentAtMs: Int64?
@@ -847,7 +795,9 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var approvalID: String {
         self.approval.id
     }
+}
 
+extension WatchExecApprovalRecord: Codable {
     private enum CodingKeys: String, CodingKey {
         case approval
         case transport
@@ -859,28 +809,6 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         case status
         case statusText
         case statusAt
-    }
-
-    init(
-        approval: WatchExecApprovalItem,
-        transport: String,
-        sourceSentAtMs: Int64?,
-        updatedAt: Date,
-        isResolving: Bool,
-        pendingDecision: WatchExecApprovalDecision?,
-        activeResolutionAttemptID: String?,
-        status: WatchExecApprovalStatus?,
-        statusAt: Date?)
-    {
-        self.approval = approval
-        self.transport = transport
-        self.sourceSentAtMs = sourceSentAtMs
-        self.updatedAt = updatedAt
-        self.isResolving = isResolving
-        self.pendingDecision = pendingDecision
-        self.activeResolutionAttemptID = activeResolutionAttemptID
-        self.status = status
-        self.statusAt = statusAt
     }
 
     init(from decoder: Decoder) throws {
@@ -898,8 +826,8 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             forKey: .activeResolutionAttemptID)
         self.status = try container.decodeIfPresent(
             WatchExecApprovalStatus.self,
-            forKey: .status) ?? Self.decodeLegacyStatus(
-            container.decodeIfPresent(String.self, forKey: .statusText))
+            forKey: .status) ?? container.decodeIfPresent(String.self, forKey: .statusText)
+            .flatMap(WatchExecApprovalStatus.decodeLegacyLocalizedText)
         self.statusAt = try container.decodeIfPresent(Date.self, forKey: .statusAt)
     }
 
@@ -917,10 +845,6 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         try container.encodeIfPresent(self.status, forKey: .status)
         try container.encodeIfPresent(self.statusAt, forKey: .statusAt)
     }
-
-    private static func decodeLegacyStatus(_ text: String?) -> WatchExecApprovalStatus? {
-        text.flatMap(WatchExecApprovalStatus.decodeLegacyLocalizedText)
-    }
 }
 
 extension OpenClawWatchAppStatus {
@@ -934,80 +858,30 @@ extension OpenClawWatchAppStatus {
         }) -> String
     {
         switch self.code {
-        case .gatewayConnected,
-             .gatewayConnecting,
-             .gatewayReconnecting,
-             .gatewayOffline,
-             .gatewayProblem,
-             .gatewayProblemWithRequestID:
-            self.localizedGatewayText(
-                localize: localize,
-                localizePresentation: localizePresentation)
-        case .talkOff,
-             .talkReady,
-             .talkConnecting,
-             .talkListening,
-             .talkThinking,
-             .talkSpeaking,
-             .talkOffline,
-             .talkPermissionRequired,
-             .talkRequestingApproval,
-             .talkApprovalRequested,
-             .talkAPIKeyMissing,
-             .talkFailure:
-            self.localizedTalkText(
-                localize: localize,
-                localizePresentation: localizePresentation)
-        case .chatConnectIPhone, .chatNoMessages, .chatUnavailable:
-            self.localizedChatText(localize: localize)
-        case .legacy:
-            self.verbatim ?? localize(.unavailable)
-        }
-    }
-
-    private func localizedGatewayText(
-        localize: (WatchStatusLocalizationKey) -> String,
-        localizePresentation: (String, [String]) -> String) -> String
-    {
-        switch self.code {
         case .gatewayConnected:
             localize(.connected)
-        case .gatewayConnecting:
+        case .gatewayConnecting, .talkConnecting:
             localize(.connecting)
         case .gatewayReconnecting:
             localize(.reconnecting)
-        case .gatewayOffline:
+        case .gatewayOffline, .talkOffline:
             localize(.offline)
-        case .gatewayProblem:
+        case .gatewayProblem, .talkFailure:
             self.localizedPresentation(localize: localizePresentation)
         case .gatewayProblemWithRequestID:
             self.localizedGatewayProblemWithRequestID(
                 localize: localize,
                 localizePresentation: localizePresentation)
-        default:
-            localize(.unavailable)
-        }
-    }
-
-    private func localizedTalkText(
-        localize: (WatchStatusLocalizationKey) -> String,
-        localizePresentation: (String, [String]) -> String) -> String
-    {
-        switch self.code {
         case .talkOff:
             localize(.off)
         case .talkReady:
             localize(.ready)
-        case .talkConnecting:
-            localize(.connecting)
         case .talkListening:
             localize(.listening)
         case .talkThinking:
             localize(.thinking)
         case .talkSpeaking:
             localize(.speaking)
-        case .talkOffline:
-            localize(.offline)
         case .talkPermissionRequired:
             self.arguments.first.map { String(format: localize(.missingFormat), $0) }
                 ?? localize(.unavailable)
@@ -1017,25 +891,14 @@ extension OpenClawWatchAppStatus {
             localize(.approvalRequested)
         case .talkAPIKeyMissing:
             localize(.apiKeyMissing)
-        case .talkFailure:
-            self.localizedPresentation(localize: localizePresentation)
-        default:
-            localize(.unavailable)
-        }
-    }
-
-    private func localizedChatText(
-        localize: (WatchStatusLocalizationKey) -> String) -> String
-    {
-        switch self.code {
         case .chatConnectIPhone:
             localize(.connectIPhoneChat)
         case .chatNoMessages:
             localize(.noChatMessages)
         case .chatUnavailable:
             localize(.chatUnavailable)
-        default:
-            localize(.unavailable)
+        case .legacy:
+            self.verbatim ?? localize(.unavailable)
         }
     }
 

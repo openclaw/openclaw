@@ -14,6 +14,15 @@ export const HOME_PANEL_TOGGLE_EVENT = "openclaw:home-toggle";
 export const CUSTODIAN_PANEL_TOGGLE_EVENT = "openclaw:custodian-toggle";
 export const DEBUG_OVERLAY_REQUEST_EVENT = "openclaw:debug-overlay-request";
 export const KEYBOARD_SHORTCUTS_REQUEST_EVENT = "openclaw:keyboard-shortcuts-request";
+export const LINK_READER_PANEL_TOGGLE_EVENT = "openclaw:link-reader-panel-toggle";
+export type LinkReaderPanelToggleDetail = {
+  url?: string;
+  newTab?: boolean;
+  open?: boolean;
+  trigger?: HTMLElement;
+  agentId?: string;
+};
+
 export const UI_COMMAND_EVENT = "openclaw:ui-command";
 
 export type UiCommandDetail = UiCommandParams;

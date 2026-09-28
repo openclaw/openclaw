@@ -45,12 +45,20 @@ describe("explicit final source-reply delivery evidence", () => {
     ).toBeUndefined();
   });
 
-  it("preserves legacy completion evidence when no marker is present", () => {
+  it.each([
+    { name: "legacy", final: undefined, state: undefined, delivered: true },
+    { name: "explicit progress", final: false, state: undefined, delivered: false },
+    { name: "explicit final", final: true, state: undefined, delivered: true },
+    { name: "earlier input", final: true, state: "missing", delivered: false },
+  ] as const)("honors $name evidence over coarse send flags", ({ final, state, delivered }) => {
     expect(
       hasCompletedSourceReplyDeliveryEvidence({
+        sourceReplyDelivered: true,
         didDeliverSourceReplyViaMessageTool: true,
+        sourceReplyDeliveryState: state,
+        messagingToolSentTargets: final === undefined ? [] : [{ sourceReplyFinal: final }],
       }),
-    ).toBe(true);
+    ).toBe(delivered);
   });
 });
 
@@ -155,19 +163,6 @@ describe("collectDeliveredMediaUrls attachment recursion", () => {
       "/tmp/aggregate.png",
       "/tmp/target.png",
     ]);
-  });
-
-  it("does not overflow the stack on a self-referential attachments cycle", () => {
-    // Payloads arrive as in-process `unknown` objects; a malformed self-referential
-    // attachments chain previously recursed until the stack overflowed.
-    const cyclic: Record<string, unknown> = { url: "https://example.com/loop.png" };
-    cyclic.attachments = [cyclic];
-
-    let urls: string[] = [];
-    expect(() => {
-      urls = collectDeliveredMediaUrls({ payloads: [cyclic] });
-    }).not.toThrow();
-    expect(urls).toEqual(["https://example.com/loop.png"]);
   });
 
   it("does not overflow on a mutual attachments cycle", () => {

@@ -5,7 +5,12 @@ import { Socket } from "node:net";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { releasePipe } from "./pipe.js";
-import { SpawnBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
+import {
+  serializeBrokerError,
+  SpawnBrokerError,
+  type BrokerRequest,
+  type BrokerResponse,
+} from "./protocol.js";
 
 type ChildMessage = Exclude<
   BrokerResponse,
@@ -102,7 +107,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         type: "output-drained",
         id: this.requestId,
         fd,
-        error: error?.message,
+        error: error ? serializeBrokerError(error) : undefined,
       }).catch(() => {});
     };
     socket.once(fd === 0 ? "finish" : "end", () => acknowledge());
@@ -287,13 +292,12 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         : typeof optionsOrCallback === "function"
           ? optionsOrCallback
           : callback;
-    if (!this.connected) {
-      const error = new Error("Child process IPC channel is closed");
-      queueMicrotask(() => (done ? done(error) : this.emit("error", error)));
-      return false;
-    }
-    if (this.sends.size >= 1024) {
-      const error = new Error("Child process IPC capacity exceeded");
+    if (!this.connected || this.sends.size >= 1024) {
+      const error = new Error(
+        this.connected
+          ? "Child process IPC capacity exceeded"
+          : "Child process IPC channel is closed",
+      );
       queueMicrotask(() => (done ? done(error) : this.emit("error", error)));
       return false;
     }

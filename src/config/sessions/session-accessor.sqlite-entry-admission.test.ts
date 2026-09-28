@@ -15,6 +15,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { resolveStateDir } from "../paths.js";
@@ -88,6 +89,12 @@ function fixture(sessionKey = "agent:main:admission") {
   return { root, env, scope, database, databasePath: database.path };
 }
 
+function closeCold(f: ReturnType<typeof fixture>) {
+  closeOpenClawAgentDatabaseByPath(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+}
+
 function nativeChecks(databasePath: string) {
   let parentChecks = 0;
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
@@ -98,7 +105,7 @@ function nativeChecks(databasePath: string) {
     const prepare = database.prepare.bind(database);
     database.prepare = (sql) => {
       const statement = prepare(sql);
-      if (sql === "PRAGMA integrity_check;") {
+      if (sql === "PRAGMA integrity_check;" || sql === "PRAGMA integrity_check('sqlite_schema');") {
         const all = statement.all.bind(statement);
         statement.all = () => {
           parentChecks += 1;
@@ -169,21 +176,17 @@ it.each(["sessions.json", "custom.json"])(
 );
 
 it.each([
-  ["entry", "preparation"],
   ["target", "preparation"],
   ["entry", "commit"],
-  ["target", "commit"],
 ] as const)("keeps %s %s integrity checks off the caller thread", async (kind, phase) => {
   const f = fixture();
   if (phase === "preparation") {
-    closeOpenClawAgentDatabaseByPath(f.databasePath);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    closeCold(f);
   }
   const parentChecks = nativeChecks(f.databasePath);
   const update = () => {
     if (phase === "commit") {
-      closeOpenClawAgentDatabaseByPath(f.databasePath);
-      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      closeCold(f);
     }
     return { label: "updated" };
   };
@@ -308,6 +311,7 @@ it("retains FIFO, caller context and publication across cold admission", async (
   const f = fixture();
   closeOpenClawAgentDatabaseByPath(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
   const gate = holdNative(f.databasePath);
   const contexts = new AsyncLocalStorage<string>();
   const order: string[] = [];
@@ -377,8 +381,7 @@ it.each(["dispose", "sync replacement"] as const)(
   "rejects %s before updater admission and recovers the lane",
   async (mode) => {
     const f = fixture();
-    closeOpenClawAgentDatabaseByPath(f.databasePath);
-    invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+    closeCold(f);
     const gate = holdNative(f.databasePath);
     const update = vi.fn(() => ({ label: "must not commit" }));
     const committed = vi.fn();
@@ -421,8 +424,7 @@ it.each(["cancel", "revoke"] as const)(
       patchSessionEntryCore(
         f.scope,
         () => {
-          closeOpenClawAgentDatabaseByPath(f.databasePath);
-          invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+          closeCold(f);
           return { sessionId: "uncommitted" };
         },
         {

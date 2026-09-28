@@ -172,6 +172,59 @@ describe("native extension bootstrap", () => {
     expect(harness.storageValues).not.toHaveProperty("nativeBootstrapDisabled");
   });
 
+  it.each([
+    ["unpair", "preflight"],
+    ["disable", "preflight"],
+    ["unpair", "save"],
+    ["disable", "save"],
+  ])("does not apply a native pairing overtaken by %s during %s", async (revocation, stage) => {
+    let respond = (_value: unknown) => {};
+    const harness = await loadBackground({
+      storedConfig: {},
+      nativeMessage: () =>
+        new Promise((resolve) => {
+          respond = resolve;
+        }),
+    });
+    const readStorage = harness.storageGet.getMockImplementation()!;
+    let releaseRead = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    let pairingReads = 0;
+    let saving = false;
+    harness.storageGet.mockImplementation(async (keys) => {
+      const result = await readStorage(keys);
+      if (keys.includes("relayUrl") && ++pairingReads === 2 && stage === "preflight") {
+        await blocked;
+      }
+      return result;
+    });
+    const writeStorage = harness.storageSet.getMockImplementation()!;
+    harness.storageSet.mockImplementation(async (values) => {
+      if (stage === "save" && values.relayUrl) {
+        saving = true;
+        await blocked;
+      }
+      await writeStorage(values);
+    });
+    respond(nativeSuccess(harness.sendNativeMessage.mock.calls[0]?.[1]));
+    await vi.waitFor(() => expect(stage === "preflight" ? pairingReads === 2 : saving).toBe(true));
+    const revoking = sendRuntimeMessage(
+      harness,
+      revocation === "unpair"
+        ? { type: "unpair" }
+        : { type: "setNativeBootstrapEnabled", enabled: false },
+    );
+    await vi.waitFor(() => expect(harness.storageValues.nativeBootstrapDisabled).toBe(true));
+    releaseRead();
+    await expect(revoking).resolves.toMatchObject({ ok: true });
+    await sendRuntimeMessage(harness, { type: "getStatus" });
+
+    expect(harness.storageValues).not.toHaveProperty("relayUrl");
+    expect(harness.relaySockets).toHaveLength(0);
+  });
+
   it("fails closed on a malformed or nonce-mismatched response", async () => {
     const harness = await loadBackground({
       storedConfig: {},

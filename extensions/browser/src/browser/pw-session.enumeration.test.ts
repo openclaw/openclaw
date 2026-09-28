@@ -22,6 +22,7 @@ function makePageEnumerationBrowser(
     url: string;
     readTitle?: () => Promise<string>;
     readTargetInfo?: () => Promise<{ targetInfo: { targetId: string; title: string } }>;
+    isClosed?: () => boolean;
     detach?: () => Promise<void>;
   }>,
 ): BrowserMockBundle & {
@@ -29,15 +30,21 @@ function makePageEnumerationBrowser(
   newCDPSession: ReturnType<typeof vi.fn>;
   contextEvents: EventEmitter;
   browserEvents: EventEmitter;
+  pageEvents: EventEmitter[];
 } {
   const browserClose = vi.fn(async () => {});
   const specByPage = new WeakMap<import("playwright-core").Page, (typeof specs)[number]>();
+  const pageEvents: EventEmitter[] = [];
   const pages = specs.map((spec) => {
+    const events = new EventEmitter();
+    pageEvents.push(events);
     const page = {
-      on: vi.fn(),
+      on: events.on.bind(events),
+      off: events.off.bind(events),
       context: () => context,
       title: vi.fn(spec.readTitle ?? (async () => spec.title)),
       url: vi.fn(() => spec.url),
+      isClosed: spec.isClosed ?? (() => false),
     } as unknown as import("playwright-core").Page;
     specByPage.set(page, spec);
     return page;
@@ -61,7 +68,7 @@ function makePageEnumerationBrowser(
   const contextEvents = new EventEmitter();
   const browserEvents = new EventEmitter();
   const context = {
-    pages: () => pages,
+    pages: () => pages.filter((page) => !page.isClosed()),
     on: contextEvents.on.bind(contextEvents),
     off: contextEvents.off.bind(contextEvents),
     newCDPSession,
@@ -71,18 +78,121 @@ function makePageEnumerationBrowser(
     on: browserEvents.on.bind(browserEvents),
     off: browserEvents.off.bind(browserEvents),
     close: browserClose,
+    isConnected: vi.fn(() => true),
     newBrowserCDPSession: vi.fn(async () => ({
       send: vi.fn(async () => ({
-        targetInfos: specs.map((spec) => ({ targetId: spec.targetId, type: "page" })),
+        targetInfos: specs
+          .filter((spec) => !spec.isClosed?.())
+          .map((spec) => ({ targetId: spec.targetId, type: "page" })),
       })),
       detach: vi.fn(async () => {}),
     })),
   } as unknown as import("playwright-core").Browser;
 
-  return { browser, browserClose, pages, newCDPSession, contextEvents, browserEvents };
+  return { browser, browserClose, pages, newCDPSession, contextEvents, browserEvents, pageEvents };
 }
 
 describe("pw-session page enumeration", () => {
+  it("reconciles a page closed between native discovery and Page enumeration", async () => {
+    vi.useFakeTimers();
+    let closed = false;
+    const fixture = makePageEnumerationBrowser([
+      { targetId: "A", title: "Closing", url: "https://a.example/", isClosed: () => closed },
+      { targetId: "B", title: "Survivor", url: "https://b.example/" },
+    ]);
+    const inventory = vi.fn(async () => {
+      const targetIds = closed ? ["B"] : ["A", "B"];
+      if (!closed) {
+        closed = true;
+        fixture.pageEvents[0]!.emit("close");
+      }
+      return { targetInfos: targetIds.map((targetId) => ({ targetId, type: "page" })) };
+    });
+    Object.assign(fixture.browser, {
+      newBrowserCDPSession: async () => ({ send: inventory, detach: async () => {} }),
+    });
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const listing = listPagesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      requireCompleteTargetList: true,
+      timeoutMs: 100,
+    });
+    const listed = expect(listing).resolves.toEqual([
+      { targetId: "B", title: "Survivor", url: "https://b.example/", type: "page" },
+    ]);
+    void listed.catch(() => {});
+    await vi.advanceTimersByTimeAsync(100);
+    await listed;
+    expect(inventory).toHaveBeenCalledTimes(2);
+    expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+    expect(fixture.browserClose).not.toHaveBeenCalled();
+    expect(fixture.pageEvents.map((events) => events.listenerCount("close"))).toEqual([1, 1]);
+  });
+
+  it.each([
+    { complete: false, disconnect: false, unresolved: false },
+    { complete: true, disconnect: false, unresolved: false },
+    { complete: true, disconnect: true, unresolved: false },
+    { complete: true, disconnect: true, unresolved: true },
+  ])(
+    "reconciles a closed page (complete: $complete, browser disconnected: $disconnect, metadata unresolved: $unresolved)",
+    async ({ complete, disconnect, unresolved }) => {
+      const cdpUrl = "http://127.0.0.1:9222";
+      const started = createDeferred<void>();
+      const release = createDeferred<void>();
+      let closed = false;
+      const fixture = makePageEnumerationBrowser([
+        {
+          targetId: "A",
+          title: "Closing",
+          url: "https://a.example/",
+          isClosed: () => closed,
+          readTargetInfo: async () => {
+            started.resolve();
+            await release.promise;
+            if (unresolved) {
+              return { targetInfo: { targetId: "", title: "" } };
+            }
+            throw new Error("Target page, context or browser has been closed");
+          },
+        },
+        { targetId: "B", title: "Survivor", url: "https://b.example/" },
+      ]);
+      const survivor = {
+        targetId: "B",
+        title: "Survivor",
+        url: "https://b.example/",
+        type: "page",
+      };
+      const replacement = makePageEnumerationBrowser([survivor]);
+      connectOverCdpSpy
+        .mockResolvedValueOnce(fixture.browser)
+        .mockResolvedValue(replacement.browser);
+      getChromeWebSocketUrlSpy.mockResolvedValue(null);
+      const listing = listPagesViaPlaywright({
+        cdpUrl,
+        requireCompleteTargetList: complete,
+        timeoutMs: 1_000,
+      });
+      const listed = expect(listing).resolves.toEqual([survivor]);
+      void listed.catch(() => {});
+      await started.promise;
+      closed = true;
+      if (disconnect) {
+        vi.spyOn(fixture.browser, "isConnected").mockReturnValue(false);
+        fixture.browserEvents.emit("disconnected");
+      }
+      release.resolve();
+      await listed;
+      expect(connectOverCdpSpy).toHaveBeenCalledTimes(disconnect ? 2 : 1);
+      if (!disconnect) {
+        expect(fixture.browserClose).not.toHaveBeenCalled();
+      }
+      expect(replacement.browserClose).not.toHaveBeenCalled();
+    },
+  );
+
   it("lists healthy pages without awaiting a wedged page title", async () => {
     vi.useFakeTimers();
     const fixture = makePageEnumerationBrowser([
@@ -516,11 +626,9 @@ describe("pw-session page enumeration", () => {
     expect(inventoryRead).toHaveBeenCalledTimes(requireCompleteTargetList ? 1 : 0);
     expect(detach).toHaveBeenCalledTimes(requireCompleteTargetList ? 1 : 0);
     expect(connectOverCdpSpy).toHaveBeenCalledOnce();
-    expect(fixture.browserClose).toHaveBeenCalledTimes(testCase.waitsForPublication ? 1 : 0);
+    expect(fixture.browserClose).not.toHaveBeenCalled();
     expect(fixture.contextEvents.listenerCount("page")).toBe(1);
-    expect(fixture.browserEvents.listenerCount("disconnected")).toBe(
-      testCase.waitsForPublication ? 0 : 1,
-    );
+    expect(fixture.browserEvents.listenerCount("disconnected")).toBe(1);
     if (blockedPage) {
       expect(fixture.newCDPSession).not.toHaveBeenCalledWith(blockedPage);
     }
@@ -569,13 +677,64 @@ describe("pw-session page enumeration", () => {
     fixture.contextEvents.emit("page", fixture.pages[0]);
     expect(fixture.newCDPSession).not.toHaveBeenCalled();
     expect(fixture.contextEvents.listenerCount("page")).toBe(1);
-    expect(fixture.browserEvents.listenerCount("disconnected")).toBe(stop === "abort" ? 0 : 1);
+    expect(fixture.browserEvents.listenerCount("disconnected")).toBe(1);
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(stop === "abort" ? 1 : 2);
     expect(successor.browserClose).not.toHaveBeenCalled();
   });
 
-  it("aborts enumeration without a timeout and retires its connection", async () => {
+  it.each(["attach", "read"] as const)(
+    "releases only its own native inventory session when cancelled during %s",
+    async (phase) => {
+      const cdpUrl = "http://127.0.0.1:9222";
+      const fixture = makePageEnumerationBrowser([
+        { targetId: "A", title: "A", url: "https://a.example/" },
+      ]);
+      const gate = createDeferred<void>();
+      const started = createDeferred<void>();
+      const detach = vi.fn(async () => {});
+      const send = vi.fn(async () => {
+        if (phase === "read") {
+          started.resolve();
+          await gate.promise;
+        }
+        return { targetInfos: [{ targetId: "A", type: "page" }] };
+      });
+      Object.assign(fixture.browser, {
+        newBrowserCDPSession: async () => {
+          if (phase === "attach") {
+            started.resolve();
+            await gate.promise;
+          }
+          return { send, detach };
+        },
+      });
+      connectOverCdpSpy.mockResolvedValue(fixture.browser);
+      getChromeWebSocketUrlSpy.mockResolvedValue(null);
+      const controller = new AbortController();
+      const listing = listPagesViaPlaywright({
+        cdpUrl,
+        requireCompleteTargetList: true,
+        signal: controller.signal,
+      });
+      const rejected = expect(listing).rejects.toThrow("cancel native inventory");
+      await started.promise;
+      controller.abort(new Error("cancel native inventory"));
+      await rejected;
+      gate.resolve();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(detach).toHaveBeenCalledOnce();
+      if (phase === "attach") {
+        expect(send).not.toHaveBeenCalled();
+      }
+      expect(fixture.browserClose).not.toHaveBeenCalled();
+      await expect(listPagesViaPlaywright({ cdpUrl })).resolves.toMatchObject([{ targetId: "A" }]);
+    },
+  );
+
+  it("aborts enumeration without a timeout while preserving the shared connection", async () => {
     const fixture = makePageEnumerationBrowser([
       {
         targetId: "T1",
@@ -595,7 +754,7 @@ describe("pw-session page enumeration", () => {
     controller.abort(new Error("cancelled enumeration"));
 
     await expect(listing).rejects.toThrow("cancelled enumeration");
-    await vi.waitFor(() => expect(fixture.browserClose).toHaveBeenCalledOnce());
+    expect(fixture.browserClose).not.toHaveBeenCalled();
   });
 
   it.each([

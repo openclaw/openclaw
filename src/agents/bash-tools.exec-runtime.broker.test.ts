@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 
@@ -28,6 +30,49 @@ afterEach(() => {
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "exec tool broker transport",
   () => {
+    it("keeps detached scheduled exec on its Gateway broker", async () => {
+      const home = tempDirs.make("openclaw-scheduled-exec-broker-");
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("SHELL", "/bin/bash");
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "state"));
+      vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
+      const broker = createSpawnBrokerHost();
+      let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
+      try {
+        await broker.ready();
+        vi.mocked(spawn).mockClear();
+        const runScheduled = runWithSpawnBroker(broker, () => createScheduledGatewayRunner());
+        const outcome = await runInDetachedAsyncContext(() =>
+          runScheduled(async () => {
+            const command = 'printf "%s" "$PPID"';
+            run = await runExecProcess({
+              command,
+              execCommand: command,
+              workdir: home,
+              env: { HOME: home, PATH: "/usr/bin:/bin" },
+              usePty: false,
+              warnings: [],
+              maxOutput: 1000,
+              pendingMaxOutput: 1000,
+              notifyOnExit: false,
+              timeoutSec: 10,
+            });
+            return await run.promise;
+          }),
+        );
+        expect(outcome).toMatchObject({ status: "completed", exitCode: 0 });
+        expect(Number(outcome.aggregated)).toBe(broker.pid);
+        expect(spawn).not.toHaveBeenCalled();
+      } finally {
+        try {
+          run?.kill();
+          await run?.promise;
+        } finally {
+          await broker.close();
+        }
+      }
+    });
+
     it("captures and validates shell startup state without forking the Gateway", async () => {
       const home = tempDirs.make("openclaw-exec-broker-");
       vi.stubEnv("HOME", home);
