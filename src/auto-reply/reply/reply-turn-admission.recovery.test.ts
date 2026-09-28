@@ -50,21 +50,10 @@ describe("reply turn recovery admission", () => {
   });
 
   it("keeps deferred owner release retries from retaining a successor", async () => {
-    const deferredReleases: Promise<void>[] = [];
-    const schedule = recoveryLifecycle.scheduleMainSessionRecoveryMutation;
+    // Keep repair pending: successor admission must not depend on its execution.
     const scheduled = vi
       .spyOn(recoveryLifecycle, "scheduleMainSessionRecoveryMutation")
-      .mockImplementation((params) => {
-        const settled = createDeferred();
-        deferredReleases.push(settled.promise);
-        schedule({
-          ...params,
-          onSuccess: async (result) => {
-            await params.onSuccess(result);
-            settled.resolve();
-          },
-        });
-      });
+      .mockImplementation(() => {});
     const pendingTarget = vi
       .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
       .mockImplementation(() => {});
@@ -125,7 +114,7 @@ describe("reply turn recovery admission", () => {
       // retry timer is advanced while joining the successor admission.
       const admitted = await successor;
       expect(successorSettled).toBe(true);
-      expect(deferredReleases).toHaveLength(1);
+      expect(scheduled).toHaveBeenCalledOnce();
       accessorSpy.mockRestore();
       expect(admitted.status).toBe("owned");
       if (admitted.status === "owned") {
@@ -138,16 +127,10 @@ describe("reply turn recovery admission", () => {
         await released;
       }
     } finally {
-      try {
-        restoreAccessor?.();
-        await vi.runOnlyPendingTimersAsync();
-        // Timer drainage starts the repair; its real SQLite work settles separately.
-        await Promise.all(deferredReleases);
-      } finally {
-        scheduled.mockRestore();
-        pendingTarget.mockRestore();
-        vi.useRealTimers();
-      }
+      vi.useRealTimers();
+      restoreAccessor?.();
+      scheduled.mockRestore();
+      pendingTarget.mockRestore();
     }
   });
 

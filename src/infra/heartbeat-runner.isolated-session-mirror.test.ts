@@ -1,7 +1,7 @@
 // Covers isolated heartbeat outbound session routing and base-session bookkeeping.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { heartbeatRunnerWhatsAppPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
@@ -324,11 +324,14 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       let heartbeatModeAwareness: string | undefined;
       let awareness: string | undefined;
       try {
-        await withTestTimeout(
+        await Promise.race([
           completionEntered.promise,
-          5_000,
-          "heartbeat delivery confirmation was not observed",
-        );
+          heartbeat.then((settled) => {
+            throw new Error(
+              `heartbeat settled before delivery confirmation: ${JSON.stringify(settled)}`,
+            );
+          }),
+        ]);
         const nextHeartbeatPreflight = await resolveHeartbeatPreflight({
           cfg,
           agentId: "main",
@@ -347,7 +350,7 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
         awareness = await drainTargetAwareness(cfg, targetSessionKey);
       } finally {
         releaseCompletion.resolve();
-        result = await withTestTimeout(heartbeat, 5_000, "heartbeat did not finish delivery");
+        result = await heartbeat;
       }
 
       expect(result.status).toBe("ran");
@@ -411,17 +414,20 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       let result!: Awaited<ReturnType<typeof runHeartbeatOnce>>;
       let systemEventsCleared: number | undefined;
       try {
-        await withTestTimeout(
+        await Promise.race([
           completionEntered.promise,
-          5_000,
-          "heartbeat delivery confirmation was not observed",
-        );
+          heartbeat.then((settled) => {
+            throw new Error(
+              `heartbeat settled before delivery confirmation: ${JSON.stringify(settled)}`,
+            );
+          }),
+        ]);
         systemEventsCleared = clearSessionResetRuntimeState([targetSessionKey], {
           agentId: "main",
         }).systemEventsCleared;
       } finally {
         releaseCompletion.resolve();
-        result = await withTestTimeout(heartbeat, 5_000, "heartbeat did not finish delivery");
+        result = await heartbeat;
       }
 
       expect(result.status).toBe("ran");
