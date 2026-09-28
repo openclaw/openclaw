@@ -56,9 +56,6 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserClean
 
 function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
-    typeof entry.runTimeoutSeconds !== "number" ||
-    !Number.isFinite(entry.runTimeoutSeconds) ||
-    entry.runTimeoutSeconds <= 0 ||
     entry.execution.outcome?.status !== "timeout" ||
     typeof entry.execution.endedAt !== "number"
   ) {
@@ -75,19 +72,6 @@ function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): bo
     entry.delivery?.status === "delivered" ||
     typeof entry.delivery?.announcedAt === "number"
   );
-}
-
-function resolveExpiredExplicitRunDeadlineMs(params: {
-  entry: SubagentRunRecord;
-  nextEndedAt: number;
-  observedStartedAt?: number;
-}): number | undefined {
-  const effectiveEndedAt = resolveSubagentRunEffectiveEndedAt(
-    params.entry,
-    params.nextEndedAt,
-    params.observedStartedAt,
-  );
-  return effectiveEndedAt < params.nextEndedAt ? effectiveEndedAt : undefined;
 }
 
 function isOlderEquivalentTerminalCallback(params: {
@@ -182,10 +166,7 @@ export async function completeSubagentRunAttempt(
       });
       return result.publication === "published";
     };
-    const restoreEntrySnapshot = (snapshot?: SubagentRunRecord) => {
-      if (!snapshot) {
-        return;
-      }
+    const restoreEntrySnapshot = (snapshot: SubagentRunRecord) => {
       for (const key of Object.keys(currentEntry)) {
         Reflect.deleteProperty(currentEntry, key);
       }
@@ -342,15 +323,11 @@ export async function completeSubagentRunAttempt(
       Number.isFinite(completeParams.startedAt)
         ? completeParams.startedAt
         : undefined;
-    const expiredDeadlineMs = recoveryRequested
-      ? undefined
-      : resolveExpiredExplicitRunDeadlineMs({
-          entry,
-          nextEndedAt: endedAt,
-          observedStartedAt,
-        });
-    if (expiredDeadlineMs !== undefined) {
-      endedAt = expiredDeadlineMs;
+    const effectiveEndedAt = recoveryRequested
+      ? endedAt
+      : resolveSubagentRunEffectiveEndedAt(entry, endedAt, observedStartedAt);
+    if (effectiveEndedAt < endedAt) {
+      endedAt = effectiveEndedAt;
       completionOutcome = { status: "timeout" };
       completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
     }

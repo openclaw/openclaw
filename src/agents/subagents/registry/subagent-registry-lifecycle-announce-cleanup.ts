@@ -113,7 +113,6 @@ const finalizeSubagentCleanup = async (
   cleanupGeneration: number,
   options?: {
     skipAnnounce?: boolean;
-    skipDeliveryStatus?: boolean;
     skipRequesterDelivery?: boolean;
   },
 ) => {
@@ -415,7 +414,6 @@ export const startSubagentAnnounceCleanupFlow = (
         }
         await finalizeSubagentCleanup(context, runId, cleanup, "delivered", cleanupGeneration, {
           skipAnnounce: true,
-          skipDeliveryStatus: true,
           skipRequesterDelivery,
         });
       },
