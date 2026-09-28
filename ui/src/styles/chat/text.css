@@ -6,16 +6,11 @@
 .chat-thinking {
   padding: 10px 12px;
   border-radius: var(--radius-md);
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
-}
-
-:root[data-theme-mode="light"] .chat-thinking {
-  border-color: rgba(16, 24, 40, 0.25);
-  background: rgba(16, 24, 40, 0.04);
 }
 
 .chat-message-disclosure {

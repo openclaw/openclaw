@@ -122,9 +122,14 @@ export function assertDoctorMaintenanceInspection(
   }
   const detail =
     inspection.blockMessage ??
+    inspection.serviceMutationSkipMessage ??
     `Gateway service ownership or shutdown could not be verified. Run ${formatCliCommand("openclaw gateway status --deep", env)} and stop it through its service owner before retrying.`;
+  const guidance =
+    kind === "foreign"
+      ? `Run ${formatCliCommand("openclaw gateway status --deep", env)} to locate the Gateway's installation, then run ${formatCliCommand("openclaw doctor --fix", env)} from that installation. The service was left unchanged.`
+      : `Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`;
   throw new DoctorMaintenanceRefusalError(
-    `Doctor could not enter maintenance. Error: ${detail} Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`,
+    `Doctor could not enter maintenance. Error: ${detail} ${guidance}`,
     { kind: "data-at-risk", reason: "gateway-state-unverified" },
   );
 }

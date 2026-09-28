@@ -266,6 +266,7 @@ export function* filterSessionEntries(
   const identityProjection = getRowContext().identityProjection;
   const projectOwner = identityProjection?.owner ?? projectSessionOwner;
   const projectParticipants = identityProjection?.participants ?? projectSessionParticipants;
+  const projectInvolvement = identityProjection?.involvement ?? projectSessionProfileInvolvement;
   const projectPeople = identityProjection?.people ?? projectSessionPeople;
   const profileRelation = opts.profileRelation
     ? {
@@ -342,21 +343,25 @@ export function* filterSessionEntries(
         projectActiveRun: params.projectActiveRun,
       })
     : undefined;
+  const participantKeys = new Map<string, string>();
   const matchesInvolvement = (
     entry: SessionEntry,
     effectiveOwner: NonNullable<ReturnType<typeof projectOwner>>["actor"] | undefined,
     profileId: string,
     personal: boolean,
   ) => {
-    const state = projectSessionProfileInvolvement(entry, profileId, identities);
+    const state = projectInvolvement(entry, profileId, identities);
+    let participantKey = participantKeys.get(profileId);
+    if (!participantKey) {
+      participantKey = JSON.stringify({ type: "profile", id: profileId });
+      participantKeys.set(profileId, participantKey);
+    }
     return (
       !(personal && state?.hidden) &&
       (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
         (effectiveOwner?.identity?.type === "profile" &&
           effectiveOwner.identity.id === profileId) ||
-        projectParticipants(entry, identities, cfg).has(
-          JSON.stringify({ type: "profile", id: profileId }),
-        ))
+        projectParticipants(entry, identities, cfg).has(participantKey))
     );
   };
 
