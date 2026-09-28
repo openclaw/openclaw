@@ -91,6 +91,14 @@ describe("nodes camera snap CLI option forwarding", () => {
     );
   });
 
+  it.each(["", "   "])("rejects blank --facing %j before invoking the node", async (facing) => {
+    const nodes = buildRootCommand();
+    await expect(
+      nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--facing", facing])),
+    ).rejects.toThrow(/invalid facing/i);
+    expect(rpc.callNodesGatewayCli).not.toHaveBeenCalled();
+  });
+
   it("makes one facing-less request and forwards deviceId when --facing is omitted", async () => {
     const nodes = buildRootCommand();
     await nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--device-id", "camera-device"]));
