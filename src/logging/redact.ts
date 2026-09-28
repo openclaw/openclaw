@@ -78,6 +78,31 @@ const MODEL_VISIBLE_REDACT_MARKER = "⟦redacted⟧";
 // the notification (a user reading the transcript or the model reading the result both see it).
 const MODEL_VISIBLE_REDACTION_NOTICE =
   "\n\n[openclaw] Note: sensitive value(s) in this content were redacted by the secret redactor before it reached the model.";
+// Stable prefix used to recognize an already-redacted model-visible payload by content.
+const MODEL_VISIBLE_REDACTION_NOTICE_PREFIX = "[openclaw] Note: sensitive value(s)";
+
+/** Whether a value (recursively) carries a model-visible redaction marker or notice. */
+export function containsModelVisibleRedaction(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (typeof value === "string") {
+    return (
+      value.includes(MODEL_VISIBLE_REDACT_MARKER) ||
+      value.includes(MODEL_VISIBLE_REDACTION_NOTICE_PREFIX)
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsModelVisibleRedaction(entry, seen));
+  }
+  if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    return Object.values(value as Record<string, unknown>).some((entry) =>
+      containsModelVisibleRedaction(entry, seen),
+    );
+  }
+  return false;
+}
 
 // The active mask replacement is scoped to a synchronous redaction call. A module-level value keeps
 // the low-level mask helpers (maskToken, maskSecretValue, literal placeholders) in sync without
