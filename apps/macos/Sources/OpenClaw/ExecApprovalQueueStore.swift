@@ -170,12 +170,8 @@ final class ExecApprovalQueueStore {
         self.pendingRefresh?.task.cancel()
         self.pendingRefresh = nil
         self.admittedLease = nil
-        for task in self.expiryTasks.values {
-            task.cancel()
-        }
-        self.expiryTasks.removeAll()
         self.refreshGeneration &+= 1
-        self.requests = []
+        self.replaceRequests([])
     }
 
     func refresh() async {

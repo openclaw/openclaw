@@ -33,6 +33,7 @@ it("keeps test-only ambient augmentation out of declaration roots but in test gr
   for (const config of [
     ...productionConfigs,
     ...testConfigs,
+    "config/tsconfig/oxlint.source.json",
     "extensions/tsconfig.package-boundary.paths.json",
     "extensions/tsconfig.package-boundary.base.json",
   ]) {

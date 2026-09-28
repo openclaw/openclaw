@@ -97,6 +97,7 @@ struct MacGatewayChatTransportMappingTests {
 
     private func withSessionTransport(
         connectInitially: Bool = true,
+        mainSessionKey: String? = nil,
         capabilities: [String] = ["session-unread-ack-contract"],
         _ run: @MainActor (MacGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
     {
@@ -124,6 +125,8 @@ struct MacGatewayChatTransportMappingTests {
                         name: "Assistant", namesource: "default", avatar: "A")), as: UTF8.self)
                 case "sessions.rewind": #"{"editorText":"rewound draft"}"#
                 case "sessions.fork": #"{"sessionKey":"forked","editorText":"continued draft"}"#
+                case "sessions.list":
+                    #"{"defaults":{"modelProvider":"example","model":"model-a","contextTokens":128000,"thinkingOptions":["low","high"],"thinkingDefault":"low","modelSelectionTarget":"session","agentRuntime":{"id":"pi","source":"agent"}},"sessions":[]}"#
                 case "chat.send": #"{"runId":"native-send","status":"ok"}"#
                 default: #"{"ok":true}"#
                 }
@@ -133,9 +136,10 @@ struct MacGatewayChatTransportMappingTests {
                 if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                 return .data(GatewayWebSocketTestSupport.connectOkData(
                     id: socket.snapshotConnectRequestID() ?? "connect",
+                    mainSessionKey: mainSessionKey,
                     methods: [
                         "agents.list", "agent.identity.get", "sessions.patch", "sessions.delete", "sessions.rewind",
-                        "sessions.fork",
+                        "sessions.fork", "sessions.list",
                     ],
                     capabilities: capabilities))
             })
@@ -335,6 +339,22 @@ struct MacGatewayChatTransportMappingTests {
         let unowned = MacGatewayChatTransport()
             .sessionsListRequest(limit: nil, search: nil, archived: false)
         #expect(unowned.params["agentId"] == nil)
+    }
+
+    @Test func `session list preserves model scope and runtime while supplying the main key`() async throws {
+        try await self.withSessionTransport(mainSessionKey: "agent:agent-a:main") { transport, _ in
+            let response = try await transport.listSessions(limit: 50, search: nil, archived: false)
+            let defaults = try #require(response.defaults)
+            #expect(defaults.modelSelectionTarget == "session")
+            #expect(defaults.agentRuntime?.id == "pi")
+            #expect(defaults.agentRuntime?.source == "agent")
+            #expect(defaults.modelProvider == "example")
+            #expect(defaults.model == "model-a")
+            #expect(defaults.contextTokens == 128_000)
+            #expect(defaults.thinkingOptions == ["low", "high"])
+            #expect(defaults.thinkingDefault == "low")
+            #expect(defaults.mainSessionKey == "agent:agent-a:main")
+        }
     }
 
     @Test func `scoped global routes and captured mutations ignore later default changes`() async throws {

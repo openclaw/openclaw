@@ -83,11 +83,12 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;
-  top: max(8px, var(--safe-area-top, 0px));
-  bottom: max(8px, var(--safe-area-bottom, 0px));
-  left: 0;
+  top: calc(8px + var(--safe-area-top));
+  height: calc(var(--shell-content-height) - 16px);
+  left: var(--safe-area-left);
   z-index: 70;
   width: min(86vw, 320px);
+  max-width: calc(100vw - var(--safe-area-left) - var(--safe-area-right));
   min-width: 0;
   min-height: 0;
   border-inline-end: none;
@@ -449,7 +450,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .agent-chat__input {
-    margin: 0 8px calc(10px + var(--safe-area-bottom));
+    margin: 0 8px 10px;
   }
 
   .agent-chat__input-btn,
