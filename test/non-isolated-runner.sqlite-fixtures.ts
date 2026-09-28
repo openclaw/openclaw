@@ -226,11 +226,13 @@ function registerClose(agentId: string) {
     agentId,
     path: "/synthetic/" + agentId + ".sqlite",
     revoke() {},
-    // Worker retirement crosses threads, so it is still in flight when teardown returns.
-    close: () => new Promise<void>((resolve) => setTimeout(() => {
+    // Worker retirement crosses threads, so it settles on a later event-loop turn. The
+    // path from one test's teardown to the next test's start is promise-only, so without
+    // the runner's join this close is still pending when the next test begins.
+    close: () => new Promise<void>((resolve) => setImmediate(() => {
       events.push(agentId + " close settled");
       resolve();
-    }, 100)),
+    })),
   });
 }
 it("schedules a Worker close that its teardown does not await", () => {
@@ -267,10 +269,11 @@ it("schedules a Worker close from aroundEach teardown", () => {
     agentId: "around",
     path: "/synthetic/around.sqlite",
     revoke() {},
-    close: () => new Promise<void>((resolve) => setTimeout(() => {
+    // Settles on a later event-loop turn, like the scheduled close in 10-a.
+    close: () => new Promise<void>((resolve) => setImmediate(() => {
       events.push("around close settled");
       resolve();
-    }, 100)),
+    })),
   });
 });
 it("starts only after the aroundEach close settled", () => {
