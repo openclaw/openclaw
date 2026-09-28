@@ -228,6 +228,10 @@ async function runEmbeddedAgentViaCliBackend(
       imageOrder: params.imageOrder,
       media: params.media,
       provider: dispatch.provider,
+      // The hook surface routes on the caller's logical provider, not on the
+      // CLI backend name this dispatch maps it to; undefined keeps the
+      // runner's backend fallback for callers that never resolved a provider.
+      modelProvider: params.provider,
       model: params.model,
       ...(params.requestedRouteResolution === "resolved" && params.provider && params.model
         ? { requesterModel: { provider: params.provider, model: params.model } }
