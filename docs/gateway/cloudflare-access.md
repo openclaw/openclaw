@@ -109,8 +109,14 @@ The provider must verify ownership of the GitHub account and bind it to the
 verified sign-in email. Its ID token must contain a canonical positive
 decimal-string account ID, such as `"12345"`, within JavaScript's safe-integer
 range. Configure Access to forward that exact [custom OIDC claim](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/generic-oidc/#custom-oidc-claims).
-OpenClaw reads it from `oidc_fields` in the Access identity response and verifies
-the numeric account through GitHub to obtain its current public login.
+OpenClaw reads it from `oidc_fields` in the authenticated
+`/cdn-cgi/access/get-identity` response, or from `custom` when `oidc_fields` is
+absent, then verifies the numeric account through GitHub to obtain its current
+public login. A present `oidc_fields` container takes precedence: OpenClaw does
+not retry `custom` if the preferred container lacks the claim or its value is
+invalid. The identity-provider **Test** preview uses `oidc_fields`; inspect the
+authenticated identity endpoint after a fresh sign-in to verify the response
+OpenClaw consumes.
 
 A missing claim or an unselected issuer/provider keeps ordinary email-only
 resolution. A malformed trusted claim or failed identity verification fails

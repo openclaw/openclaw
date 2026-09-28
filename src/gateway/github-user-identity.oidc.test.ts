@@ -110,12 +110,12 @@ function identityResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), { status });
 }
 
-function oidcIdentity(claim: unknown = "101") {
+function oidcIdentity(claim: unknown = "101", field: "oidc_fields" | "custom" = "oidc_fields") {
   return {
     id: "unrelated-oidc-subject",
     email: "ada@example.test",
     idp: { type: "oidc", id: oidcProviderId },
-    oidc_fields: { [accountIdClaim]: claim },
+    [field]: { "https://openclaw.ai/github-role": "none", [accountIdClaim]: claim },
   };
 }
 
@@ -125,37 +125,44 @@ afterEach(() => {
 });
 
 describe("Cloudflare Access OIDC profile resolution", () => {
-  it("verifies a trusted account claim for HTTP and WebSocket profiles and public credit", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-        if (url === `${accessOrigin}/cdn-cgi/access/get-identity`) {
-          return identityResponse(oidcIdentity());
+  it.each(["oidc_fields", "custom", "both"] as const)(
+    "verifies %s claims for HTTP and WebSocket profiles and public credit",
+    async (representation) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+          if (url === `${accessOrigin}/cdn-cgi/access/get-identity`) {
+            return identityResponse(
+              representation === "both"
+                ? { ...oidcIdentity(), custom: { [accountIdClaim]: "202" } }
+                : oidcIdentity("101", representation),
+            );
+          }
+          expect(url).toBe("https://api.github.com/user/101");
+          return identityResponse({ id: 101, login: "canonical-ada", name: "Ada" });
+        });
+        const request = accessRequest("ada@example.test", githubCfg);
+        try {
+          const http = await resolveAuthenticatedHttpUserProfile(request);
+          const profileId = http.authenticatedUserProfile!.profileId;
+          expect(http.operatorRolePolicy?.scopes).toEqual([]);
+          expect(getUserProfileListItem(profileId)).toMatchObject({
+            displayName: "Ada",
+            emails: ["ada@example.test"],
+            githubIdentity: { login: "canonical-ada" },
+          });
+          expect((await resolveUserProfileGitHubAttribution([profileId])).get(profileId)).toEqual({
+            accountId: 101,
+            login: "canonical-ada",
+          });
+          const connected = await resolveWsProfileAdmission(request);
+          expect(connected).toEqual(http.authenticatedUserProfile);
+          expect(transport).toHaveBeenCalledTimes(3);
+        } finally {
+          request.req.destroy();
         }
-        expect(url).toBe("https://api.github.com/user/101");
-        return identityResponse({ id: 101, login: "canonical-ada", name: "Ada" });
       });
-      const request = accessRequest("ada@example.test", githubCfg);
-      try {
-        const http = await resolveAuthenticatedHttpUserProfile(request);
-        const profileId = http.authenticatedUserProfile!.profileId;
-        expect(http.operatorRolePolicy?.scopes).toEqual([]);
-        expect(getUserProfileListItem(profileId)).toMatchObject({
-          displayName: "Ada",
-          emails: ["ada@example.test"],
-          githubIdentity: { login: "canonical-ada" },
-        });
-        expect((await resolveUserProfileGitHubAttribution([profileId])).get(profileId)).toEqual({
-          accountId: 101,
-          login: "canonical-ada",
-        });
-        const connected = await resolveWsProfileAdmission(request);
-        expect(connected).toEqual(http.authenticatedUserProfile);
-        expect(transport).toHaveBeenCalledTimes(3);
-      } finally {
-        request.req.destroy();
-      }
-    });
-  });
+    },
+  );
 
   it.each(["email-only", "verified"])(
     "preserves an existing %s maintainer profile and saved credit opt-out",
@@ -171,7 +178,9 @@ describe("Cloudflare Access OIDC profile resolution", () => {
         setUserProfileRole(profile.id, "maintainer");
         setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
         vi.spyOn(globalThis, "fetch")
-          .mockResolvedValueOnce(identityResponse(oidcIdentity()))
+          .mockResolvedValueOnce(
+            identityResponse(oidcIdentity("101", kind === "email-only" ? "custom" : "oidc_fields")),
+          )
           .mockResolvedValueOnce(identityResponse({ id: 101, login: "canonical-ada" }));
         const request = accessRequest("ada@example.test", githubCfg);
         try {
@@ -202,6 +211,15 @@ describe("Cloudflare Access OIDC profile resolution", () => {
     { name: "missing provider ID", identity: { ...oidcIdentity(), idp: { type: "oidc" } } },
     { name: "missing claim", identity: { ...oidcIdentity(), oidc_fields: {} } },
     { name: "different claim", identity: { ...oidcIdentity(), oidc_fields: { github_id: "101" } } },
+    { name: "both containers absent", identity: { ...oidcIdentity(), oidc_fields: undefined } },
+    {
+      name: "preferred container without the claim",
+      identity: { ...oidcIdentity(), oidc_fields: {}, custom: { [accountIdClaim]: "101" } },
+    },
+    {
+      name: "null preferred container",
+      identity: { ...oidcIdentity(), oidc_fields: null, custom: { [accountIdClaim]: "101" } },
+    },
   ])("keeps email-only sign-in with $name", async ({ config, issuer, identity }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const transport = vi
@@ -227,7 +245,9 @@ describe("Cloudflare Access OIDC profile resolution", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const transport = vi
           .spyOn(globalThis, "fetch")
-          .mockResolvedValueOnce(identityResponse(oidcIdentity(claim)));
+          .mockResolvedValueOnce(
+            identityResponse({ ...oidcIdentity(claim), custom: { [accountIdClaim]: "101" } }),
+          );
         const request = accessRequest("ada@example.test", githubCfg);
         try {
           await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toThrow(
