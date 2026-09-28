@@ -55,6 +55,7 @@ export async function checkTelegramTestCredential({
     const driverEnv = { ...sanitizeChildEnvironment(), ...credential.driverEnv };
     const requiredChat = dm || chat ? "" : credential.groupId;
     const statusArgs = telegramPythonArgs(
+      driverEnv,
       USER_DRIVER_PATH,
       "status",
       "--json",
@@ -185,7 +186,7 @@ export async function checkTelegramTestCredential({
     if (chat) {
       const resolved = await runCommandImpl(
         "uv",
-        telegramPythonArgs(USER_DRIVER_PATH, "resolve-chat", "--chat", chat, "--json"),
+        telegramPythonArgs(driverEnv, USER_DRIVER_PATH, "resolve-chat", "--chat", chat, "--json"),
         {
           cwd: process.cwd(),
           env: driverEnv,
@@ -277,7 +278,14 @@ export async function checkTelegramTestCredential({
     }
     const testerAccess = await runCommandImpl(
       "uv",
-      telegramPythonArgs(USER_DRIVER_PATH, "status", "--check-chat", credential.groupId, "--json"),
+      telegramPythonArgs(
+        driverEnv,
+        USER_DRIVER_PATH,
+        "status",
+        "--check-chat",
+        credential.groupId,
+        "--json",
+      ),
       { cwd: process.cwd(), env: driverEnv, timeoutMs: 30_000 },
     );
     lease.assertHealthy();

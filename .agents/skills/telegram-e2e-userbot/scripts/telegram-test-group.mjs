@@ -16,7 +16,7 @@ export async function prepareTelegramTestGroup(
   let releasing;
   const run = async (command) => {
     credential.assertLeaseHealthy();
-    const args = telegramPythonArgs(USER_DRIVER_PATH, command, "--json");
+    const args = telegramPythonArgs(credential.driverEnv, USER_DRIVER_PATH, command, "--json");
     if (command === "prepare-group" && chatId) args.push("--chat", chatId);
     const result = await runCommandImpl("uv", args, {
       cwd: process.cwd(),

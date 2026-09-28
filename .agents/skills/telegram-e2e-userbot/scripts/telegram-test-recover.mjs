@@ -113,14 +113,15 @@ runTelegramCli(async (signal) => {
         fs.readFileSync(path.join(stateRoot, "credentials.local.json"), "utf8"),
       );
       const driver = path.join(path.dirname(fileURLToPath(import.meta.url)), "user-driver.py");
+      const runtimeEnv = createTelegramRuntimeEnvironment(stateRoot);
       const result = await runCommand(
         "uv",
-        telegramPythonArgs(driver, command, "--json", ...args),
+        telegramPythonArgs(runtimeEnv, driver, command, "--json", ...args),
         {
           cwd: process.cwd(),
           env: {
             ...sanitizeChildEnvironment(),
-            ...createTelegramRuntimeEnvironment(stateRoot),
+            ...runtimeEnv,
             TELEGRAM_E2E_STATE_DIR: stateRoot,
             TELEGRAM_USER_DRIVER_STATE_DIR: path.join(stateRoot, "user-driver"),
             TELEGRAM_USER_DRIVER_SUT_ID: credential.sutBotId,

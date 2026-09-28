@@ -25,22 +25,28 @@ Keep this folder in git. Add new scenarios here before wiring them into automati
 ## Confined repository checkpoint commands
 
 `scripts/qa/repository-checkpoint-admission.ts` adapts the product-owned checkpoint
-and publication command planners to a campaign Git boundary. It admits only the
+and publication command planners to the final campaign Git launch boundary. It executes only the
 canonical bare checkpoint initialization, checkpoint Git-directory query, and
-read-only publication config probes. All other commands return `false`.
+read-only publication config probes. All other commands exit 126 before spawning Git.
 
 The launcher supplies freshly validated `checkpointRoot` (from the repository
 workspace store), `nodeRoot` (from the current placement), `campaignRoot`, `cwd`,
 `argv` (including `git`), and `env`. Paths must already exist, be canonical, and
 remain inside the isolated campaign. The adapter does not discover sessions,
-read state databases, authorize transport, sanitize execution environments, or
+read state databases, authorize transport, or
 manage checkpoint contents. Those responsibilities stay with their owners.
 Do not turn a denied command into a generic Git write allowance.
 
-Import `admitQaRepositoryCheckpointCommand` or pass the same JSON object on stdin
+Pass that JSON object on stdin
 to `node --import ./scripts/tsx.mjs scripts/qa/repository-checkpoint-admission.ts`.
-Freeze the adapter with the campaign tooling; preserve the enclosing sandbox,
-environment sanitization, current-owner checks, and decision evidence.
+The launcher validates those current roots and exact canonical argv immediately
+before spawning Git, sanitizes its environment, and forwards Git's output/status.
+It uses the campaign launcher's PATH, not the requested command's PATH. Delegate
+the process to this entry rather than treating its exit status as permission to
+spawn Git again. Freeze it with the campaign tooling; preserve the enclosing
+sandbox, freshly validated current-owner facts, and execution evidence. Historical
+artifact shims that consumed the old Boolean interface must migrate to this
+delegated launch; they are not maintained campaign entry points.
 
 ### Script checkout and artifact roots
 

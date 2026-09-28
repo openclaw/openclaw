@@ -306,11 +306,15 @@ export async function applyScenarioConfigPatch({
 async function readTester(driverEnv, repoRoot) {
   let result;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    result = await runCommand("uv", telegramPythonArgs(USER_DRIVER_PATH, "status", "--json"), {
-      cwd: repoRoot,
-      env: driverEnv,
-      timeoutMs: 30_000,
-    });
+    result = await runCommand(
+      "uv",
+      telegramPythonArgs(driverEnv, USER_DRIVER_PATH, "status", "--json"),
+      {
+        cwd: repoRoot,
+        env: driverEnv,
+        timeoutMs: 30_000,
+      },
+    );
     if (result.status === 0) break;
     if (attempt < 3) {
       // A restored TDLib archive reported unauthorized once, then became ready
@@ -1201,7 +1205,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
       leaseHealth.assertHealthy();
       const sent = await runCommand(
         "uv",
-        telegramPythonArgs(USER_DRIVER_PATH, "send", "--text", text),
+        telegramPythonArgs(driverEnv, USER_DRIVER_PATH, "send", "--text", text),
         {
           cwd: repoRoot,
           env: driverEnv,
@@ -1218,8 +1222,8 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
     leaseHealth.assertHealthy();
     const recorderReadyPath = path.join(temp.root, "recorder-ready.json");
     const probeArgs = recording
-      ? telegramPythonArgs(USER_RECORD_PATH)
-      : telegramPythonArgs(USER_DRIVER_PATH, "probe");
+      ? telegramPythonArgs(driverEnv, USER_RECORD_PATH)
+      : telegramPythonArgs(driverEnv, USER_DRIVER_PATH, "probe");
     if (recording) {
       if (args.scenario) {
         probeArgs.push(
