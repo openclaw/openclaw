@@ -312,6 +312,14 @@ SQLite rows, missing-store behavior, and update behavior are unchanged.
 
 ## Migrate a caller
 
+Completed-child archive lookups resolve durable store ownership and check exact
+archive registration through the existing history reader. Empty lookups do not
+start the archive reader. Positive lookups retain the original physical database
+and logical session through metadata preparation, archive integrity checks, and
+reader cleanup. Process-held incognito preflight retains its native owner pending
+the memory namespace migration. Schemas, stored bytes, retention, and update
+behavior are unchanged.
+
 1. Trace the registered request, event, or timer through the store owner. Check
    whether a worker adapter already exists; separate durable databases from
    process-held incognito stores, which cannot be reopened by path in another
