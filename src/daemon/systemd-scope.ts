@@ -153,24 +153,14 @@ function systemdTemplatePrefix(base: string): { template: string; instance: stri
 }
 
 function systemdInstalledNameProbes(names: string[]): string[] {
-  const probes: string[] = [];
-  const seen = new Set<string>();
-  const add = (name: string) => {
-    if (!seen.has(name)) {
-      seen.add(name);
-      probes.push(name);
-    }
-  };
-  for (const name of names) {
-    add(name);
-  }
+  const probes = new Set(names);
   for (const name of names) {
     const parsed = systemdTemplatePrefix(name);
     if (parsed?.instance) {
-      add(`${parsed.template}@`);
+      probes.add(`${parsed.template}@`);
     }
   }
-  return probes;
+  return [...probes];
 }
 
 function systemdUnitMatchesIdentity(

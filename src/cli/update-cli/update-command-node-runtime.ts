@@ -91,9 +91,7 @@ export function createPackageRuntimeRecovery(params: {
               { auxiliaryPreflight: true },
             );
             authority.assertCurrent();
-            return installResult.termination === "exit" && !installResult.killed
-              ? installResult.code
-              : null;
+            return installResult.code;
           },
         }
       : {}),

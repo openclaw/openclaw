@@ -253,13 +253,7 @@ export function formatCost(cost: number | null | undefined, fallback = "$0.00"):
   if (cost === 0) {
     return "$0.00";
   }
-  if (cost < 0.01) {
-    return `$${cost.toFixed(4)}`;
-  }
-  if (cost < 1) {
-    return `$${cost.toFixed(3)}`;
-  }
-  return `$${cost.toFixed(2)}`;
+  return `$${cost.toFixed(cost < 0.01 ? 4 : cost < 1 ? 3 : 2)}`;
 }
 
 // Keep token presentation consistent across UI session and usage surfaces.
