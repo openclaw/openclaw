@@ -55,6 +55,7 @@ vi.mock("./node-worker-supervisor.js", () => ({
 vi.mock("./node-worker-workspace.js", () => ({
   NodeWorkerWorkspaceRuntime: class {
     readonly exec = vi.fn();
+    readonly checkAdmission = vi.fn(async () => undefined);
   },
 }));
 

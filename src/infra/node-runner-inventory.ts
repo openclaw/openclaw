@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { parseWorkerSlotSummary } from "../shared/node-list-parse.js";
+import { parseWorkerCapacity } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { workerProtocolObject } from "../worker/protocol-record.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
@@ -19,6 +19,7 @@ export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_STATUS_WAIT_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
+export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -27,9 +28,11 @@ export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   headlessReconnectCommand: "openclaw node restart",
 } as const;
 
-export type NodeRunnerInventoryIssue = typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
+export type NodeRunnerInventoryIssue =
+  | typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE
+  | { code: "worker-host-unavailable"; message: string };
 const CapacitySnapshot = z.transform((value, context) => {
-  const capacity = parseWorkerSlotSummary(value);
+  const capacity = parseWorkerCapacity(value);
   if (!capacity) {
     context.addIssue({ code: "custom", message: "invalid worker capacity" });
     return z.NEVER;
@@ -37,7 +40,10 @@ const CapacitySnapshot = z.transform((value, context) => {
   return capacity;
 });
 const WorkerHost = z.union([
-  workerProtocolObject({ enabled: z.literal(false) }),
+  workerProtocolObject({
+    enabled: z.literal(false),
+    reason: z.string().max(NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH).refine((value) => value.trim().length > 0).optional(),
+  }),
   workerProtocolObject({
     enabled: z.literal(true),
     capacity: CapacitySnapshot,
@@ -111,11 +117,13 @@ export function parseNodeRunnerInventoryDeclaration(
     : null;
 }
 
-export function formatNodeRunnerUpdateRequired(
+export function formatNodeRunnerInventoryIssue(
   nodeId: string,
   issue: NodeRunnerInventoryIssue,
 ): string {
-  return `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
+  return issue.code === "worker-host-unavailable"
+    ? `device worker node ${nodeId} cannot host sessions: ${issue.message}`
+    : `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
 }
 
 /** Worker execution requires the node to preserve the Gateway's captured exec policy. */

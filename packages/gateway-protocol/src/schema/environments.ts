@@ -1,5 +1,6 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type, type Static } from "typebox";
+import { NODE_WORKER_CAPACITY_MAX } from "../worker-capacity.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -68,12 +69,18 @@ export const WorkerDesktopAppIdSchema = Type.Union([
 ]);
 
 /** Actionable issue attached only to runtime targets that need operator intervention. */
-export const RuntimeTargetIssueSchema = closedObject({
-  code: Type.Literal("update-required"),
-  action: Type.Literal("update-and-reconnect"),
-  updateCommand: Type.Literal("openclaw update"),
-  headlessReconnectCommand: Type.Literal("openclaw node restart"),
-});
+export const RuntimeTargetIssueSchema = Type.Union([
+  closedObject({
+    code: Type.Literal("update-required"),
+    action: Type.Literal("update-and-reconnect"),
+    updateCommand: Type.Literal("openclaw update"),
+    headlessReconnectCommand: Type.Literal("openclaw node restart"),
+  }),
+  closedObject({
+    code: Type.Literal("worker-host-unavailable"),
+    message: Type.String({ minLength: 1, maxLength: 1_024 }),
+  }),
+]);
 
 const NodeWorkerBundleStatusSchema = Type.Union([
   closedObject({ status: Type.Literal("installed"), version: NonEmptyString }),
@@ -83,8 +90,8 @@ const NodeWorkerBundleStatusSchema = Type.Union([
 /** Bounded live worker slots advertised by a connected node host. */
 export const WorkerSlotSummarySchema = Type.Refine(
   closedObject({
-    total: Type.Integer({ minimum: 1, maximum: 1_024 }),
-    available: Type.Integer({ minimum: 0, maximum: 1_024 }),
+    total: Type.Integer({ minimum: 1, maximum: NODE_WORKER_CAPACITY_MAX }),
+    available: Type.Integer({ minimum: 0, maximum: NODE_WORKER_CAPACITY_MAX }),
   }),
   (slots) => slots.available <= slots.total,
   (slots) => `available worker slots ${slots.available} exceed total ${slots.total}`,
@@ -101,6 +108,7 @@ export const RequiredNodeCommandStateSchema = Type.Union([
 export const RequiredNodeCommandSchema = closedObject({
   command: Type.String({ minLength: 1, maxLength: 128 }),
   state: RequiredNodeCommandStateSchema,
+  message: Type.Optional(NonEmptyString),
 });
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */

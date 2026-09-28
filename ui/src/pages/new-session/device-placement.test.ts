@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { projectDevicePlacements } from "./device-placement.ts";
+import {
+  projectDevicePlacements,
+  resolveAutomaticDevicePlacementDisabledReason,
+} from "./device-placement.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
 const updateIssue = {
@@ -124,6 +127,27 @@ describe("device placement projection", () => {
     ).toEqual([]);
   });
 
+  it("shows the host's actionable failure before generic offline or disabled-host hints", () => {
+    const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
+    const environments = [
+      node({
+        status: "unavailable",
+        sessionHost: false,
+        workerSlots: undefined,
+        issues: [{ code: "worker-host-unavailable", message }],
+      }),
+    ];
+    const devices = projectDevicePlacements(environments);
+
+    expect(devices[0]).toMatchObject({
+      selectable: false,
+      disabledReason: message,
+      hideDetails: false,
+      facts: [message, "macOS", "Camera"],
+    });
+    expect(resolveAutomaticDevicePlacementDisabledReason(environments, devices)).toBe(message);
+  });
+
   it("adds short device ids only when labels collide", () => {
     expect(
       projectDevicePlacements([
@@ -190,4 +214,22 @@ describe("device placement projection", () => {
       expect(device?.disabledReason).toBe(reason);
     }
   });
+
+  it.each(["pending-approval", "undeclared", "unauthorized", "invocable"] as const)(
+    "uses Gateway command remediation without changing %s eligibility",
+    (state) => {
+      const message = "Enable the codex plugin on this node with openclaw plugins enable codex.";
+      const [device] = projectDevicePlacements(
+        [
+          node({
+            requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state, message },
+          }),
+        ],
+        { requiredNodeCommands: ["codex.exec-server.stdio.v1"], consumesWorkerSlot: false },
+      );
+
+      expect(device?.selectable).toBe(state === "invocable");
+      expect(device?.disabledReason).toBe(state === "invocable" ? undefined : message);
+    },
+  );
 });

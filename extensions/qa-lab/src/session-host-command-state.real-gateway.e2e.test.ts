@@ -103,6 +103,9 @@ suite.define(() => {
         const undeclaredIdentity = createDeviceIdentity();
         const pendingIdentity = createDeviceIdentity();
         const unauthorizedIdentity = createDeviceIdentity();
+        const undeclaredMessage = `paired-device command ${COMMAND} is not advertised by node ${undeclaredIdentity.deviceId}; enable the codex plugin on that node (openclaw plugins enable codex), then restart the node (openclaw node restart) and approve its updated command surface`;
+        const pendingMessage = `paired-device command ${COMMAND} is awaiting pairing approval for node ${pendingIdentity.deviceId}; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>`;
+        const unauthorizedMessage = `paired-device command ${COMMAND} is blocked by Gateway policy for node ${unauthorizedIdentity.deviceId}; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry`;
 
         const undeclaredNode = await connectPairedNode({
           displayName: "Undeclared command",
@@ -144,7 +147,7 @@ suite.define(() => {
           const inventory = await operator.request<{
             environments: Array<{
               id: string;
-              requiredNodeCommand?: { command: string; state: string };
+              requiredNodeCommand?: { command: string; state: string; message?: string };
             }>;
           }>("environments.list", { runtimeId: "codex" });
           return inventory.environments.find((environment) => environment.id === `node:${deviceId}`)
@@ -153,10 +156,12 @@ suite.define(() => {
         expect(await readCommandState(undeclaredIdentity.deviceId)).toEqual({
           command: COMMAND,
           state: "undeclared",
+          message: undeclaredMessage,
         });
         expect(await readCommandState(pendingIdentity.deviceId)).toEqual({
           command: COMMAND,
           state: "pending-approval",
+          message: pendingMessage,
         });
         expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
           command: COMMAND,
@@ -186,14 +191,10 @@ suite.define(() => {
             const disabledReason = async (deviceId: string) => tooltipTitleText(row(deviceId));
 
             await row(undeclaredIdentity.deviceId).waitFor();
-            expect(await disabledReason(undeclaredIdentity.deviceId)).toContain(
-              `Make ${COMMAND} available on this device, then reconnect, or pick another device.`,
-            );
+            expect(await disabledReason(undeclaredIdentity.deviceId)).toContain(undeclaredMessage);
             await expect
               .poll(() => disabledReason(pendingIdentity.deviceId))
-              .toContain(
-                `Ask an administrator to approve the pending ${COMMAND} request, or pick another device.`,
-              );
+              .toContain(pendingMessage);
             if (captureUiProof) {
               // Keep captures at the recorded viewport size: clips and larger full-page
               // screenshots temporarily resize Chromium's shared screencast surface.
@@ -222,6 +223,7 @@ suite.define(() => {
                 expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
                   command: COMMAND,
                   state: "unauthorized",
+                  message: unauthorizedMessage,
                 });
               },
               { interval: 250, timeout: 60_000 },
@@ -233,9 +235,7 @@ suite.define(() => {
             await row(unauthorizedIdentity.deviceId).waitFor();
             await expect
               .poll(() => disabledReason(unauthorizedIdentity.deviceId))
-              .toContain(
-                `Authorize ${COMMAND} in the Gateway node command policy, or pick another device.`,
-              );
+              .toContain(unauthorizedMessage);
             if (captureUiProof) {
               await page.screenshot({
                 animations: "disabled",
@@ -262,6 +262,7 @@ suite.define(() => {
                 expect(await readCommandState(pendingIdentity.deviceId)).toEqual({
                   command: COMMAND,
                   state: "pending-approval",
+                  message: pendingMessage,
                 });
               },
               { interval: 250, timeout: 60_000 },

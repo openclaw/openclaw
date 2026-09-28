@@ -8,6 +8,7 @@ import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
+  checkWorkspaceAdmission: vi.fn(async () => undefined),
   closeWorkerSupervisor: vi.fn<() => Promise<void>>(async () => undefined),
   initializeWorkerSupervisor: vi.fn(async () => undefined),
   handleInvoke: vi.fn(async () => undefined),
@@ -38,6 +39,7 @@ vi.mock("./node-worker-supervisor.js", () => ({
 vi.mock("./node-worker-workspace.js", () => ({
   NodeWorkerWorkspaceRuntime: class {
     readonly exec = vi.fn();
+    readonly checkAdmission = mocks.checkWorkspaceAdmission;
   },
 }));
 vi.mock("./plugin-node-host.js", () => ({
@@ -56,6 +58,7 @@ const client = { request: vi.fn(async () => ({})) } as unknown as NodeHostClient
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.checkWorkspaceAdmission.mockReset().mockResolvedValue(undefined);
   mocks.closeWorkerSupervisor.mockReset().mockResolvedValue(undefined);
   mocks.initializeWorkerSupervisor.mockReset().mockResolvedValue(undefined);
 });
@@ -154,6 +157,22 @@ describe("node-host worker manifest", () => {
     expect(prepared.manifest).not.toHaveProperty("workerRuns");
     expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, "container"] as const)(
+    "disables %s hosting before publishing capacity when workspace admission fails",
+    async (isolation) => {
+      const reason =
+        "State directory /srv/node-state is group-writable; run chmod go-w /srv/node-state";
+      mocks.checkWorkspaceAdmission.mockRejectedValueOnce(new Error(reason));
+      const prepared = await prepareWorkerRuntime(isolation);
+      expect(prepared.workerHostingEnabled).toBe(false);
+      expect(prepared.workerHostingDisabledReason).toBe(reason);
+      expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
+      const runtime = prepared.start({ client });
+      expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
+      await runtime.close();
+    },
+  );
 
   it("disables container-isolated hosting and records why when no engine is usable", async () => {
     const reason =

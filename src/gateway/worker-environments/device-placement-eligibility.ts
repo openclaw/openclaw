@@ -5,6 +5,7 @@ import {
   type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
 import {
+  formatRequiredNodeCommandUnavailable,
   resolveNodeCommandAllowlist,
   resolveRequiredNodeCommandAuthority,
   isNodeCommandAllowed,
@@ -132,11 +133,11 @@ export async function resolveDevicePlacementEligibility(params: {
     withheldCommands: params.currentNode ? readNodeSessionWithheldCommands(params.currentNode) : [],
     allowlist,
   });
-  if (requiredNodeCommand && requiredNodeCommand.state !== "invocable") {
-    return {
-      ok: false,
-      error: `paired-device command ${requiredNodeCommand.command} is not enabled or approved for ${deviceId}; enable it in gateway.nodes.commands.allow and approve the command on the node`,
-    };
+  const commandError = requiredNodeCommand
+    ? formatRequiredNodeCommandUnavailable(requiredNodeCommand, deviceId)
+    : undefined;
+  if (commandError) {
+    return { ok: false, error: commandError };
   }
   if (requirement.consumesWorkerSlot && node.workerHost.capacity.available <= 0) {
     return {

@@ -149,6 +149,26 @@ to finish cleanup, and reports failures from those cleanup operations. If a comm
 reports `Node plugin cleanup failed`, reconnect the node to retry disconnect cleanup
 before sending another command.
 
+### Session-host workspace permissions
+
+A node started with `--session-host` checks workspace staging before advertising
+session capacity. On Unix, the state directory (`OPENCLAW_STATE_DIR`, or
+`~/.openclaw`) and its canonical ancestors must satisfy the filesystem owner's
+checks. Group- or world-writable ancestors without sticky protection prevent
+session hosting, even when the `node-host` directory itself is private.
+
+The node log and `environments.list` identify the offending directory and the
+remediation: run `chmod go-w '<reported-path>'` on the node, then restart the node
+host. Review shared-directory permissions before changing them; alternatively,
+move node state under a private directory. OpenClaw does not change ancestor
+permissions or bypass staging checks. A trusted sticky system temporary directory
+remains supported.
+
+Disabled-host reasons are published only when the Gateway advertises
+`node-worker-host-diagnostics-v1`. Older Gateways still receive disabled hosting;
+the node log retains the reason. Workspace transfers also report the same
+remediation if permissions change after startup.
+
 ### Automatic node updates
 
 Packaged headless nodes check for updates hourly by default, in both foreground
@@ -177,9 +197,8 @@ openclaw devices approve <deviceRequestId>
 
 If the node retries with changed auth details, re-run `openclaw devices list` and approve the current `requestId`.
 
-Restart an installed node with `openclaw node restart`, or stop and rerun its
-foreground `openclaw node run` command. A node paused on `PAIRING_REQUIRED`
-does not resume automatically after manual approval. Its reconnect creates a
+The node keeps reconnecting while device approval is pending, with exponential
+backoff capped at 30 seconds. After approval, its next reconnect creates a
 separate command-surface request. On the Gateway:
 
 ```bash
@@ -187,6 +206,10 @@ openclaw nodes pending
 openclaw nodes approve <nodeRequestId>
 openclaw nodes describe --node <id|name|ip>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once.
 
 The device and node request IDs are distinct. An initial unapproved surface has
 no effective commands. SSH-verified and bootstrap enrollment can approve the

@@ -34,7 +34,6 @@ import {
   isNodeWorkerSupervisorProofCurrent,
   resolveNodeRunnerInventoryIssue,
   resolveNodeWorkerSupervisorProof,
-  sameBundleStatusObservation,
   type NodeRunnerInventoryRecord,
   type NodeRunnerRegistrySession,
   type NodeRunnerStateChange,
@@ -178,7 +177,7 @@ function updateWorkerRunnerInventory(
       ? {
           workerHost: workerHost.enabled
             ? { ...workerHost, capacity: { ...workerHost.capacity } }
-            : { enabled: false },
+            : { ...workerHost },
         }
       : {}),
   };
@@ -486,7 +485,7 @@ export function registerNodeRegistryPrivateRuntime(
         } else {
           state.bundleStatusByConn.delete(node.connId);
         }
-        if (!sameBundleStatusObservation(previous, observation)) {
+        if (!isDeepStrictEqual(previous, observation)) {
           state.runnerState.reconcile(node.nodeId, true);
         }
         return true;

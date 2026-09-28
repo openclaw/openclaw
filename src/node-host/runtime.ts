@@ -162,14 +162,14 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableWorkerRuns === true &&
     (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
   const workspaceOptions = { env, ephemeral: params?.ephemeral };
-  let preparedContainerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
+  let preparedWorkerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
   let preparedContainerInitialized = false;
   let workerCleanupIncomplete = false;
   let publishContainerCapacity: ((capacity: NodeWorkerCapacitySnapshot) => void) | undefined;
   let workerHostingDisabledReason: string | undefined;
-  const disablePreparedContainerHosting = async (error: unknown) => {
+  const disablePreparedWorkerHosting = async (error: unknown) => {
     let failure = error;
     workerCleanupIncomplete ||= error instanceof NodeWorkerContainerContextMismatchError;
     try {
@@ -181,11 +181,19 @@ export async function prepareNodeHostRuntime(params?: {
       }
     }
     workerRunsEnabled = false;
-    preparedContainerWorkspace = undefined;
+    preparedWorkerWorkspace = undefined;
     preparedContainerSupervisor = undefined;
     preparedContainerCapacity = undefined;
     workerHostingDisabledReason = failure instanceof Error ? failure.message : String(failure);
   };
+  if (workerRunsEnabled) {
+    try {
+      preparedWorkerWorkspace = new NodeWorkerWorkspaceRuntime(workspaceOptions);
+      await preparedWorkerWorkspace.checkAdmission();
+    } catch (error) {
+      await disablePreparedWorkerHosting(error);
+    }
+  }
   if (workerRunsEnabled && config.nodeHost?.workerRuns?.isolation === "container") {
     try {
       if (platform === "win32") {
@@ -194,11 +202,10 @@ export async function prepareNodeHostRuntime(params?: {
         );
       }
       const containerEngine = await resolveNodeWorkerContainerEngine({ env });
-      preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime(workspaceOptions);
       preparedContainerSupervisor = createNodeWorkerSupervisor({
         env,
         capacity: config.nodeHost?.workerRuns?.capacity,
-        workspace: preparedContainerWorkspace,
+        workspace: preparedWorkerWorkspace,
         containerEngine,
         ...(config.nodeHost?.workerRuns?.containerImage
           ? { containerImage: config.nodeHost.workerRuns.containerImage }
@@ -214,13 +221,13 @@ export async function prepareNodeHostRuntime(params?: {
         preparedContainerInitialized = true;
       } catch (error) {
         if (error instanceof NodeWorkerContainerContextMismatchError) {
-          await disablePreparedContainerHosting(error);
+          await disablePreparedWorkerHosting(error);
         } else {
           logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
         }
       }
     } catch (error) {
-      await disablePreparedContainerHosting(error);
+      await disablePreparedWorkerHosting(error);
     }
   }
   const skills =
@@ -266,9 +273,7 @@ export async function prepareNodeHostRuntime(params?: {
       let supervisorClose: Promise<void> | undefined;
       let mcpClose: Promise<void> | undefined;
       let initializationRetry: ReturnType<typeof setTimeout> | undefined;
-      const workerWorkspace =
-        preparedContainerWorkspace ??
-        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime(workspaceOptions) : undefined);
+      const workerWorkspace = preparedWorkerWorkspace;
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;

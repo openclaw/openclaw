@@ -4,6 +4,7 @@ import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/clien
 import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
 import {
@@ -444,6 +445,61 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-1");
   });
 
+  it("projects current disabled-host diagnostics without admitting a worker", async () => {
+    const { runtime, client } = createCurrentRunner();
+    const inventoryChanged = vi.fn();
+    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
+    const connected = [{ nodeId: "node-1", connId: "conn-1", pairingGeneration: "generation-1" }];
+    try {
+      for (const reason of [
+        "state directory /srv/node is group-writable; run chmod go-w /srv/node",
+        "state directory /srv is group-writable; run chmod go-w /srv",
+        "x".repeat(NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH),
+      ]) {
+        const opts = runnerInventoryOptions({
+          nodeRegistry: runtime.nodeRegistry,
+          client,
+          declaration: {
+            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+            workerHost: { enabled: false, reason },
+          },
+        });
+        inventoryChanged.mockClear();
+        await runnerInventoryHandler(opts);
+        expect(opts.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
+        expect(inventoryChanged).toHaveBeenCalledWith("node-1", {
+          inventoryChanged: true,
+          availabilityChanged: false,
+        });
+        const issue = { code: "worker-host-unavailable", message: reason };
+        expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toEqual(issue);
+        const catalog = collectNodeCatalogRuntimeState(runtime.nodeRegistry, connected);
+        expect(catalog.issuesByNodeId.get("node-1")).toEqual([issue]);
+        expect(catalog.sessionHostNodeIds.size).toBe(0);
+        expect(catalog.workerSlotsByNodeId.size).toBe(0);
+        await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
+      }
+      expect(
+        updatePairedNodeSessionHostMock.mock.calls.map(([params]) => params.sessionHost),
+      ).toEqual([false, false, false]);
+
+      await runnerInventoryHandler(
+        runnerInventoryOptions({
+          nodeRegistry: runtime.nodeRegistry,
+          client,
+          declaration: availableHost,
+        }),
+      );
+      expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toBeUndefined();
+      expect(
+        collectNodeCatalogRuntimeState(runtime.nodeRegistry, connected).issuesByNodeId.size,
+      ).toBe(0);
+    } finally {
+      runtime.nodeRegistry.unregister("conn-1");
+    }
+    expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toBeUndefined();
+  });
+
   it("returns a retryable failure when durable consent does not commit", async () => {
     const { runtime, client } = createCurrentRunner();
     updatePairedNodeSessionHostMock.mockRejectedValueOnce(new Error("database busy"));
@@ -690,6 +746,29 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         workerHost: { enabled: false, capacity: FULL_CAPACITY },
       },
     },
+    ...["", "   ", null, 42, "x".repeat(NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH + 1)].map(
+      (reason) => ({
+        name: `disabled host with invalid diagnostic ${JSON.stringify(reason).slice(0, 32)}`,
+        params: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: { enabled: false, reason },
+        },
+      }),
+    ),
+    {
+      name: "disabled host with unknown diagnostic field",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: false, reason: "unavailable", action: "repair" },
+      },
+    },
+    {
+      name: "enabled host with disabled diagnostic",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, reason: "unavailable" },
+      },
+    },
     {
       name: "enabled host without capacity",
       params: {
@@ -725,34 +804,20 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         workerHost: { enabled: true, capacity: { total: 2, available: 2, busy: 0 } },
       },
     },
-    {
-      name: "unsupported bundle prewarm version",
+    ...[
+      "bundlePrewarm",
+      "bundleRetention",
+      "bundleStatus",
+      "portalStream",
+      "environmentSession",
+      "preparedWorkspace",
+    ].map((capability) => ({
+      name: `unsupported ${capability} version`,
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 2 },
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, [capability]: 2 },
       },
-    },
-    {
-      name: "unsupported bundle retention version",
-      params: {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundleRetention: 2 },
-      },
-    },
-    {
-      name: "unsupported bundle status version",
-      params: {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundleStatus: 2 },
-      },
-    },
-    {
-      name: "unsupported portal stream version",
-      params: {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, portalStream: 2 },
-      },
-    },
+    })),
     {
       name: "bundle status without bundle retention",
       params: {

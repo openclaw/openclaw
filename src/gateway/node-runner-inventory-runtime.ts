@@ -1,7 +1,7 @@
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
-  formatNodeRunnerUpdateRequired,
+  formatNodeRunnerInventoryIssue,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_STATUS_WAIT_VERSION,
@@ -30,18 +30,6 @@ export type NodeWorkerBundleStatusObservation = {
   bundleHash: string;
   status: NodeWorkerBundleStatus;
 };
-
-export function sameBundleStatusObservation(
-  left: NodeWorkerBundleStatusObservation | undefined,
-  right: NodeWorkerBundleStatusObservation | undefined,
-): boolean {
-  return (
-    left?.bundleHash === right?.bundleHash &&
-    left?.status.status === right?.status.status &&
-    (left?.status.status !== "installed" ||
-      (right?.status.status === "installed" && left.status.version === right.status.version))
-  );
-}
 
 export type NodeRunnerRegistrySession = {
   nodeId: string;
@@ -162,7 +150,7 @@ export async function waitForNodeRunnerAvailability(
       }
       const issue = transport.getIssue?.(nodeId);
       if (issue) {
-        throw new Error(formatNodeRunnerUpdateRequired(nodeId, issue));
+        throw new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
       }
       await racePromiseWithAbortSignal(changed.promise, options.signal);
       changed = createDeferredCore();
@@ -259,19 +247,26 @@ export function resolveNodeRunnerInventoryIssue(
   runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
 ): NodeRunnerInventoryIssue | undefined {
   const declaration = runnerInventoryByConn.get(node.connId);
-  return declaration &&
-    node.client.invalidated !== true &&
-    declaration.nodeId === node.nodeId &&
-    declaration.pairingIdentity === node.pairingIdentity &&
-    declaration.pairingGeneration !== undefined &&
-    declaration.pairingGeneration === node.pairingGeneration &&
-    isNodeWorkerHostClientId(node.clientId) &&
-    declaration.clientId === node.clientId &&
-    node.clientMode === "node" &&
-    declaration.clientMode === "node" &&
-    declaration.protocolFeatures.length === 1 &&
-    declaration.protocolFeatures[0] !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE
-    ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
+  if (
+    !declaration ||
+    node.client.invalidated === true ||
+    declaration.nodeId !== node.nodeId ||
+    declaration.pairingIdentity !== node.pairingIdentity ||
+    declaration.pairingGeneration === undefined ||
+    declaration.pairingGeneration !== node.pairingGeneration ||
+    !isNodeWorkerHostClientId(node.clientId) ||
+    declaration.clientId !== node.clientId ||
+    node.clientMode !== "node" ||
+    declaration.clientMode !== "node" ||
+    declaration.protocolFeatures.length !== 1
+  ) {
+    return undefined;
+  }
+  if (declaration.protocolFeatures[0] !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE) {
+    return NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
+  }
+  return declaration.workerHost?.enabled === false && declaration.workerHost.reason
+    ? { code: "worker-host-unavailable", message: declaration.workerHost.reason }
     : undefined;
 }
 

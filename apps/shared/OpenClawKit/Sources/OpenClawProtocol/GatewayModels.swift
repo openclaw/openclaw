@@ -6724,7 +6724,7 @@ public struct EnvironmentSummary: Codable, Sendable {
     public let invocablecommands: [String]?
     public let desktop: Bool?
     public let desktopavailability: DesktopAvailability?
-    public let issues: [[String: AnyCodable]]?
+    public let issues: [AnyCodable]?
     public let worker: WorkerEnvironmentMetadata?
     public let preparation: [String: AnyCodable]?
     public let requirednodecommand: RequiredNodeCommand?
@@ -6748,7 +6748,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         invocablecommands: [String]? = nil,
         desktop: Bool? = nil,
         desktopavailability: DesktopAvailability? = nil,
-        issues: [[String: AnyCodable]]? = nil,
+        issues: [AnyCodable]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
         preparation: [String: AnyCodable]? = nil,
         requirednodecommand: RequiredNodeCommand? = nil,
@@ -6840,7 +6840,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
     public let invocablecommands: [String]?
     public let desktop: Bool?
     public let desktopavailability: DesktopAvailability?
-    public let issues: [[String: AnyCodable]]?
+    public let issues: [AnyCodable]?
     public let worker: WorkerEnvironmentMetadata?
     public let preparation: [String: AnyCodable]?
 
@@ -6862,7 +6862,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         invocablecommands: [String]? = nil,
         desktop: Bool? = nil,
         desktopavailability: DesktopAvailability? = nil,
-        issues: [[String: AnyCodable]]? = nil,
+        issues: [AnyCodable]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
         preparation: [String: AnyCodable]? = nil)
     {
@@ -6948,7 +6948,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
     public let invocablecommands: [String]?
     public let desktop: Bool?
     public let desktopavailability: DesktopAvailability?
-    public let issues: [[String: AnyCodable]]?
+    public let issues: [AnyCodable]?
     public let worker: WorkerEnvironmentMetadata?
     public let preparation: [String: AnyCodable]?
 
@@ -6970,7 +6970,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         invocablecommands: [String]? = nil,
         desktop: Bool? = nil,
         desktopavailability: DesktopAvailability? = nil,
-        issues: [[String: AnyCodable]]? = nil,
+        issues: [AnyCodable]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
         preparation: [String: AnyCodable]? = nil)
     {
@@ -7268,7 +7268,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     public let invocablecommands: [String]?
     public let desktop: Bool?
     public let desktopavailability: DesktopAvailability?
-    public let issues: [[String: AnyCodable]]?
+    public let issues: [AnyCodable]?
     public let worker: WorkerEnvironmentMetadata?
     public let preparation: [String: AnyCodable]?
 
@@ -7290,7 +7290,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         invocablecommands: [String]? = nil,
         desktop: Bool? = nil,
         desktopavailability: DesktopAvailability? = nil,
-        issues: [[String: AnyCodable]]? = nil,
+        issues: [AnyCodable]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
         preparation: [String: AnyCodable]? = nil)
     {
@@ -13410,13 +13410,16 @@ public struct RequestFrame: Codable, Sendable {
 public struct RequiredNodeCommand: Codable, Sendable {
     public let command: String
     public let state: RequiredNodeCommandState
+    public let message: String?
 
     public init(
         command: String,
-        state: RequiredNodeCommandState)
+        state: RequiredNodeCommandState,
+        message: String? = nil)
     {
         self.command = command
         self.state = state
+        self.message = message
     }
 }
 

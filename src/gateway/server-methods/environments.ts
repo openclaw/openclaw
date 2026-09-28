@@ -28,6 +28,7 @@ import {
 } from "../method-scopes.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import {
+  formatRequiredNodeCommandUnavailable,
   isNodeCommandAllowed,
   resolveNodeCommandAllowlist,
   resolveRequiredNodeCommandAuthority,
@@ -98,11 +99,17 @@ function summarizeNodeEnvironment(
           allowlist,
         })
       : undefined;
+  const commandMessage = requiredNodeCommand
+    ? formatRequiredNodeCommandUnavailable(requiredNodeCommand, node.nodeId)
+    : undefined;
   return {
     id: `node:${node.nodeId}`,
     type: "node",
     label: node.displayName ?? node.nodeId,
-    status: node.connected ? "available" : "unavailable",
+    status:
+      node.connected && !node.issues?.some((issue) => issue.code === "worker-host-unavailable")
+        ? "available"
+        : "unavailable",
     ...(platform ? { platform } : {}),
     sessionHost: node.sessionHost === true,
     ...(node.workerSlots ? { workerSlots: { ...node.workerSlots } } : {}),
@@ -120,7 +127,14 @@ function summarizeNodeEnvironment(
       : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
     ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
-    ...(requiredNodeCommand ? { requiredNodeCommand } : {}),
+    ...(requiredNodeCommand
+      ? {
+          requiredNodeCommand: {
+            ...requiredNodeCommand,
+            ...(commandMessage ? { message: commandMessage } : {}),
+          },
+        }
+      : {}),
     ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
