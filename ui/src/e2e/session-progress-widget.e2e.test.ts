@@ -379,7 +379,7 @@ suite.define(() => {
         };
         app.runtime?.context?.agentSelection?.setScope?.("writer");
       });
-      await gateway.waitForRequest("sessions.describe");
+      await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       // Reconcile the descriptor after the running roster and scope transition.
       await gateway.resolveDeferred("sessions.describe");
       await expect
