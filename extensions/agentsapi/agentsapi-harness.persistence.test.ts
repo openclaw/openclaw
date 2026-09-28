@@ -110,11 +110,15 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
     const register = () => {
       const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
       plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
-      const { runAttempt, reset, dispose } = registerAgentHarness.mock.calls[0]?.[0] ?? {};
-      if (!runAttempt || !reset || !dispose) {
+      const harness = registerAgentHarness.mock.calls[0]?.[0];
+      if (!harness?.runAttempt || !harness.reset || !harness.dispose) {
         throw new Error("The registered Agents API harness requires run, reset, and disposal");
       }
-      return { runAttempt, reset, dispose };
+      return {
+        runAttempt: harness.runAttempt.bind(harness),
+        reset: harness.reset.bind(harness),
+        dispose: harness.dispose.bind(harness),
+      };
     };
     let harness = register();
     try {
