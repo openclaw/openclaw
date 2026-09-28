@@ -291,6 +291,38 @@ describe("qwen video generation provider", () => {
     }
   });
 
+  it.each([
+    { buffer: Buffer.from("png-bytes"), mimeType: "image/png" },
+    { url: "https://example.com/frame.png" },
+  ])("routes the default Wan model to image-to-video for %j", async (image) => {
+    mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
+
+    const result = await qwenVideoGenerationProvider.generateVideo({
+      provider: "qwen",
+      model: "wan2.6-t2v",
+      prompt: "animate this frame",
+      cfg: {},
+      inputImages: [image],
+      resolution: "720P",
+      durationSeconds: 5,
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        body: {
+          model: "wan2.6-i2v",
+          input: {
+            prompt: "animate this frame",
+            img_url: image.url ?? "data:image/png;base64,cG5nLWJ5dGVz",
+          },
+          parameters: { resolution: "720P", duration: 5 },
+        },
+      }),
+    );
+    expect(result.model).toBe("wan2.6-i2v");
+    expectSuccessfulDashscopeVideoResult(result);
+  });
+
   it("rejects DashScope video downloads that exceed the configured media cap", async () => {
     postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({

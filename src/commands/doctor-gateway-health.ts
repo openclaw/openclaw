@@ -37,6 +37,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
 import { projectDoctorSecretRuntimeDegradations } from "./doctor-secret-runtime-degradation.js";
+import { isServiceRepairExternallyManaged } from "./doctor-service-repair-policy.js";
 import { waitForGatewayDiagnostic } from "./gateway-diagnostic-readiness.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
@@ -257,7 +258,7 @@ function noteGatewayStateDirectory(
 async function noteInstalledGatewayStateDirectory(cfg: OpenClawConfig, timeoutMs: number) {
   // A remote Gateway can use a loopback tunnel or have no configured URL.
   // Neither case makes the local installed service authoritative.
-  if (cfg.gateway?.mode === "remote") {
+  if (cfg.gateway?.mode === "remote" || isServiceRepairExternallyManaged()) {
     return;
   }
   try {
@@ -301,7 +302,11 @@ export async function checkGatewayHealth(params: {
   let gatewaySnapshot: GatewayHello["snapshot"] | undefined;
   try {
     const remainingMs = await waitForGatewayDiagnostic(
-      { config: params.cfg, timeoutMs },
+      {
+        config: params.cfg,
+        timeoutMs,
+        serviceMode: isServiceRepairExternallyManaged() ? "external" : "native",
+      },
       params.runtime,
     );
     if (remainingMs === undefined) {

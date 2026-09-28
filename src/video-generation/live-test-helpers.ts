@@ -100,6 +100,12 @@ export function canRunBufferBackedImageToVideoLiveLane(params: {
   if (BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS.has(providerId)) {
     return false;
   }
+  if (providerId === "alibaba" || providerId === "qwen") {
+    // The default T2V model routes a single local image to its I2V sibling.
+    // Wan 2.6 R2V still requires URL-backed images in reference_urls.
+    const model = params.modelRef.replace(/^[^/]+\//u, "");
+    return ["wan2.6-t2v", "wan2.6-i2v", "wan2.7-r2v"].includes(model);
+  }
   if (providerId === "together") {
     return params.modelRef.includes(TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL);
   }

@@ -20,7 +20,12 @@ export function createMountedPanes(
   readBarrier?: Promise<void>,
   responses?: Partial<
     Record<
-      "chat.history" | "chat.startup" | "sessions.describe" | "sessions.list" | "sessions.patch",
+      | "chat.history"
+      | "chat.startup"
+      | "models.list"
+      | "sessions.describe"
+      | "sessions.list"
+      | "sessions.patch",
       GatewayRequestHandler
     >
   >,
@@ -29,6 +34,7 @@ export function createMountedPanes(
     if (
       method === "chat.history" ||
       method === "chat.startup" ||
+      method === "models.list" ||
       method === "sessions.describe" ||
       method === "sessions.list" ||
       method === "sessions.patch"

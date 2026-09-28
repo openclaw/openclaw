@@ -696,6 +696,7 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("advertises LAN Control UI links while probing the local gateway", async () => {
+    probeGatewayReachable.mockResolvedValue({ ok: true });
     resolveAdvertisedControlUiLinks.mockResolvedValueOnce({
       httpUrl: "http://10.211.55.3:18789/",
       wsUrl: "ws://10.211.55.3:18789",
@@ -717,7 +718,7 @@ describe("finalizeSetupWizard", () => {
     expect(resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
       expect.objectContaining({ bind: "lan", port: 18789 }),
     );
-    expect(waitForGatewayReachable).toHaveBeenCalledWith(
+    expect(probeGatewayReachable).toHaveBeenCalledWith(
       expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
     );
     expectNoteContains(prompter, "http://10.211.55.3:18789/", "Control UI");
@@ -1107,7 +1108,15 @@ describe("finalizeSetupWizard", () => {
           }),
         );
 
-        const managedStartup = action !== "reused" && action !== "skipped";
+        if (action === "skipped") {
+          expect(waitForGatewayReachable).not.toHaveBeenCalled();
+          expectNoteContains(prompter, "openclaw gateway run", "Gateway");
+          expect(prompter.outro).toHaveBeenCalledWith(
+            expect.stringContaining("openclaw gateway run"),
+          );
+          return;
+        }
+        const managedStartup = action !== "reused";
         expect(waitForGatewayReachable).toHaveBeenCalledOnce();
         const timing = requireMockArg(waitForGatewayReachable) as {
           deadlineMs?: number;
@@ -1783,6 +1792,7 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("uses the setup token for health checks to avoid local env token drift", async () => {
+    probeGatewayReachable.mockResolvedValue({ ok: true });
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
     const prompter = createLaterPrompter();
 
@@ -1802,21 +1812,17 @@ describe("finalizeSetupWizard", () => {
       }),
     );
 
-    const healthArgs = requireMockArg(healthCommand) as {
-      json?: boolean;
-      timeoutMs?: number;
-      token?: string;
-      config?: OpenClawConfig;
-    };
-    expect(healthArgs.json).toBe(false);
-    expect(healthArgs.timeoutMs).toBe(10_000);
-    expect(healthArgs.token).toBe("session-token");
-    expect(healthArgs.config?.gateway?.auth?.mode).toBe("token");
-    expect(healthArgs.config?.gateway?.auth?.token).toBe("session-token");
+    expect(requireMockArg(healthCommand)).toMatchObject({
+      json: false,
+      timeoutMs: 10_000,
+      token: "session-token",
+      config: { gateway: { auth: { mode: "token", token: "session-token" } } },
+    });
     expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
   });
 
   it("ends with a health-failure outro when the health check exits after a reachable probe", async () => {
+    probeGatewayReachable.mockResolvedValue({ ok: true });
     // importActual yields the ExitError instance the prod graph sees; the test
     // file's static import can be a second class instance under Vitest.
     const { ExitError } = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
@@ -1961,6 +1967,7 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("uses the resolved setup password for health checks", async () => {
+    probeGatewayReachable.mockResolvedValue({ ok: true });
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-password");
     resolveSetupSecretInputString.mockResolvedValueOnce("session-password");
     const prompter = createLaterPrompter();
@@ -1985,26 +1992,18 @@ describe("finalizeSetupWizard", () => {
       }),
     );
 
-    const waitArgs = requireMockArg(waitForGatewayReachable) as {
-      url?: string;
-      token?: string;
-      password?: string;
-    };
-    expect(waitArgs.url).toBe("ws://127.0.0.1:18789");
-    expect(waitArgs.token).toBeUndefined();
-    expect(waitArgs.password).toBe("session-password");
-    const healthArgs = requireMockArg(healthCommand) as {
-      json?: boolean;
-      timeoutMs?: number;
-      token?: string;
-      password?: string;
-      config?: OpenClawConfig;
-    };
-    expect(healthArgs.json).toBe(false);
-    expect(healthArgs.timeoutMs).toBe(10_000);
-    expect(healthArgs.token).toBeUndefined();
-    expect(healthArgs.password).toBe("session-password");
-    expect(healthArgs.config?.gateway?.auth?.mode).toBe("password");
+    expect(requireMockArg(probeGatewayReachable)).toMatchObject({
+      url: "ws://127.0.0.1:18789",
+      token: undefined,
+      password: "session-password",
+    });
+    expect(requireMockArg(healthCommand)).toMatchObject({
+      json: false,
+      timeoutMs: 10_000,
+      token: undefined,
+      password: "session-password",
+      config: { gateway: { auth: { mode: "password" } } },
+    });
     expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
   });
 

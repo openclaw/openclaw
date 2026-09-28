@@ -1,3 +1,4 @@
+import type { AcpSessionControlConstraint } from "../acp/runtime/session-meta-control.types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { recordSessionStateEventAsync } from "./session-state-events.js";
 
@@ -19,6 +20,7 @@ export async function recordSubagentTerminalState(
     outcomeStatus: SubagentTerminalStatus;
   },
   assertCurrent: () => void,
+  acpControl?: AcpSessionControlConstraint,
 ): Promise<void> {
   // Non-ok outcomes share run_failed; the precise status survives in payload.
   await recordSessionStateEventAsync(
@@ -33,6 +35,6 @@ export async function recordSubagentTerminalState(
       ...(params.outcomeStatus === "ok" ? {} : { payload: { outcome: params.outcomeStatus } }),
       watcherSessionKeys: [params.requesterSessionKey],
     },
-    { assertCurrent },
+    { assertCurrent, acpControl },
   );
 }

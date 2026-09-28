@@ -5076,6 +5076,7 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/gateway/server-methods/usage.sessions-usage-owner-attribution.integration.test.ts",
   "src/gateway/server-plugin-in-process-dispatch.session-scopes.test.ts",
   "src/gateway/server-plugin-subagent-runtime.test.ts",
+  "src/gateway/server-reload-handlers.identity-scopes.test.ts",
   "src/gateway/server-reload-hot.cron-lazy.test.ts",
   "src/gateway/server-request-entry.test.ts",
   "src/gateway/server-sidecar-retention.test.ts",

@@ -31,7 +31,8 @@ extension DashboardWindowController {
             replyHandler(NSNull(), nil)
             return
         }
-        guard Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL) else {
+        guard ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
+        else {
             replyHandler(nil, "The device settings document is no longer available.")
             return
         }

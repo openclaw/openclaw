@@ -7,6 +7,7 @@ import {
   UI_APPEARANCE_DEFAULTS,
   type TextScaleStop,
 } from "../../app/settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -258,7 +259,7 @@ export function renderAppearanceSection(
             : t("configView.appearance.customAccent"),
         });
   return html`
-    <div class="settings-page">
+    <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderLanguageSection(props)}
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <div class="settings-section__header">

@@ -1,6 +1,8 @@
 import { stripVTControlCharacters } from "node:util";
 import { decodeNodeTestGroups } from "./ci-node-test-groups-codec.mts";
 import {
+  NATIVE_SOLO_TIMING_PROFILE,
+  createNativeSoloTimingKey,
   isRuntimePlacementTiming,
   isRuntimePlacementIncludePatterns,
   runtimePlacementTimingIdentity,
@@ -209,7 +211,12 @@ function readWorkerResources(text: string) {
   ) {
     return undefined;
   }
-  return { logicalCpuCount: values[0]!, totalMemoryBytes: values[1]!, admittedPlans: values[3]! };
+  return {
+    logicalCpuCount: values[0]!,
+    totalMemoryBytes: values[1]!,
+    requestedPlans: values[2]!,
+    admittedPlans: values[3]!,
+  };
 }
 
 function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
@@ -251,7 +258,7 @@ function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
   }
 }
 
-function readSingletonExtensionInvocations(
+function readSingletonVitestInvocations(
   lines: readonly string[],
   config: string,
   files: readonly string[],
@@ -360,6 +367,31 @@ function readSingletonExtensionInvocations(
   return verified && passed && measured.size === declared.size ? measured : undefined;
 }
 
+function hasNativeSoloJobEnvironment(text: string): boolean {
+  const encoded = readLogEnv(text, "OPENCLAW_NODE_TEST_ENV_JSON");
+  if (encoded === null) {
+    return false;
+  }
+  try {
+    const env: unknown = encoded ? JSON.parse(encoded) : {};
+    if (env === null) {
+      return true;
+    }
+    if (
+      typeof env !== "object" ||
+      Array.isArray(env) ||
+      Object.entries(env).some(
+        ([key, value]) => key !== "OPENCLAW_VITEST_MAX_WORKERS" || value !== "8",
+      )
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readCompactLog(
   text: string,
   labels: string[],
@@ -380,6 +412,20 @@ function readCompactLog(
   const runnerEnvironment = readLogEnv(text, "RUNNER_ENVIRONMENT");
   const frozenTarget = readLogEnv(text, "FROZEN_TARGET");
   const jobExtraArgs = readLogEnv(text, "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON");
+  const nativeSoloHost =
+    labels.length === 1 &&
+    labels[0] === NATIVE_SOLO_TIMING_PROFILE.runner &&
+    descriptors.length === 1 &&
+    Boolean(readLogEnv(text, "OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64")) &&
+    resources?.logicalCpuCount === NATIVE_SOLO_TIMING_PROFILE.logicalCpuCount &&
+    resources.totalMemoryBytes >= NATIVE_SOLO_TIMING_PROFILE.minTotalMemoryBytes &&
+    resources.totalMemoryBytes <= NATIVE_SOLO_TIMING_PROFILE.maxTotalMemoryBytes &&
+    resources.requestedPlans === 1 &&
+    resources.admittedPlans === 1 &&
+    jobWorkerCeiling === NATIVE_SOLO_TIMING_PROFILE.maxWorkers &&
+    runnerEnvironment === "self-hosted" &&
+    frozenTarget === "false" &&
+    hasNativeSoloJobEnvironment(text);
   for (const line of text.split("\n")) {
     const output = /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:([^\]]+)\]/u.exec(line);
     if (output) {
@@ -416,6 +462,9 @@ function readCompactLog(
       runtimeModes.delete(key);
       const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
       const descriptor = matches.length === 1 ? matches[0] : undefined;
+      if (descriptor && nativeSoloHost && createNativeSoloTimingKey(descriptor)) {
+        singletonLogs.set(descriptor.shard_name, { key, lines: [] });
+      }
       if (
         descriptor?.shard_name.startsWith("changed-extensions-config") &&
         descriptor.configs.length === 1 &&
@@ -564,7 +613,7 @@ function readCompactLog(
         innerParallelism === 1 &&
         !runtimeModes.has(key)
       ) {
-        const invocations = readSingletonExtensionInvocations(
+        const invocations = readSingletonVitestInvocations(
           singletonLog.lines,
           group.configs[0]!,
           group.includePatterns!,
@@ -594,7 +643,18 @@ function readCompactLog(
           }
         }
       }
+      const nativeSoloKey =
+        nativeSoloHost &&
+        group &&
+        hasExactSelection &&
+        workerCeiling === NATIVE_SOLO_TIMING_PROFILE.maxWorkers &&
+        !runtimeModes.has(key) &&
+        singletonLog?.key === key &&
+        readSingletonVitestInvocations(singletonLog.lines, group.configs[0]!, selectedFiles)
+          ? createNativeSoloTimingKey(group)
+          : undefined;
       const measuredKeys = [
+        ...(nativeSoloKey ? [nativeSoloKey] : []),
         ...(!extensionGroup && (!exactInventoryOnly || matchesSplitSelection) ? [key] : []),
         ...(exactKey ? [exactKey] : []),
       ];

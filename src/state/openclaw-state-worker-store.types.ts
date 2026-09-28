@@ -1,7 +1,10 @@
 import type { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import type { SqliteWorkerAdmissionCleanup } from "../infra/sqlite-worker-broker.types.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
-import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import type {
+  getSqliteWorkerActorIdentity,
+  SqliteWorkerStore,
+} from "../infra/sqlite-worker-store.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type {
@@ -23,7 +26,7 @@ export type Entry = {
   openingAdmission: ReturnType<typeof captureOpenClawStateWorkerOpeningGuard>["admission"];
   existingOnly: boolean;
   store?: Store;
-  actor?: object;
+  actor?: ReturnType<typeof getSqliteWorkerActorIdentity>;
   bound?: boolean;
   cleanup?: SqliteWorkerAdmissionCleanup;
   activeOperations: number;

@@ -200,7 +200,11 @@ struct ChatSessionSidebar: View {
             set: { next in
                 guard let next, next != self.viewModel.sessionKey else { return }
                 let agentID = self.viewModel.sessions.first(where: { $0.key == next })?.agentId
-                self.viewModel.switchSession(to: next, agentID: agentID)
+                // List writes this binding inside its table selection delegate.
+                // Navigation changes the same rows and focus, so leave that callback first.
+                Task { @MainActor in
+                    self.viewModel.switchSession(to: next, agentID: agentID)
+                }
             })
     }
 

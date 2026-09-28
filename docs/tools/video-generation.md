@@ -96,7 +96,7 @@ of failing the task if local persistence rejects an oversized file.
 
 | Provider              | Default model                   | Text | Image ref                                            | Video ref                                       | Auth                                     |
 | --------------------- | ------------------------------- | :--: | ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
-| Alibaba               | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
+| Alibaba               | `wan2.6-t2v`                    |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
 | BytePlus plugin       | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (first + last frame)                  | -                                               | `BYTEPLUS_API_KEY`                       |
 | BytePlus 1.5 plugin   | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
 | BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  |  ✓   | Up to 9 reference images                             | Up to 3 videos                                  | `BYTEPLUS_API_KEY`                       |
@@ -109,7 +109,7 @@ of failing the task if local persistence rejects an oversized file.
 | Novita                | `wan2.6-t2v`                    |  ✓   | 1 image (URL or local file)                          | -                                               | `NOVITA_API_KEY`                         |
 | OpenRouter            | `google/veo-3.1-fast`           |  ✓   | Up to 4 images (first/last frame or references)      | -                                               | `OPENROUTER_API_KEY`                     |
 | PixVerse              | `v6`                            |  ✓   | 1 local or remote image                              | -                                               | `PIXVERSE_API_KEY`                       |
-| Qwen                  | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `QWEN_API_KEY`                           |
+| Qwen                  | `wan2.6-t2v`                    |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
 | Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | `Wan-AI/Wan2.2-I2V-A14B` only                        | -                                               | `TOGETHER_API_KEY`                       |
 | Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
@@ -129,7 +129,7 @@ the shared live sweep:
 
 | Provider   | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes                                                                                                                       |
 | ---------- | :--------: | :------------: | :------------: | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Alibaba    |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
+| Alibaba    |     ✓      |       ✓        |       ✓        | `generate`, local `imageToVideo` (default routes to `wan2.6-i2v`); `videoToVideo` needs remote `http(s)` video URLs                     |
 | BytePlus   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | ComfyUI    |     ✓      |       ✓        |       -        | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                              |
 | DeepInfra  |     ✓      |       -        |       -        | `generate`; native DeepInfra video schemas are text-to-video in the plugin contract                                                     |
@@ -140,7 +140,7 @@ the shared live sweep:
 | Novita     |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | OpenRouter |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | PixVerse   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| Qwen       |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
+| Qwen       |     ✓      |       ✓        |       ✓        | `generate`, local `imageToVideo` (default routes to `wan2.6-i2v`); `videoToVideo` needs remote `http(s)` video URLs                     |
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
 | Together   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because `veo3` is text-only and `kling` requires a remote image URL                           |
@@ -321,8 +321,14 @@ OpenClaw does not append auto-detected providers.
 
 <AccordionGroup>
   <Accordion title="Alibaba">
-    Uses DashScope / Model Studio async endpoint. Reference images and
-    videos must be remote `http(s)` URLs.
+    Uses the DashScope / Model Studio async endpoint. Image-to-video and
+    Wan 2.7 reference images accept local files or remote URLs; local images
+    are sent as data URIs, up to 20 MB per image before encoding.
+    A text-to-video model with exactly one image and no video uses its
+    same-generation image-to-video sibling when that model is in the known
+    catalog, such as `wan2.6-t2v` to `wan2.6-i2v`. The result reports the
+    resolved model. Reference videos and Wan 2.6 reference-to-video images
+    still require remote `http(s)` URLs.
   </Accordion>
   <Accordion title="BytePlus plugin">
     Requires the official `@openclaw/byteplus-provider` plugin.
@@ -416,8 +422,11 @@ OpenClaw does not append auto-detected providers.
     `16:9`/`9:16` aspect ratios.
   </Accordion>
   <Accordion title="Qwen">
-    Same DashScope backend as Alibaba. Reference inputs must be remote
-    `http(s)` URLs; local files are rejected upfront.
+    Same DashScope backend as Alibaba. Image-to-video and Wan 2.7 image
+    references accept local files up to 20 MB before encoding or remote URLs.
+    With exactly one image and no video, `wan2.6-t2v` automatically uses
+    `wan2.6-i2v` and reports that model in the result. Reference videos and
+    Wan 2.6 reference-to-video images require remote `http(s)` URLs.
   </Accordion>
   <Accordion title="Runway">
     Supports local files via data URIs. Video-to-video requires

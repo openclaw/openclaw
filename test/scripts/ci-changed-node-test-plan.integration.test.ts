@@ -414,6 +414,7 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
   expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
   const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
   let canonical: CompactNodeTestShard[];
+  let selectedCanonical: CompactNodeTestShard[];
   try {
     canonical = createNodeTestShardBundles({
       compactMode: "pull-request",
@@ -422,7 +423,22 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       includeReleaseOnlyToolingShards: true,
       includeProofTests: false,
       includeReleaseOnlyRuntimeTests: true,
+      // Match the focused selector's admitted owner inventory before comparing resources.
+      includePrExemptRuntimeTests: true,
     });
+    selectedCanonical = expectDefined(
+      createSelectedNodeTestShardBundles(
+        (shards ?? []).flatMap(
+          (job) => job.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
+        ),
+        {
+          runnerBackend: options.runnerBackend,
+          includeReleaseOnlyRuntimeTests: true,
+          includePrExemptRuntimeTests: true,
+        },
+      ),
+      "canonical selected UI consumer owners",
+    );
   } finally {
     placement.mockRestore();
   }
@@ -464,12 +480,38 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
         expect(group).toEqual(owner);
       }
       expect(group.configs.every((config) => owner.configs.includes(config))).toBe(true);
-      expect(group.env).toEqual(owner.env);
-      expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
-      expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
-      expect(job.env).toEqual(ownerJob.env);
-      expect(job.runner).toBe(ownerJob.runner);
-      expect(job.planConcurrency).toBe(ownerJob.planConcurrency);
+      // Tooling capacity follows selected files; an excluded compiler can require a larger full job.
+      const selectedJob = expectDefined(
+        selectedCanonical.find((candidate) =>
+          candidate.groups.some((selected) => selected.shard_name === group.shard_name),
+        ),
+        `selected UI consumer job for ${group.shard_name}`,
+      );
+      const selectedGroup = expectDefined(
+        selectedJob.groups.find((selected) => selected.shard_name === group.shard_name),
+        "selected UI consumer group",
+      );
+      for (const key of [
+        "configs",
+        "env",
+        "runner",
+        "fallbackMaxWorkers",
+        "minTotalMemoryBytes",
+        "pretestBuildMode",
+        "requiresDist",
+      ] as const) {
+        expect(group[key], `${group.shard_name} group ${key}`).toEqual(selectedGroup[key]);
+      }
+      for (const key of [
+        "env",
+        "runner",
+        "planConcurrency",
+        "pretestBuildMode",
+        "requiresDist",
+        "timeoutMinutes",
+      ] as const) {
+        expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
+      }
     }
   }
   expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(

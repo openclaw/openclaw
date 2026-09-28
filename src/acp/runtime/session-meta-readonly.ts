@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import {
   type AcpSessionEntryBinding,
@@ -20,16 +21,19 @@ import {
 } from "./session-meta-keys.js";
 
 /** Each result stays bound to the entry lifecycle captured by the row reader. */
-export async function readAcpSessionMetaForEntries(params: {
-  entries: readonly {
-    sessionKey: string;
-    agentId: string;
-    entry: AcpSessionEntryBinding | undefined;
-  }[];
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): Promise<Array<SessionAcpMeta | null>> {
+export async function readAcpSessionMetaForEntries(
+  params: {
+    entries: readonly {
+      sessionKey: string;
+      agentId: string;
+      entry: AcpSessionEntryBinding | undefined;
+    }[];
+    cfg: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    databasePath?: string;
+  },
+  options: { current?: true } = {},
+): Promise<Array<SessionAcpMeta | null>> {
   if (params.entries.length === 0) {
     return [];
   }
@@ -57,6 +61,7 @@ export async function readAcpSessionMetaForEntries(params: {
         entry,
       })),
     },
+    options,
   );
   if (result === undefined) {
     return entries.map(() => null);
@@ -94,19 +99,25 @@ export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
   };
 }
 
-export function readAcpSessionMetaForEntry(params: {
-  sessionKey: string;
-  agentId?: string;
-  cfg?: OpenClawConfig;
-  entry: AcpSessionEntryBinding | undefined;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-}): SessionAcpMeta | undefined {
+export function readAcpSessionMetaForEntry(
+  params: {
+    sessionKey: string;
+    agentId?: string;
+    cfg?: OpenClawConfig;
+    entry: AcpSessionEntryBinding | undefined;
+    env?: NodeJS.ProcessEnv;
+    databasePath?: string;
+  },
+  options: { current?: true } = {},
+): SessionAcpMeta | undefined {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return undefined;
   }
-  const row = withExistingOpenClawStateDatabaseReadOnly(
+  const read = options.current
+    ? withExistingOpenClawStateDatabaseCurrentReadOnly
+    : withExistingOpenClawStateDatabaseReadOnly;
+  const row = read(
     ({ db }) =>
       resolveReadableAcpSessionRow({
         row: selectAcpSessionRowForStoreEntry(

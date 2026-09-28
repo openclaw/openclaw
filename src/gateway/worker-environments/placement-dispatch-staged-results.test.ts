@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createCommandTest } from "../../../test/helpers/command-fixture.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -14,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   type PlacementStore,
   REQUEST,
@@ -33,8 +35,9 @@ import {
 } from "./workspace-result-staging.js";
 
 const { stageWorkerWorkspaceResult } = workerWorkspaceResultStaging;
+const it = createCommandTest();
 
-describe("staged worker placement result recovery", () => {
+describe("worker placement result recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
   let root: string;
   let database: OpenClawStateDatabase;
@@ -45,6 +48,64 @@ describe("staged worker placement result recovery", () => {
     database = support.testState.stateDb;
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
+
+  it.for(["failed capture", "crash after drain"] as const)(
+    "recovers Stop before releasing the machine after %s and a Gateway restart",
+    async (interruption, { command }) => {
+      const workspacePath = path.join(root, "restart-stop-workspace");
+      const initialized = await command.run("git", ["init", "--quiet", workspacePath], {
+        timeout: 10_000,
+      });
+      expect(initialized.status).toBe(0);
+      const original = createHarness(database, placementStore, {
+        workspacePath,
+        reconcileFailureCount: 1,
+      });
+      const active = await original.service.dispatch(REQUEST);
+      if (interruption === "failed capture") {
+        await expect(original.service.reclaim(REQUEST)).rejects.toThrow("workspace conflict");
+      } else {
+        placementStore.startDrain({
+          sessionId: active.sessionId,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+          expectedGeneration: active.generation,
+        });
+      }
+      expect(placementStore.get(active.sessionId)).toMatchObject({
+        state: "draining",
+        turnClaim: null,
+      });
+      expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+
+      await closeStateDatabaseForTest();
+      database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+      const restarted = createHarness(database, restartedStore, {
+        workspacePath,
+        reconcileFailureCount: 1,
+      });
+      restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+      await restarted.service.reconcile("startup");
+
+      expect(restarted.environments.destroy).not.toHaveBeenCalled();
+      expect(restartedStore.get(active.sessionId)?.state).toBe("draining");
+      expect(restarted.reportWorkspaceResultRecoveryFailure).toHaveBeenCalled();
+      await restarted.service.reconcileActive();
+
+      expect(restartedStore.get(active.sessionId)).toMatchObject({
+        state: "reclaimed",
+        turnClaim: null,
+        workspaceBaseManifestRef: restarted.reconciledManifestRef,
+      });
+      expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
+      expect(restarted.environments.destroy).toHaveBeenCalledOnce();
+      expect(restarted.log.indexOf("workspace:verify-local")).toBeLessThan(
+        restarted.log.indexOf("teardown:destroy"),
+      );
+      console.info("[stop-restart-proof]", interruption, restarted.log.join(","));
+    },
+  );
 
   async function seedWorkerTurn(harness: ReturnType<typeof createHarness>) {
     const active = await harness.placements.seedActive(2);

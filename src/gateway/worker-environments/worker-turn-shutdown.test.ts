@@ -168,6 +168,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       placements: recovered,
       environments: {
         ...environments,
+        fenceWorkerTurnForRecovery: unexpected,
         reconcileEnvironment: async () => {},
         reconcileOnce: async () => {},
         supportsProviderExecutionMode: () => true,
