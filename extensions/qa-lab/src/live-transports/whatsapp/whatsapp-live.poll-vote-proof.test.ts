@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
+import { whatsappScenarioImplementations } from "./scenario-implementations.js";
 import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
 import type { WhatsAppQaMessageScenarioContext } from "./whatsapp-live.contracts.js";
 import { whatsappQaPollVoteHookProofScenario } from "./whatsapp-live.scenario-implementations.poll-vote-proof.js";
-import { whatsappScenarioImplementations } from "./scenario-implementations.js";
 
 function buildProofConfig(proofOutputDir: string) {
   return buildWhatsAppQaConfig(

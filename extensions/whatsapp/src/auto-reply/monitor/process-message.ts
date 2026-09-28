@@ -108,6 +108,7 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
   cfg: ReturnType<LoadConfigFn>;
   accountId?: string;
 }): boolean {
+  // SAFETY: The WhatsApp config schema owns this pluginHooks shape; the cast preserves its account override fields.
   const channelConfig = params.cfg.channels?.whatsapp as
     | WhatsAppMessageReceivedHookConfig
     | undefined;
@@ -124,45 +125,57 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
 
 function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
   cfg: ReturnType<LoadConfigFn>;
+  loadConfig: LoadConfigFn;
   ctx: Awaited<ReturnType<typeof prepareWhatsAppInboundContext>>["ctxPayload"];
   accountId?: string;
   sessionKey: string;
 }): void {
-  if (!shouldEmitWhatsAppMessageReceivedHooks(params)) {
+  const { cfg, loadConfig, ctx, accountId, sessionKey } = params;
+  if (!shouldEmitWhatsAppMessageReceivedHooks({ cfg, accountId })) {
     return;
   }
-  const canonical = deriveInboundMessageHookContext(params.ctx);
+  const canonical = deriveInboundMessageHookContext(ctx);
+  // Bounded hook factories run later; use the monitor's current snapshot at dispatch.
+  const isStillEnabled = () =>
+    shouldEmitWhatsAppMessageReceivedHooks({
+      cfg: loadConfig(),
+      accountId,
+    });
+  const enqueueIfEnabled = (task: () => Promise<unknown>, label: string) =>
+    fireAndForgetBoundedHook(
+      () => (isStillEnabled() ? task() : Promise.resolve()),
+      label,
+      undefined,
+      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
+    );
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetBoundedHook(
+    enqueueIfEnabled(
       () =>
         hookRunner.runMessageReceived(
           toPluginMessageReceivedEvent(canonical),
           toPluginMessageContext(canonical),
         ),
       "whatsapp: message_received plugin hook failed",
-      undefined,
-      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
     );
   }
-  fireAndForgetBoundedHook(
+  enqueueIfEnabled(
     () =>
       triggerInternalHook(
         createInternalHookEvent(
           "message",
           "received",
-          params.sessionKey,
+          sessionKey,
           toInternalMessageReceivedContext(canonical),
         ),
       ),
     "whatsapp: message_received internal hook failed",
-    undefined,
-    WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
   );
 }
 
 export async function processMessage(params: {
   cfg: ReturnType<LoadConfigFn>;
+  loadConfig: LoadConfigFn;
   msg: AdmittedWebInboundMessage;
   route: ReturnType<typeof resolveAgentRoute>;
   groupHistoryKey: string;
@@ -442,6 +455,7 @@ export async function processMessage(params: {
     : undefined;
   emitWhatsAppMessageReceivedHooksIfEnabled({
     cfg: params.cfg,
+    loadConfig: params.loadConfig,
     ctx: ctxPayload,
     accountId: params.route.accountId,
     sessionKey: params.route.sessionKey,

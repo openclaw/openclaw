@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
@@ -334,7 +335,7 @@ export async function startInboxMonitor(
   }
   const merged = {
     cfg: mockLoadConfig() as never,
-    loadConfig: mockLoadConfig,
+    loadConfig: () => mockLoadConfig() as OpenClawConfig,
     verbose: false,
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,

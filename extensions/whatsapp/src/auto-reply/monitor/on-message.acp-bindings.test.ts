@@ -257,6 +257,7 @@ function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg(
     groupHistories,
     handler: createWebOnMessageHandler({
       cfg: cfg as never,
+      loadConfig: () => cfg as never,
       verbose: false,
       connectionId: "conn-1",
       maxMediaBytes: 1024 * 1024,

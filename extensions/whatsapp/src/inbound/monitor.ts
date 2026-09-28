@@ -32,7 +32,7 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
 
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
-  loadConfig?: () => OpenClawConfig;
+  loadConfig: () => OpenClawConfig;
   socketTiming?: Required<WhatsAppSocketTimingOptions>;
   verbose: boolean;
   accountId: string;

@@ -460,7 +460,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     resolveInboundJid,
     resolveReactionTargetJids,
     rememberBaileysMessage,
-      getCachedBaileysMessage,
+    getCachedBaileysMessage,
     assertCanSendToJid,
     assertSendReady,
     sendTrackedMessage,

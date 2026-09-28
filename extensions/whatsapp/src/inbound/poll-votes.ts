@@ -49,6 +49,7 @@ export function extractWhatsAppPollUpdateMessage(
   if (!message) {
     return undefined;
   }
+  // SAFETY: POLL_UPDATE_SECTIONS narrows findMessageSection to Baileys' poll-update protobuf arm.
   return findMessageSection(message, POLL_UPDATE_SECTIONS)?.value as
     | proto.Message.IPollUpdateMessage
     | undefined;
@@ -67,6 +68,7 @@ function hashPollOptionName(optionName: string): string {
  */
 function buildPollOptionHashMap(pollCreationMessage: proto.IMessage): Map<string, string> {
   const section = findMessageSection(pollCreationMessage, POLL_CREATION_SECTIONS);
+  // SAFETY: POLL_CREATION_SECTIONS limits the selected protobuf arm to poll-creation options.
   const options = (
     section?.value as { options?: Array<{ optionName?: string | null }> } | undefined
   )?.options;
@@ -330,6 +332,8 @@ const WHATSAPP_POLL_VOTE_RECEIVED_HOOK_LIMITS = {
 function emitWhatsAppPollVoteReceivedHook(params: {
   accountId: string;
   vote: WhatsAppDecodedPollVote;
+  dedupeKey?: string;
+  loadConfig: () => OpenClawConfig;
   /** The vote-update message's own id — distinct per vote/retraction, unlike pollMessageId (shared by every vote on the same poll). */
   voteUpdateId: string;
 }): boolean {
@@ -338,8 +342,28 @@ function emitWhatsAppPollVoteReceivedHook(params: {
     return false;
   }
   return fireAndForgetBoundedHook(
-    () =>
-      hookRunner.runPollVoteReceived(
+    () => {
+      // Queue-admission dedupe is provisional until dispatch; blocked votes must remain replayable.
+      const clearDedupe = () => {
+        if (params.dedupeKey) {
+          recentlyDispatchedPollVoteKeys.delete(params.dedupeKey);
+        }
+      };
+      try {
+        if (
+          !shouldEmitWhatsAppPollVoteHooks({
+            cfg: params.loadConfig(),
+            accountId: params.accountId,
+          })
+        ) {
+          clearDedupe();
+          return Promise.resolve();
+        }
+      } catch (error) {
+        clearDedupe();
+        throw error;
+      }
+      return hookRunner.runPollVoteReceived(
         {
           pollMessageId: params.vote.pollMessageId,
           chatJid: params.vote.chatJid,
@@ -357,7 +381,8 @@ function emitWhatsAppPollVoteReceivedHook(params: {
           // identity so consumers can correlate/dedupe individual events.
           messageId: params.voteUpdateId,
         },
-      ),
+      );
+    },
     "whatsapp: poll_vote_received plugin hook failed",
     undefined,
     WHATSAPP_POLL_VOTE_RECEIVED_HOOK_LIMITS,
@@ -373,6 +398,7 @@ function emitWhatsAppPollVoteReceivedHook(params: {
  */
 export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   cfg: OpenClawConfig;
+  loadConfig: () => OpenClawConfig;
   accountId: string;
   message: proto.IMessage | null | undefined;
   key: proto.IMessageKey;
@@ -380,16 +406,13 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   selfJid?: string | null;
   selfLid?: string | null;
 }): void {
-  if (!shouldEmitWhatsAppPollVoteHooks({ cfg: params.cfg, accountId: params.accountId })) {
+  const { accountId, cfg, loadConfig } = params;
+  if (!shouldEmitWhatsAppPollVoteHooks({ cfg, accountId })) {
     return;
   }
   const creationKey = extractWhatsAppPollUpdateMessage(params.message)?.pollCreationMessageKey;
   const remoteJid = params.key.remoteJid ?? creationKey?.remoteJid;
-  if (
-    !creationKey?.id ||
-    !remoteJid ||
-    !isOwnPollCreation(params.accountId, remoteJid, creationKey.id)
-  ) {
+  if (!creationKey?.id || !remoteJid || !isOwnPollCreation(accountId, remoteJid, creationKey.id)) {
     // Not a poll this account created — stays within the documented
     // "polls OpenClaw created" boundary rather than exposing third-party
     // participants' vote selections to opted-in plugins. Account-scoped so
@@ -397,11 +420,9 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     return;
   }
   const voteUpdateId = params.key.id;
-  if (voteUpdateId) {
-    const dedupKey = `${params.accountId}:${remoteJid}:${voteUpdateId}`;
-    if (readWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey)) {
-      return;
-    }
+  const dedupeKey = voteUpdateId ? `${accountId}:${remoteJid}:${voteUpdateId}` : undefined;
+  if (dedupeKey && readWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupeKey)) {
+    return;
   }
   const decoded = decodeWhatsAppPollVote({
     message: params.message,
@@ -411,7 +432,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     selfLid: params.selfLid,
   });
   if (!decoded) {
-    const failureKey = `${params.accountId}:${remoteJid}:${creationKey.id}`;
+    const failureKey = `${accountId}:${remoteJid}:${creationKey.id}`;
     if (!readWhatsAppBaileysCacheEntry(recentPollVoteDecodeFailureKeys, failureKey)) {
       rememberWhatsAppBaileysCacheEntry(
         recentPollVoteDecodeFailureKeys,
@@ -432,8 +453,10 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     return;
   }
   const admitted = emitWhatsAppPollVoteReceivedHook({
-    accountId: params.accountId,
+    accountId,
     vote: decoded,
+    dedupeKey,
+    loadConfig,
     // Falls back to the poll id in the (practically unseen) case a vote
     // update key has no id of its own — still a valid identity, just not
     // distinct per-vote.
@@ -449,7 +472,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
   }
   rememberWhatsAppBaileysCacheEntry(
     recentlyDispatchedPollVoteKeys,
-    `${params.accountId}:${remoteJid}:${voteUpdateId}`,
+    `${accountId}:${remoteJid}:${voteUpdateId}`,
     true,
     POLL_VOTE_DEDUP_TTL_MS,
   );

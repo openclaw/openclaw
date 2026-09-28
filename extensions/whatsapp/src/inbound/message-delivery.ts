@@ -81,7 +81,7 @@ export type WhatsAppAppendReplyWindow = {
 
 type WhatsAppMessageDeliveryOptions = {
   cfg: OpenClawConfig;
-  loadConfig?: () => OpenClawConfig;
+  loadConfig: () => OpenClawConfig;
   verbose: boolean;
   accountId: string;
   sock: WASocket;
@@ -500,8 +500,10 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         // only, never enter the normal admission/reply pipeline below.
         if (msg.key) {
           try {
+            const loadConfig = options.loadConfig;
             maybeEmitWhatsAppPollVoteReceivedHook({
-              cfg: options.loadConfig?.() ?? options.cfg,
+              cfg: loadConfig(),
+              loadConfig,
               accountId: options.accountId,
               message: msg.message,
               key: msg.key,

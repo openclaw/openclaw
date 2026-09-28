@@ -532,26 +532,20 @@ describe("web monitor inbox poll vote hook", () => {
 
       // Account B, opted in, observes a vote on the same chat/poll id — must
       // not fire, since B never recorded this poll as its own.
-      maybeEmitWhatsAppPollVoteReceivedHook({
+      const crossAccountVoteParams = {
         cfg,
-        accountId: ACCOUNT_B,
+        loadConfig: () => cfg,
         message: voteMessage,
         key: voteKey,
         getCachedMessage: () => pollCreationMessage,
         selfJid: SELF_JID,
-      });
+      };
+      maybeEmitWhatsAppPollVoteReceivedHook({ ...crossAccountVoteParams, accountId: ACCOUNT_B });
       await enqueueWhatsAppHookQueueBarrierForTests();
       expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
 
       // The same vote, dispatched as account A (the actual owner), does fire.
-      maybeEmitWhatsAppPollVoteReceivedHook({
-        cfg,
-        accountId: ACCOUNT_A,
-        message: voteMessage,
-        key: voteKey,
-        getCachedMessage: () => pollCreationMessage,
-        selfJid: SELF_JID,
-      });
+      maybeEmitWhatsAppPollVoteReceivedHook({ ...crossAccountVoteParams, accountId: ACCOUNT_A });
       await waitForMessageCalls(runPollVoteReceivedMock, 1);
     });
   });

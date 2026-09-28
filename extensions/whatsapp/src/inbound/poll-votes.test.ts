@@ -435,7 +435,7 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
       vote: { encPayload: new Uint8Array([1]), encIv: new Uint8Array([2]) },
     });
 
-    maybeEmitWhatsAppPollVoteReceivedHook({
+    const thirdPartyVoteParams = {
       cfg: { channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } } } as never,
       loadConfig: () =>
         ({
@@ -446,7 +446,8 @@ describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
       key: voteKeyFor("VOTE-THIRD-PARTY"),
       getCachedMessage: () => undefined,
       selfJid: POLL_CREATOR_JID,
-    });
+    };
+    maybeEmitWhatsAppPollVoteReceivedHook(thirdPartyVoteParams);
 
     expect(pollVoteWarningMock).not.toHaveBeenCalled();
   });

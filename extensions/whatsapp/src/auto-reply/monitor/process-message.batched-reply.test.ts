@@ -104,6 +104,7 @@ describe("WhatsApp debounce reply quoting boundary", () => {
             await dispatchGate.promise;
             await processMessage({
               cfg,
+              loadConfig: () => cfg,
               msg,
               route,
               groupHistoryKey: `whatsapp:${accountId}:direct:${peer}`,

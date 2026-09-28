@@ -313,6 +313,7 @@ an earlier poll is decoded or dispatched in the new process — whether that
 vote was cast while the Gateway was offline or after it reconnects. This is
 intentional: OpenClaw never infers ownership from a reobserved inbound echo.
 Send a new poll after reconnecting when the hook must observe its votes.
+
 ## Access control
 
 ### Access control and activation

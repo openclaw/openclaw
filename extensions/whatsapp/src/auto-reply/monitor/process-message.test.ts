@@ -266,13 +266,15 @@ function callProcessMessage(
     cfg?: unknown;
     dispatchReplyFromConfig?: Parameters<typeof processMessage>[0]["dispatchReplyFromConfig"];
     groupHistories?: Map<string, unknown[]>;
-    loadConfig?: () => unknown;
+    loadConfig?: () => OpenClawConfig;
     msg?: unknown;
     suppressGroupHistoryClear?: boolean;
   } = {},
 ) {
+  const cfg = (overrides.cfg ?? {}) as OpenClawConfig;
   const processParams = {
-    cfg: (overrides.cfg ?? {}) as never,
+    cfg,
+    loadConfig: overrides.loadConfig ?? (() => cfg),
     msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
@@ -290,9 +292,6 @@ function callProcessMessage(
     replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     backgroundTasks: new Set(),
   };
-  if (overrides.loadConfig) {
-    Object.assign(processParams, { loadConfig: overrides.loadConfig });
-  }
   return processMessage(processParams as Parameters<typeof processMessage>[0]);
 }
 

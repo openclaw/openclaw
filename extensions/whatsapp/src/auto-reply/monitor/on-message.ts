@@ -33,7 +33,7 @@ import {
 
 export function createWebOnMessageHandler(params: {
   cfg: OpenClawConfig;
-  loadConfig?: () => OpenClawConfig;
+  loadConfig: () => OpenClawConfig;
   verbose: boolean;
   connectionId: string;
   maxMediaBytes: number;
@@ -90,6 +90,7 @@ export function createWebOnMessageHandler(params: {
     return processMessage({
       ...params,
       cfg,
+      loadConfig: params.loadConfig,
       msg,
       route,
       groupHistoryKey,
@@ -100,7 +101,7 @@ export function createWebOnMessageHandler(params: {
 
   return async (normalizedMsg: AdmittedWebInboundMessage) => {
     const canRunDirectEarlyAudioPreflight = normalizedMsg.admission.ingress.decision === "allow";
-    const cfg = params.loadConfig?.() ?? params.cfg;
+    const cfg = params.loadConfig();
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
     const admission = requireWhatsAppInboundAdmission(msg);
