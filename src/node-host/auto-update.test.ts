@@ -376,20 +376,25 @@ describe("node auto-update discovery runtime", () => {
     vi.unstubAllGlobals();
   });
 
-  it("reads the registry in-process on Bun instead of spawning npm", async () => {
-    useRuntime("bun");
-    mocks.fetch.mockResolvedValue(new Response(JSON.stringify({ version: candidate.version })));
-    start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.exec).not.toHaveBeenCalled();
-    expect(mocks.fetch).toHaveBeenCalledWith(
-      "https://registry.npmjs.org/openclaw/latest",
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
-    expect(mocks.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ targetVersion: candidate.version }),
-    );
-  });
+  it.each(["https://registry.npmjs.org/", "http://127.0.0.1:4873/"])(
+    "reads %s in-process on Bun instead of spawning npm",
+    async (registryUrl) => {
+      useRuntime("bun");
+      vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", "openclaw");
+      vi.stubEnv("NPM_CONFIG_REGISTRY", registryUrl);
+      mocks.fetch.mockResolvedValue(new Response(JSON.stringify({ version: candidate.version })));
+      start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.exec).not.toHaveBeenCalled();
+      expect(mocks.fetch).toHaveBeenCalledWith(
+        `${registryUrl}openclaw/latest`,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(mocks.prepare).toHaveBeenCalledWith(
+        expect.objectContaining({ targetVersion: candidate.version }),
+      );
+    },
+  );
 
   it("keeps npm registry discovery on Node", async () => {
     useRuntime("node");

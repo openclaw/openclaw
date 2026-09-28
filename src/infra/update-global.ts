@@ -707,8 +707,11 @@ function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
   );
 }
 
-function inferBunGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
-  return pkgRoot ? (resolveBunGlobalInstallOwner(pkgRoot)?.globalRoot ?? null) : null;
+function inferBunGlobalRootFromPackageRoot(
+  pkgRoot?: string | null,
+  env?: NodeJS.ProcessEnv,
+): string | null {
+  return pkgRoot ? (resolveBunGlobalInstallOwner(pkgRoot, env)?.globalRoot ?? null) : null;
 }
 
 function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
@@ -1018,6 +1021,7 @@ export async function resolveGlobalInstallTarget(params: {
   timeoutMs: number;
   pkgRoot?: string | null;
   honorPackageRoot?: boolean;
+  env?: NodeJS.ProcessEnv;
   packageName?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
 }): Promise<ResolvedGlobalInstallTarget> {
@@ -1052,7 +1056,7 @@ export async function resolveGlobalInstallTarget(params: {
     verifiedPnpmIsolatedGlobalRoot || (await isPnpmGlobalPackageRoot(params.pkgRoot))
       ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
       : null;
-  const bunPackageRootGlobalRoot = inferBunGlobalRootFromPackageRoot(params.pkgRoot);
+  const bunPackageRootGlobalRoot = inferBunGlobalRootFromPackageRoot(params.pkgRoot, params.env);
   const honoredDirectNpmRoot =
     verifiedPnpmIsolatedGlobalRoot === null &&
     pnpmIsolatedPackage === null &&
