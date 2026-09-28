@@ -27,9 +27,6 @@ It does not include native apps or ClawHub publication, and it does not change
 the regular stable channel. Its GitHub release is not marked Latest. A monthly
 line retires when it falls outside the two supported completed months.
 
-Alpha builds are a separate internal testing track, not a recommended user
-channel.
-
 ## Version naming
 
 | Release            | Version example                                                       |
@@ -44,7 +41,8 @@ number within the month, not a day of the month. Regular releases use patches
 below `33`; extended-stable starts at `33`. Git tags add `v`, as in `v2026.9.6`.
 
 Published npm versions and release tags are never replaced. A fix receives a
-new version. Alpha-only versions do not advance the regular release number.
+new version. Historical alpha-only versions do not advance the regular release
+number; alpha releases are retired.
 
 ## Release cadence
 

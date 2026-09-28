@@ -91,10 +91,13 @@ suite.define(() => {
           ),
         )
         .toEqual([true, true]);
+      // Loading is published before foreground subscription admission and RPC dispatch.
+      await gateway.waitForRequest("chat.startup");
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
       await gateway.resolveDeferred("chat.startup");
       await expect.poll(() => page.getByText("Shared cold startup proof.").count()).toBe(2);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

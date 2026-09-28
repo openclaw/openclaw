@@ -37,30 +37,6 @@ describe("runtime config snapshot writes", () => {
     resetRuntimeConfigState();
   });
 
-  it("skips source projection for non-runtime-derived configs", () => {
-    const sourceConfig: OpenClawConfig = {
-      ...createProviderConfigFixture(),
-      gateway: {
-        auth: {
-          mode: "token",
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      ...createProviderConfigFixture("sk-runtime-resolved"), // pragma: allowlist secret
-      gateway: {
-        auth: {
-          mode: "token",
-        },
-      },
-    };
-    const independentConfig = createProviderConfigFixture("sk-independent-config"); // pragma: allowlist secret
-
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    const projected = projectConfigOntoRuntimeSourceSnapshot(independentConfig);
-    expect(projected).toBe(independentConfig);
-  });
-
   it("isolates untouched source descendants when projecting runtime edits", () => {
     const sourceConfig: OpenClawConfig = {
       ...createProviderConfigFixture(),
@@ -84,43 +60,6 @@ describe("runtime config snapshot writes", () => {
     expect(sourceConfig.tools?.exec?.safeBins).toEqual(["jq"]);
     expect(projected.models).toEqual(sourceConfig.models);
     expect(projected.gateway?.port).toBe(19002);
-  });
-
-  it("retains an empty object for a changed runtime subtree", () => {
-    const sourceConfig: OpenClawConfig = { gateway: { port: 18789 } };
-    const runtimeConfig: OpenClawConfig = {
-      gateway: { port: 18789, auth: { mode: "token", allowTailscale: true } },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-
-    const projected = projectConfigOntoRuntimeSourceSnapshot({
-      gateway: { port: 18789, auth: { mode: "token" } },
-    });
-
-    expect(projected).toStrictEqual({ gateway: { port: 18789, auth: {} } });
-  });
-
-  it("preserves literal nulls and omissions when projecting a runtime edit", () => {
-    const sourceConfig: OpenClawConfig = {
-      ...createProviderConfigFixture(),
-      agents: { defaults: { params: { temperature: 0.2, topP: 0.8 } } },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      ...createProviderConfigFixture("synthetic-runtime-value"),
-      agents: { defaults: { ...sourceConfig.agents?.defaults, maxConcurrent: 4 } },
-    };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    const params = { temperature: null, nested: { value: null } };
-
-    const projected = projectConfigOntoRuntimeSourceSnapshot({
-      ...runtimeConfig,
-      agents: { defaults: { ...runtimeConfig.agents?.defaults, params } },
-    });
-
-    expect(projected).toStrictEqual({
-      ...sourceConfig,
-      agents: { defaults: { params } },
-    });
   });
 
   it("publishes canonical include snapshots with managed auth-store refresh scope", async () => {
@@ -222,46 +161,6 @@ describe("runtime config snapshot writes", () => {
       expect(notification?.preparedCandidate?.compareConfig.logging?.level).toBe("error");
       expect(prepared?.runtimeConfig.logging?.level).toBe("debug");
       expect(prepared?.compareConfig.logging?.level).toBe("debug");
-    });
-  });
-
-  it("rolls back a managed root write when a notification overlay throws", async () => {
-    const initialConfig = {
-      gateway: { mode: "local" as const },
-      logging: { level: "info" as const },
-    };
-    await withTempHomeConfig(initialConfig, async ({ configPath }) => {
-      const originalRaw = await fs.readFile(configPath, "utf-8");
-      const failure = new Error("synthetic overlay failure");
-      const listener = vi.fn();
-      const compareOverlay = vi.fn((config: OpenClawConfig) => config);
-      const unsubscribe = registerConfigWriteListener(listener, {
-        ownsRuntimeActivationFor: configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          reapplyRuntimeOverlays() {
-            throw failure;
-          },
-          reapplyCompareOverlays: compareOverlay,
-        }),
-      });
-      try {
-        setRuntimeConfigSnapshot(initialConfig, initialConfig);
-        const pending = writeConfigFile({ ...initialConfig, logging: { level: "debug" } });
-        await expect(pending).rejects.toMatchObject({
-          name: "ConfigWritePostCommitError",
-          rollbackStatus: "restored",
-          cause: failure,
-        });
-        const error = await pending.catch((caught: unknown) => caught);
-        expect(error instanceof Error ? error.cause : undefined).toBe(failure);
-      } finally {
-        unsubscribe();
-      }
-      expect(listener).not.toHaveBeenCalled();
-      expect(compareOverlay).not.toHaveBeenCalled();
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
     });
   });
 

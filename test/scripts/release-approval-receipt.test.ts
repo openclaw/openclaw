@@ -106,6 +106,19 @@ function fixture() {
   };
 }
 
+it.each([
+  { releaseTag: "v2026.9.24-alpha.1" },
+  { npmDistTag: "alpha" },
+  {
+    toolingRef: "tideclaw/alpha/2026-09-24-1200Z",
+    toolingFullRef: "refs/heads/tideclaw/alpha/2026-09-24-1200Z",
+  },
+])("rejects retired alpha approval %j", (override) => {
+  expect(() => validateReleaseApprovalReceipt({ ...fixture().receipt, ...override })).toThrow(
+    "Alpha releases are retired;",
+  );
+});
+
 describe("release approval receipt", () => {
   it("creates the exact receipt using the last approved npm-release reviewer", () => {
     const receipt = createReleaseApprovalReceipt(env, (path: string) => {

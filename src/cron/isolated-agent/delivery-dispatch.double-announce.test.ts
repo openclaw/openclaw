@@ -29,7 +29,7 @@ const directCronCompletionRetention = {
 const {
   appendAssistantMessageToSessionTranscriptMock,
   commitBackgroundResultToSessionMock,
-  hasDescendantRunAwaitingSettleMock,
+  hasUnsettledCronDescendantsMock,
   deliverOutboundPayloadsMock,
   ensureOutboundSessionEntryMock,
   loadCronSessionEntryLatestMock,
@@ -46,7 +46,7 @@ const {
     ok: true,
     messageId: "current-completion-message",
   }),
-  hasDescendantRunAwaitingSettleMock: vi.fn().mockReturnValue(false),
+  hasUnsettledCronDescendantsMock: vi.fn().mockResolvedValue(false),
   deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
   ensureOutboundSessionEntryMock: vi.fn().mockResolvedValue(undefined),
   loadCronSessionEntryLatestMock: vi.fn(),
@@ -105,7 +105,6 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 }));
 
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
-  hasDescendantRunAwaitingSettle: hasDescendantRunAwaitingSettleMock,
   getLatestLiveSubagentRunByChildSessionKey: () => null,
 }));
 
@@ -114,8 +113,7 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
 }));
 
 vi.mock("./delivery-subagent-registry.runtime.js", () => ({
-  hasDescendantRunAwaitingSettle: hasDescendantRunAwaitingSettleMock,
-  getLatestLiveSubagentRunByChildSessionKey: () => null,
+  hasUnsettledCronDescendants: hasUnsettledCronDescendantsMock,
 }));
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
@@ -192,7 +190,6 @@ vi.mock("./subagent-followup.runtime.js", () => ({
 
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 // Import after mocks
-import { hasDescendantRunAwaitingSettle } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
 import { callGateway } from "../../gateway/call.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
@@ -213,6 +210,7 @@ import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
 } from "./delivery-dispatch.js";
+import { hasUnsettledCronDescendants } from "./delivery-subagent-registry.runtime.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import {
@@ -357,7 +355,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(deliveryQueueSqlite, "getDeliveryQueueEntryStatus").mockReturnValue(undefined);
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(false);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
@@ -416,7 +414,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
           ? { delivery: { status: "in_progress" as const, disposition: "session_queued" as const } }
           : {}),
       };
-      vi.mocked(hasDescendantRunAwaitingSettle).mockImplementation((sessionKey) =>
+      vi.mocked(hasUnsettledCronDescendants).mockImplementation(async (sessionKey) =>
         hasDescendantRunAwaitingSettleFromRuns(
           new Map([[descendant.runId, descendant]]),
           sessionKey,
@@ -436,7 +434,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   );
 
   it("bestEffort delivery skips active subagent wait and sends the cron reply", async () => {
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(true);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(true);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
 
@@ -1384,7 +1382,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("bestEffort delivery skips expected subagent follow-up waits", async () => {
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(false);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
 
@@ -1403,7 +1401,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("bestEffort delivery still suppresses stale interim text while descendants run", async () => {
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(true);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(true);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
@@ -1422,9 +1420,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
   it("early return (stale interim suppression) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {
     // Settlement is pending initially, then complete after the wait
-    vi.mocked(hasDescendantRunAwaitingSettle)
-      .mockReturnValueOnce(true) // initial check → hadDescendants=true, enters wait block
-      .mockReturnValueOnce(false); // second check after wait → settlement complete
+    vi.mocked(hasUnsettledCronDescendants)
+      .mockResolvedValueOnce(true) // initial check → hadDescendants=true, enters wait block
+      .mockResolvedValueOnce(false); // second check after wait → settlement complete
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     // synthesizedText matches initialSynthesizedText & isLikelyInterimCronMessage → stale interim
@@ -1442,7 +1440,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("consolidates descendant output into the final direct delivery", async () => {
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(false);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
       "Detailed child result, everything finished successfully.",
@@ -1498,11 +1496,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     async ({ activeDescendants, deliveryBestEffort, threadId }) => {
       const childReply = "Completed child result visible to the user.";
       if (activeDescendants) {
-        vi.mocked(hasDescendantRunAwaitingSettle)
-          .mockReturnValueOnce(true)
-          .mockReturnValueOnce(false);
+        vi.mocked(hasUnsettledCronDescendants)
+          .mockResolvedValueOnce(true)
+          .mockResolvedValueOnce(false);
       } else {
-        vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(false);
+        vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
       }
       vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
       vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(childReply);
@@ -1539,7 +1537,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
   it("preserves a substantive parent synthesis after an accepted child has completed", async () => {
     const parentReply = "Combined parent summary already includes every child result.";
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(false);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
 
     const state = await dispatchCronDelivery(
       makeBaseParams({ spawnOnlyHandoff: false, synthesizedText: parentReply }),
@@ -1552,7 +1550,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
   it("immediately delivers a substantive threaded parent while its accepted child runs", async () => {
     const parentReply = "Parent summary is ready for the existing thread.";
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(true);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(true);
     const params = makeBaseParams({ spawnOnlyHandoff: false, synthesizedText: parentReply });
     params.resolvedDelivery = makeResolvedDelivery({ threadId: "42" });
 
@@ -1576,7 +1574,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       error: "cron child-session handoff completed without a final assistant payload",
     },
   ])("fails an accepted spawn-only handoff when $name", async ({ activeDescendants, error }) => {
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(activeDescendants > 0);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(activeDescendants > 0);
     const params = makeBaseParams({ spawnOnlyHandoff: true, synthesizedText: "" });
     params.synthesizedText = undefined;
     params.deliveryPayloads = [];
@@ -1595,7 +1593,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
   it("preserves abort precedence when an accepted child handoff is interrupted", async () => {
     const abortReason = "scheduled run aborted while waiting for its child";
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValueOnce(true).mockReturnValue(false);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValueOnce(true).mockResolvedValue(false);
     const params = makeBaseParams({ spawnOnlyHandoff: true, synthesizedText: "" });
     params.synthesizedText = undefined;
     params.deliveryPayloads = [];
@@ -1634,7 +1632,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const runStartedAt = 1_000;
     const agentSessionKey = "agent:main:cron:daily-monitor";
     const runSessionKey = "agent:main:cron:daily-monitor:run:test-session-id";
-    vi.mocked(hasDescendantRunAwaitingSettle).mockReturnValue(false);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
     vi.mocked(readDescendantSubagentFallbackReply).mockImplementation(async (params) =>
       params.sessionKey === runSessionKey
@@ -1651,8 +1649,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const state = await dispatchCronDelivery(params);
 
-    expect(hasDescendantRunAwaitingSettle).toHaveBeenCalledWith(runSessionKey);
-    expect(hasDescendantRunAwaitingSettle).not.toHaveBeenCalledWith(agentSessionKey);
+    expect(hasUnsettledCronDescendants).toHaveBeenCalledWith(runSessionKey);
+    expect(hasUnsettledCronDescendants).not.toHaveBeenCalledWith(agentSessionKey);
     expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
       sessionKey: runSessionKey,
       runStartedAt,

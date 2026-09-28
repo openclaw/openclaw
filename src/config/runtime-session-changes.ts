@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { resolveChannelConfigActivationFacts } from "./channel-config-activation.js";
 import { serializeConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -9,6 +11,7 @@ function projectionConfig({
   diagnostics: _diagnostics,
   update: _update,
   telemetry: _telemetry,
+  channels,
   ui,
   gateway,
   ...config
@@ -16,9 +19,17 @@ function projectionConfig({
   const { prefs: _prefs, ...uiConfig } = ui ?? {};
   const { auth, ...gatewayConfig } = gateway ?? {};
   const { identityScopes: _identityScopes, ...authConfig } = auth ?? {};
-  // Everything else remains significant, including plugin policy, sharing, models,
-  // session policy, roster and physical store selection.
-  return { ...config, ui: uiConfig, gateway: { ...gatewayConfig, auth: authConfig } };
+  // Channel transport settings do not affect resident rows. Keep their catalog
+  // inputs, including activation that can admit bundled plugin capabilities.
+  return {
+    ...config,
+    channels: {
+      activation: resolveChannelConfigActivationFacts({ channels }),
+      models: collectConfiguredModelRefs({ channels }),
+    },
+    ui: uiConfig,
+    gateway: { ...gatewayConfig, auth: authConfig },
+  };
 }
 
 function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {
@@ -36,7 +47,8 @@ function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {
         Object.fromEntries(
           Object.entries(agents.entries).map(([id, entry]) => [id, withoutIdentity(entry)]),
         ),
-      list: agents.list?.map(withoutIdentity),
+      // The loader's non-enumerable list is a projection when entries owns the roster.
+      list: Object.hasOwn(agents, "entries") ? undefined : agents.list?.map(withoutIdentity),
     },
   };
 }

@@ -278,12 +278,7 @@ function supportsFoundryReasoningEffort(value?: string | null): boolean {
   ) {
     return false;
   }
-  return (
-    normalized.startsWith("gpt-5") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4")
-  );
+  return requiresFoundryMaxCompletionTokens(normalized);
 }
 
 function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
@@ -361,16 +356,6 @@ export function normalizeFoundryEndpoint(endpoint: string): string {
   }
 }
 
-function buildFoundryV1BaseUrl(endpoint: string): string {
-  const base = normalizeFoundryEndpoint(endpoint);
-  return base.endsWith("/openai/v1") ? base : `${base}/openai/v1`;
-}
-
-function buildFoundryAnthropicBaseUrl(endpoint: string): string {
-  const base = normalizeFoundryEndpoint(endpoint);
-  return base.endsWith("/anthropic") ? base : `${base}/anthropic`;
-}
-
 export function resolveFoundryApi(
   modelId: string,
   modelNameHint?: string | null,
@@ -393,9 +378,9 @@ export function buildFoundryProviderBaseUrl(
   configuredApi?: ModelApi | null,
 ): string {
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
-  return resolvedApi === ANTHROPIC_MESSAGES_API
-    ? buildFoundryAnthropicBaseUrl(endpoint)
-    : buildFoundryV1BaseUrl(endpoint);
+  const base = normalizeFoundryEndpoint(endpoint);
+  const path = resolvedApi === ANTHROPIC_MESSAGES_API ? "/anthropic" : "/openai/v1";
+  return base.endsWith(path) ? base : `${base}${path}`;
 }
 
 export function extractFoundryEndpoint(baseUrl: string | null | undefined): string | undefined {
@@ -435,7 +420,7 @@ function buildFoundryModelCompat(
     };
   }
   return {
-    ...(resolvedApi === DEFAULT_GPT5_API ? { supportsStore: false } : {}),
+    supportsStore: false,
     ...(supportsReasoningEffort ? { supportsReasoningEffort, supportedReasoningEfforts } : {}),
     maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens",
   };

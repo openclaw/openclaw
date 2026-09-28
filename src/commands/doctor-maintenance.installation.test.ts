@@ -179,6 +179,7 @@ afterEach(() => {
 async function runInstallationCase(params: {
   platform: "linux" | "darwin" | "win32";
   mode: "maintenance" | "direct";
+  bun?: boolean;
   installFails?: boolean;
   stopFailsWithPairedDevice?: boolean;
   tokenRecovery?: "success" | "refused" | "service-failure" | "writer-unavailable";
@@ -231,7 +232,7 @@ async function runInstallationCase(params: {
   mocks.runtimePath =
     params.consent?.mixed === "version-managed-runtime"
       ? path.join(home, ".nvm", "versions", "node", "v26.8.1", "bin", "node")
-      : path.join(home, "runtime", "node");
+      : path.join(home, "runtime", params.bun ? "bun" : "node");
   const oldRoot = path.join(home, "prefix-a/lib/node_modules/openclaw");
   mocks.activeRoot = path.join(home, "prefix-b/lib/node_modules/openclaw");
   for (const [root, version] of [
@@ -430,6 +431,13 @@ async function runInstallationCase(params: {
         const cli = params.profile ? `openclaw --profile ${params.profile}` : "openclaw";
         expect(notes).toContain(`${cli} doctor --fix`);
         expect(notes).toContain(`${cli} gateway install --force`);
+        if (params.bun) {
+          expect(events).toEqual([]);
+          expect(running).toBe(true);
+          expect(command).toEqual(originalCommand);
+          expect(notes).toContain("automatic installation repair was skipped");
+          return;
+        }
         if (params.updateInProgress) {
           expect(notes).toContain("deferred to update finalization");
           expect(events).toEqual([]);
@@ -801,3 +809,6 @@ it("keeps installation reconciliation guidance on the selected profile", async (
 
 it("leaves two-prefix installation drift with update finalization", async () =>
   runInstallationCase({ platform: "linux", mode: "direct", updateInProgress: true }));
+
+it("reports split-root Bun drift without rewriting or stopping the service", async () =>
+  runInstallationCase({ platform: "linux", mode: "direct", bun: true }));

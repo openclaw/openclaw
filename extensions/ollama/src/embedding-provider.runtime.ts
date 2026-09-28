@@ -1,4 +1,7 @@
 import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
+import { sanitizeAndNormalizeEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
   isKnownEnvApiKeyMarker,
@@ -14,7 +17,6 @@ import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   coerceSecretRef,
   hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
   resolveConfiguredSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
@@ -30,14 +32,7 @@ import { resolveOllamaApiBase } from "./provider-models.js";
 
 export type OllamaEmbeddingProvider = EmbeddingProvider;
 
-type MemoryCoreAcquireLocalService = (
-  target: {
-    providerId: string;
-    baseUrl: string;
-    headers?: HeadersInit;
-  },
-  signal?: AbortSignal | null,
-) => Promise<{ release: () => void } | undefined>;
+type MemoryCoreAcquireLocalService = OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
 
 type OllamaEmbeddingOptions = {
   config: OpenClawConfig;
@@ -88,20 +83,13 @@ const QUERY_INSTRUCTION_TEMPLATES = [
   },
 ] as const;
 
-function sanitizeAndNormalizeEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
+function normalizeOllamaEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
   const selected =
     typeof outputDimensionality === "number" ? vec.slice(0, outputDimensionality) : vec;
-  const sanitized = selected.map((value) => {
-    if (typeof value !== "number") {
-      throw new Error("Ollama embed response contains a non-number embedding value");
-    }
-    return Number.isFinite(value) ? value : 0;
-  });
-  const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude < 1e-10) {
-    return sanitized;
+  if (!selected.every((value): value is number => typeof value === "number")) {
+    throw new Error("Ollama embed response contains a non-number embedding value");
   }
-  return sanitized.map((value) => value / magnitude);
+  return sanitizeAndNormalizeEmbedding(selected);
 }
 
 async function readOllamaEmbeddingJsonResponse(
@@ -148,19 +136,6 @@ function resolveConfiguredProvider(options: OllamaEmbeddingOptions) {
   }
   const fallback = providers.ollama;
   return fallback ? { providerId: "ollama", config: fallback } : undefined;
-}
-
-function resolveMemorySecretInputString(params: {
-  value: unknown;
-  path: string;
-}): string | undefined {
-  if (!hasConfiguredSecretInput(params.value)) {
-    return undefined;
-  }
-  return normalizeResolvedSecretInputString({
-    value: params.value,
-    path: params.path,
-  });
 }
 
 type OllamaEmbeddingBaseUrlOrigin = "remote-config" | "provider-config" | "default";
@@ -436,7 +411,7 @@ export async function createOllamaEmbeddingProvider(
       if (!Array.isArray(embedding)) {
         throw new Error("Ollama embed response contains a non-array embedding");
       }
-      return sanitizeAndNormalizeEmbedding(embedding, client.outputDimensionality);
+      return normalizeOllamaEmbedding(embedding, client.outputDimensionality);
     });
   };
 

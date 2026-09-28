@@ -2,10 +2,10 @@ const AGENT_RUN_STALE_LIFECYCLE_ERROR = "Agent run belongs to a stale gateway li
 const AGENT_RUN_STALE_LIFECYCLE_ERROR_CODE = "ERR_STALE_GATEWAY_LIFECYCLE";
 
 export function createAgentRunStaleLifecycleError(): Error {
-  const error = new Error(AGENT_RUN_STALE_LIFECYCLE_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_STALE_LIFECYCLE_ERROR_CODE;
-  return error;
+  return Object.assign(new Error(AGENT_RUN_STALE_LIFECYCLE_ERROR), {
+    name: "AbortError",
+    code: AGENT_RUN_STALE_LIFECYCLE_ERROR_CODE,
+  });
 }
 
 export function isAgentRunStaleLifecycleError(value: unknown): boolean {

@@ -229,11 +229,32 @@ function parseOpenAIResponsesTextSignature(
   return { id: signature };
 }
 
+const responsesInputSource = Symbol("openclaw.responsesInputSource");
+
+/** Source identity survives payload spreads but never enters serialized provider input. */
+export function bindResponsesInputMessage(
+  source: Extract<Context["messages"][number], { role: "user" }>,
+): (input: unknown) => boolean {
+  const identity = {};
+  Object.defineProperty(source, responsesInputSource, { value: identity, enumerable: true });
+  return (input) =>
+    typeof input === "object" &&
+    input !== null &&
+    Reflect.get(input, responsesInputSource) === identity;
+}
+
 export function buildResponsesInputMessage(
   role: "user" | "system" | "developer",
   content: ResponseInputMessageContentList,
+  source?: Extract<Context["messages"][number], { role: "user" }>,
 ): ResponseInputItem.Message {
-  return { type: "message", role, content };
+  const identity = source && Reflect.get(source, responsesInputSource);
+  return {
+    type: "message",
+    role,
+    content,
+    ...(identity ? { [responsesInputSource]: identity } : {}),
+  };
 }
 
 export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from "./assistant-output.js";
@@ -388,9 +409,11 @@ function convertResponsesMessagesWithStyle(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push(
-          buildResponsesInputMessage("user", [
-            { type: "input_text", text: sanitizeTransportPayloadText(msg.content) },
-          ]),
+          buildResponsesInputMessage(
+            "user",
+            [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
+            msg,
+          ),
         );
       } else {
         const content = (
@@ -407,7 +430,7 @@ function convertResponsesMessagesWithStyle(
           (item) => providerStyle || model.input.includes("image") || item.type !== "input_image",
         );
         if (content.length > 0) {
-          messages.push(buildResponsesInputMessage("user", content));
+          messages.push(buildResponsesInputMessage("user", content, msg));
         } else if (providerStyle) {
           continue;
         }
