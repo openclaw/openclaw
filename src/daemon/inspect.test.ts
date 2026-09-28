@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { detectMarkerLineWithGateway } from "./inspect-markers.js";
 import {
-  detectMarkerLineWithGateway,
   findExtraGatewayServices,
   findSystemGatewayServices,
   listManagedOpenClawGatewayServices,
