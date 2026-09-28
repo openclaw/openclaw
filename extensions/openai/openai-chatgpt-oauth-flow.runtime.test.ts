@@ -251,6 +251,44 @@ describe("OpenAI Codex OAuth flow", () => {
     expect(onAuth).not.toHaveBeenCalled();
   });
 
+  it.each(["prompt", "manual input"] as const)(
+    "uses %s when the callback port is already occupied",
+    async (entry) => {
+      const server = createServer();
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(1455, resolveOpenAICallbackHost(), resolve);
+      });
+      const onAuth = vi.fn();
+      const onPrompt = vi.fn(async () => "manual-code");
+      mockTokenResponse({
+        access_token: fakeJwt({
+          "https://api.openai.com/auth": { chatgpt_account_id: "manual-account" },
+        }),
+        refresh_token: "test-refresh-token",
+        expires_in: 3600,
+      });
+      try {
+        await expect(
+          loginOpenAICodex({
+            onAuth,
+            onPrompt,
+            ...(entry === "manual input" ? { onManualCodeInput: async () => "manual-code" } : {}),
+          }),
+        ).resolves.toMatchObject({ accountId: "manual-account" });
+        expect(onAuth).toHaveBeenCalledOnce();
+        if (entry === "manual input") {
+          expect(onPrompt).not.toHaveBeenCalled();
+        }
+        expect(ssrfMocks.fetchWithSsrFGuard.mock.calls[0]?.[0].init.body.get("code")).toBe(
+          "manual-code",
+        );
+      } finally {
+        await closeServer(server);
+      }
+    },
+  );
+
   it.each(["callback", "manual input", "transport preparation"] as const)(
     "revalidates live authority after held %s before exchanging the code",
     async (boundary) => {

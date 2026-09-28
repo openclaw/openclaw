@@ -12,7 +12,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { WizardSession } from "../../wizard/session.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import { systemAgentHandlers } from "./system-agent.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
 import { wizardHandlers } from "./wizard.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({ activateSetupInference: vi.fn() }));
@@ -63,6 +67,7 @@ function startAuthRequest(
   sessionId: string,
   overrides: Partial<SystemAgentSetupAuthStartParams> = {},
   client: GatewayClient = authClient,
+  authority: Pick<GatewayRequestHandlerOptions, "sessionMutationCommitGuard"> = {},
 ) {
   const { calls, respond } = makeRespond();
   const pending = Promise.resolve(
@@ -71,6 +76,7 @@ function startAuthRequest(
       client,
       context,
       respond,
+      ...authority,
     } as never),
   );
   return { calls, pending };
@@ -240,6 +246,97 @@ describe("openclaw.setup auth retries", () => {
       await settleAuthRequests(wizardSessions, requests, () => cleanupReleased.resolve());
     }
   });
+
+  it.each([
+    { when: "before cancellation", revocation: "client invalidation" },
+    { when: "before cancellation", revocation: "request guard" },
+    { when: "during cleanup", revocation: "client invalidation" },
+    { when: "during cleanup", revocation: "request guard" },
+  ] as const)(
+    "rejects a queued retry on $revocation $when and preserves a later live retry",
+    async ({ when, revocation }) => {
+      const { wizardSessions, context } = makeContext();
+      const cleanupStarted = createDeferredCore();
+      const cleanupReleased = createDeferredCore();
+      const authorityError = new Error("Queued request authority was revoked");
+      const retryClient = { ...authClient, connId: "queued-connection", invalidated: false };
+      let guardRevoked = false;
+      setupInferenceMocks.activateSetupInference
+        .mockImplementationOnce(async (params) => {
+          try {
+            await params.prompter.note("Complete the original sign-in");
+          } finally {
+            cleanupStarted.resolve();
+            if (when === "during cleanup") {
+              await cleanupReleased.promise;
+            }
+          }
+        })
+        .mockImplementation(async (params) => {
+          await params.prompter.note("Complete the live replacement sign-in");
+          return { ok: true, modelRef: "github-copilot/test", latencyMs: 1, lines: [] };
+        });
+      const first = startAuthRequest(context, "auth-first");
+      const requests: Array<Promise<unknown>> = [first.pending];
+      try {
+        await first.pending;
+        const original = expectDefined(wizardSessions.get("auth-first"), "original sign-in");
+        await callWizardNext(context, { sessionId: "auth-first" });
+        const denied = startAuthRequest(context, "auth-denied", {}, retryClient, {
+          sessionMutationCommitGuard: () => {
+            if (guardRevoked) {
+              throw authorityError;
+            }
+          },
+        });
+        const deniedResult = denied.pending.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        requests.push(deniedResult);
+        if (when === "during cleanup") {
+          await Promise.race([cleanupStarted.promise, deniedResult]);
+          expect(original.signal.aborted).toBe(true);
+        }
+        if (revocation === "client invalidation") {
+          retryClient.invalidated = true;
+        } else {
+          guardRevoked = true;
+        }
+        cleanupReleased.resolve();
+        const error = await deniedResult;
+
+        if (when === "before cancellation") {
+          expect(original.signal.aborted).toBe(false);
+          expect(wizardSessions.get("auth-first")).toBe(original);
+        }
+        expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledOnce();
+        expect(wizardSessions.has("auth-denied")).toBe(false);
+        expect(denied.calls).toEqual([]);
+        if (revocation === "request guard") {
+          expect(error).toBe(authorityError);
+        } else {
+          expect(error).toMatchObject({ message: "Gateway requester authority changed" });
+        }
+
+        const live = startAuthRequest(context, "auth-live");
+        requests.push(live.pending);
+        await live.pending;
+        expect(live.calls[0]).toMatchObject({
+          ok: true,
+          payload: { sessionId: "auth-live", done: false, status: "running" },
+        });
+        expect(original.signal.aborted).toBe(true);
+        expect(wizardSessions.has("auth-first")).toBe(false);
+        expect((await callWizardNext(context, { sessionId: "auth-live" })).step?.message).toBe(
+          "Complete the live replacement sign-in",
+        );
+        expect(setupInferenceMocks.activateSetupInference).toHaveBeenCalledTimes(2);
+      } finally {
+        await settleAuthRequests(wizardSessions, requests, () => cleanupReleased.resolve());
+      }
+    },
+  );
 
   it("retains sign-in ownership after overlapping retries during preparation", async () => {
     const { wizardSessions, context } = makeContext();

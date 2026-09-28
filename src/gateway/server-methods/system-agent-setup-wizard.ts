@@ -35,6 +35,7 @@ async function createSetupActivationSession(
   params: {
     sessionId: string;
     ownerKey?: string;
+    assertCurrent?: () => void;
     activation: SetupActivation;
     context: GatewayRequestContext;
   },
@@ -57,13 +58,23 @@ async function createSetupActivationSession(
   ) {
     return undefined;
   }
+  let authorityFailure: { error: unknown } | undefined;
+  const assertCurrent = () => {
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      authorityFailure = { error };
+      throw error;
+    }
+  };
   const request: AuthWizardRequest = {
     ownerKey,
     activation,
     pendingSessionIds: previous?.pendingSessionIds ?? new Set(),
     session: Promise.resolve().then(async () => {
-      if (previous) {
-        const predecessor = await previous.session;
+      const predecessor = previous ? await previous.session : undefined;
+      try {
+        assertCurrent();
         if (predecessor && predecessor !== "superseded") {
           if (predecessor.session.getStatus() === "running" && !predecessor.session.cancel()) {
             // Preparation locks can lift later; rejected retries must retain that owner.
@@ -76,12 +87,21 @@ async function createSetupActivationSession(
             params.context.purgeWizardSession(predecessor.sessionId);
           }
         }
+        if (authWizardRequests.get(sessions) !== request) {
+          return "superseded";
+        }
+        const session = await createAdmittedWizardSession(() => {
+          assertCurrent();
+          return createSession();
+        });
+        return session ? { sessionId: params.sessionId, session } : undefined;
+      } catch (error) {
+        if (!authorityFailure) {
+          throw error;
+        }
+        // Denied callers receive their error, but later retries still inherit the live owner.
+        return predecessor;
       }
-      if (authWizardRequests.get(sessions) !== request) {
-        return "superseded";
-      }
-      const session = await createAdmittedWizardSession(createSession);
-      return session ? { sessionId: params.sessionId, session } : undefined;
     }),
   };
   // Reserve before awaiting admission so only the newest request can start login.
@@ -93,16 +113,22 @@ async function createSetupActivationSession(
     }
   };
   try {
-    const session = await request.session;
+    const session = await request.session.catch((error: unknown) => {
+      release();
+      throw error;
+    });
+    let result: WizardSession | "superseded" | undefined;
     if (session && session !== "superseded") {
       void whenAdmittedWizardSessionSettled(session.session).then(release, release);
-      return session.sessionId === params.sessionId ? session.session : undefined;
+      result = session.sessionId === params.sessionId ? session.session : undefined;
+    } else {
+      release();
+      result = session;
     }
-    release();
-    return session;
-  } catch (error) {
-    release();
-    throw error;
+    if (authorityFailure) {
+      throw authorityFailure.error;
+    }
+    return result;
   } finally {
     request.pendingSessionIds.delete(params.sessionId);
   }
@@ -131,6 +157,7 @@ export function rejectExistingSetupWizardSession(params: {
 export async function startSetupActivationWizard(params: {
   sessionId: string;
   ownerKey?: string;
+  assertCurrent?: () => void;
   activation: SetupActivation;
   isLocalClient?: boolean;
   timeoutMs: number;
