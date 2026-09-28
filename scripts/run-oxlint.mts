@@ -140,6 +140,7 @@ async function runWithAdvisoryLimits(
   args: string[],
   env: NodeJS.ProcessEnv,
   signal?: AbortSignal,
+  killGraceMs?: number,
 ): Promise<OxlintRunResult> {
   const configOption = oxlintOption(args, "--config", "-c");
   const configPath = path.resolve(configOption.value ?? ".oxlintrc.json");
@@ -148,6 +149,8 @@ async function runWithAdvisoryLimits(
     args,
     env,
     signal,
+    abortKillGraceMs: killGraceMs,
+    signalKillGraceMs: killGraceMs,
     requireProcessTreeExit: process.platform !== "win32",
   };
   const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE_ID;
@@ -517,10 +520,11 @@ function resolveOxlintToolchainEnv(
 /**
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
-async function runOxlint(
+export async function runOxlint(
   argv: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
+  killGraceMs?: number,
 ): Promise<OxlintRunResult> {
   signal?.throwIfAborted();
   const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
@@ -573,6 +577,7 @@ async function runOxlint(
     finalArgs,
     resolveOxlintToolchainEnv(oxlintPath, env),
     signal,
+    killGraceMs,
   );
 }
 

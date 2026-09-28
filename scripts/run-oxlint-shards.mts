@@ -1,28 +1,19 @@
 // Splits oxlint into resource-aware shards with heartbeat and timeout handling.
-import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runCancelableCommand } from "./lib/cancelable-command.mts";
-import {
-  distArtifactEntryArgs,
-  withDistArtifactOwnership,
-} from "./lib/dist-artifact-ownership.mts";
+import { isCommandCancellation, runCancelableCommand } from "./lib/cancelable-command.mts";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import {
   CI_PARALLEL_MIN_MEMORY_BYTES,
   isConstrainedCiCheckHost,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
-import {
-  inspectManagedProcessGroup,
-  terminateManagedChild,
-  waitForManagedProcessGroupExit,
-} from "./lib/managed-child-process.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { prepareExtensionPackageBoundaryArtifacts } from "./prepare-extension-package-boundary-artifacts.mts";
-import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
+import { runOxlint, shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
 
 const DEFAULT_EXTENSION_CHUNK_SIZE = 8;
 const LARGE_CI_EXTENSION_CHUNK_SIZE = 16;
@@ -31,13 +22,11 @@ const DEFAULT_CONSTRAINED_CORE_STRIPES = 5;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
 const DEFAULT_SHARD_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_SHARD_KILL_GRACE_MS = 5_000;
-const POST_FORCE_KILL_WAIT_MS = 1_000;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "extensions/tsconfig.json";
 const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
-const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] satisfies NodeJS.Signals[];
 
 type OxlintShard = { name: string; args: string[] };
 type ShardStripe = { index: number; total: number };
@@ -57,20 +46,13 @@ type ResourceOptions = PlatformOptions & { hostResources?: HostResources };
 type RunnerOptions = {
   env: NodeJS.ProcessEnv;
   extraArgs: string[];
-  runner: string;
+  signal: AbortSignal;
 };
 type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard; onCompleted?: () => void };
 type ShardBatchOptions = RunnerOptions & {
   entries: OxlintShard[];
   evidenceId?: string;
 };
-type ActiveShardChild = { child: ChildProcess; killGraceMs: number };
-
-const ACTIVE_SHARD_CHILDREN = new Set<ActiveShardChild>();
-let parentTerminationSignal: (typeof PARENT_TERMINATION_SIGNALS)[number] | null = null;
-let parentTerminationForceKill: ReturnType<typeof setTimeout> | null = null;
-const parentSignalHandlers = new Map<NodeJS.Signals, () => void>();
-
 const CORE_SHARD = {
   name: "core",
   args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src", "ui", "packages"],
@@ -383,7 +365,6 @@ async function runOxlintShards(
   runtimeEnv: NodeJS.ProcessEnv,
   signal: AbortSignal,
 ) {
-  const runner = path.resolve("scripts", "run-oxlint.mts");
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalCheckEnv(runtimeEnv);
   const hostResources = resolveHostResources();
@@ -428,7 +409,7 @@ async function runOxlintShards(
       entries: selectedShards,
       env,
       extraArgs: shardArgs.oxlintArgs,
-      runner,
+      signal,
       evidenceId,
     });
     completed = results.completed;
@@ -438,7 +419,7 @@ async function runOxlintShards(
     ? await withDistArtifactOwnership(process.cwd(), run, signal)
     : await run();
   signal.throwIfAborted();
-  if (evidenceId && completed === selectedShards.length && !isParentTerminationRequested()) {
+  if (evidenceId && completed === selectedShards.length) {
     console.log(
       `[ci-static:oxlint:completion] ${JSON.stringify({
         version: 1,
@@ -658,13 +639,11 @@ function matchesShardSelector(shard: { name: string }, selector: string) {
   return selector === shard.name || selector === shard.name.split(":")[0];
 }
 
-async function runShards({ entries, env, extraArgs, runner, evidenceId }: ShardBatchOptions) {
+async function runShards({ entries, env, extraArgs, signal, evidenceId }: ShardBatchOptions) {
   let completed = 0;
   const statuses: number[] = [];
   for (const [index, shard] of entries.entries()) {
-    if (isParentTerminationRequested()) {
-      break;
-    }
+    signal.throwIfAborted();
     const targets = shard.args.slice(2);
     const boundedTargets =
       (shard.name.startsWith("core:") &&
@@ -683,12 +662,13 @@ async function runShards({ entries, env, extraArgs, runner, evidenceId }: ShardB
           : "",
       },
       extraArgs,
-      runner,
+      signal,
       shard,
       onCompleted: () => {
         completed++;
       },
     });
+    signal.throwIfAborted();
     statuses.push(status);
     // Join the failed leaf before returning. Later --fix shards must not mutate files.
     if (status !== 0) {
@@ -698,172 +678,69 @@ async function runShards({ entries, env, extraArgs, runner, evidenceId }: ShardB
   return { statuses, completed };
 }
 
-export async function runShard({ env, extraArgs, runner, shard, onCompleted }: ShardRunnerOptions) {
+async function runShard({ env, extraArgs, signal, shard, onCompleted }: ShardRunnerOptions) {
+  signal.throwIfAborted();
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
   const heartbeatMs = resolveShardHeartbeatMs(env);
   const timeoutMs = resolveShardTimeoutMs(env);
-  const killGraceMs = resolveShardKillGraceMs(env);
-  // The batch owns reporting and artifacts. Raw children must propagate cleanup
-  // errors to the private artifact entry without catching or reporting them here.
-  const args =
-    runner === path.resolve("scripts", "run-oxlint.mts")
-      ? shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
-        ? distArtifactEntryArgs(runner, [...shard.args, ...extraArgs])
-        : [
-            "--import",
-            new URL("./tsx.mjs", import.meta.url).href,
-            runner,
-            ...shard.args,
-            ...extraArgs,
-          ]
-      : [runner, ...shard.args, ...extraArgs];
-  const child = spawn(process.execPath, args, {
-    stdio: ["inherit", "pipe", "pipe"],
-    detached: process.platform !== "win32",
-    env: {
-      ...env,
-      OPENCLAW_OXLINT_SKIP_PREPARE: "1",
-    },
-  });
-  const collectEvidence = env.OPENCLAW_CI_STATIC_EVIDENCE === "1";
-  let output = "";
-  let outputOverflow = false;
-  if (collectEvidence) {
-    // Concurrent shards must publish each native JSON report and receipt together.
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (!outputOverflow && output.length + chunk.length > 16 * 1024 * 1024) {
-        outputOverflow = true;
-        process.stdout.write(output);
-        output = "";
-        console.error(`[oxlint:${shard.name}] evidence output exceeded its limit`);
-      }
-      if (outputOverflow) {
-        process.stdout.write(chunk);
-      } else {
-        output += chunk;
-      }
-    });
-  } else {
-    child.stdout.pipe(process.stdout, { end: false });
+  const deadline = new AbortController();
+  const heartbeat =
+    heartbeatMs > 0
+      ? setInterval(() => {
+          const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+          console.error(`[oxlint:${shard.name}] still running after ${elapsedSeconds}s`);
+        }, heartbeatMs)
+      : undefined;
+  const timeout =
+    timeoutMs > 0
+      ? setTimeout(() => {
+          console.error(`[oxlint:${shard.name}] timed out; awaiting compiler cleanup`);
+          deadline.abort();
+        }, timeoutMs)
+      : undefined;
+  heartbeat?.unref();
+  timeout?.unref();
+  const finish = (status: number) => {
+    console.error(`[oxlint:${shard.name}] ${status === 0 ? "passed" : `failed (exit ${status})`}`);
+    return status;
+  };
+  try {
+    // The managed leaf owns signal delivery and escalation. Killing a second
+    // wrapper can destroy that owner before it joins the compiler and its outputs.
+    const result = await runOxlint(
+      [...shard.args, ...extraArgs],
+      { ...env, OPENCLAW_OXLINT_SKIP_PREPARE: "1" },
+      AbortSignal.any([signal, deadline.signal]),
+      resolveShardKillGraceMs(env),
+    );
+    signal.throwIfAborted();
+    if (deadline.signal.aborted) {
+      return finish(124);
+    }
+    if (result.evidence) {
+      console.log(`\n[ci-static:oxlint:leaf] ${JSON.stringify(result.evidence)}`);
+    }
+    // Serial leaves write their native report before their receipt. Missing or
+    // truncated evidence cannot certify coverage of the whole batch.
+    if (
+      (result.status === 0 || result.status === 1) &&
+      (env.OPENCLAW_CI_STATIC_EVIDENCE !== "1" || result.evidence)
+    ) {
+      onCompleted?.();
+    }
+    return finish(result.status);
+  } catch (error) {
+    // Cleanup uncertainty and unrelated failures must retain their error identity.
+    // Parent cancellation wins over a concurrent shard deadline.
+    if (deadline.signal.aborted && !signal.aborted && isCommandCancellation(error)) {
+      return finish(124);
+    }
+    throw error;
+  } finally {
+    clearInterval(heartbeat);
+    clearTimeout(timeout);
   }
-  child.stderr.pipe(process.stderr, { end: false });
-  const unregisterShardChild = registerShardChild({ child, killGraceMs });
-
-  return await new Promise<number>((resolve, reject) => {
-    let finished = false;
-    let timedOut = false;
-    let forceKill: ReturnType<typeof setTimeout> | null = null;
-    let forceKillAt: number | null = null;
-    const heartbeat =
-      heartbeatMs > 0
-        ? setInterval(() => {
-            const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
-            console.error(`[oxlint:${shard.name}] still running after ${elapsedSeconds}s`);
-          }, heartbeatMs)
-        : null;
-    heartbeat?.unref();
-    const timeout =
-      timeoutMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
-            console.error(
-              `[oxlint:${shard.name}] timed out after ${elapsedSeconds}s; terminating shard`,
-            );
-            signalChildProcess(child, "SIGTERM");
-            if (killGraceMs > 0) {
-              forceKillAt = Date.now() + killGraceMs;
-              forceKill = setTimeout(() => {
-                console.error(`[oxlint:${shard.name}] did not exit cleanly; killing shard`);
-                signalChildProcess(child, "SIGKILL");
-              }, killGraceMs);
-              forceKill.unref();
-            } else {
-              signalChildProcess(child, "SIGKILL");
-            }
-          }, timeoutMs)
-        : null;
-    timeout?.unref();
-    const finish = (status: number, error?: Error) => {
-      if (finished) {
-        return;
-      }
-      finished = true;
-      if (heartbeat) {
-        clearInterval(heartbeat);
-      }
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      if (forceKill) {
-        clearTimeout(forceKill);
-      }
-      forceKillAt = null;
-      unregisterShardChild();
-      if (collectEvidence && output) {
-        process.stdout.write(output);
-        output = "";
-      }
-      console.error(
-        `[oxlint:${shard.name}] ${status === 0 ? "passed" : `failed (exit ${status})`}`,
-      );
-      if (error) {
-        reject(error);
-      } else {
-        resolve(status);
-      }
-    };
-    const finishAfterForcedTeardown = async (status: number) => {
-      const graceRemainingMs =
-        forceKillAt === null ? killGraceMs : Math.max(0, forceKillAt - Date.now());
-      if (graceRemainingMs > 0) {
-        await waitForChildProcessGroupExit(child, graceRemainingMs);
-      }
-      const requiresForceKill = isChildProcessGroupAlive(child);
-      if (requiresForceKill) {
-        signalChildProcess(child, "SIGKILL");
-      }
-      await waitForChildProcessGroupExit(child, POST_FORCE_KILL_WAIT_MS);
-      if (isChildProcessGroupAlive(child)) {
-        finish(
-          1,
-          Object.assign(new Error("oxlint shard process group did not exit"), {
-            code: "EPROCESSGROUP_CLEANUP_FAILED",
-            processTreeState: "live",
-          }),
-        );
-      } else {
-        finish(requiresForceKill ? status || 1 : status);
-      }
-    };
-    child.once("error", (error) => {
-      console.error(error);
-      finish(1);
-    });
-    child.once("close", (status, signal) => {
-      const exitStatus = parentTerminationSignal
-        ? getSignalExitCode(parentTerminationSignal)
-        : timedOut
-          ? 124
-          : (status ?? 1);
-      if (isChildProcessGroupAlive(child)) {
-        void finishAfterForcedTeardown(exitStatus);
-        return;
-      }
-      if (
-        !parentTerminationSignal &&
-        !timedOut &&
-        !signal &&
-        !outputOverflow &&
-        (status === 0 || status === 1)
-      ) {
-        onCompleted?.();
-      }
-      finish(exitStatus);
-    });
-  });
 }
 
 export function resolveShardHeartbeatMs(env: NodeJS.ProcessEnv) {
@@ -926,107 +803,4 @@ function parsePositiveEnvInt(rawValue: string, key: string) {
     throw new Error(`${key} must be a positive integer; got: ${rawValue}`);
   }
   return parsedValue;
-}
-
-function signalChildProcess(child: ChildProcess, signal: NodeJS.Signals) {
-  if (!child.pid) {
-    return;
-  }
-
-  const reportSignalError = (error: unknown) => {
-    if (!isNodeErrorCode(error, "ESRCH")) {
-      console.error(error);
-    }
-  };
-  terminateManagedChild(child, signal, {
-    onChildSignalError: reportSignalError,
-    onProcessGroupSignalError: reportSignalError,
-    processGroupFallback: "never",
-    useWindowsTaskkill: false,
-  });
-}
-
-function isChildProcessGroupAlive(child: ChildProcess) {
-  return inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
-}
-
-function waitForChildProcessGroupExit(child: ChildProcess, timeoutMs: number) {
-  return waitForManagedProcessGroupExit(child, timeoutMs, { errorPolicy: "alive-on-eperm" });
-}
-
-function registerShardChild(entry: ActiveShardChild) {
-  installParentSignalForwarding();
-  ACTIVE_SHARD_CHILDREN.add(entry);
-  return () => {
-    ACTIVE_SHARD_CHILDREN.delete(entry);
-    if (ACTIVE_SHARD_CHILDREN.size === 0 && parentTerminationForceKill) {
-      clearTimeout(parentTerminationForceKill);
-      parentTerminationForceKill = null;
-    }
-    if (ACTIVE_SHARD_CHILDREN.size === 0) {
-      for (const [signal, handler] of parentSignalHandlers) {
-        process.off(signal, handler);
-      }
-      parentSignalHandlers.clear();
-      process.off("exit", onParentExit);
-    }
-  };
-}
-
-function installParentSignalForwarding() {
-  if (parentSignalHandlers.size > 0) {
-    return;
-  }
-  for (const signal of PARENT_TERMINATION_SIGNALS) {
-    const handler = () => {
-      parentTerminationSignal = signal;
-      process.exitCode = getSignalExitCode(signal);
-      signalActiveShardChildren(signal);
-      scheduleParentTerminationForceKill();
-    };
-    parentSignalHandlers.set(signal, handler);
-    process.on(signal, handler);
-  }
-  process.once("exit", onParentExit);
-}
-
-function onParentExit() {
-  signalActiveShardChildren("SIGTERM");
-}
-
-function isParentTerminationRequested() {
-  return parentTerminationSignal !== null;
-}
-
-function signalActiveShardChildren(signal: NodeJS.Signals) {
-  for (const entry of ACTIVE_SHARD_CHILDREN) {
-    signalChildProcess(entry.child, signal);
-  }
-}
-
-function scheduleParentTerminationForceKill() {
-  if (parentTerminationForceKill) {
-    return;
-  }
-  const killGraceMs = Math.max(
-    0,
-    ...Array.from(ACTIVE_SHARD_CHILDREN, (entry) => entry.killGraceMs),
-  );
-  if (killGraceMs === 0) {
-    signalActiveShardChildren("SIGKILL");
-    return;
-  }
-  parentTerminationForceKill = setTimeout(() => {
-    parentTerminationForceKill = null;
-    signalActiveShardChildren("SIGKILL");
-  }, killGraceMs);
-  parentTerminationForceKill.unref();
-}
-
-function getSignalExitCode(signal: NodeJS.Signals) {
-  return signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
-}
-
-function isNodeErrorCode(error: unknown, code: string) {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
 }
