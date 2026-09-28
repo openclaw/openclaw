@@ -186,73 +186,59 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
 
-  it("falls back to the package spec when the captured installed ACP path is reclaimed", async () => {
-    const root = testWorkspace.dir;
-    const stateDir = path.join(root, "state");
-    const generated = generatedCodexPaths(stateDir);
-    const captureDir = path.join(root, "openclaw-plugin-build", "package-2026-9-5");
-    const installedBinPath = path.join(
-      captureDir,
-      "node_modules",
-      "@agentclientprotocol",
-      "codex-acp",
-      "dist",
-      "index.js",
-    );
-    await fs.mkdir(path.dirname(installedBinPath), { recursive: true });
-    await fs.writeFile(
-      installedBinPath,
-      "process.stdout.write('CAPTURED_ADAPTER_PATH_WAS_USED');\n",
-      "utf8",
-    );
-    const pluginConfig = resolveAcpxPluginConfig({ rawConfig: {}, workspaceDir: root });
-
-    await prepareAcpxCodexAuthConfig({
-      pluginConfig,
-      stateDir,
-      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
-    });
-
-    // Plugin capture directories are disposable; a durable wrapper must survive
-    // the capture dir being reclaimed by a later install or upgrade.
-    await fs.rm(captureDir, { recursive: true, force: true });
-    await expectPathMissing(installedBinPath);
-
-    // The generated wrapper derives the npm CLI path from process.execPath, so
-    // a node shim keeps the fallback observable and fully offline.
-    const shimRoot = path.join(root, "node-shim");
-    const shimNode = path.join(shimRoot, "bin", process.platform === "win32" ? "node.exe" : "node");
-    await fs.mkdir(path.dirname(shimNode), { recursive: true });
-    try {
-      await fs.link(process.execPath, shimNode);
-    } catch {
-      await fs.copyFile(process.execPath, shimNode);
-    }
-    const shimNpmCli = path.join(shimRoot, "lib", "node_modules", "npm", "bin", "npm-cli.js");
-    await fs.mkdir(path.dirname(shimNpmCli), { recursive: true });
-    await fs.writeFile(
-      shimNpmCli,
-      "process.stdout.write(JSON.stringify({ invokedAs: process.argv[1], argv: process.argv.slice(2) }));\n",
-      "utf8",
-    );
-
-    const { stdout } = await execFileAsync(shimNode, [generated.wrapperPath], {
-      cwd: root,
-      env: { ...process.env },
-    });
-
-    const launched = JSON.parse(stdout.trim()) as { invokedAs?: unknown; argv?: unknown };
-    expect(launched.invokedAs).toBe(shimNpmCli);
-    expect(launched.argv).toEqual([
-      "exec",
-      "--yes",
-      "--package",
-      "@agentclientprotocol/codex-acp@1.11.0",
-      "--",
-      "codex-acp",
-    ]);
-    expect(stdout).not.toContain("CAPTURED_ADAPTER_PATH_WAS_USED");
-  });
+  it.each([
+    { agent: "codex", packageName: "codex-acp", version: "1.12.0" },
+    { agent: "claude", packageName: "claude-agent-acp", version: "0.79.0" },
+  ] as const)(
+    "launches $agent after its captured adapter is removed",
+    async ({ agent, packageName, version }) => {
+      const { root, generated, generatedClaude, prepare } = createWrapperFixture();
+      const capturedBin = path.join(root, "captured-adapter.cjs");
+      await fs.writeFile(capturedBin, "console.log('captured adapter');\n");
+      await prepare({
+        resolveInstalledCodexAcpBinPath: async () => capturedBin,
+        resolveInstalledClaudeAcpBinPath: async () => capturedBin,
+      });
+      const wrapperPath = agent === "codex" ? generated.wrapperPath : generatedClaude.wrapperPath;
+      const packageDir = path.join(root, "node_modules", "@agentclientprotocol", packageName);
+      const binDir = path.join(root, "node_modules", ".bin");
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: `@agentclientprotocol/${packageName}`,
+          version,
+          bin: { [packageName]: "index.cjs" },
+        }),
+      );
+      const fallbackBin = path.join(packageDir, "index.cjs");
+      await fs.writeFile(fallbackBin, "#!/usr/bin/env node\nconsole.log('fallback adapter');\n", {
+        mode: 0o755,
+      });
+      if (process.platform === "win32") {
+        await fs.writeFile(
+          path.join(binDir, `${packageName}.cmd`),
+          `@"${process.execPath}" "${fallbackBin}" %*\r\n`,
+        );
+      } else {
+        await fs.symlink(fallbackBin, path.join(binDir, packageName));
+      }
+      const options = {
+        cwd: root,
+        env: {
+          ...process.env,
+          npm_config_offline: "true",
+          npm_config_cache: path.join(root, "cache"),
+        },
+      };
+      const present = await execFileAsync(process.execPath, [wrapperPath], options);
+      expect(present.stdout.trim()).toBe("captured adapter");
+      await fs.rm(capturedBin);
+      const reclaimed = await execFileAsync(process.execPath, [wrapperPath], options);
+      expect(reclaimed.stdout.trim()).toBe("fallback adapter");
+    },
+  );
 
   it("keeps the orphaned wrapper alive long enough to force-kill the child process group", async () => {
     const { generated, prepare } = createWrapperFixture();
