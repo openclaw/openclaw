@@ -12,14 +12,17 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
-import { overrideNativeFixtureExecutable } from "./native-boundary-fixture.js";
+import {
+  hasSemanticTestBackend,
+  overrideNativeFixtureExecutable,
+} from "./native-boundary-fixture.js";
 
 const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
 
-it.runIf(process.platform !== "win32")(
-  "releases shard artifacts after canceling a compiler that requires forced termination",
-  ({ signal }) =>
+it.runIf(hasSemanticTestBackend()).for(["direct", "shards"] as const)(
+  "releases %s artifacts after canceling a compiler that requires forced termination",
+  (entry, { signal }) =>
     lifetime.run(async () => {
       const root = fs.realpathSync(lifetime.createTempDir("openclaw-cancel-shards-"));
       fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
@@ -33,7 +36,7 @@ it.runIf(process.platform !== "win32")(
         compiler,
         `#!${resolveTestNodeExecPath()}
 process.on('SIGTERM', () => {});
-process.stdin.resume();
+setInterval(() => {}, 1000);
 console.log(JSON.stringify({ pid: process.pid }));
 `,
       );
@@ -55,11 +58,14 @@ Date.now = () => start + (now() - start) * 10;
       const completion = lifetime.track(
         runManagedCommand({
           bin: resolveTestNodeExecPath(),
-          args: [
-            path.join(root, "scripts/run-tsgo-core-test-shards.mts"),
-            "--stripe",
-            `1/${TSGO_CORE_TEST_SHARDS.length}`,
-          ],
+          args:
+            entry === "direct"
+              ? [path.join(root, "scripts/run-tsgo.mts"), "-p", "tsconfig.extensions.json"]
+              : [
+                  path.join(root, "scripts/run-tsgo-core-test-shards.mts"),
+                  "--stripe",
+                  `1/${TSGO_CORE_TEST_SHARDS.length}`,
+                ],
           cwd: root,
           env: {
             ...process.env,

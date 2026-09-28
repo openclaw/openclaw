@@ -306,7 +306,14 @@ describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () =
         [compiler, "-p", path.join(root, "consumer.json"), "--noEmit"],
         { cwd: root, encoding: "utf8" },
       );
-      expect(consumer.status, consumer.stdout + consumer.stderr).toBe(0);
+      expect(consumer.status, consumer.stdout + consumer.stderr).toBe(
+        process.platform === "linux" ? 0 : 75,
+      );
+      if (process.platform !== "linux") {
+        expect(consumer.stderr).toContain(
+          "Semantic checks require verified Linux kernel containment",
+        );
+      }
     }));
 
   it.concurrent.for([

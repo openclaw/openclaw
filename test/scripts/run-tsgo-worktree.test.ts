@@ -4,11 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  hasSemanticTestBackend,
+  semanticFixtureEnv,
+  stopSemanticFixtureScopes,
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
   writeNativeFixtureFile,
 } from "./native-boundary-fixture.js";
 
+const semanticIt = it.runIf(hasSemanticTestBackend());
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const sourceRoot = process.cwd();
 
@@ -62,6 +66,7 @@ function createLinkedCheckoutFixture() {
     "scripts/tsx.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib",
+    "packages/normalization-core/src/mountinfo-path.ts",
   ]) {
     const target = path.join(primary, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -91,88 +96,107 @@ function runTsgoEntry(
   args: string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ) {
-  return spawnSync(process.execPath, [path.join(root, "scripts/run-tsgo.mjs"), ...args], {
-    cwd: options.cwd ?? root,
-    env: options.env ?? process.env,
-    encoding: "utf8",
-    timeout: 25_000,
-    killSignal: "SIGKILL",
-  });
+  const accountEnv = semanticFixtureEnv(root);
+  try {
+    return spawnSync(process.execPath, [path.join(root, "scripts/run-tsgo.mjs"), ...args], {
+      cwd: options.cwd ?? root,
+      env: { ...accountEnv, ...options.env, NODE_OPTIONS: accountEnv.NODE_OPTIONS },
+      encoding: "utf8",
+      timeout: 25_000,
+      killSignal: "SIGKILL",
+    });
+  } finally {
+    stopSemanticFixtureScopes(root);
+  }
 }
 
 describe("run-tsgo linked worktree entry", () => {
-  it("selects its own root compiler from src while preserving relative project semantics", () => {
-    const { primary, root } = createLinkedCheckoutFixture();
-    installCheckoutTools(primary);
-    const native = installCheckoutTools(root);
-    const write = (file: string, text: string) => writeNativeFixtureFile(root, file, text);
-    const compilerOptions = {
-      module: "NodeNext",
-      target: "ES2023",
-      types: [],
-      strict: true,
-      noEmit: true,
-    };
-    write("tsconfig.json", JSON.stringify({ compilerOptions, files: ["wrong-entry.ts"] }));
-    write("wrong-entry.ts", 'export const value: number = "wrong project";\n');
-    write("src/tsconfig.json", JSON.stringify({ compilerOptions, files: ["entry.ts"] }));
-    write("src/entry.ts", "export const value: number = 1;\n");
-    const selectionPath = path.join(root, "compiler-selection.json");
-    // Record the selected executable and cwd, then let the unchanged native compiler
-    // parse -p and check the real project. No bootstrap or compiler result is mocked.
-    write(
-      "native-compiler.mjs",
-      `#!/usr/bin/env node
+  semanticIt(
+    "resolves its own compiler from src",
+    () => {
+      const { primary, root } = createLinkedCheckoutFixture();
+      installCheckoutTools(primary);
+      const native = installCheckoutTools(root);
+      const write = (file: string, text: string) => writeNativeFixtureFile(root, file, text);
+      const compilerOptions = {
+        module: "NodeNext",
+        target: "ES2023",
+        types: [],
+        strict: true,
+        noEmit: true,
+      };
+      write("tsconfig.json", JSON.stringify({ compilerOptions, files: ["wrong-entry.ts"] }));
+      write("wrong-entry.ts", 'export const value: number = "wrong project";\n');
+      write("src/tsconfig.json", JSON.stringify({ compilerOptions, files: ["entry.ts"] }));
+      write("src/entry.ts", "export const value: number = 1;\n");
+      const selectionPath = path.join(root, "compiler-selection.json");
+      // Record the selected executable and cwd, then let the unchanged native compiler
+      // parse -p and check the real project. No bootstrap or compiler result is mocked.
+      write(
+        "native-compiler.mjs",
+        `#!/usr/bin/env node
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
-fs.writeFileSync(${JSON.stringify(selectionPath)}, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));
+const group = fs.readFileSync("/proc/self/cgroup", "utf8").split("\\n").find(line => line.startsWith("0::")).slice(3);
+const memory = { group, max: fs.readFileSync("/sys/fs/cgroup"+group+"/memory.max", "utf8").trim(), swap: fs.readFileSync("/sys/fs/cgroup"+group+"/memory.swap.max", "utf8").trim() };
+fs.writeFileSync(${JSON.stringify(selectionPath)}, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2), memory }));
 const result = spawnSync(${JSON.stringify(native)}, process.argv.slice(2), { stdio: "inherit" });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;
 `,
-    );
-    fs.chmodSync(path.join(root, "native-compiler.mjs"), 0o755);
-    const launcher = path.join(root, "node_modules/.bin/tsgo");
-    fs.unlinkSync(launcher);
-    fs.symlinkSync("../../native-compiler.mjs", launcher, "file");
-    if (process.platform === "win32") {
-      write("node_modules/.bin/tsgo.cmd", '@node "%~dp0tsgo" %*\r\n');
-    }
-    overrideNativeFixtureExecutable(root, launcher);
-    const cwd = path.join(root, "src");
-    const result = runTsgoEntry(root, ["-p", "tsconfig.json"], {
-      cwd,
-      env: { ...process.env, OPENCLAW_CI_STATIC_EVIDENCE: "1" },
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    const selected: { cwd: string; args: string[] } = JSON.parse(
-      fs.readFileSync(selectionPath, "utf8"),
-    );
-    expect(selected.cwd).toBe(cwd);
-    expect(selected.args.slice(0, 2)).toEqual(["-p", "tsconfig.json"]);
-    if (process.platform !== "win32") {
-      const receipts = result.stdout.trim().split("\n");
-      expect(receipts).toHaveLength(2);
-      const leaf = JSON.parse(receipts[0]!.slice(receipts[0]!.indexOf(" ") + 1));
-      expect(leaf).toEqual({
-        version: 1,
-        id: expect.any(String),
-        config: "tsconfig.json",
-        exitCode: 0,
-        stdout: "",
-        stderr: "",
+      );
+      fs.chmodSync(path.join(root, "native-compiler.mjs"), 0o755);
+      const launcher = path.join(root, "node_modules/.bin/tsgo");
+      fs.unlinkSync(launcher);
+      fs.symlinkSync("../../native-compiler.mjs", launcher, "file");
+      if (process.platform === "win32") {
+        write("node_modules/.bin/tsgo.cmd", '@node "%~dp0tsgo" %*\r\n');
+      }
+      overrideNativeFixtureExecutable(root, launcher);
+      const cwd = path.join(root, "src");
+      const result = runTsgoEntry(root, ["-p", "tsconfig.json"], {
+        cwd,
+        env: { ...process.env, OPENCLAW_CI_STATIC_EVIDENCE: "1" },
       });
-      expect(JSON.parse(receipts[1]!.slice(receipts[1]!.indexOf(" ") + 1))).toEqual({
-        version: 1,
-        id: expect.any(String),
-        planned: 1,
-        completed: 1,
-        leaves: [leaf.id],
-      });
-    }
-    expect(fs.lstatSync(path.join(cwd, "node_modules"), { throwIfNoEntry: false })).toBeUndefined();
-  }, 30_000);
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const selected: {
+        cwd: string;
+        args: string[];
+        memory: { group: string; max: string; swap: string };
+      } = JSON.parse(fs.readFileSync(selectionPath, "utf8"));
+      expect(selected.cwd).toBe(cwd);
+      expect(Number(selected.memory.max)).toBeGreaterThanOrEqual(512 * 1024 ** 2);
+      expect(Number(selected.memory.max)).toBeLessThanOrEqual(8 * 1024 ** 3);
+      expect(selected.memory.swap).toBe("0");
+      expect(selected.memory.group).toMatch(/\/openclaw-check-[a-f0-9-]+\.scope$/u);
+      expect(selected.args.slice(0, 2)).toEqual(["-p", "tsconfig.json"]);
+      if (process.platform !== "win32") {
+        const receipts = result.stdout.trim().split("\n");
+        expect(receipts).toHaveLength(2);
+        const leaf = JSON.parse(receipts[0]!.slice(receipts[0]!.indexOf(" ") + 1));
+        expect(leaf).toEqual({
+          version: 1,
+          id: expect.any(String),
+          config: "tsconfig.json",
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+        });
+        expect(JSON.parse(receipts[1]!.slice(receipts[1]!.indexOf(" ") + 1))).toEqual({
+          version: 1,
+          id: expect.any(String),
+          planned: 1,
+          completed: 1,
+          leaves: [leaf.id],
+        });
+      }
+      expect(
+        fs.lstatSync(path.join(cwd, "node_modules"), { throwIfNoEntry: false }),
+      ).toBeUndefined();
+    },
+    30_000,
+  );
 
   it("refuses a missing local install through its own wrapper without creating dependency links", () => {
     const { primary, root } = createLinkedCheckoutFixture();

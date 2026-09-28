@@ -1,11 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { acquireFileLock } from "@openclaw/fs-safe/file-lock";
 import { root as openLockRoot } from "@openclaw/fs-safe/root";
 import { afterEach, expect, it } from "vitest";
+import { withDistArtifactOwnership } from "../../scripts/lib/dist-artifact-ownership.mts";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { createDeferred } from "../helpers/promise.js";
@@ -20,11 +22,11 @@ import {
 const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
 
-function fixture() {
+function fixture(script = "check-tsgo-core-boundary.mts") {
   const root = fs.realpathSync(lifetime.createTempDir("tsgo-admission-lifecycle-"));
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
   fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-  installDistArtifactScripts(root, ["check-tsgo-core-boundary.mts"], {
+  installDistArtifactScripts(root, [script], {
     compiler: false,
     dependencies: ["@openclaw/fs-safe"],
   });
@@ -196,6 +198,49 @@ it.runIf(hasSemanticTestBackend()).for(["admission", "between queries"] as const
             throw new AggregateError(failures, "Fixture cleanup failed");
           }
         });
+      }
+    }),
+);
+
+it.runIf(hasSemanticTestBackend())(
+  "does not certify compiler completion when canceled during artifact release",
+  async ({ signal }) =>
+    lifetime.run(async () => {
+      const { root, env } = fixture("run-tsgo.mts");
+      const lockModule = pathToFileURL(
+        createRequire(import.meta.url).resolve("@openclaw/fs-safe/file-lock"),
+      ).href;
+      const hooked = installHook(
+        root,
+        env,
+        "scripts/lib/dist-artifact-lock.mts",
+        "@openclaw/fs-safe/file-lock",
+        [
+          "import {acquireFileLock as acquire} from " + JSON.stringify(lockModule) + ";",
+          "export async function acquireFileLock(...args){",
+          "const lock=await acquire(...args);return {...lock,async release(){",
+          barrier,
+          "return await lock.release();}};}",
+        ].join("\n"),
+      );
+      const args = [path.join(root, "scripts/run-tsgo.mts"), "-p", "fixture.json"];
+      const running = start(root, { ...hooked, OPENCLAW_CI_STATIC_EVIDENCE: "1" }, args, signal);
+      try {
+        await running.ready();
+        running.cancel();
+        await running.observed();
+        running.release();
+        expect(await running.completion, running.output()).toBe(143);
+        expect(running.output()).toContain("[ci-static:tsgo:leaf]");
+        expect(running.output()).not.toContain("[ci-static:tsgo:completion]");
+        expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
+          false,
+        );
+        await withDistArtifactOwnership(root, async () => {});
+      } finally {
+        running.release();
+        await Promise.allSettled([running.completion]);
+        await lifetime.verifyCleanup(async () => stopSemanticFixtureScopes(root));
       }
     }),
 );

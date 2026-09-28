@@ -1171,6 +1171,11 @@ describe("scripts/changed-lanes", () => {
     }
     const config = run("scripts/run-tsgo.mjs", ["--showConfig", "-p", "test/tsconfig.json"]);
     expect(config.error, config.stderr).toBeUndefined();
+    if (process.platform !== "linux") {
+      expect(config.status, config.stdout + config.stderr).toBe(75);
+      expect(config.stderr).toContain("Semantic checks require verified Linux kernel containment");
+      return;
+    }
     expect(config.status, config.stdout + config.stderr).toBe(0);
     const project = JSON.parse(config.stdout) as {
       files: string[];

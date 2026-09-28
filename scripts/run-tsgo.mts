@@ -19,6 +19,7 @@ import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { findRepoRoot } from "./lib/repo-root.mjs";
 import {
   getSparseTsgoGuardError,
+  isTsgoInfoCommand,
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mts";
 
@@ -44,6 +45,7 @@ export function prepareTsgoCommand(
   baseEnv: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
 ) {
+  const infoOnly = isTsgoInfoCommand(args);
   const hostResources = {
     logicalCpuCount:
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
@@ -72,10 +74,11 @@ export function prepareTsgoCommand(
     timeoutMs = resolveTsgoTimeoutMs(env);
   } catch {
     throw new Error(
-      `[tsgo] OPENCLAW_TSGO_TIMEOUT_MS must be plain decimal digits with no leading zero, sign, exponent, or decimal point, between 1 and ${Number.MAX_SAFE_INTEGER}; got ${env.OPENCLAW_TSGO_TIMEOUT_MS}. Unset it to disable the watchdog.`,
+      `[tsgo] OPENCLAW_TSGO_TIMEOUT_MS must be plain decimal digits with no leading zero, sign, exponent, or decimal point, between 1 and ${Number.MAX_SAFE_INTEGER}; got ${env.OPENCLAW_TSGO_TIMEOUT_MS}. Unset it to use the 15-minute semantic-check deadline.`,
     );
   }
   return {
+    infoOnly,
     args: finalArgs,
     bin: tsgoPath,
     cwd,
@@ -88,7 +91,7 @@ export function prepareTsgoCommand(
 /** The caller holds artifact ownership until this compiler and its output are joined. */
 export async function runPreparedTsgoCommand(
   command: NonNullable<ReturnType<typeof prepareTsgoCommand>>,
-  evidence: { evidenceId?: string; onEvidence?: () => void } = {},
+  evidence: { evidenceId?: string; onEvidence?: () => void; signal?: AbortSignal } = {},
 ): Promise<number> {
   try {
     const tsBuildInfoFile = readFlagValue(command.args, "--tsBuildInfoFile");
@@ -108,8 +111,15 @@ export async function runPreparedTsgoCommand(
     let capturedBytes = 0;
     let overflow = false;
     let interrupted = false;
-    const code = await runManagedCommand({
-      ...command,
+    // Only singleton help/version is nonsemantic. Mixed flags and response files
+    // can turn apparent queries into compilation; let the native parser own them.
+    const { infoOnly, ...invocation } = command;
+    const run = infoOnly
+      ? runManagedCommand
+      : (await import("./lib/semantic-check-admission.mts")).runSemanticCheck;
+    const code = await run({
+      ...invocation,
+      signal: evidence.signal,
       args: capture ? [...command.args, "--pretty", "false"] : command.args,
       requireProcessTreeExit: process.platform !== "win32",
       ...(capture
@@ -151,6 +161,7 @@ export async function runPreparedTsgoCommand(
     if (
       capture &&
       !interrupted &&
+      !evidence.signal?.aborted &&
       !overflow &&
       stderr === "" &&
       ((code === 0 && stdout.trim() === "") ||
@@ -167,7 +178,7 @@ export async function runPreparedTsgoCommand(
       throw error;
     }
     console.error(
-      `[tsgo] no completion after ${command.timeoutMs}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds, or unset it to disable the watchdog.`,
+      `[tsgo] no completion after ${command.timeoutMs ?? 900_000}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds, or unset it to restore the 15-minute default.`,
     );
     return 1;
   }
@@ -190,15 +201,22 @@ async function main(): Promise<void> {
   const id = randomUUID();
   const evidenceId = `${id}:0`;
   let verified = false;
-  process.exitCode = await withDistArtifactOwnership(command.cwd, () =>
-    runPreparedTsgoCommand(command, {
-      evidenceId,
-      onEvidence: () => {
-        verified = true;
-      },
-    }),
+  const { runCancelableCommand } = await import("./lib/cancelable-command.mts");
+  process.exitCode = await runCancelableCommand((signal) =>
+    withDistArtifactOwnership(
+      command.cwd,
+      () =>
+        runPreparedTsgoCommand(command, {
+          signal,
+          evidenceId,
+          onEvidence: () => {
+            verified = true;
+          },
+        }),
+      signal,
+    ),
   );
-  if (verified) {
+  if (verified && (process.exitCode === 0 || process.exitCode === 2)) {
     console.log(
       `[ci-static:tsgo:completion] ${JSON.stringify({ version: 1, id, planned: 1, completed: 1, leaves: [evidenceId] })}`,
     );

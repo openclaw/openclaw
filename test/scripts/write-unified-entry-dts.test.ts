@@ -262,7 +262,14 @@ describe("write-unified-entry-dts", () => {
           ]),
         (result) => result.status,
       );
-      expect(consumer.status, consumer.stdout + consumer.stderr).toBe(0);
+      expect(consumer.status, consumer.stdout + consumer.stderr).toBe(
+        process.platform === "linux" ? 0 : 75,
+      );
+      if (process.platform !== "linux") {
+        expect(consumer.stderr).toContain(
+          "Semantic checks require verified Linux kernel containment",
+        );
+      }
       for (const name of ["runtime-only", "typed-runtime"]) {
         expect(
           fs.statSync(path.join(root, `dist/extensions/fixture-a/${name}.js`)).size,
