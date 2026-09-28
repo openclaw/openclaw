@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { classMap } from "lit/directives/class-map.js";
 import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
@@ -505,24 +504,21 @@ export function renderApplicationShell(host: ShellViewHost) {
       }
       <main
         id="control-ui-main"
-        class=${classMap({
-          content: true,
-          "content--chat": chatLikeRoute,
-          "content--custodian": activeRoute === "custodian",
-          "content--workboard": activeRoute === "workboard",
-          "content--actions-blocked": pageActionsBlocked,
-          "content--plugin-embed": Boolean(layout.pluginEmbed),
-          "content--hub-header": Boolean(layout.hubHeader),
-          "content--toolbar-header": Boolean(layout.toolbarHeader),
-          "content--workbench": Boolean(layout.workbench),
-          "content--settings-page": Boolean(layout.settingsPage),
-          "content--settings-wide": Boolean(layout.settingsWide),
-          "content--settings-workspace": Boolean(layout.settingsWorkspace),
-          "content--memory-page": Boolean(layout.memoryPage),
-          "content--logs-page": Boolean(layout.logsPage),
-          "content--activity-page": Boolean(layout.activityPage),
-          "content--terminal-page": Boolean(layout.terminalPage),
-        })}
+        class="content ${chatLikeRoute ? "content--chat" : ""} ${
+          activeRoute === "custodian" ? "content--custodian" : ""
+        } ${activeRoute === "workboard" ? "content--workboard" : ""} ${
+          pageActionsBlocked ? "content--actions-blocked" : ""
+        } ${layout.pluginEmbed ? "content--plugin-embed" : ""} ${
+          layout.hubHeader ? "content--hub-header" : ""
+        } ${layout.toolbarHeader ? "content--toolbar-header" : ""} ${
+          layout.workbench ? "content--workbench" : ""
+        } ${layout.settingsPage ? "content--settings-page" : ""} ${
+          layout.settingsWide ? "content--settings-wide" : ""
+        } ${layout.settingsWorkspace ? "content--settings-workspace" : ""} ${
+          layout.memoryPage ? "content--memory-page" : ""
+        } ${layout.logsPage ? "content--logs-page" : ""} ${
+          layout.activityPage ? "content--activity-page" : ""
+        } ${layout.terminalPage ? "content--terminal-page" : ""}"
         @openclaw-shell-layout=${host.shellLayout.handleChange}
         .tabIndex=${-1}
         @mousedown=${beginNativeWindowDragFromTopInset}
