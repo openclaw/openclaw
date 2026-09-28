@@ -136,9 +136,10 @@ function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
   }
   const canonical = deriveInboundMessageHookContext(ctx);
   // Bounded hook factories run later; use the monitor's current snapshot at dispatch.
+  const getRuntimeConfig = loadConfig;
   const isStillEnabled = () =>
     shouldEmitWhatsAppMessageReceivedHooks({
-      cfg: loadConfig(),
+      cfg: getRuntimeConfig(),
       accountId,
     });
   const enqueueIfEnabled = (task: () => Promise<unknown>, label: string) =>

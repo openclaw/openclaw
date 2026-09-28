@@ -500,10 +500,10 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         // only, never enter the normal admission/reply pipeline below.
         if (msg.key) {
           try {
-            const loadConfig = options.loadConfig;
+            const getRuntimeConfig = options.loadConfig;
             maybeEmitWhatsAppPollVoteReceivedHook({
-              cfg: loadConfig(),
-              loadConfig,
+              cfg: getRuntimeConfig(),
+              loadConfig: getRuntimeConfig,
               accountId: options.accountId,
               message: msg.message,
               key: msg.key,

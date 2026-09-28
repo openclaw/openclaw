@@ -68,10 +68,9 @@ function hashPollOptionName(optionName: string): string {
  */
 function buildPollOptionHashMap(pollCreationMessage: proto.IMessage): Map<string, string> {
   const section = findMessageSection(pollCreationMessage, POLL_CREATION_SECTIONS);
-  // SAFETY: POLL_CREATION_SECTIONS limits the selected protobuf arm to poll-creation options.
-  const options = (
-    section?.value as { options?: Array<{ optionName?: string | null }> } | undefined
-  )?.options;
+  const options =
+    // SAFETY: POLL_CREATION_SECTIONS limits the selected protobuf arm to poll-creation options.
+    (section?.value as { options?: Array<{ optionName?: string | null }> } | undefined)?.options;
   const map = new Map<string, string>();
   for (const option of options ?? []) {
     const name = option.optionName?.trim();
@@ -333,7 +332,7 @@ function emitWhatsAppPollVoteReceivedHook(params: {
   accountId: string;
   vote: WhatsAppDecodedPollVote;
   dedupeKey?: string;
-  loadConfig: () => OpenClawConfig;
+  getRuntimeConfig: () => OpenClawConfig;
   /** The vote-update message's own id — distinct per vote/retraction, unlike pollMessageId (shared by every vote on the same poll). */
   voteUpdateId: string;
 }): boolean {
@@ -352,7 +351,7 @@ function emitWhatsAppPollVoteReceivedHook(params: {
       try {
         if (
           !shouldEmitWhatsAppPollVoteHooks({
-            cfg: params.loadConfig(),
+            cfg: params.getRuntimeConfig(),
             accountId: params.accountId,
           })
         ) {
@@ -456,7 +455,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     accountId,
     vote: decoded,
     dedupeKey,
-    loadConfig,
+    getRuntimeConfig: loadConfig,
     // Falls back to the poll id in the (practically unseen) case a vote
     // update key has no id of its own — still a valid identity, just not
     // distinct per-vote.

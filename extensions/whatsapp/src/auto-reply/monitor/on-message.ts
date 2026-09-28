@@ -101,7 +101,8 @@ export function createWebOnMessageHandler(params: {
 
   return async (normalizedMsg: AdmittedWebInboundMessage) => {
     const canRunDirectEarlyAudioPreflight = normalizedMsg.admission.ingress.decision === "allow";
-    const cfg = params.loadConfig();
+    const getRuntimeConfig = params.loadConfig;
+    const cfg = getRuntimeConfig();
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
     const admission = requireWhatsAppInboundAdmission(msg);

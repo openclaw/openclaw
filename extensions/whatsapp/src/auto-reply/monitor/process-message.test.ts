@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
+import {
+  clearInternalHooks,
+  fireAndForgetBoundedHook,
+  registerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
 // Whatsapp tests cover process message plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { enqueueWhatsAppHookQueueBarrierForTests } from "../../hook-queue.test-helper.js";
@@ -177,7 +181,6 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
   };
 });
 
-import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { attachWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import { processMessage } from "./process-message.js";
 
