@@ -291,6 +291,28 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect(prepared.finalAssistantRawText).toBe(expected);
     },
   );
+  it("does not mark the model's own final text as a fallback", async () => {
+    const final = {
+      ...assistantMessage("stop"),
+      content: [{ type: "text" as const, text: "Done" }],
+    };
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        assistantTexts: ["Checking now", "Done"],
+        lastAssistant: final,
+        currentAttemptAssistant: final,
+        currentAttemptCompletedAssistant: final,
+      }),
+      currentAttemptCompletedAssistant: final,
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.finalAssistantRawText).toBe("Done");
+    expect(prepared.finalAssistantRawTextIsFallback).toBe(false);
+  });
 
   it.each(["error", "aborted"] as const)(
     "does not use %s assistant text as final terminal text",

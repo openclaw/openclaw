@@ -78,12 +78,14 @@ code units) per field and redacted through the same sensitive-text filter as
 other exported content. `output.value` records what the LLM actually responded
 with — the model's own final response, before delivery filtering — so sentinel
 replies such as `NO_REPLY` appear verbatim; this is LLM-observability data, not
-a delivery record. For tool-only turns, the text the model passed to the
-message tool as its final reply to the source conversation is captured; for
-webchat and Control UI replies, reply and audio markers such as
-`[[reply_to_current]]` are already stripped from that text. The model's exact
-tool arguments are on the `openclaw.tool.execution` span (`gen_ai.tool.call.arguments`)
-for the built-in runtime. Progress sends (`final: false`) are not captured. Text the
+a delivery record. Only the text of the model's last message counts. Text the
+model passed to the `message` tool is an argument to a tool call, not its final
+message, so tool-only turns record the model's closing message (usually
+`NO_REPLY`) or nothing; the sent text is on the child `openclaw.model.call`
+output messages and, for the built-in runtime, the `openclaw.tool.execution`
+span (`gen_ai.tool.call.arguments`). CLI backends do not export tool arguments,
+so their message-tool text is not captured on any span. Earlier narration in
+the turn ("Checking now…") is never reported as the final response. Text the
 model did not write is never captured, even when it was delivered to the chat:
 plugin hook replies (`before_dispatch`, `before_agent_reply`), no-visible-reply
 fallbacks, continuation statuses, failure texts, and Gateway restart notices.

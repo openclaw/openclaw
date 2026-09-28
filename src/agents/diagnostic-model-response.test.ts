@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  resolveDiagnosticModelResponse,
-  resolveDiagnosticSourceReplyText,
-} from "./diagnostic-model-response.js";
+import { resolveDiagnosticModelResponse } from "./diagnostic-model-response.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 
 function result(meta: Partial<EmbeddedAgentRunResult["meta"]>): EmbeddedAgentRunResult {
@@ -23,7 +20,6 @@ describe("resolveDiagnosticModelResponse", () => {
           livenessState: "blocked",
           finalAssistantRawText: "Blocked by before_agent_run policy",
         }),
-        "delivered",
       ),
     ).toBeUndefined();
   });
@@ -49,23 +45,36 @@ describe("resolveDiagnosticModelResponse", () => {
   });
 });
 
-describe("delivery mirror", () => {
-  it("prefers the model's message-tool text over the CLI delivery mirror", () => {
+describe("tool-only turns", () => {
+  const sent = [
+    { tool: "message", provider: "slack", text: "Done, 3 restarted", sourceReplyFinal: true },
+  ];
+
+  it("records the model's final NO_REPLY, never the message-tool text", () => {
     expect(
       resolveDiagnosticModelResponse({
-        ...result({ finalAssistantVisibleText: "Deploy finished." }),
-        messagingToolSentTargets: [
-          {
-            tool: "message",
-            provider: "slack",
-            text: "[[reply_to_current]] Deploy finished.",
-            sourceReplyFinal: true,
-          },
-        ],
+        ...result({ finalAssistantRawText: "NO_REPLY" }),
+        messagingToolSentTargets: sent,
+        messagingToolSourceReplyPayloads: [{ text: "Done", sourceReplyFinal: true }],
       }),
-    ).toBe("[[reply_to_current]] Deploy finished.");
+    ).toBe("NO_REPLY");
+  });
+
+  it("records nothing when the final message is empty, even with a delivery mirror", () => {
     expect(
-      resolveDiagnosticModelResponse(result({ finalAssistantVisibleText: "mirror only" })),
+      resolveDiagnosticModelResponse({
+        ...result({ finalAssistantVisibleText: "Done, 3 restarted" }),
+        messagingToolSentTargets: sent,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("never records earlier turn text the runner substituted for an empty final message", () => {
+    expect(
+      resolveDiagnosticModelResponse({
+        ...result({ finalAssistantRawText: "Checking now", finalAssistantRawTextIsFallback: true }),
+        messagingToolSentTargets: sent,
+      }),
     ).toBeUndefined();
   });
 });
@@ -89,41 +98,5 @@ describe("hook-handled turns", () => {
     expect(resolveDiagnosticModelResponse(result({ finalAssistantRawText: "NO_REPLY" }))).toBe(
       "NO_REPLY",
     );
-  });
-});
-
-describe("resolveDiagnosticSourceReplyText", () => {
-  it("includes confirmed internal and external final source replies only", () => {
-    expect(
-      resolveDiagnosticSourceReplyText({
-        messagingToolSourceReplyPayloads: [
-          { text: "internal reply", sourceReplyFinal: true },
-          { text: "internal progress", sourceReplyFinal: false },
-        ],
-        messagingToolSentTargets: [
-          { tool: "message", provider: "slack", text: "external reply", sourceReplyFinal: true },
-          { tool: "message", provider: "slack", text: "progress", sourceReplyFinal: false },
-          { tool: "message", provider: "telegram", to: "other-chat", text: "elsewhere" },
-        ],
-      }),
-    ).toBe("internal reply\nexternal reply");
-  });
-
-  it("is the default fallback for tool-only runs and never outranks model text", () => {
-    const sent = [
-      { tool: "message", provider: "slack", text: "external reply", sourceReplyFinal: true },
-    ];
-    expect(
-      resolveDiagnosticModelResponse({
-        ...result({}),
-        messagingToolSentTargets: sent,
-      }),
-    ).toBe("external reply");
-    expect(
-      resolveDiagnosticModelResponse({
-        ...result({ finalAssistantRawText: "NO_REPLY" }),
-        messagingToolSentTargets: sent,
-      }),
-    ).toBe("NO_REPLY");
   });
 });

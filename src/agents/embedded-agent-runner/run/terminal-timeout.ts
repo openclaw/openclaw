@@ -78,6 +78,9 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
       finalPromptText: input.attempt.finalPromptText,
       finalAssistantVisibleText: input.terminalPrepared.finalAssistantVisibleText,
       finalAssistantRawText: input.terminalPrepared.finalAssistantRawText,
+      ...(input.terminalPrepared.finalAssistantRawTextIsFallback
+        ? { finalAssistantRawTextIsFallback: true }
+        : {}),
       replayInvalid,
       livenessState,
       ...timeoutAttribution,
