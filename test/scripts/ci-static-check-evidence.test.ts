@@ -56,7 +56,7 @@ function completeStaticLog(
   kind: "tsgo" | "oxlint" = "tsgo",
   change: (rows: { phase: string; data: Record<string, unknown> }[]) => void = () => {},
 ) {
-  const rows: { phase: string; data: Record<string, unknown> }[] = [
+  const rows = [
     {
       phase: "leaf",
       data: {
