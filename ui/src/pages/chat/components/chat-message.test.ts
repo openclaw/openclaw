@@ -3,6 +3,7 @@
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageClientSource } from "../../../../../src/chat/message-client-source.js";
+import { sanitizeChatHistoryMessages } from "../../../../../src/gateway/chat-display-projection.sanitize.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -1439,28 +1440,19 @@ describe("grouped chat rendering", () => {
     expect(fixture.onAction).not.toHaveBeenCalled();
   });
 
-  it("renders assistant context usage from input and cache tokens", () => {
-    const renderUsage = (usage: Record<string, number>, contextWindow: number) => {
+  it("renders projected history context snapshots separately from billing totals", () => {
+    const renderUsage = (usage: TestMessage, contextWindow: number) => {
       const container = document.createElement("div");
-      renderAssistantMessage(
-        container,
-        createAssistantMessage("Done", {
-          usage,
-          model: "anthropic/claude-opus-4-7",
-          timestamp: 1000,
-        }),
-        { contextWindow },
-      );
+      const [message] = sanitizeChatHistoryMessages([
+        createAssistantMessage("Done", { usage, model: "openai/gpt-5.6-luna", timestamp: 1000 }),
+      ]);
+      renderAssistantMessage(container, message, { contextWindow });
       return container;
     };
-
+    const cacheCounts = (container: HTMLElement) =>
+      Array.from(container.querySelectorAll(".msg-meta__cache"), (node) => node.textContent);
     const cached = renderUsage(
-      {
-        input: 1,
-        output: 1200,
-        cacheRead: 438_400,
-        cacheWrite: 307,
-      },
+      { input: 1, output: 1200, cacheRead: 438_400, cacheWrite: 307, cost: { total: 0.1234 } },
       1_000_000,
     );
     const summary = cached.querySelector<HTMLButtonElement>(".msg-meta__summary");
@@ -1470,32 +1462,25 @@ describe("grouped chat rendering", () => {
     expect(summary?.textContent).not.toContain("Context");
     expect(summary?.getAttribute("aria-label")).toContain("Message context for");
     expect(cached.querySelector(".msg-meta__ctx")?.textContent).toBe("44% ctx");
-    expect(
-      Array.from(cached.querySelectorAll(".msg-meta__cache")).map((node) => node.textContent),
-    ).toEqual(["R438.4k", "W307"]);
-
-    const outputHeavy = renderUsage(
-      {
-        input: 1_000,
-        output: 9_000,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-      10_000,
-    );
+    expect(cacheCounts(cached)).toEqual(["R438.4k", "W307"]);
+    expect(cached.querySelector(".msg-meta__cost")?.textContent).toBe("$0.123");
+    const outputHeavy = renderUsage({ input: 1_000, output: 9_000 }, 10_000);
     expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
-
-    // Cost is nested under usage.cost in the canonical AssistantMessage
-    // shape; the popover must surface it (it was dead reading message.cost).
-    const withCost = renderUsage(
-      {
-        input: 1_000,
-        output: 500,
-        cost: { total: 0.1234 } as unknown as number,
-      } as Record<string, number>,
-      10_000,
-    );
-    expect(withCost.querySelector(".msg-meta__cost")?.textContent).toContain("$0.12");
+    expect(cacheCounts(outputHeavy)).toEqual([]);
+    expect(outputHeavy.querySelector(".msg-meta__cost")).toBeNull();
+    for (const [contextUsage, expected] of [
+      [{ state: "available", promptTokens: 22_887, totalTokens: 22_945 }, "9% ctx"],
+      [{ state: "unavailable" }, undefined],
+      [{ state: "available", promptTokens: 0, totalTokens: 0 }, undefined],
+    ] as const) {
+      const snapshot = renderUsage(
+        { input: 159, output: 2475, cacheRead: 1_089_037, cacheWrite: 22_884, contextUsage },
+        258_400,
+      );
+      expect.soft(snapshot.querySelector(".msg-meta__ctx")?.textContent).toBe(expected);
+      expect(cacheCounts(snapshot)).toEqual(["R1.1M", "W22.9k"]);
+      expect(snapshot.querySelector(".msg-meta__cost")).toBeNull();
+    }
   });
 
   it("dismisses message context when the neighboring reply tooltip opens", async () => {
@@ -1533,25 +1518,31 @@ describe("grouped chat rendering", () => {
     }
   });
 
-  it("uses the largest single assistant call for grouped context usage", () => {
+  it.each([
+    [undefined, undefined, "42% ctx"],
+    [
+      { state: "available", promptTokens: 60_000, totalTokens: 60_100 },
+      { state: "available", promptTokens: 4_000, totalTokens: 4_100 },
+      "23% ctx",
+    ],
+    [
+      { state: "unavailable" },
+      { state: "available", promptTokens: 4_000, totalTokens: 4_100 },
+      "2% ctx",
+    ],
+  ] as const)("uses the largest context snapshot (%j, %j)", (first, last, expected) => {
     const container = document.createElement("div");
-
     renderAssistantMessages(
       container,
-      [
-        createAssistantMessage("Checking", {
-          usage: { input: 105_944, output: 100 },
-          timestamp: 1000,
+      [first, last].map((contextUsage, index) =>
+        createAssistantMessage(index ? "Done" : "Checking", {
+          usage: { input: [105_944, 108_577][index], output: 100, contextUsage },
+          timestamp: 1000 + index,
         }),
-        createAssistantMessage("Done", {
-          usage: { input: 108_577, output: 100 },
-          timestamp: 1001,
-        }),
-      ],
+      ),
       { contextWindow: 258_400 },
     );
-
-    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("42% ctx");
+    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe(expected);
     expect(container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑214.5k");
   });
 

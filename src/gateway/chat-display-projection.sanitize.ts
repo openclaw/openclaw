@@ -1,6 +1,7 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeContextUsage } from "../agents/usage.js";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
@@ -360,6 +361,12 @@ function sanitizeNumericMetadata(
     const cost = sanitizeNumericMetadata(record.cost, COST_FIELDS);
     if (cost) {
       projected.cost = cost;
+    }
+  }
+  if (fields === USAGE_FIELDS) {
+    const contextUsage = normalizeContextUsage(record.contextUsage);
+    if (contextUsage) {
+      projected.contextUsage = contextUsage;
     }
   }
   return Object.keys(projected).length > 0 ? projected : undefined;

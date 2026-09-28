@@ -179,6 +179,22 @@ const normalizeTokenCount = (value: unknown): number | undefined => {
   return Math.min(Math.trunc(numeric), Number.MAX_SAFE_INTEGER);
 };
 
+/** Retain only a complete context snapshot or explicit unavailability. */
+export function normalizeContextUsage(raw: unknown): ContextUsage | undefined {
+  const context = asOptionalRecord(raw);
+  if (context?.state === "unavailable") {
+    return { state: "unavailable" };
+  }
+  if (context?.state !== "available") {
+    return undefined;
+  }
+  const promptTokens = normalizeTokenCount(context.promptTokens);
+  const totalTokens = normalizeTokenCount(context.totalTokens);
+  return promptTokens !== undefined && totalTokens !== undefined && totalTokens >= promptTokens
+    ? { state: "available", promptTokens, totalTokens }
+    : undefined;
+}
+
 /** Normalize provider-specific token usage fields into OpenClaw usage buckets. */
 export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefined {
   if (!raw) {
@@ -251,26 +267,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.predicted_n ??
       raw.timings?.predicted_n,
   );
-  const contextPromptTokens =
-    raw.contextUsage?.state === "available"
-      ? normalizeTokenCount(raw.contextUsage.promptTokens)
-      : undefined;
-  const contextTotalTokens =
-    raw.contextUsage?.state === "available"
-      ? normalizeTokenCount(raw.contextUsage.totalTokens)
-      : undefined;
-  const contextUsage =
-    raw.contextUsage?.state === "unavailable"
-      ? ({ state: "unavailable" } as const)
-      : contextPromptTokens !== undefined &&
-          contextTotalTokens !== undefined &&
-          contextTotalTokens >= contextPromptTokens
-        ? ({
-            state: "available",
-            promptTokens: contextPromptTokens,
-            totalTokens: contextTotalTokens,
-          } as const)
-        : undefined;
+  const contextUsage = normalizeContextUsage(raw.contextUsage);
   const reasoningTokens = normalizeTokenCount(
     raw.reasoningTokens ??
       raw.reasoning_tokens ??

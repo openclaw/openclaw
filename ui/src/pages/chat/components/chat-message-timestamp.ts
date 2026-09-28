@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { UsageLike } from "../../../../../src/agents/usage.js";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -134,7 +135,7 @@ export function extractGroupMeta(
     if (m.role !== "assistant") {
       continue;
     }
-    const usage = m.usage as Record<string, number> | undefined;
+    const usage = m.usage as UsageLike | undefined;
     if (usage) {
       hasUsage = true;
       const callInput = usage.input ?? usage.inputTokens ?? 0;
@@ -145,14 +146,18 @@ export function extractGroupMeta(
       output += callOutput;
       cacheRead += callCacheRead;
       cacheWrite += callCacheWrite;
-      maxPromptTokens = Math.max(maxPromptTokens, callInput + callCacheRead + callCacheWrite);
+      // Billing may accumulate across calls; explicit snapshots own context occupancy.
+      const promptTokens = usage.contextUsage
+        ? usage.contextUsage.state === "available"
+          ? usage.contextUsage.promptTokens
+          : 0
+        : callInput + callCacheRead + callCacheWrite;
+      maxPromptTokens = Math.max(maxPromptTokens, promptTokens);
     }
     // Producers write cost nested under usage.cost (the AssistantMessage
     // shape); a bare message.cost never exists, so reading only it left the
     // popover's $ line permanently dead.
-    const c =
-      (usage as { cost?: { total?: number } } | undefined)?.cost ??
-      (m.cost as Record<string, number> | undefined);
+    const c = usage?.cost ?? (m.cost as Record<string, number> | undefined);
     if (c?.total) {
       cost += c.total;
     }

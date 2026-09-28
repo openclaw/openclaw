@@ -487,6 +487,55 @@ describe("oversized multimodal chat history", () => {
 });
 
 describe("transcript metadata projection", () => {
+  it.each([
+    [
+      "available with private extras",
+      { state: "available", promptTokens: 12.9, totalTokens: 15.9, diagnostic: "private" },
+      { state: "available", promptTokens: 12, totalTokens: 15 },
+    ],
+    [
+      "unavailable with private extras",
+      { state: "unavailable", diagnostic: "private" },
+      { state: "unavailable" },
+    ],
+    ["incoherent", { state: "available", promptTokens: 20, totalTokens: 19 }, undefined],
+    ["incomplete", { state: "available", promptTokens: 12 }, undefined],
+    ["nonfinite", { state: "available", promptTokens: Infinity, totalTokens: 20 }, undefined],
+    ["numeric string", { state: "available", promptTokens: "12", totalTokens: 20 }, undefined],
+    ["unknown state", { state: "other", promptTokens: 12, totalTokens: 20 }, undefined],
+    ["null", null, undefined],
+    ["array", [], undefined],
+    ["legacy absent", undefined, undefined],
+  ] as const)(
+    "projects %s context without leaking metadata or changing billing",
+    (_name, contextUsage, expected) => {
+      const billing = {
+        input: 159,
+        output: 2475,
+        cacheRead: 1_089_037,
+        cacheWrite: 22_884,
+        cost: { total: 0.1234 },
+      };
+      const messages = ["user", "assistant"].map((role) => ({
+        role,
+        content: "Visible reply",
+        usage: {
+          ...billing,
+          contextUsage,
+          privateDetails: "private",
+          cost: { ...billing.cost, diagnostic: "private" },
+        },
+      }));
+      const original = structuredClone(messages);
+      const projected = projectChatDisplayMessages(messages);
+      expect(projected.map((message) => message.usage)).toEqual([
+        undefined,
+        { ...billing, ...(expected ? { contextUsage: expected } : {}) },
+      ]);
+      expect(messages).toEqual(original);
+    },
+  );
+
   it("keeps display metadata while omitting oversized upstream prompt metadata", () => {
     const message = {
       role: "user",
