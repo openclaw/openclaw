@@ -1493,12 +1493,12 @@ openclaw-toast-host[data-toast-placement="shell"]
   min-width: 36px;
   height: 36px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
 }
 
 .btn--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 
 .btn--icon svg {
@@ -2128,14 +2128,14 @@ select.input {
 }
 
 :root[data-theme-mode="light"] .btn--icon {
-  background: var(--button-icon-bg);
+  background: var(--bg-elevated);
   border-color: var(--border);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  box-shadow: var(--shadow-sm);
   color: var(--muted);
 }
 
 :root[data-theme-mode="light"] .btn--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: var(--button-icon-bg);
+  background: var(--bg-hover);
   border-color: var(--border-strong);
   color: var(--text);
 }
@@ -2207,7 +2207,7 @@ select.input {
 }
 
 .callout__dismiss:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .callout__dismiss svg {
@@ -2705,11 +2705,7 @@ select.input {
 
 .code-block-copy:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
-}
-
-:root[data-theme-mode="light"] .code-block-copy:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .code-block-copy__done,
@@ -3893,8 +3889,8 @@ td.data-table-key-col {
   border-radius: calc(var(--radius-xl) + 6px);
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, black 6%), var(--panel));
   box-shadow:
-    0 32px 96px rgba(0, 0, 0, 0.48),
-    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+    var(--shadow-xl),
+    0 1px 0 var(--card-highlight) inset;
   overflow: hidden;
 }
 
@@ -3982,7 +3978,7 @@ td.data-table-key-col {
   color: color-mix(in srgb, var(--text) 86%, var(--muted));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.045),
-    0 8px 20px rgba(0, 0, 0, 0.18);
+    var(--shadow-md);
 }
 
 .md-preview-icon-btn:hover:not(:disabled) {
@@ -3995,7 +3991,7 @@ td.data-table-key-col {
   color: var(--text-strong);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 10px 24px rgba(0, 0, 0, 0.24);
+    var(--shadow-md);
 }
 
 .md-preview-icon-btn[aria-pressed="true"] {
@@ -4004,7 +4000,7 @@ td.data-table-key-col {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.07),
     0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
-    0 12px 28px rgba(0, 0, 0, 0.28);
+    var(--shadow-lg);
 }
 
 .md-preview-icon-btn > span {
@@ -4030,7 +4026,11 @@ td.data-table-key-col {
       color-mix(in srgb, var(--accent) 5.5%, transparent),
       transparent 32%
     ),
-    radial-gradient(circle at bottom left, rgba(20, 184, 166, 0.045), transparent 28%),
+    radial-gradient(
+      circle at bottom left,
+      color-mix(in srgb, var(--accent-2) 4.5%, transparent),
+      transparent 28%
+    ),
     linear-gradient(
       180deg,
       color-mix(in srgb, var(--panel) 84%, black 16%),
@@ -4105,8 +4105,8 @@ td.data-table-key-col {
     var(--md-preview-document-bg)
   );
   box-shadow:
-    0 22px 54px rgba(0, 0, 0, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    var(--shadow-lg),
+    inset 0 1px 0 var(--card-highlight);
 }
 
 .md-preview-dialog__reader::before {
@@ -5297,7 +5297,7 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: 22px;
   background: var(--qr-bg);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-lg);
 }
 
 .device-pair-setup__qr {

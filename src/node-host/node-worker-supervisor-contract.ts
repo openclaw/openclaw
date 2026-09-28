@@ -30,7 +30,10 @@ export type NodeWorkerSupervisorControl = {
     connectionEndpoint: WorkerConnectionEndpoint,
     signal?: AbortSignal,
   ): Promise<NodeWorkerLaunchReceipt>;
-  status(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined>;
+  status(
+    launchId: string,
+    options?: { waitMs: number; signal?: AbortSignal },
+  ): Promise<NodeWorkerLaunchReceipt | undefined>;
   retainWorkspaces(
     input: NodeWorkerWorkspaceRetainInput,
     signal?: AbortSignal,

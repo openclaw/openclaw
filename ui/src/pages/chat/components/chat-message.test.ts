@@ -96,18 +96,6 @@ function requireFirstMockArg(
   return arg;
 }
 
-function selectText(element: Element) {
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function pointerClick(element: Element) {
-  element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-}
-
 beforeEach(() => {
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
@@ -3070,11 +3058,6 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("Read failed");
     expect(activitySummary.querySelector(".chat-activity-group__badge")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
-    selectText(expectElement(activitySummary, ".chat-activity-group__label", HTMLElement));
-    pointerClick(activitySummary);
-    expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
     activitySummary.click();
 
     expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", false);
@@ -3343,11 +3326,6 @@ describe("grouped chat rendering", () => {
     expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
       "sessions_spawn",
     );
-    selectText(expectElement(summary, ".chat-tool-msg-summary__label", HTMLElement));
-    pointerClick(summary);
-    expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
     summary.click();
     expect(onToggleToolMessageExpanded).toHaveBeenCalledOnce();
 

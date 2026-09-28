@@ -33,7 +33,6 @@ import { StringDecoder } from "node:string_decoder";
 import { setImmediate as yieldToSignals } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { gte as semverGte } from "semver";
 import {
   ensureManagedCrabboxBinary,
   findCrabboxBinary,
@@ -123,7 +122,7 @@ try {
   console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(2);
 }
-let { binary, version } = cli;
+const { binary, version } = cli;
 const workloadCommand = isWorkloadRoutedCommand(args);
 const workloadOption = workloadCommand ? extractWrapperValueOption(args, "--workload") : undefined;
 const userArgStart = commandUserArgStart(args);
@@ -3708,22 +3707,18 @@ async function applyRunTransforms(
 }
 
 const helpCommand = workloadCommand ? args.slice(0, userArgStart) : ["run"];
-function cliMetadata() {
-  const help = probeCrabboxHelp(binary, [...helpCommand, "--help"]);
-  const providers = parseProvidersFromHelp(help.text);
-  commandValueOptionsFromHelp = parseCommandValueOptionsFromHelp(help.text);
-  const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
+const help = probeCrabboxHelp(binary, [...helpCommand, "--help"]);
+const providers = parseProvidersFromHelp(help.text);
+commandValueOptionsFromHelp = parseCommandValueOptionsFromHelp(help.text);
+const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 
-  if (help.status !== 0 || commandValueOptionsFromHelp.size === 0) {
-    console.error(
-      `[crabbox] bin=${displayBinary} version=${version} providers=${providers.join(",") || "unknown"}`,
-    );
-    console.error("[crabbox] selected binary failed --help sanity checks");
-    process.exit(2);
-  }
-  return { help, providers, displayBinary };
+if (help.status !== 0 || commandValueOptionsFromHelp.size === 0) {
+  console.error(
+    `[crabbox] bin=${displayBinary} version=${version} providers=${providers.join(",") || "unknown"}`,
+  );
+  console.error("[crabbox] selected binary failed --help sanity checks");
+  process.exit(2);
 }
-let { help, providers, displayBinary } = cliMetadata();
 
 // Classify help before removing the wrapper separator or preparing execution.
 // Only the leaf's option prefix counts; payloads and flag values stay gated.
@@ -3754,27 +3749,7 @@ if (args[userArgStart] === "--") {
   args.splice(userArgStart, 1);
 }
 
-let providerSelection = selectedProvider(args, providers);
-if (
-  !providerSelection.error &&
-  canonicalProviderName(providerSelection.provider) === "blacksmith-testbox" &&
-  !semverGte(version, "0.67.0")
-) {
-  // Only Testbox needs the native SSH lifetime repair. Preserve supported
-  // offline binaries for other providers, and parse against the executable used.
-  try {
-    ({ binary, version } = await ensureManagedCrabboxBinary({
-      binary,
-      minimumVersion: "0.67.0",
-    }));
-    resolvedCrabboxConfigCache = undefined;
-    ({ help, providers, displayBinary } = cliMetadata());
-    providerSelection = selectedProvider(args, providers);
-  } catch (error) {
-    console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(2);
-  }
-}
+const providerSelection = selectedProvider(args, providers);
 if (providerSelection.error) {
   console.error(`[crabbox] ${providerSelection.error}`);
   if (providerSelection.readiness) {

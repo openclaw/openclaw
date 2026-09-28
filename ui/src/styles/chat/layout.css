@@ -2704,8 +2704,19 @@ openclaw-chat-ci-details {
 }
 
 @media (max-width: 640px) {
-  .chat-pr__identity {
+  .chat-pr__identity,
+  .chat-pr__link--static .chat-pr__repo {
     display: none;
+  }
+
+  .chat-pr__link--static .chat-pr__identity {
+    display: flex;
+  }
+
+  .chat-pr__link--static .chat-pr__branch {
+    flex: 1;
+    text-overflow: clip;
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
   }
 }
 
@@ -3013,6 +3024,7 @@ openclaw-chat-ci-details {
 @media (max-width: 560px) {
   .agent-chat__input--chat .chat-mobile-primary-action {
     margin-inline-start: var(--chat-mobile-row-action-gap);
+    gap: var(--chat-mobile-row-action-gap);
   }
 
   .agent-chat__input--chat

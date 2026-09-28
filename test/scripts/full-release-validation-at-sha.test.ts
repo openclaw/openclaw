@@ -1114,7 +1114,9 @@ describe("full-release-validation-at-sha", () => {
     const readVersion = (version: string) => () => JSON.stringify({ version });
 
     expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-beta.4"))).toBe("beta");
-    expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-alpha.4"))).toBe("beta");
+    expect(() => releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-alpha.4"))).toThrow(
+      "Alpha releases are retired;",
+    );
     expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1"))).toBe("stable");
     expect(releaseProfileForTarget("a".repeat(40), readVersion("2026.7.1-1"))).toBe("stable");
   });

@@ -1,9 +1,9 @@
 import { consume } from "@lit/context";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type {
   UserProfile,
-  UsersSelfResult,
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
@@ -98,6 +98,17 @@ export class ProfilePage extends OpenClawLightDomElement {
     super.connectedCallback();
     this.subscriptions = [
       this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
+      this.context.gateway.subscribeEvents((event) => {
+        if (
+          !this.identityBusy &&
+          event.event === "sessions.changed" &&
+          asOptionalRecord(event.payload)?.reason === "profile-identity"
+        ) {
+          this.identityRequestId += 1;
+          this.identityLoading = false;
+          void this.loadIdentity();
+        }
+      }),
       this.context.agents.subscribe(() => this.requestUpdate()),
       this.context.agentIdentity.subscribe(() => this.requestUpdate()),
     ];
@@ -127,7 +138,9 @@ export class ProfilePage extends OpenClawLightDomElement {
     const nextSelfUser = nextConnected
       ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
       : null;
-    const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
+    const selfProfileChanged =
+      nextSelfUser?.id !== this.selfUser?.id ||
+      nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
     const identitySourceChanged =
       clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
     this.client = snapshot.client;
@@ -153,7 +166,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!nextConnected || !snapshot.client) {
       return;
     }
-    if (nextSelfUser && nextCanWrite && identitySourceChanged) {
+    if (identitySourceChanged) {
       void this.loadIdentity();
     }
     void this.context.agents.ensureList().then((list) => {
@@ -165,9 +178,7 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private async loadIdentity() {
     const client = this.client;
-    // One active request owns the generation; reconnects clear loading before
-    // starting their replacement so stale responses cannot win out of order.
-    if (!client || !this.connected || !this.canWrite || this.identityLoading) {
+    if (!client || !this.connected || this.identityLoading) {
       return;
     }
     const requestId = ++this.identityRequestId;
@@ -178,12 +189,14 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.identityLoading = true;
     this.identityError = null;
     try {
-      const result = await client.request<UsersSelfResult>("users.self", {});
+      const profile = await this.context.gateway.loadSelfProfile();
       if (requestId !== this.identityRequestId) {
         return;
       }
-      const profile = result.profile;
       this.ownProfile = profile;
+      if (!profile) {
+        return;
+      }
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
       this.gitCoauthorEnabled = true;
       if (profile.githubIdentity) {
@@ -320,22 +333,20 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderIdentity() {
-    if (!this.selfUser || !this.canWrite || !this.ownProfile) {
+    if (!this.selfUser || !this.ownProfile) {
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
-          !this.selfUser
-            ? renderSettingsEmpty(t("profilePage.identity.unidentified"))
-            : !this.canWrite
-              ? renderSettingsEmpty(t("profilePage.identity.writeRequired"))
-              : this.identityLoading
-                ? renderSettingsLoadingSkeleton({
-                    label: t("profilePage.identity.loading"),
-                    rows: 2,
-                  })
-                : renderSettingsEmpty(
-                    this.identityError ?? t("profilePage.identity.profileUnavailable"),
+          this.identityLoading
+            ? renderSettingsLoadingSkeleton({ label: t("profilePage.identity.loading"), rows: 2 })
+            : renderSettingsEmpty(
+                this.identityError ??
+                  t(
+                    !this.selfUser
+                      ? "profilePage.identity.unidentified"
+                      : "profilePage.identity.profileUnavailable",
                   ),
+              ),
         )}
       </div>`;
     }
@@ -353,6 +364,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     return renderIdentitySection({
       config: this.context.config,
       profile: this.ownProfile,
+      canWrite: this.canWrite,
       avatarUrl,
       displayName: this.displayName,
       gitCoauthorEnabled: this.gitCoauthorEnabled,
@@ -398,7 +410,7 @@ export class ProfilePage extends OpenClawLightDomElement {
             control: html`<button
               type="button"
               class="btn"
-              ?disabled=${this.identityLoading || this.identityBusy !== null}
+              ?disabled=${this.identityBusy !== null}
               @click=${() => this.context.gateway.connect()}
             >
               ${t("profilePage.access.reconnect")}
@@ -440,7 +452,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private refreshManually() {
-    if (this.selfUser && this.canWrite && !this.identityBusy && !this.identityLoading) {
+    if (this.connected && !this.identityBusy && !this.identityLoading) {
       if (this.client) {
         invalidateUserPreferences(this.client);
       }
@@ -513,7 +525,7 @@ export class ProfilePage extends OpenClawLightDomElement {
           </div>
         </div>
         ${
-          this.selfUser && this.canWrite
+          this.connected
             ? html`<button
                 class="btn profile-refresh"
                 ?disabled=${this.identityLoading || this.identityBusy !== null}

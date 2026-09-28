@@ -474,12 +474,12 @@ final class NodePairingApprovalPrompter {
             requestNodeId: req.nodeId,
             localNodeId: localNodeId)
         {
-            guard self.beginAutoApproveAttempt(requestId: req.requestId) else { return false }
+            guard self.autoApproveAttempts.insert(req.requestId).inserted else { return false }
             return await self.approveAutomatically(req, via: "local-node", notify: false, source: source)
         }
 
         guard req.silent == true else { return false }
-        guard self.beginAutoApproveAttempt(requestId: req.requestId) else { return false }
+        guard self.autoApproveAttempts.insert(req.requestId).inserted else { return false }
 
         let user = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !user.isEmpty else {
@@ -534,10 +534,6 @@ final class NodePairingApprovalPrompter {
             await self.notify(resolution: .approved, request: req, via: via, source: source)
         }
         return true
-    }
-
-    private func beginAutoApproveAttempt(requestId: String) -> Bool {
-        self.autoApproveAttempts.insert(requestId).inserted
     }
 
     static func shouldAutoApproveOwnLocalNode(
@@ -616,11 +612,7 @@ final class NodePairingApprovalPrompter {
     }
 
     private func reconcileOnce(timeoutMs: Double, source: PairingPromptSupport.Source) async {
-        do {
-            try await self.refreshPairingList(timeoutMs: timeoutMs, source: source)
-        } catch {
-            // best effort: ignore transient connectivity failures
-        }
+        try? await self.refreshPairingList(timeoutMs: timeoutMs, source: source)
     }
 
     private func scheduleReconcileOnce(

@@ -10,7 +10,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import {
   expectRuntime,
-  registerGitActivationDoctorOutcomeTests,
+  expectNoGitRuntimeStagingPaths,
   registerGitRuntimeStagingTests,
   registerGitRuntimeRestorationTests,
   runFixtureGit as git,
@@ -19,6 +19,7 @@ import {
   writeRuntime,
   type VirtualStoreLayout,
 } from "./update-runner-git-candidate.test-support.js";
+import { registerGitActivationDoctorOutcomeTests } from "./update-runner-git-transactions.test-support.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
@@ -186,17 +187,7 @@ describe("Git candidate activation", () => {
     });
   }
 
-  async function expectNoRuntimeStagingPaths() {
-    for (const inspectionRoot of inspectionRoots) {
-      await expect(fs.stat(inspectionRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    const entries = await fs.readdir(root, { recursive: true });
-    expect(
-      entries.filter((entry) =>
-        /\.openclaw-update-[0-9a-f]{8}-[0-9a-f-]{27}\.tmp(?:\/|$)/u.test(entry),
-      ),
-    ).toEqual([]);
-  }
+  const expectNoRuntimeStagingPaths = () => expectNoGitRuntimeStagingPaths(root, inspectionRoots);
 
   it.each([undefined, 5_000])(
     "separates work deadlines from observation budgets: %s",
@@ -238,6 +229,10 @@ describe("Git candidate activation", () => {
     beforeSha,
     events,
     isStopped: () => stopped,
+    runCommand,
+    setRunCommand: (runner) => {
+      runCommand = runner;
+    },
     advanceRemote,
     git,
     update,
