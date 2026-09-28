@@ -12,6 +12,7 @@ import {
 import { QuestionManager } from "../gateway/question-manager.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
@@ -31,7 +32,8 @@ describe("question delivery generation", () => {
     "keeps a queued %s prompt on its expired question after the id is reused",
     async (producer) => {
       vi.useFakeTimers();
-      const manager = new QuestionManager();
+      const scheduler = createTestGatewayScheduler("fake-timers");
+      const manager = new QuestionManager(scheduler);
       const precedingSendEntered = createDeferredCore();
       const releasePrecedingSend = createDeferredCore();
       const finalizers: ReturnType<typeof vi.fn>[] = [];
@@ -67,7 +69,7 @@ describe("question delivery generation", () => {
           timeoutMs,
           onResolved: handleQuestionChannelResolved,
         });
-        handleQuestionChannelRequested(record);
+        handleQuestionChannelRequested(record, scheduler);
         return record;
       };
       const sendPrompt = () =>

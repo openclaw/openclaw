@@ -38,6 +38,7 @@ import {
   createDefaultGatewayReloadState,
   createDirectConfigWriteFixture,
   createConfigWriteNotification,
+  createTestConfigRevisionProjector,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
@@ -142,10 +143,7 @@ it("commits model-only role changes without retiring permitted models or origina
     const reloader = startManagedGatewayConfigReloader({
       scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
       getPluginRegistry: () => registry,
-      configRevisionProjector: {
-        projectRawHash: (hash) => hash,
-        projectResolvedHash: (hash) => hash,
-      },
+      configRevisionProjector: createTestConfigRevisionProjector(),
       minimalTestGateway: false,
       initialConfig,
       initialCompareConfig: initialConfig,

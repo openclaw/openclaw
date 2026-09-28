@@ -119,6 +119,7 @@ import {
 import { abortPendingChannelReloads } from "./server-reload-generation.js";
 import {
   captureConfigWriteListener,
+  createTestConfigRevisionProjector,
   createConfigWriteListenerRef,
   createManagedRestartSequenceConfigs,
   createConfigWriteNotification,
@@ -272,10 +273,7 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     commitRuntimePolicy: vi.fn(),
     acceptTerminalConfig: vi.fn(),
     ...params,
-    configRevisionProjector: params.configRevisionProjector ?? {
-      projectRawHash: (hash) => hash,
-      projectResolvedHash: (hash) => hash,
-    },
+    configRevisionProjector: params.configRevisionProjector ?? createTestConfigRevisionProjector(),
     initialSnapshotRawHash: params.initialSnapshotRawHash ?? null,
     initialAuthoredConfig: params.initialAuthoredConfig ?? {},
     initialSnapshotValid: params.initialSnapshotValid ?? true,

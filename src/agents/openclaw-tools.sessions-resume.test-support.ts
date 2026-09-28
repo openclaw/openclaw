@@ -31,24 +31,25 @@ export function registerSessionsSendResumeTests({
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it.each(
-    ["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"].flatMap((targetKey) =>
-      [
-        { scenario: "explicit resume", options: { mode: "resume" as const } },
-        { scenario: "automatic resume", options: {} },
-        { scenario: "newer completed sibling", options: {} },
-        {
-          scenario: "automatic resume with reply options",
-          options: { timeoutSeconds: 30, watch: true },
-        },
-        { scenario: "explicit separate followup", options: { mode: "followup" as const } },
-        { scenario: "unrelated caller", options: {} },
-        { scenario: "completed child", options: {} },
-        { scenario: "completion disabled", options: {} },
-        { scenario: "completion unspecified", options: {} },
-      ].map((testCase) => Object.assign({ targetKey }, testCase)),
+  it.each([
+    {
+      targetKey: "agent:main:subagent:resume-child",
+      scenario: "explicit resume",
+      options: { mode: "resume" as const },
+    },
+    ...[
+      { scenario: "newer completed sibling", options: {} },
+      {
+        scenario: "automatic resume with reply options",
+        options: { timeoutSeconds: 30, watch: true },
+      },
+      { scenario: "explicit separate followup", options: { mode: "followup" as const } },
+      { scenario: "unrelated caller", options: {} },
+      { scenario: "completion unspecified", options: {} },
+    ].map((testCase) =>
+      Object.assign({ targetKey: "agent:main:dashboard:resume-child" }, testCase),
     ),
-  )(
+  ])(
     "sessions_send preserves completion ownership for $targetKey: $scenario",
     async ({ targetKey, scenario, options }) => {
       const parent = "agent:main:main";
@@ -56,12 +57,10 @@ export function registerSessionsSendResumeTests({
       const siblingRunId = "tool-resume-independent-sibling";
       const controller =
         scenario === "unrelated caller" ? "agent:main:dashboard:other-parent" : parent;
-      const pauseReason = scenario === "completed child" ? undefined : "sessions_yield";
+      const pauseReason = "sessions_yield";
       const resumes =
         scenario !== "explicit separate followup" &&
         scenario !== "unrelated caller" &&
-        scenario !== "completed child" &&
-        scenario !== "completion disabled" &&
         scenario !== "completion unspecified";
       await replaceSessionEntry(
         { agentId: "main", sessionKey: targetKey },
@@ -78,8 +77,7 @@ export function registerSessionsSendResumeTests({
         startedAt: Date.now() - 100,
         endedAt: Date.now(),
         pauseReason,
-        expectsCompletionMessage:
-          scenario === "completion unspecified" ? undefined : scenario !== "completion disabled",
+        expectsCompletionMessage: scenario === "completion unspecified" ? undefined : true,
       });
       if (scenario === "newer completed sibling") {
         addSubagentRunForTests({

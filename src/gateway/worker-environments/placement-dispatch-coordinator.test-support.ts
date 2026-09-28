@@ -24,13 +24,15 @@ export function admittedRecovery(
   };
 }
 
-export function preparedReclaim(run: () => Promise<unknown>) {
-  return async (
-    _request: unknown,
-    _authorize: unknown,
-    _beforeDrain: unknown,
-    serialize: (operation: () => Promise<unknown>) => Promise<unknown>,
-  ) => await serialize(run);
+export function preparedReclaim(
+  run: () => ReturnType<DispatchService["reclaim"]>,
+): DispatchService["reclaim"] {
+  return async (_request, _authorize, _beforeDrain, serialize) => {
+    if (!serialize) {
+      throw new Error("Reclaim fixture requires session admission");
+    }
+    return await serialize(run);
+  };
 }
 
 export const REQUEST: WorkerPlacementDispatchRequest = {
@@ -95,6 +97,8 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
     move: unexpected,
     reclaim: unexpected,
     forceDestroyEnvironment: unexpected,
+    getEnvironmentAttachedSessionIds: () => [],
+    readEnvironmentSessionIds: async () => [],
     reconcile: unexpected,
     reconcileActive: unexpected,
     resumeProvisioning: unexpected,

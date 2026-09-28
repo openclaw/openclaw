@@ -27,6 +27,7 @@ import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.j
 import {
   publishRetainedSessionGeneration,
   reconcileSessionSharingAcquisition,
+  updateSessionSharingField,
   recordAcquiringSessionEntry,
   recordAcquiringSessionMember,
   type CommittedSessionSharingFacts,
@@ -430,46 +431,43 @@ export function readCommittedIncognitoSessionSharing(database: DatabaseSync, ses
   return current;
 }
 
+function publishSessionSharingFieldChange(
+  database: SessionEntryCacheDatabase & { path: string },
+  sessionKey: string,
+  change: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
+): void {
+  publishTrackedCacheUpdate(
+    database,
+    () => {
+      for (const read of retainedSharingReads(database, sessionKey) ?? []) {
+        if (read.acquisition) {
+          if (change.kind === "member") {
+            recordAcquiringSessionMember(read.acquisition, change);
+          } else {
+            // A pending worker snapshot cannot establish which assignment it read.
+            recordAcquiringSessionEntry(read.acquisition, undefined, undefined);
+          }
+        } else if (read.facts) {
+          read.facts = updateSessionSharingField(read.facts, change);
+        }
+      }
+      const entries = incognitoSharingEntries.get(database.db)?.entries;
+      const current = entries?.get(sessionKey);
+      if (current) {
+        entries?.set(sessionKey, updateSessionSharingField(current, change));
+      }
+    },
+    () => stageSessionSharingPublication(database, sessionKey),
+  );
+}
+
 export function publishSessionSharingMemberChange(
   database: SessionEntryCacheDatabase & { path: string },
   sessionKey: string,
   member: Extract<SessionRowFacts, { kind: "member" }>,
   agentId = database.agentId,
 ): void {
-  const incognito = !database.db.location();
-  publishTrackedCacheUpdate(
-    database,
-    () => {
-      const update = (facts: CommittedSessionSharingFacts): CommittedSessionSharingFacts => {
-        // A legacy synchronous replacement can commit before a worker reply reaches this owner.
-        if (facts.entry?.sessionId !== member.sessionId) {
-          return facts;
-        }
-        const membership = new Set(facts.membership);
-        if (member.present) {
-          membership.add(member.identityId);
-        } else {
-          membership.delete(member.identityId);
-        }
-        return { ...facts, membership };
-      };
-      for (const read of retainedSharingReads(database, sessionKey) ?? []) {
-        const acquisition = read.acquisition;
-        if (acquisition) {
-          recordAcquiringSessionMember(acquisition, member);
-        } else if (read.facts) {
-          read.facts = update(read.facts);
-        }
-      }
-      if (incognito) {
-        const current = incognitoSharingEntries.get(database.db)?.entries.get(sessionKey);
-        if (current) {
-          incognitoSharingEntries.get(database.db)?.entries.set(sessionKey, update(current));
-        }
-      }
-    },
-    () => stageSessionSharingPublication(database, sessionKey),
-  );
+  publishSessionSharingFieldChange(database, sessionKey, member);
   emitPreparedSessionSharingChange(database, sessionKey, agentId, member);
 }
 /** Publish sharing state before the listing projection and its public change event. */
@@ -483,6 +481,10 @@ export function publishSessionSharingEntryChange(
   },
 ): void {
   const facts = update.facts;
+  if (facts?.kind === "owner") {
+    publishSessionSharingFieldChange(database, update.sessionKey, facts);
+    return;
+  }
   const sharingUnchanged =
     facts?.kind === "unchanged" || facts?.kind === "participants" || facts?.kind === "category";
   const incognito = !database.db.location();

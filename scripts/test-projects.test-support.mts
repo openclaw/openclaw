@@ -1513,18 +1513,19 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
       // The full aggregate already includes the dedicated database-worker project.
       return [targetArg];
     }
-    const databaseWorkerTargets = databaseWorkerExtensionTestFiles.filter((file) =>
-      isGlobTarget(relative)
-        ? path.matchesGlob(file, relative)
-        : isExistingDirectoryTarget(targetArg, cwd) && isPathAtOrUnder(file, relative),
-    );
+    const glob = isGlobTarget(relative);
+    const directory = isExistingDirectoryTarget(targetArg, cwd);
+    // Target shape is invariant across the worker inventory; literal files need no expansion.
+    const databaseWorkerTargets =
+      glob || directory
+        ? databaseWorkerExtensionTestFiles.filter((file) =>
+            glob ? path.matchesGlob(file, relative) : isPathAtOrUnder(file, relative),
+          )
+        : [];
     if (databaseWorkerTargets.length > 0) {
       return [...databaseWorkerTargets, targetArg];
     }
-    if (
-      (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) &&
-      isGlobTarget(relative)
-    ) {
+    if ((isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) && glob) {
       // Expand mixed browser globs before assigning files to their disjoint runners.
       const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
         (file) => isTestFileTarget(file) && path.matchesGlob(file, relative),
@@ -1535,13 +1536,13 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
     if (prefixTargets) {
       return prefixTargets;
     }
-    if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
+    if (relative === "src/commands" && directory) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
     }
     // Contract directory targets must fan out to the owning contract lanes; the
     // generic channels/plugins projects exclude contracts/**, so routing a
     // contracts directory there silently runs zero tests (passWithNoTests).
-    if (isExistingDirectoryTarget(targetArg, cwd)) {
+    if (directory) {
       if (isPathAtOrUnder(relative, "src/channels/plugins/contracts")) {
         return [
           CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
@@ -2101,19 +2102,24 @@ function listImportGraphGrepMatches(
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["pipe", "pipe", "pipe"],
   };
-  const result = spawnSync(
-    "git",
-    ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
-    spawnOptions,
-  );
+  // Git's fixed-string prefilter rescans for each term. Large frontiers use the
+  // source reader's single-pass multi-term matcher over the same inventory.
+  const result =
+    missing.length <= 64
+      ? spawnSync(
+          "git",
+          ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
+          spawnOptions,
+        )
+      : undefined;
   for (const term of missing) {
     matches.set(term, []);
   }
-  if (result.status !== 1) {
+  if (result?.status !== 1) {
     const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
     // Source archives use the same filesystem inventory and native reader as the full graph.
     const candidates = (
-      result.status === 0
+      result?.status === 0
         ? result.stdout.split("\0").filter((file) => trackedFiles.has(file))
         : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
     ).toSorted((left, right) => left.localeCompare(right));

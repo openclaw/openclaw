@@ -860,7 +860,11 @@ describe("sessions.abort agent scope", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-sub", "agent:work:global", {
       provisional: true,
     });
-    expect(respond).toHaveBeenCalledWith(true, { subscribed: true, key: "global" }, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { subscribed: true, key: "global", agentId: "work" },
+      undefined,
+    );
   });
 
   it("aborts an active legacy-key run owned by the configured default agent", async () => {

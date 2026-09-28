@@ -127,6 +127,9 @@ describe("test runtime prerequisites", () => {
     ["Windows Claude CLI process", ["src/process/exec.windows.integration.test.ts"], "runtime"],
     ["process config", ["test/vitest/vitest.process.config.ts"], "runtime"],
     ["ordinary process unit", ["src/process/exec.windows.test.ts"], undefined],
+    ["TUI native provider policy", ["src/tui/tui-session-identity-pty.e2e.test.ts"], "runtime"],
+    ["TUI PTY config", ["test/vitest/vitest.tui-pty.config.ts"], "runtime"],
+    ["ordinary TUI PTY test", ["src/tui/tui-text-wrap-pty.e2e.test.ts"], undefined],
     [
       "candidate Gateway canary",
       ["src/infra/update-candidate-canary.integration.test.ts"],
@@ -335,6 +338,8 @@ describe("test runtime prerequisites", () => {
     ["extensions", ["deepinfra/**", "google-meet/**", "file-transfer/**"], undefined],
     ["tooling", ["test/**"], undefined],
     ["plugins", ["plugin-module-generation.sdk.test.ts"], undefined],
+    ["tui-pty", ["tui/tui-session-identity-pty.e2e.test.ts"], undefined],
+    ["tui-pty", ["tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
     ["runtime-config", ["config/config-startup-corpus.test.ts"], "runtime"],
     ...stateStartupCorpusTestFiles.map(
       (file) => ["runtime-config", [file.slice("src/".length)], "runtime"] as const,

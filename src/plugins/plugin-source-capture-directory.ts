@@ -265,6 +265,13 @@ async function reclaimInstances(
   }
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
   let legacyAllowed: boolean | undefined;
+  const lstatIfPresent = (file: string) =>
+    fsPromises.lstat(file).catch((error: unknown) => {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      return undefined;
+    });
   for (const entry of entries) {
     if (
       !entry.isDirectory() ||
@@ -288,20 +295,8 @@ async function reclaimInstances(
         continue;
       }
       const tokenPath = path.join(canonical, SQLITE_STAGING_TOKEN_FILES[0]);
-      const nativeStat = await fsPromises
-        .lstat(path.join(canonical, "native"))
-        .catch((error: unknown) => {
-          if (!hasErrnoCode(error, "ENOENT")) {
-            throw error;
-          }
-          return undefined;
-        });
-      const tokenStat = await fsPromises.lstat(tokenPath).catch((error: unknown) => {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-        return undefined;
-      });
+      const nativeStat = await lstatIfPresent(path.join(canonical, "native"));
+      const tokenStat = await lstatIfPresent(tokenPath);
       if (legacy && tokenStat) {
         continue;
       }
@@ -322,6 +317,11 @@ async function reclaimInstances(
             legacyAllowed = "error" in census || census.pids.length === 0;
           }
           if (!legacyAllowed) {
+            continue;
+          }
+          // The census excludes foreign-UID processes, not their scratch. Recheck
+          // ownership after inspection, even when an elevated process could remove it.
+          if (process.getuid && (await fsPromises.lstat(canonical)).uid !== process.getuid()) {
             continue;
           }
         }
