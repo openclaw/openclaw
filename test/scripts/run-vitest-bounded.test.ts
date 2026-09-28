@@ -264,6 +264,14 @@ syncBuiltinESMExports();
       const pidPath = path.join(root, "builder.pid");
       const executable = path.join(root, "command.mjs");
       const preload = path.join(root, "preload.mjs");
+      const aiPackageRoot = path.join(repoRoot, "packages/ai");
+      const aiManifest = JSON.parse(
+        fs.readFileSync(path.join(aiPackageRoot, "package.json"), "utf8"),
+      ) as { types: string; exports: Record<string, { types: string }> };
+      const aiDeclarations = [
+        aiManifest.types,
+        ...Object.values(aiManifest.exports).map((entry) => entry.types),
+      ].map((entry) => path.resolve(aiPackageRoot, entry));
       fs.writeFileSync(
         executable,
         `import fs from "node:fs";
@@ -288,7 +296,14 @@ if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
       fs.writeFileSync(
         preload,
         `import cp from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
+// This fixture tests one E2E setup generation; packed AI declaration repair has its own tests.
+const aiDeclarations = new Set(${JSON.stringify(aiDeclarations)});
+const existsSync = fs.existsSync;
+fs.existsSync = (file) =>
+  (typeof file === "string" && aiDeclarations.has(path.resolve(file))) || existsSync(file);
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
   const kind = args.includes("scripts/prepare-vitest-runtime.mjs") ? "runtime"
