@@ -25,6 +25,62 @@ const customProvider: ModelProviderConfig = {
 };
 
 describe("resolveModelCandidateChain", () => {
+  it("preserves an exact auth binding on the requested candidate", () => {
+    expect(
+      resolveModelCandidateChain({
+        cfg: {},
+        provider: "openai",
+        model: "gpt-5.6",
+        requestedRouteResolution: "resolved",
+        requestedAuthProfileId: "openai:primary",
+        fallbacksOverride: [],
+        manifestPlugins: [],
+      }),
+    ).toEqual([
+      {
+        provider: "openai",
+        model: "gpt-5.6",
+        authProfileId: "openai:primary",
+        routeOrigin: "requested",
+        routeResolution: "resolved",
+      },
+    ]);
+  });
+
+  it("preserves distinct auth-bound explicit fallback candidates", () => {
+    const candidates = resolveModelCandidateChain({
+      cfg: {},
+      provider: "openai",
+      model: "gpt-5.6",
+      requestedRouteResolution: "resolved",
+      fallbacksOverride: ["openai/gpt-5.6@openai:profile-a", "openai/gpt-5.6@openai:profile-b"],
+      manifestPlugins: [],
+    });
+
+    expect(candidates).toEqual([
+      {
+        provider: "openai",
+        model: "gpt-5.6",
+        routeOrigin: "requested",
+        routeResolution: "resolved",
+      },
+      {
+        provider: "openai",
+        model: "gpt-5.6",
+        authProfileId: "openai:profile-a",
+        routeOrigin: "configured-fallback",
+        routeResolution: "resolved",
+      },
+      {
+        provider: "openai",
+        model: "gpt-5.6",
+        authProfileId: "openai:profile-b",
+        routeOrigin: "configured-fallback",
+        routeResolution: "resolved",
+      },
+    ]);
+  });
+
   it.each([
     { origin: "requested", primary: "custom/model", model: "custom/model", first: "custom/model" },
     { origin: "configured-fallback", primary: "custom/model", model: "model", first: "model" },

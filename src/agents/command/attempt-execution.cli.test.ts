@@ -404,6 +404,7 @@ describe("CLI attempt execution", () => {
     sessionEntry?: Partial<SessionEntry>;
     additionalSessionEntries?: Record<string, Partial<SessionEntry>>;
     configuredAuthProfileId?: string;
+    candidateAuthProfileId?: string;
     timeoutMs?: number;
     runTimeoutOverrideMs?: number;
   }) {
@@ -441,6 +442,7 @@ describe("CLI attempt execution", () => {
       originalProvider: "openai",
       modelOverride: overrides?.modelOverride ?? "gpt-5.4",
       configuredAuthProfileId: overrides?.configuredAuthProfileId,
+      candidateAuthProfileId: overrides?.candidateAuthProfileId,
       cfg: overrides?.config ?? ({ session: { store: storePath } } as OpenClawConfig),
       sessionEntry,
       sessionKey,
@@ -916,6 +918,7 @@ describe("CLI attempt execution", () => {
             defaultProvider: "claude-cli",
             defaultModel: "sonnet",
             configuredDefaultAuthProfileId: undefined,
+            explicitRunAuthProfileId: undefined,
             providerForAuthProfileValidation: "claude-cli",
             hasExplicitRunOverride: false,
             storedProviderOverride: undefined,
@@ -4222,6 +4225,23 @@ describe("CLI attempt execution", () => {
 
     expectRecordFields(embeddedArg, {
       authProfileId: "openai:verified",
+      authProfileIdSource: "user",
+    });
+  });
+
+  it("locks an exact fallback-candidate profile over an explicit session profile", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "candidate-auth-over-session",
+      candidateAuthProfileId: "openai:candidate",
+      configuredAuthProfileId: "openai:configured",
+      sessionEntry: {
+        authProfileOverride: "openai:session-choice",
+        authProfileOverrideSource: "user",
+      },
+    });
+
+    expectRecordFields(embeddedArg, {
+      authProfileId: "openai:candidate",
       authProfileIdSource: "user",
     });
   });
