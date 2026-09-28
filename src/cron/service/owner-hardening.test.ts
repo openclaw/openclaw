@@ -4,6 +4,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
@@ -30,16 +31,16 @@ import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { upsertCronJobRow } from "../store/row-codec.js";
-import * as runReceiptStore from "../store/run-receipt-store.js";
 import {
-  claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import { findCronRunRecoveryInDatabase } from "./run-history-recovery.js";
@@ -311,15 +312,15 @@ function databaseUpdateReceiptToRunning(receiptId: string): void {
 
 function claimMarkerlessReceipt(storePath: string, job: CronJob, startedAtMs: number) {
   const prepared = prepareCronRunReceiptClaim({
+    observed: undefined,
     storePath,
     job,
     agentId: job.agentId!,
     startedAtMs,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
-      receiptSchema: prepareCronRunReceiptWriteSchema(db),
       prepared,
       resolveAgentId: (current) => current.agentId!,
     }),
@@ -327,27 +328,32 @@ function claimMarkerlessReceipt(storePath: string, job: CronJob, startedAtMs: nu
 }
 
 describe("cron durable run ownership", () => {
-  it("does not execute when the durable receipt cannot be recorded", async () => {
+  it("rolls back the receipt and queued marker when reservation commit admission is refused", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const job = makeCommandJob("receipt-required", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     inspectActiveCronRunReceipt({ storePath, jobId: job.id });
-    const claim = vi
-      .spyOn(runReceiptStore, "claimCronRunReceiptInDatabase")
-      .mockImplementation(() => {
-        throw new Error("receipt unavailable");
-      });
+    const rejectCommit = vi.fn(() => {
+      throw new Error("receipt commit refused");
+    });
+    const stopObserving = observeCronJobWrites(job.id, (written) => {
+      if (written.queuedAtMs !== undefined) {
+        rejectCommit();
+      }
+    });
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     const cron = makeParentService(storePath, runner);
     try {
-      await expect(cron.run(job.id, "force")).rejects.toThrow("receipt unavailable");
-      expect(claim).toHaveBeenCalledOnce();
+      await expect(cron.run(job.id, "force")).rejects.toThrow("receipt commit refused");
+      expect(rejectCommit).toHaveBeenCalledOnce();
       expect(runner).not.toHaveBeenCalled();
+      expect(receipts(storePath, job.id)).toEqual([]);
+      expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
     } finally {
       cron.stop();
-      claim.mockRestore();
+      stopObserving();
     }
   });
 
@@ -397,7 +403,7 @@ describe("cron durable run ownership", () => {
     inspectActiveCronRunReceipt({ storePath, jobId: job.id });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TRIGGER reject_cron_run_receipt_finish
+      CREATE TEMP TRIGGER reject_cron_run_receipt_finish
       BEFORE UPDATE OF status ON cron_run_receipts
       WHEN OLD.status = 'running' AND NEW.status != 'running'
       BEGIN

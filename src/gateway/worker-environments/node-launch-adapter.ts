@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -13,6 +14,7 @@ import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   nodeWorkerPlanHash,
   parseNodeWorkerLaunchInput,
@@ -462,6 +464,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const launch = async (
     request: DeviceWorkerLaunchRequest,
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
+    const restartSignal = getGatewayRestartDrainSignal();
     const originalInput = snapshotLaunchInput(request.input);
     let input = originalInput;
     const stableRequest = { ...request, input };
@@ -593,6 +596,10 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         });
       }
     } catch (error) {
+      if (restartSignal.aborted && isAgentRunRestartAbortReason(deadline.signal.reason)) {
+        // The launcher retains the durable claim; startup must stop this worker before reuse.
+        throw deadline.signal.reason;
+      }
       if (!dispatchReady && availabilityDeadline.signal.aborted && !deadline.signal.aborted) {
         throw new WorkerRunnerUnavailableError();
       }

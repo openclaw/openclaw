@@ -525,6 +525,15 @@ largest family and 64 MiB for restoration while migrated originals remain.
 Hard-linked database or journal files refuse before migration because restoring
 one pathname cannot safely restore every alias.
 
+Settled, verified successful activation removes the current update's database
+snapshots, together with the old package backup. Rollback, failed or unverified
+completion, and restore refusal keep them. Cleanup failures produce a maintenance warning with
+the retained path. Older snapshot directories remain untouched because their
+ownership and successful outcome cannot be proven from existing receipts;
+Doctor reports older npm snapshot directories with their size and removal command.
+Confirm no update is in progress and inspect their update reports and recovery
+state before removing them manually.
+
 If the Gateway was confirmed stopped during capture and the update fails before
 the candidate is allowed to start, restoration also requires matching database
 write evidence. Doctor checks the captured file generations before migrations
@@ -553,7 +562,8 @@ provided by this check.
 If Doctor cannot provide write evidence, rollback requires the last verified
 database generations to remain unchanged.
 Snapshots taken while a Gateway may still be writing, including with
-`--no-restart`, remain available for manual recovery with a warning. They never
+`--no-restart`, remain available for manual recovery with a warning until verified
+successful activation. They never
 become eligible for automatic restoration just because that Gateway later exits.
 
 This protection belongs to the updater already running. Installing it does not

@@ -22,6 +22,7 @@ import {
   hasCompleteStartupCorpusCoverage,
   isExclusiveCompactShardName,
   packNodeTestGroups,
+  resolveCanonicalNodeTestConfig,
   resolveStartupCorpusTestFiles,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
@@ -30,10 +31,14 @@ import {
 } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
+  isPrExemptRuntimeTestFile,
   isReleaseOnlyRuntimeTestFile,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
-import { isRuntimePlacementIncludePatterns } from "../../scripts/lib/ci-test-timings-schema.mts";
+import {
+  createNativeSoloTimingKey,
+  isRuntimePlacementIncludePatterns,
+} from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -43,7 +48,10 @@ import {
   createCompactSplitTimingGeneration,
   parseCompactSplitTimingKey,
 } from "../../scripts/lib/vitest-shard-metadata.mts";
-import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
+import {
+  buildVitestRunPlans,
+  createVitestRunSpecs,
+} from "../../scripts/test-projects.test-support.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
@@ -57,10 +65,14 @@ import {
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "../vitest/vitest.agents-tools.config.ts";
 import { createAgentsVitestConfig } from "../vitest/vitest.agents.config.ts";
+import { createAutoReplyCoreVitestConfig } from "../vitest/vitest.auto-reply-core.config.ts";
+import { createAutoReplyTopLevelVitestConfig } from "../vitest/vitest.auto-reply-top-level.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
 import { createCliVitestConfig } from "../vitest/vitest.cli.config.ts";
+import { createCommandsLightVitestConfig } from "../vitest/vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
+import { createDaemonVitestConfig } from "../vitest/vitest.daemon.config.ts";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
 import { diagnosticForksPool } from "../vitest/vitest.forks-pool.ts";
 import { createGatewayClientVitestConfig } from "../vitest/vitest.gateway-client.config.ts";
@@ -77,6 +89,7 @@ import {
 } from "../vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "../vitest/vitest.gateway-server.config.ts";
 import { createGatewayVitestConfig } from "../vitest/vitest.gateway.config.ts";
+import { createHooksVitestConfig } from "../vitest/vitest.hooks.config.ts";
 import { createInfraVitestConfig } from "../vitest/vitest.infra.config.ts";
 import { createLoggingVitestConfig } from "../vitest/vitest.logging.config.ts";
 import { createMediaUnderstandingVitestConfig } from "../vitest/vitest.media-understanding.config.ts";
@@ -888,6 +901,50 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(native.every((job) => job.predictedSeconds === 220)).toBe(true);
   });
 
+  it.each([
+    { tailSeconds: 460, tailRunner: DEFAULT_NODE_TEST_RUNNER, expectedJobs: 1 },
+    { tailSeconds: 461, tailRunner: DEFAULT_NODE_TEST_RUNNER, expectedJobs: 2 },
+    { tailSeconds: 460, tailRunner: BUNDLED_NODE_TEST_RUNNER, expectedJobs: 2 },
+    { tailSeconds: 461, tailRunner: BUNDLED_NODE_TEST_RUNNER, expectedJobs: 2 },
+  ])(
+    "preserves hosted runner anchors and the serial budget with a $tailSeconds-second $tailRunner tail",
+    ({ tailSeconds, tailRunner, expectedJobs }) => {
+      const before = measuredToolingFixture().slice(0, 2);
+      const anchor = before[0]!;
+      const tail = before[1]!;
+      anchor.predictedSeconds = 200;
+      tail.runner = tailRunner;
+      tail.groups[0]!.runner = tailRunner;
+      tail.predictedSeconds = tailSeconds;
+      const after = rebalanceMeasuredSerialJobs(before, {
+        ...measuredPackingOptions,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        profile: "hosted-hourly",
+        estimateGroup: (group) => ({
+          seconds: group === anchor.groups[0] ? 200 : tailSeconds,
+          complete: true,
+        }),
+      });
+
+      expect(after).toHaveLength(expectedJobs);
+      expect(sortedMeasuredGroups(after)).toEqual(sortedMeasuredGroups(before));
+      expect(Math.max(...after.map((job) => job.predictedSeconds!))).toBeLessThanOrEqual(720);
+      expect(after.every((job) => job.planConcurrency === 1 && job.timeoutMinutes === 20)).toBe(
+        true,
+      );
+      if (expectedJobs === 1) {
+        expect(after[0]).toMatchObject({
+          checkName: tail.checkName,
+          shardName: tail.shardName,
+          runner: DEFAULT_NODE_TEST_RUNNER,
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+          predictedSeconds: 660,
+        });
+        expect(after[0]!.predictedSeconds! + 60).toBe(720);
+      }
+    },
+  );
+
   it("splits the observed CLI pair with its measured wall floors and complete child contracts", () => {
     const before = structuredClone(measuredCompactFixture.cliTailJob);
     const after = rebalanceMeasuredSerialJobs([before], measuredPackingOptions);
@@ -1152,10 +1209,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         return readFileSync.call(this, file, ...args);
       };
       syncBuiltinESMExports();
-      const { createChangedNodeTestShards } = await import("./scripts/lib/ci-changed-node-test-plan.mts");
+      const { createSelectedNodeTestShardBundles } = await import("./scripts/lib/ci-node-test-plan.mts");
       const importReads = sourceReads;
-      const target = "test/scripts/managed-child-process.test.ts";
-      const plan = createChangedNodeTestShards([target], { runnerBackend: "github" });
+      const plan = createSelectedNodeTestShardBundles([
+        "test/scripts/managed-child-process.test.ts",
+        "test/scripts/test-projects.test.ts",
+      ], { runnerBackend: "github" });
       console.log(JSON.stringify({
         importReads,
         sourceReads,
@@ -2332,10 +2391,33 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("matches policy owners only for exact changed paths", () => {
+  it("matches policy owners with literal and native glob semantics", () => {
     const changedPath = "ui/src/styles/base.css";
     expect(isPolicyTestOwnedPath(changedPath)).toBe(true);
     expect(resolvePolicyTestTargets([changedPath])).not.toEqual([]);
+    expect(resolvePolicyTestTargets([changedPath], { completeOwnersOnly: true })).toEqual([
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/base-theme-contrast.node.test.ts",
+      "ui/src/styles/cursor-policy.node.test.ts",
+    ]);
+    expect(
+      resolvePolicyTestTargets(["ui/public/themes/tide.css"], { completeOwnersOnly: true }),
+    ).toEqual([
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/base-theme-contrast.node.test.ts",
+    ]);
+    expect(isPolicyTestOwnedPath("ui/public/themes/tide.css")).toBe(true);
+    expect(isPolicyTestOwnedPath("ui/src/styles/./base.css")).toBe(true);
+    expect(
+      resolvePolicyTestTargets(["ui/src/styles/./base.css"], { completeOwnersOnly: true }),
+    ).toEqual([
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/base-theme-contrast.node.test.ts",
+      "ui/src/styles/cursor-policy.node.test.ts",
+    ]);
+    expect(
+      resolvePolicyTestTargets(["ui/src/pages/chat/view.ts"], { completeOwnersOnly: true }),
+    ).toEqual([]);
     for (const lookalike of [` ${changedPath}`, String.raw`ui\src\pages\chat\view.ts`]) {
       expect(isPolicyTestOwnedPath(lookalike), lookalike).toBe(false);
       expect(resolvePolicyTestTargets([lookalike]), lookalike).toEqual([]);
@@ -2599,12 +2681,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it.each([
-    { profile: "blacksmith", legacy: 116, measured: 310, defaultSeconds: 25 },
-    { profile: "github", legacy: 186, measured: 370, defaultSeconds: 40 },
-    { profile: "hybrid", legacy: 101, measured: 310, defaultSeconds: 22 },
+    { profile: "blacksmith", legacy: 116, measured: 310, defaultSeconds: 25, preparation: 60 },
+    { profile: "github", legacy: 186, measured: 370, defaultSeconds: 40, preparation: 96 },
+    { profile: "hybrid", legacy: 101, measured: 310, defaultSeconds: 22, preparation: 60 },
   ])(
     "prefers $profile measurements while retaining unmeasured hints and defaults",
-    ({ profile, legacy, measured, defaultSeconds }) => {
+    ({ profile, legacy, measured, defaultSeconds, preparation }) => {
       const timings = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
       const options = {
         includeReleaseOnlyPluginShards: false,
@@ -2616,7 +2698,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         plan.find((shard) =>
           shard.groups.some((group) => group.shard_name === "core-runtime-tui-pty"),
         );
-      expect(tuiJob(fallback)?.predictedSeconds).toBe(legacy);
+      expect(tuiJob(fallback)?.pretestBuildMode).toBe("runtime");
+      expect(tuiJob(fallback)?.predictedSeconds).toBe(legacy + preparation);
       timings.mockImplementation((runner) => ({
         "core-runtime-tui-pty": runner === "blacksmith" ? 310 : 370,
         "removed-test-group": 999,
@@ -2625,7 +2708,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(tuiJob(updated)?.groups.map((group) => group.shard_name)).toEqual([
         "core-runtime-tui-pty",
       ]);
-      expect(tuiJob(updated)?.predictedSeconds).toBe(measured);
+      expect(tuiJob(updated)?.predictedSeconds).toBe(measured + preparation);
       expect(
         updated.find((shard) =>
           shard.groups.some((group) => group.shard_name === "core-support-boundary"),
@@ -3043,7 +3126,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           );
         }
       }
+      const automatic = createNodeTestShards({ includePrExemptRuntimeTests: false });
       for (const { config, create } of [
+        {
+          config: "test/vitest/vitest.agents-tools.config.ts",
+          create: createAgentsToolsVitestConfig,
+        },
+        {
+          config: "test/vitest/vitest.auto-reply-core.config.ts",
+          create: createAutoReplyCoreVitestConfig,
+        },
+        {
+          config: "test/vitest/vitest.auto-reply-top-level.config.ts",
+          create: createAutoReplyTopLevelVitestConfig,
+        },
+        {
+          config: "test/vitest/vitest.commands-light.config.ts",
+          create: createCommandsLightVitestConfig,
+        },
+        { config: "test/vitest/vitest.daemon.config.ts", create: createDaemonVitestConfig },
+        { config: "test/vitest/vitest.hooks.config.ts", create: createHooksVitestConfig },
         { config: "test/vitest/vitest.logging.config.ts", create: createLoggingVitestConfig },
         { config: "test/vitest/vitest.process.config.ts", create: createProcessVitestConfig },
         { config: "test/vitest/vitest.plugins.config.ts", create: createPluginsVitestConfig },
@@ -3053,30 +3155,39 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           create: createPluginSdkLightVitestConfig,
         },
       ]) {
-        const expected = listMatchedTestFiles(create(env));
-        const actual = plan
-          .flatMap((job) => job.groups)
-          .filter((group) => group.configs.includes(config))
-          .flatMap((group) => {
-            if (!group.includePatterns) {
-              return listMatchedTestFiles(create(env));
-            }
-            writeFileSync(includeFile, JSON.stringify(group.includePatterns));
-            return listMatchedTestFiles(
-              create({ ...env, OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
-            );
-          });
-        expect(actual.toSorted(), config).toEqual(expected.toSorted());
-        expect(new Set(actual).size, config).toBe(actual.length);
+        const complete = listMatchedTestFiles(create(env));
+        for (const { groups, exempt } of [
+          { groups: plan.flatMap((job) => job.groups), exempt: true },
+          { groups: automatic, exempt: false },
+        ]) {
+          const expected = complete.filter((file) => exempt || !isPrExemptRuntimeTestFile(file));
+          const actual = groups
+            .filter((group) => group.configs.includes(config))
+            .flatMap((group) => {
+              if (!group.includePatterns) {
+                return listMatchedTestFiles(create(env));
+              }
+              writeFileSync(includeFile, JSON.stringify(group.includePatterns));
+              return listMatchedTestFiles(
+                create({ ...env, OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
+              );
+            });
+          expect(actual.toSorted(), config).toEqual(expected.toSorted());
+          expect(new Set(actual).size, config).toBe(actual.length);
+        }
       }
     } finally {
       process.argv = originalArgv;
     }
   });
 
-  it.each([false, true])(
-    "retains measured storage module work despite a stale parent timing (companion: %s)",
-    async (companion) => {
+  it.each([
+    { companion: false, nativeSample: false },
+    { companion: true, nativeSample: false },
+    { companion: true, nativeSample: true },
+  ])(
+    "prices storage work without changing placement (companion: $companion, native sample: $nativeSample)",
+    async ({ companion, nativeSample }) => {
       const config = "test/vitest/vitest.infra.config.ts";
       const longest = MEASURED_STORAGE_RECOVERY_TEST;
       const ordinary = "src/infra/sqlite-readonly-location.copy.test.ts";
@@ -3096,9 +3207,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         listTrackedTestFiles: (root: string) =>
           companion && root === "src/infra" ? [ordinary] : [],
       }));
+      const measurements: Record<string, number> = { "core-runtime-infra-storage-state": 1 };
       vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
         ...testTimings,
-        readCompactGroupTimings: () => ({ "core-runtime-infra-storage-state": 1 }),
+        readCompactGroupTimings: () => measurements,
         readRuntimePlacementTimings: () => [],
       }));
       vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
@@ -3108,8 +3220,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         resolveVitestPretestBuildMode: () => undefined,
       }));
       try {
-        const { createNodeTestShardBundles: createPlan } =
-          await import("../../scripts/lib/ci-node-test-plan.mts");
+        const {
+          createNodeTestShardBundles: createPlan,
+          createSelectedNodeTestShardBundles: createSelectedPlan,
+        } = await import("../../scripts/lib/ci-node-test-plan.mts");
         const plan = createPlan({ compactMode: "push", runnerBackend: "blacksmith" });
         expect(
           plan.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
@@ -3122,6 +3236,35 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(longestJob.predictedTestSeconds).toBeGreaterThanOrEqual(279.963 + 20);
         expect(longestJob.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
         expect(plan.every((job) => job.predictedTestSeconds! <= 300)).toBe(true);
+        if (nativeSample) {
+          const targets = [longest, ordinary];
+          const selectedBefore = createSelectedPlan(targets, { runnerBackend: "blacksmith" });
+          const hostedBefore = createPlan({ compactMode: "push", runnerBackend: "github" });
+          const key = expectDefined(
+            createNativeSoloTimingKey(longestJob.groups[0]!),
+            "native solo key",
+          );
+          measurements[key] = 123;
+          for (const [before, after] of [
+            [plan, createPlan({ compactMode: "push", runnerBackend: "blacksmith" })],
+            [selectedBefore, createSelectedPlan(targets, { runnerBackend: "blacksmith" })],
+          ]) {
+            expect(before).not.toBeNull();
+            expect(after).not.toBeNull();
+            const expected = structuredClone(before!);
+            for (const job of expected) {
+              if (job.groups.some((group) => group.includePatterns?.includes(longest))) {
+                job.predictedSeconds = 123;
+                job.predictedTestSeconds = 123;
+              }
+            }
+            expect(after).toEqual(expected);
+          }
+          // A native price cannot reprice hosted execution of the same file.
+          expect(createPlan({ compactMode: "push", runnerBackend: "github" })).toEqual(
+            hostedBefore,
+          );
+        }
       } finally {
         vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
         vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
@@ -4647,7 +4790,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(requiresDistShardNames).toEqual(["core-support-boundary", "core-runtime-tui-pty"]);
   });
 
-  it("keeps lifecycle proofs on main while excluding PR and manual PR-fallback plans", () => {
+  it("retains the caught Codex recovery contract in main, PR, and manual Node plans", () => {
     const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
     const files = (mode: "push" | "pull-request") =>
       getCommittedCompactPlan(mode).flatMap((shard) =>
@@ -4658,12 +4801,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const manual = createNodeTestShards({ includeProofTests: false });
     for (const file of proofFiles) {
       expect(mainFiles.filter((target) => target === file)).toHaveLength(1);
-      expect(prFiles).not.toContain(file);
-      expect(manual.flatMap((shard) => shard.includePatterns ?? [])).not.toContain(file);
+      expect(prFiles.filter((target) => target === file)).toHaveLength(1);
+      const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
+      const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
+      expect(
+        manual.filter(
+          (shard) =>
+            shard.configs.includes(config) &&
+            (!shard.includePatterns ||
+              shard.includePatterns.some((pattern) => matchesGlob(file, pattern))),
+        ),
+      ).toHaveLength(1);
+      expect(isCiProofTestFile(file)).toBe(false);
     }
+    const isolated = expectDefined(
+      manual.find((shard) => shard.shardName === "agentic-gateway-server-isolated"),
+      "manual isolated Gateway owner",
+    );
+    expect(isolated.configs).toContain("test/vitest/vitest.gateway-server-isolated.config.ts");
     expect(
-      manual.find((shard) => shard.shardName === "agentic-gateway-server-isolated")
-        ?.includePatterns,
+      isolated.includePatterns ?? listMatchedTestFiles(createGatewayServerIsolatedVitestConfig({})),
     ).toContain("src/gateway/server.chat-recovered-output.test.ts");
   });
 
@@ -5026,8 +5183,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("keeps precise tooling selection through hosted overflow refusal", () => {
     const tooling = defaultShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
-    const selected = tooling.flatMap((shard) => shard.includePatterns ?? []).slice(0, 96);
+    // Full-suite rows include release proofs; precise PR plans always exclude them.
+    const selected = tooling
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .filter((file) => !isCiProofTestFile(file))
+      .slice(0, 96);
     expect(selected).toHaveLength(96);
+    vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue({});
     vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(20_000);
     // Every selected file is now indivisible above the admission cap. Overflow
     // must retain these 96 files without adding unrelated dist owners or the full suite.
@@ -6430,6 +6592,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
+      "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
       "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
       "src/plugin-sdk/session-transcript-runtime.test.ts",
       "src/agents/sessions/sdk.auth-migration.test.ts",
@@ -7158,12 +7321,20 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(owners[0]?.pretestBuildMode).toBe("runtime");
   });
 
-  it("retains the changed host plugin test in a global fallback beside store aliases", () => {
+  it("retains the changed host plugin test in a bounded hub plan beside store aliases", () => {
     const target = "src/plugins/tools.optional.test.ts";
     const changedPaths = [...STORE_ALIAS_CHANGED_PATHS, "tsconfig.json"];
     const onFallback = vi.fn();
-    expect(createChangedNodeTestShards(changedPaths, { onFallback })).toBeNull();
-    expect(onFallback).toHaveBeenCalledWith("global execution or resolution input: tsconfig.json");
+    const changedShards = createChangedNodeTestShards(changedPaths, { onFallback });
+    expect(changedShards).not.toBeNull();
+    expect(onFallback).not.toHaveBeenCalled();
+    expect(
+      changedShards?.flatMap((shard) =>
+        (shard.targets ?? []).concat(
+          (shard.groups ?? [shard]).flatMap((group) => group.includePatterns ?? []),
+        ),
+      ),
+    ).toContain(target);
     const options = {
       changedPaths,
       includeReleaseOnlyPluginShards: false,
@@ -7182,6 +7353,33 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         runner: DEFAULT_NODE_TEST_RUNNER,
       },
     ]);
+  });
+
+  it("packs precise plugin tests through their canonical owner without enabling the sweep", () => {
+    const targets = [
+      "src/plugins/runtime.test.ts",
+      "src/plugins/public-surface-loader.test.ts",
+      "src/plugins/plugin-instance.consumer.test.ts",
+    ];
+    const selected = expectDefined(
+      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
+      "selected plugin owner",
+    );
+    const groups = selected.flatMap((shard) => shard.groups);
+    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+      targets.toSorted(),
+    );
+    expect(
+      groups.every(
+        (group) =>
+          group.configs.length === 1 && group.configs[0] === "test/vitest/vitest.plugins.config.ts",
+      ),
+    ).toBe(true);
+    expect(
+      createNodeTestShards({ includeReleaseOnlyPluginShards: false }).some((shard) =>
+        shard.configs.includes("test/vitest/vitest.plugins.config.ts"),
+      ),
+    ).toBe(false);
   });
 
   it("retains only exact changed plugin-owner tests in deterministic order", () => {
@@ -7578,29 +7776,51 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expectTimingFamilies(after, afterInherited);
       expect(policies(after, afterInherited)).toEqual(policies(before, beforeInherited));
       if (runnerBackend === "hybrid") {
-        const serial = structuredClone(before);
-        const serialGroup = expectDefined(
-          serial
-            .filter(
-              (job) => job.planConcurrency === 1 && job.env?.OPENCLAW_VITEST_MAX_WORKERS === "2",
-            )
-            .flatMap((job) => job.groups)
-            .find((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined),
-          "already-serial group using its job worker cap",
-        );
-        serialGroup.env = { ...serialGroup.env, OPENCLAW_VITEST_MAX_WORKERS: "2" };
+        // Inventory changes need not leave an already-serial row in the generated plan.
+        const serialGroup: Group = {
+          shard_name: "serial-policy-control",
+          configs: ["test/vitest/vitest.commands-light.config.ts"],
+          requiresDist: false,
+          runner: DEFAULT_NODE_TEST_RUNNER,
+        };
+        const serialAdmission: CompactNodeTestShard = {
+          checkName: "serial-policy-control",
+          shardName: "serial-policy-control",
+          groups: [serialGroup],
+          requiresDist: false,
+          runner: DEFAULT_NODE_TEST_RUNNER,
+          planConcurrency: 1,
+          env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        };
+        const serialInherited = inheritedGroupsFor([serialAdmission]);
+        const expectedSerialPolicy = {
+          descriptors: [
+            {
+              shard_name: "serial-policy-control",
+              configs: ["test/vitest/vitest.commands-light.config.ts"],
+              requiresDist: false,
+            },
+          ],
+          tooling: [],
+        };
+        expect(serialInherited.has(serialGroup.shard_name)).toBe(false);
+        expect(policies([serialAdmission], serialInherited)).toEqual(expectedSerialPolicy);
+        serialGroup.env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
         expect(() =>
-          expect(policies(serial, beforeInherited)).toEqual(policies(before, beforeInherited)),
+          expect(policies([serialAdmission], serialInherited)).toEqual(expectedSerialPolicy),
         ).toThrow();
         const promoted = structuredClone(before);
+        const isInheritedHostedGroup = (group: Group) =>
+          group.timing_key !== undefined &&
+          parseCompactSplitTimingKey(group.timing_key) !== undefined &&
+          beforeInherited.has(group.shard_name);
         const recipient = expectDefined(
           promoted.find(
             (job) =>
               job.planConcurrency === 2 &&
               job.groups.some(
                 (group) =>
-                  group.timing_key &&
-                  parseCompactSplitTimingKey(group.timing_key) &&
+                  isInheritedHostedGroup(group) &&
                   group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined,
               ) &&
               job.groups.every(
@@ -7638,12 +7858,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           group.env = { OPENCLAW_VITEST_MAX_WORKERS: "2", ...group.env };
         }
         const hosted = expectDefined(
-          recipient.groups.find(
-            (group) =>
-              group.timing_key &&
-              parseCompactSplitTimingKey(group.timing_key) &&
-              beforeInherited.has(group.shard_name),
-          ),
+          recipient.groups.find(isInheritedHostedGroup),
           "hosted recipient group",
         );
         const original = expectDefined(

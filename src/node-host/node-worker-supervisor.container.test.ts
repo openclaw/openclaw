@@ -416,9 +416,9 @@ describe("node worker supervisor container isolation", () => {
         expect(failed.state).toBe("failed");
         expect(requestedTimeouts).toEqual([30_000]);
         expect(failed.errorText).toContain(
-          `Command timed out after ${30_000 / DAEMON_TIMER_SCALE} milliseconds:`,
+          "Container command timed out after 30000 milliseconds: docker info",
         );
-        expect(failed.errorText).toContain("docker info --format '{{.ID}}'");
+        expect(failed.errorText).not.toContain(fixture.containerEngine.command);
         expect(await fixture.supervisor.status(input.launchId)).toMatchObject({
           state: "failed",
           errorText: failed.errorText,

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -18,7 +19,10 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  seedAttachedPlacementEnvironment,
+} from "./placement-test-fixtures.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 
 describe("worker placement dispatch", () => {
@@ -194,42 +198,12 @@ describe("worker placement dispatch", () => {
       sessionId: "session-2",
       sessionKey: "agent:main:session-2",
     };
-    let otherPlacement = await placementStore.startDispatch(otherRequest);
-    otherPlacement = placementStore.transition({
-      sessionId: otherRequest.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: otherPlacement.generation,
-      patch: { environmentId: active.environmentId },
-    });
-    otherPlacement = placementStore.transition({
-      sessionId: otherRequest.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: otherPlacement.generation,
-      patch: { workerBundleHash: active.workerBundleHash },
-    });
-    otherPlacement = placementStore.transition({
-      sessionId: otherRequest.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: otherPlacement.generation,
-      patch: {
-        workspaceBaseManifestRef: active.workspaceBaseManifestRef,
-        remoteWorkspaceDir: active.remoteWorkspaceDir,
-      },
-    });
-    seedAttachedPlacementEnvironment(database, {
+    await advancePlacementFixtureToActive(placementStore, database, otherRequest, {
       environmentId: active.environmentId,
-      sessionId: otherRequest.sessionId,
       ownerEpoch: active.activeOwnerEpoch,
-    });
-    placementStore.transition({
-      sessionId: otherRequest.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: otherPlacement.generation,
-      patch: { activeOwnerEpoch: active.activeOwnerEpoch },
+      workerBundleHash: active.workerBundleHash,
+      workspaceBaseManifestRef: active.workspaceBaseManifestRef,
+      remoteWorkspaceDir: active.remoteWorkspaceDir,
     });
     const otherClaim = await placementStore.claimTurn({
       ...otherRequest,
@@ -700,12 +674,7 @@ describe("worker placement dispatch", () => {
 
     await harness.service.reconcile();
 
-    expect(harness.log).toEqual([
-      "environment:reconcile",
-      "tunnel:attached",
-      "placement:adopted",
-      "workspace",
-    ]);
+    expect(harness.log).toEqual(["environment:reconcile", "tunnel:attached", "placement:adopted"]);
     expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
@@ -750,7 +719,6 @@ describe("worker placement dispatch", () => {
       "placement:draining",
       "placement:reconciling",
       "placement:failed",
-      "workspace",
     ]);
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
@@ -860,7 +828,6 @@ describe("worker placement dispatch", () => {
       "teardown:stop",
       "teardown:destroy",
       "placement:failed",
-      "workspace",
     ]);
   });
 
@@ -880,7 +847,6 @@ describe("worker placement dispatch", () => {
       "teardown:stop",
       "teardown:destroy",
       "placement:reclaimed",
-      "workspace",
     ]);
 
     const destroyCalls = vi.mocked(harness.environments.destroy).mock.calls.length;
@@ -955,26 +921,46 @@ describe("worker placement dispatch", () => {
     harness.markEnvironmentOwnerEpoch(harness.attached.ownerEpoch + 1);
     harness.log.length = 0;
 
+    const { promise: toolAdmissionClosed, resolve: signalToolAdmissionClosed } = createDeferred();
+    const closeWorkerTurnToolState = placementStore.closeWorkerTurnToolState.bind(placementStore);
+    // Recovery reads precede fencing; observe the real admission boundary instead
+    // of requiring unrelated state-worker work to finish within a polling budget.
+    vi.spyOn(placementStore, "closeWorkerTurnToolState").mockImplementation((closingClaim) => {
+      const closing = closeWorkerTurnToolState(closingClaim);
+      signalToolAdmissionClosed();
+      return closing;
+    });
     const reconciliation = harness.service.reconcileActive();
-
-    await vi.waitFor(() => {
+    let completed = false;
+    try {
+      await Promise.race([
+        toolAdmissionClosed,
+        reconciliation.then(() => {
+          throw new Error("Reconciliation completed before closing tool admission");
+        }),
+      ]);
       expect(placementStore.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
-    });
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
-    expect(harness.placements.current()).toMatchObject({
-      state: "draining",
-      turnClaim: { claimId: claim.claimId },
-    });
-    expect(
-      placementStore.completeWorkerSessionToolOperation({
-        sourceSessionId: claim.sessionId,
-        sourceClaimId: claim.claimId,
-        toolCallId: "call-owner-mismatch",
-        requestDigest: "digest-owner-mismatch",
-        resultJson: '{"status":"ok"}',
-      }),
-    ).toBe(true);
-    await reconciliation;
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+      expect(harness.placements.current()).toMatchObject({
+        state: "draining",
+        turnClaim: { claimId: claim.claimId },
+      });
+    } finally {
+      // Failed fence assertions must still unblock and join recovery before
+      // afterEach closes the shared-state database.
+      try {
+        completed = placementStore.completeWorkerSessionToolOperation({
+          sourceSessionId: claim.sessionId,
+          sourceClaimId: claim.claimId,
+          toolCallId: "call-owner-mismatch",
+          requestDigest: "digest-owner-mismatch",
+          resultJson: '{"status":"ok"}',
+        });
+      } finally {
+        await reconciliation;
+      }
+    }
+    expect(completed).toBe(true);
 
     expect(harness.placements.current()).toMatchObject({
       state: "failed",

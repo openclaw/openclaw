@@ -97,6 +97,10 @@ servers; omit it for unauthenticated servers and OpenClaw stores a local non-sec
 This writes `models.providers.lmstudio` and sets the default model to `lmstudio/<custom-model-id>`.
 Providing an API key also writes the `lmstudio:default` auth profile.
 
+Add `--json` for a machine-readable result. Connection, HTTP, and model-selection
+failures return a JSON error with the same recovery guidance as human output and
+exit nonzero without applying the proposed provider configuration.
+
 Interactive setup can additionally prompt for a preferred load context length and applies it across
 the discovered models it saves to config.
 

@@ -106,6 +106,7 @@ actor OutboxTransportState {
     var sentMessages: [String] = []
     var sentSessionKeys: [String] = []
     var sentAgentIDs: [String?] = []
+    var historyRequestSessionKeys: [String] = []
     var historyRequestAgentIDs: [String?] = []
     var sentThinkingLevels: [String] = []
     var sentSessionSettings: [OpenClawChatSessionSettingsExpectation?] = []
@@ -115,8 +116,9 @@ actor OutboxTransportState {
         self.sendFails = sendFails
     }
 
-    func recordHistoryRequest(agentID: String?) {
+    func recordHistoryRequest(sessionKey: String, agentID: String?) {
         self.historyRequestCount += 1
+        self.historyRequestSessionKeys.append(sessionKey)
         self.historyRequestAgentIDs.append(agentID)
     }
 
@@ -271,7 +273,7 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         agentID: String?,
         expectedRoute: Int?) async throws -> OpenClawChatHistoryPayload
     {
-        await self.state.recordHistoryRequest(agentID: agentID)
+        await self.state.recordHistoryRequest(sessionKey: sessionKey, agentID: agentID)
         if let expectedRoute, await state.routeGeneration != expectedRoute {
             throw CancellationError()
         }

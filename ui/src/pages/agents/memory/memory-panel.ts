@@ -7,6 +7,7 @@ import {
   type ApplicationGateway,
   type ApplicationGatewaySnapshot,
 } from "../../../app/context.ts";
+import { shellLayoutTraits } from "../../../app/shell-layout-traits.ts";
 import {
   showConfirmDialog,
   type ConfirmDialogOptions,
@@ -415,7 +416,10 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const selectedAgentId = dreaming.selectedAgentId ?? "";
 
     return html`
-      <section class="content-header content-header--page agent-memory-panel__header">
+      <section
+        class="content-header content-header--page agent-memory-panel__header"
+        ${shellLayoutTraits({ toolbarHeader: true })}
+      >
         <div class="page-meta">
           <div class="dreaming-header-controls">
             <button

@@ -109,6 +109,40 @@ describe("chat transcript entry lifecycle", () => {
     },
   );
 
+  it("keeps consecutive pending steers in place through their history handoff", () => {
+    const view = setupEntryTranscript();
+    const first = { ...pendingSend("First input"), createdAt: 10, queueMode: "steer" as const };
+    const second = { ...pendingSend("Second input"), createdAt: 20, queueMode: "steer" as const };
+    try {
+      view.props.queue = [first];
+      view.update();
+      const firstBubble = expectDefined(bubbles(view.container)[0], "first prompt");
+      view.props.queue = [first, second];
+      view.update();
+      const pendingBubbles = bubbles(view.container).filter((bubble) => bubble.dataset.messageText);
+      expect(pendingBubbles.map((bubble) => bubble.dataset.messageText)).toEqual([
+        "First input",
+        "Second input",
+      ]);
+      expect(pendingBubbles[0]).toBe(firstBubble);
+
+      view.props.messages = [first, second].map((input, index) => ({
+        role: "user",
+        content: input.text,
+        timestamp: input.createdAt,
+        __openclaw: { id: input.id, seq: index + 1, idempotencyKey: input.sendRunId },
+      }));
+      view.props.queue = [];
+      view.update();
+      const settledBubbles = bubbles(view.container).filter((bubble) => bubble.dataset.messageText);
+      expect(settledBubbles).toHaveLength(2);
+      expect(settledBubbles[0]).toBe(firstBubble);
+      expect(settledBubbles[1]).toBe(pendingBubbles[1]);
+    } finally {
+      view.transcript.hostDisconnected();
+    }
+  });
+
   it("retires an unfinished prompt animation when the transcript disconnects", () => {
     const view = setupEntryTranscript();
     view.props.queue = [pendingSend("pending-disconnect")];

@@ -89,9 +89,9 @@ env:
   OCM_VERSION: v0.2.47
   OCM_LINUX_X64_SHA256: 05e0bb598fe391c75fe7668e159d7eb09168b4298b5d8d0999786e79e97d0642
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 17304ab9d7aa283b78b1771a2585518fa5961048
-  KOVA_LEGACY_LIST_CONFIG_REF: 17304ab9d7aa283b78b1771a2585518fa5961048
-  KOVA_TRUSTED_LIVE_REF: 17304ab9d7aa283b78b1771a2585518fa5961048
+  KOVA_CANONICAL_CONFIG_REF: ec90fe4dd443859a248df82206ad2f1f363930ba
+  KOVA_LEGACY_LIST_CONFIG_REF: ec90fe4dd443859a248df82206ad2f1f363930ba
+  KOVA_TRUSTED_LIVE_REF: ec90fe4dd443859a248df82206ad2f1f363930ba
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -422,37 +422,9 @@ jobs:
         if: steps.lane.outputs.run == 'true'
         uses: ./.artifacts/performance-workflow/.github/actions/setup-node-env
         with:
+          semantic-checks: ${{ matrix.managed_service }}
           cache-mode: ${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}
           install-bun: "false"
-
-      - name: Prepare systemd user session
-        if: ${{ steps.lane.outputs.run == 'true' && matrix.managed_service == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          user="$(id -un)"
-          uid="$(id -u)"
-
-          test "$(ps -p 1 -o comm= | xargs)" = systemd
-          sudo systemctl is-active --quiet systemd-logind.service
-          sudo loginctl enable-linger "$user"
-          sudo systemctl start "user@${uid}.service"
-
-          runtime_dir="$(loginctl show-user "$user" --property=RuntimePath --value)"
-          test -n "$runtime_dir"
-          test -d "$runtime_dir"
-          test -O "$runtime_dir"
-
-          export XDG_RUNTIME_DIR="$runtime_dir"
-          test -S "$XDG_RUNTIME_DIR/systemd/private"
-          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
-
-          if [[ -S "$runtime_dir/bus" ]]; then
-            export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime_dir}/bus"
-            echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
-          fi
-
-          systemctl --user show-environment >/dev/null
 
       - name: Install OCM and Kova
         if: steps.lane.outputs.run == 'true'

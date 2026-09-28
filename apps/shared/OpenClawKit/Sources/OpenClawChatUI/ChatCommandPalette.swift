@@ -28,7 +28,13 @@ struct ChatCommandPalette: View {
             sections: self.sections,
             remote: self.search.rows(for: self.request),
             query: self.query,
-            preview: self.preview)
+            preview: self.preview).filter { item in
+            guard self.viewModel.usesWebConversation else { return true }
+            switch item {
+            case .action(.find), .action(.export): return false
+            default: return true
+            }
+        }
     }
 
     var body: some View {

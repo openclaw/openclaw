@@ -295,7 +295,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/worktrees/service.diagnostics.test.ts", 18],
   ["src/agents/worktrees/service.naming.test.ts", 10],
   ["src/agents/worktrees/service.provisioned.test.ts", 24],
-  ["src/agents/worktrees/service.run-end-cleanup.test.ts", 11],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).

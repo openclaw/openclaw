@@ -1,5 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 
 const persistLifecycle = vi.hoisted(() => vi.fn());
 const ownerStatus = vi.hoisted(() => vi.fn());
@@ -30,19 +34,22 @@ const terminal = {
   },
 };
 
+function fixture() {
+  const time = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(time.clock);
+  onTestFinished(() => scheduler.stop());
+  return { owner: createSessionLifecyclePersistenceOwner(scheduler), scheduler, time };
+}
+
 describe("session lifecycle persistence owner", () => {
   beforeEach(() => {
     persistLifecycle.mockReset();
     ownerStatus.mockReset().mockReturnValue("active");
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("starts one terminal write before the chat handler consumes it", async () => {
     persistLifecycle.mockResolvedValue(undefined);
-    const owner = createSessionLifecyclePersistenceOwner();
+    const { owner } = fixture();
 
     const prepared = owner.observe(terminal);
     const consumed = owner.persist(terminal);
@@ -55,7 +62,7 @@ describe("session lifecycle persistence owner", () => {
 
   it("distinguishes reused run ids by their exact owner claim", async () => {
     persistLifecycle.mockResolvedValue(undefined);
-    const owner = createSessionLifecyclePersistenceOwner();
+    const { owner } = fixture();
     const first = {
       ...terminal,
       event: { ...terminal.event, contextClaimId: "claim-1" },
@@ -91,7 +98,7 @@ describe("session lifecycle persistence owner", () => {
       controlUiVisible: { value: true, enumerable: false },
       isHeartbeat: { value: false, enumerable: false },
     });
-    const owner = createSessionLifecyclePersistenceOwner();
+    const { owner } = fixture();
 
     await owner.observe({ sessionKey: terminal.sessionKey, event });
 
@@ -109,7 +116,7 @@ describe("session lifecycle persistence owner", () => {
 
   it("persists a keyed error after the chat retry grace expires", async () => {
     persistLifecycle.mockResolvedValue(undefined);
-    const owner = createSessionLifecyclePersistenceOwner();
+    const { owner } = fixture();
     const error = {
       ...terminal,
       event: {
@@ -127,8 +134,9 @@ describe("session lifecycle persistence owner", () => {
   it("keeps terminal writes alive until shutdown drains them", async () => {
     const deferred = createDeferred();
     persistLifecycle.mockReturnValue(deferred.promise);
-    const owner = createSessionLifecyclePersistenceOwner();
+    const { owner, scheduler } = fixture();
     void owner.observe(terminal);
+    scheduler.beginClose();
 
     let drained = false;
     const drain = owner.drain().then(() => {
@@ -142,26 +150,35 @@ describe("session lifecycle persistence owner", () => {
     expect(drained).toBe(true);
   });
 
-  it("keeps a pending write available after its lookup grace expires", async () => {
-    vi.useFakeTimers();
-    const deferred = createDeferred();
-    persistLifecycle.mockReturnValue(deferred.promise);
-    const owner = createSessionLifecyclePersistenceOwner();
-    const prepared = owner.observe(terminal);
-    await vi.advanceTimersByTimeAsync(60_000);
+  it.each([false, true])(
+    "keeps an expired write available until settlement (consumed while pending: %s)",
+    async (consumeWhilePending) => {
+      const deferred = createDeferred();
+      persistLifecycle.mockReturnValue(deferred.promise);
+      const { owner, time } = fixture();
+      const prepared = owner.observe(terminal);
+      await time.advanceBy(60_000);
 
-    const consumed = owner.persist(terminal);
-
-    expect(consumed).toBe(prepared);
-    deferred.resolve();
-    await consumed;
-    await owner.drain();
-  });
+      expect(owner.observe(terminal)).toBe(prepared);
+      if (consumeWhilePending) {
+        expect(owner.persist(terminal)).toBe(prepared);
+      }
+      deferred.resolve();
+      await prepared;
+      if (!consumeWhilePending) {
+        await expect(owner.persist(terminal)).rejects.toMatchObject({
+          code: "ERR_STALE_GATEWAY_LIFECYCLE",
+        });
+      }
+      expect(persistLifecycle).toHaveBeenCalledOnce();
+      await owner.drain();
+    },
+  );
 
   it("keeps a prepared write available while shutdown drain waits", async () => {
     const deferred = createDeferred();
     persistLifecycle.mockReturnValue(deferred.promise);
-    const owner = createSessionLifecyclePersistenceOwner();
+    const { owner } = fixture();
     const prepared = owner.observe(terminal);
     const draining = owner.drain();
     await Promise.resolve();
@@ -183,7 +200,7 @@ describe("session lifecycle persistence owner", () => {
       params.assertCommitAllowed?.();
       sessionStatus = "done";
     });
-    const owner = createSessionLifecyclePersistenceOwner();
+    const { owner } = fixture();
     const persistence = owner.observe({
       ...terminal,
       authority: {
@@ -214,7 +231,7 @@ describe("session lifecycle persistence owner", () => {
       params.assertCommitAllowed?.();
       sessionStatus = "failed";
     });
-    const owner = createSessionLifecyclePersistenceOwner();
+    const { owner } = fixture();
     const persistence = owner.persist({
       ...terminal,
       event: {
@@ -241,12 +258,11 @@ describe("session lifecycle persistence owner", () => {
     { name: "fallback exhaustion", data: { phase: "error", fallbackExhaustedFailure: true } },
     { name: "settled execution failure", data: { phase: "error", executionSettled: true } },
   ])("does not restart $name after its prepared promise expires", async ({ data }) => {
-    vi.useFakeTimers();
     persistLifecycle.mockResolvedValue(undefined);
-    const owner = createSessionLifecyclePersistenceOwner();
+    const { owner, time } = fixture();
     const event = { ...terminal, event: { ...terminal.event, data } };
     await owner.observe(event);
-    await vi.advanceTimersByTimeAsync(60_000);
+    await time.advanceBy(60_000);
 
     await expect(owner.persist(event)).rejects.toMatchObject({
       code: "ERR_STALE_GATEWAY_LIFECYCLE",
