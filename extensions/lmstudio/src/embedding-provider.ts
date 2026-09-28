@@ -10,6 +10,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
@@ -46,6 +47,8 @@ type MemoryCoreAcquireLocalService = (
     providerId: string;
     baseUrl: string;
     headers?: HeadersInit;
+    /** Pause/resume the managed-readiness search deadline during local service startup. */
+    onReadinessWait?: (waiting: boolean) => void;
   },
   signal?: AbortSignal | null,
 ) => Promise<{ release: () => void } | undefined>;
@@ -242,11 +245,15 @@ export async function createLmstudioEmbeddingProvider(
   const withLocalServiceLease = async <T>(
     signal: AbortSignal | undefined,
     action: () => Promise<T>,
+    onReadinessWait?: (waiting: boolean) => void,
   ): Promise<T> => {
     signal?.throwIfAborted();
+    const target = onReadinessWait && localServiceTarget
+      ? { ...localServiceTarget, onReadinessWait }
+      : localServiceTarget;
     const lease =
-      localServiceTarget && acquireLocalService
-        ? await acquireLocalService(localServiceTarget, signal)
+      target && acquireLocalService
+        ? await acquireLocalService(target, signal)
         : undefined;
     try {
       signal?.throwIfAborted();
@@ -370,12 +377,27 @@ export async function createLmstudioEmbeddingProvider(
           errorPrefix: "lmstudio embeddings failed",
         })
       : remoteProvider;
+  const resolveCallOptionsOnReadinessWait = (
+    callOptions: Record<string | symbol, unknown> | undefined,
+  ): ((waiting: boolean) => void) | undefined => {
+    const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL] as
+      | { report: (action: "pause" | "resume") => void }
+      | undefined;
+    return deadlineControl
+      ? (waiting: boolean) => deadlineControl.report(waiting ? "pause" : "resume")
+      : undefined;
+  };
+
   const embed: MemoryEmbeddingProvider["embed"] = async (input, callOptions) =>
-    await withLocalServiceLease(callOptions?.signal, async () => {
-      const prepared = await preloadModel(callOptions?.signal);
-      callOptions?.signal?.throwIfAborted();
-      return await resolveRequestProvider(prepared).embed(input, callOptions);
-    });
+    await withLocalServiceLease(
+      callOptions?.signal,
+      async () => {
+        const prepared = await preloadModel(callOptions?.signal);
+        callOptions?.signal?.throwIfAborted();
+        return await resolveRequestProvider(prepared).embed(input, callOptions);
+      },
+      resolveCallOptionsOnReadinessWait(callOptions as Record<string | symbol, unknown> | undefined),
+    );
   const embedBatch: MemoryEmbeddingProvider["embedBatch"] = async (inputs, callOptions) => {
     if (inputs.length === 0) {
       return [];
@@ -384,11 +406,15 @@ export async function createLmstudioEmbeddingProvider(
       // Promise.all rejects before sibling requests settle, so every query keeps its own lease.
       return await Promise.all(inputs.map((input) => embed(input, callOptions)));
     }
-    return await withLocalServiceLease(callOptions?.signal, async () => {
-      const prepared = await preloadModel(callOptions?.signal);
-      callOptions?.signal?.throwIfAborted();
-      return await resolveRequestProvider(prepared).embedBatch(inputs, callOptions);
-    });
+    return await withLocalServiceLease(
+      callOptions?.signal,
+      async () => {
+        const prepared = await preloadModel(callOptions?.signal);
+        callOptions?.signal?.throwIfAborted();
+        return await resolveRequestProvider(prepared).embedBatch(inputs, callOptions);
+      },
+      resolveCallOptionsOnReadinessWait(callOptions as Record<string | symbol, unknown> | undefined),
+    );
   };
   const provider: MemoryEmbeddingProvider = {
     ...remoteProvider,
