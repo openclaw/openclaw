@@ -34,6 +34,69 @@ const candidateCheckNames = [
   "candidate gateway canary",
 ];
 
+it("retains the original failed published result before the bounded output tail", async () => {
+  const root = temporary.make("installed-update-result-");
+  const secret = "synthetic-update-result-secret";
+  const records: installedCommand.CommandRecord[] = [];
+  await expect(
+    installedCommand.run(
+      [
+        "-e",
+        `process.stdout.write(JSON.stringify({
+          status: "error", mode: "npm", reason: "primary-update-failure", durationMs: 123,
+          root: process.env.FIXTURE_SECRET,
+          steps: [{ name: "candidate check", exitCode: 1, durationMs: 12,
+            command: process.env.FIXTURE_SECRET, cwd: process.env.FIXTURE_SECRET,
+            stderrTail: "token=" + process.env.FIXTURE_SECRET,
+            failureFacts: [{ check: "runtime", code: "fixture-failure", message: "Primary check failed", privatePayload: process.env.FIXTURE_SECRET }]
+          }],
+          padding: "x".repeat(4000),
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" }
+        })); process.exitCode = 1;`,
+      ],
+      {
+        SystemRoot: process.env.SystemRoot,
+        WINDIR: process.env.WINDIR,
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        FIXTURE_SECRET: secret,
+      },
+      root,
+      records,
+      0,
+      undefined,
+      { commandBudget: "published-update" },
+    ),
+  ).rejects.toThrow();
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({
+    code: 1,
+    joined: true,
+    publishedUpdate: {
+      kind: "published-update",
+      status: "error",
+      reason: "primary-update-failure",
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [
+        {
+          name: "candidate check",
+          exitCode: 1,
+          failureFacts: [
+            { check: "runtime", code: "fixture-failure", message: "Primary check failed" },
+          ],
+        },
+      ],
+    },
+  });
+  expect(records[0]?.failureOutput?.stdout).not.toContain("primary-update-failure");
+  expect(records[0]?.publishedUpdate).not.toHaveProperty("root");
+  expect(records[0]?.publishedUpdate).not.toHaveProperty("steps.0.command");
+  expect(records[0]?.publishedUpdate).not.toHaveProperty("steps.0.cwd");
+  expect(records[0]?.publishedUpdate).not.toHaveProperty("steps.0.failureFacts.0.privatePayload");
+  expect(JSON.stringify(records)).not.toContain(secret);
+});
+
 it.each([
   { name: "candidate migration continuation", exitCode: 0 },
   { name: "candidate migration continuation", exitCode: null },

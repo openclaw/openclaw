@@ -155,7 +155,11 @@ it.each([
   });
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-  const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: profile };
+  const env = {
+    USERPROFILE: "C:\\Users\\test",
+    APPDATA: tempDirs.make("registered-task-startup-"),
+    OPENCLAW_PROFILE: profile,
+  };
   try {
     await expect(findExtraGatewayServices(env, { deep: true })).resolves.toEqual({
       services: [

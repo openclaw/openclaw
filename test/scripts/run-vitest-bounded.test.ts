@@ -203,7 +203,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
-  if (args.includes("scripts/run-node.mjs")) {
+  if (args.includes("scripts/prepare-vitest-runtime.mjs")) {
     return spawn(process.execPath, ["-e", ""], {
       ...options, env: { ...options.env, NODE_OPTIONS: "" },
     });
@@ -264,6 +264,11 @@ syncBuiltinESMExports();
       const pidPath = path.join(root, "builder.pid");
       const executable = path.join(root, "command.mjs");
       const preload = path.join(root, "preload.mjs");
+      const aiDeclarations = path.join(root, "ai-declarations");
+      if (outcome === "prebuilt") {
+        // A complete prebuilt generation includes the typed AI package.
+        fs.writeFileSync(aiDeclarations, "");
+      }
       fs.writeFileSync(
         executable,
         `import fs from "node:fs";
@@ -278,20 +283,33 @@ if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
   fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
   setInterval(() => {}, 1000);
 } else {
+  const failed = ${JSON.stringify(outcome)} === kind + "-failure";
+  if (kind === "ai" && !failed) {
+    fs.writeFileSync(${JSON.stringify(aiDeclarations)}, "");
+  }
   record("end");
-  process.exit(${JSON.stringify(outcome)} === kind + "-failure" ? 7 : 0);
+  process.exit(failed ? 7 : 0);
 }
 `,
       );
       // Preserve the real CLI and managed process owners; replace only the
       // expensive executables so build/read admission remains observable.
+      // The stub AI build publishes its declarations as a fixture receipt, so
+      // the declaration check sees the stub's output, not the checkout's dist.
       fs.writeFileSync(
         preload,
         `import cp from "node:child_process";
+import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+const aiDist = ${JSON.stringify(path.join(repoRoot, "packages/ai/dist") + path.sep)};
+const existsSync = fs.existsSync;
+fs.existsSync = (entry) =>
+  typeof entry === "string" && entry.startsWith(aiDist) && entry.endsWith(".d.mts")
+    ? existsSync(${JSON.stringify(aiDeclarations)})
+    : existsSync(entry);
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
-  const kind = args.includes("scripts/run-node.mjs") ? "runtime"
+  const kind = args.includes("scripts/prepare-vitest-runtime.mjs") ? "runtime"
     : args.includes("scripts/tsdown-build.mts") ? "ai"
     : args.some(arg => arg === "vitest" || arg.endsWith("/vitest.mjs")) ? "reader" : null;
   return kind ? spawn(process.execPath, [${JSON.stringify(executable)}, kind,

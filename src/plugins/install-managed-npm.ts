@@ -606,7 +606,7 @@ export async function installPluginFromManagedNpmRoot(
         copyErrorPrefix: "Failed to publish managed npm project",
         beforePersistentApply: () => {
           params.signal?.throwIfAborted();
-          params.beforePersistentApply?.();
+          return params.beforePersistentApply?.();
         },
         hasDeps: false,
         sourceHardlinks: "package-manager",

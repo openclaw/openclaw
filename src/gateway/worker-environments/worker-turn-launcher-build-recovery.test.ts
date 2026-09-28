@@ -29,8 +29,10 @@ import {
   type WorkerTurnTunnelHandle,
 } from "./tunnel-contract.js";
 import {
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
+  acknowledgeCompletedWorkerTurn,
   ENVIRONMENT_ID,
-  MANIFEST_REF,
   OWNER_EPOCH,
   SESSION_ID,
   SESSION_KEY,
@@ -39,7 +41,6 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   database,
-  measureLaunchTurn,
   openSessionManager,
   placements,
   root,
@@ -107,23 +108,7 @@ async function createBuildRecoveryHarness(
         timestamp: 51,
       }),
     );
-    createWorkerSessionPlacementGate(placements).updateAckCursors({
-      claim: request.turnClaim,
-      transcriptSeq: 2,
-      liveSeq: 1,
-    });
-    return {
-      stdout: JSON.stringify({
-        status: "completed",
-        transcriptLeafId: leafId,
-        transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-      }),
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    };
+    return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
   });
   const destroy = vi.fn(async () => environment);
   const environments: WorkerTurnEnvironmentService &
@@ -164,31 +149,16 @@ async function createBuildRecoveryHarness(
         }
         throw new StaleWorkerBuildError();
       }
-      return {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
+      return createWorkerTurnTunnel({
         quiesceWorkspace: async () => ({
           assertActive: async () => {},
           resume: async () => {},
         }),
-        measureLaunchTurn,
         launchTurn,
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        },
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
         stop: async () => {},
-      };
+      });
     },
     stopTunnel: vi.fn(async () => {}),
     destroy,
@@ -383,31 +353,17 @@ describe("worker turn launcher build recovery", () => {
       readRuntimeRefresh: () => (inFlight && (!fence || ++reads > 1) ? refresh : undefined),
       acquireTurnCredential,
       acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: async () => ({
-          assertActive: async () => {},
-          resume: async () => {},
+      startTunnel: async () =>
+        createWorkerTurnTunnel({
+          quiesceWorkspace: async () => ({
+            assertActive: async () => {},
+            resume: async () => {},
+          }),
+          launchTurn,
+          syncWorkspace: vi.fn(),
+          reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+          stop: async () => {},
         }),
-        measureLaunchTurn,
-        launchTurn,
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace: async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        },
-        stop: async () => {},
-      }),
     };
     const claimTurn = vi.spyOn(placements, "claimTurn");
     const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });

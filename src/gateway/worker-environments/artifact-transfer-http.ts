@@ -148,6 +148,13 @@ export function createArtifactTransferHttpCallback(
             sendOpaqueNotFound(res);
             return;
           }
+          const range = req.headers.range;
+          const start = range === undefined ? 0 : Number(/^bytes=(\d+)-$/u.exec(range)?.[1]);
+          if (range !== undefined && (!Number.isSafeInteger(start) || start >= file.bytes)) {
+            res.setHeader("Content-Range", `bytes */${file.bytes}`);
+            sendJson(res, 416, { error: "range_not_satisfiable" });
+            return;
+          }
           const checkAuthority = new Transform({
             transform(chunk: Buffer, _encoding, next) {
               if (!service.isAuthorizationCurrent(authorization)) {
@@ -158,15 +165,19 @@ export function createArtifactTransferHttpCallback(
               next(null, chunk);
             },
           });
-          res.writeHead(200, {
+          res.writeHead(range === undefined ? 200 : 206, {
             "content-type": "application/octet-stream",
-            "content-length": String(file.bytes),
+            "content-length": String(file.bytes - start),
+            "accept-ranges": "bytes",
+            ...(range === undefined
+              ? {}
+              : { "content-range": `bytes ${start}-${file.bytes - 1}/${file.bytes}` }),
             "x-openclaw-content-sha256": file.sha256,
           });
           // An extra EOF read can outlive the client's Content-Length-complete response
           // and let owner revocation destroy its reused keep-alive socket.
           const stream = file.handle.createReadStream({
-            start: 0,
+            start,
             end: file.bytes - 1,
             autoClose: false,
           });

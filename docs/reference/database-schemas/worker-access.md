@@ -27,6 +27,27 @@ or `withOpenClawAgentDatabaseReadOnly` alone, does not move execution off thread
 `readWithCanonicalSessionAdmission` validates session reads on the executing
 thread; invoke it inside the worker's admitted reader.
 
+Reply initialization and audited admission validators can reserve their exact
+session keys in the shared store queue. Unrelated sessions proceed while a holder
+awaits another queue; overlapping keys retain FIFO order. Creation hooks, parent
+forks, legacy-main retirement, and unscoped validators retain store-wide exclusion.
+Placement and migration barriers join earlier accepted work and block later
+writers. The separate canonical SQLite writer still owns transaction admission,
+current-authority checks, and commit settlement. Schemas, durability, and update
+behavior are unchanged.
+
+The dedicated shared-state read transport reuses successful process-owner and
+compatibility-projection verification for less than one second. Canonical
+owner-path resolutions have the same maximum age. An expired read synchronously
+resolves its path and verifies ownership before worker dispatch, including after
+a queue delay; no timer can extend this window. Transient verification errors
+refuse the affected read and are retried by the next read. Release, cleanup, and
+schema-maintenance transitions invalidate cached paths immediately. Maintenance
+authority, physical database identity, and read lifecycle checks remain in place.
+Writes, schema transitions, lease grants, and all generic SQLite broker jobs
+retain immediate fresh ownership verification, including their transaction and
+commit grants. Schemas, retained data, and update behavior are unchanged.
+
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
 rechecks its config owner after the read before using the selected agent. Each

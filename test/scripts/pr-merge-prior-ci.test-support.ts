@@ -138,8 +138,8 @@ export function ciWorkflowTree(f: MergeFixture, treeish: string, workflow: strin
 export function createPriorCiCandidateFactory(
   fixture: ReturnType<typeof createMergeOutcomeFixtureHarness>["fixture"],
 ) {
-  function candidate() {
-    const f = fixture(undefined, [["first change\n"], ["resolved conflict\n"]]);
+  function candidate(existing?: ReturnType<typeof fixture>) {
+    const f = existing ?? fixture(undefined, [["first change\n"], ["resolved conflict\n"]]);
     const state = f.state();
     const path = join(f.root, "admin.json");
     state.priorCi.enabled = true;
@@ -153,7 +153,7 @@ export function createPriorCiCandidateFactory(
     f.save(state);
     writeFileSync(
       join(f.worktree, ".local/gates.env"),
-      `GATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+      `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
     );
     const delta = f.git([
       "diff",
@@ -187,8 +187,8 @@ export function createPriorCiCandidateFactory(
     return { ...f, path, evidence };
   }
 
-  function preExistingCandidate(workflow?: string) {
-    const f = candidate();
+  function preExistingCandidate(workflow?: string, existing?: ReturnType<typeof fixture>) {
+    const f = candidate(existing);
     let main = f.base;
     if (workflow) {
       main = f.commit(ciWorkflowTree(f, f.base, workflow), [f.base]);
@@ -196,7 +196,7 @@ export function createPriorCiCandidateFactory(
       f.prepare(f.head, main);
       writeFileSync(
         join(f.worktree, ".local/gates.env"),
-        `GATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
       );
     }
     const state = f.state();

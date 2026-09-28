@@ -727,6 +727,7 @@ describe("dedicated worker websocket protocol", () => {
             ...session,
             storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
           },
+          promptCacheContext: { boundaryCount: 0 },
           assertSourceCurrent: () => {},
           turn: {
             preparedRunAdmission,

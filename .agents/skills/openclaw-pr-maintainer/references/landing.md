@@ -168,10 +168,19 @@ rechecks the current writer's repository and active organization-admin authority
 and permits only pending/skipped normal CI. Failed required checks, security
 requirements, enforced reviews and unresolved required review
 threads still block. This mode supports immediate squash on github.com with
-known ruleset policy, not classic protection, queues, auto-merge, or recovery.
+known ruleset policy, not classic protection, queues, or auto-merge. Recovery is
+limited to the explicitly qualified cases below.
 It dispatches the protected REST merge with the exact head pinned and retains
 the prior run, inspected delta, scoped evidence, and operator in the existing
 merge outcome. Accepted or uncertain outcomes still require reconciliation.
+
+If GraphQL cannot determine mergeability, this explicit mode can switch to a
+complete REST observation and retain that reader for the attempt. It preserves
+known GraphQL facts and reads the repository, PR head, main, rules, and required
+checks together; a blocked CI projection remains blocked. The existing admin
+verifier rechecks live authority, enforced reviews, security, and exact CI evidence
+after the final REST reread. Missing or changed evidence still refuses before
+intent. This adds no implicit admin route or mutation retry.
 
 #### Explicitly approved pre-existing failures
 
@@ -335,15 +344,50 @@ A replacement head repairing the same authorized scope needs fresh review and
 preparation, not renewed landing permission. Explicitly select its exact SHA;
 new scope or a different merge method still needs authorization.
 
-Replacement recovery requires completed ordinary gates, not `github_pending`.
-Use the completed-evidence preparation path above. Neither command deletes the
-prior outcome or bypasses review and merge admission. Queue cancellation is not
-supported by this path.
+Ordinary replacement recovery requires completed gates, not `github_pending`.
+Use the completed-evidence preparation path above. A confirmed-cancelled auto
+squash may instead recover an explicitly selected different head through the
+[prior-CI admin route](#explicit-prior-ci-admin-landing):
+
+```bash
+scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
+  --replacement-head <HEAD_SHA> --admin-evidence <path> --confirmed-operator-admin
+```
+
+This requires fresh review and exact-head `github_pending` preparation, followed
+by current admin, review, security, and CI-evidence verification for the
+replacement. The old head's CI attribution cannot qualify the new head. The
+successor CAS retains the original intent, confirmed cancellation, and capture
+history; neither history is relabeled as a rejected or unsubmitted request.
+Unconfirmed cancellation, a renewed auto/queue request, same-head substitution,
+and changed recovery artifacts remain blocked. Queue cancellation is unsupported.
 
 A failed operation can retain a lock. Verify no owned child tools remain, then
 recover only with the exact token and command the wrapper printed. Never remove
 locks by hand or start competing retries. After throttling, inspect quota before
 retrying native prepare/merge.
+
+An unaccepted prior-CI admin REST squash may be recovered on the same prepared
+head when its original capture contains the complete known GitHub response
+`Base branch was modified. Review and try the merge again.` with HTTP 405 and
+the matching `gh` diagnostic. Inspect that sent request and its retained outcome,
+then use the existing confirmations with current admin evidence:
+
+```bash
+scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
+  --admin-evidence <path> --confirmed-operator-admin
+```
+
+This records `recovery.providerRejection`, retains every qualified capture and
+the prior intent through the successor CAS, and reruns all current review,
+security, admin-authority, evidence, and head checks. The exact-head
+`github_pending` stamp stays pending. Capture changes during admission, unknown
+extra captures, symlinks, other 405 responses, timeouts, 5xx responses, and mixed
+or truncated output remain blocked. Accepted, queue, Crabbox, and replacement-head
+recovery are outside this exception. Another explicit recovery must use the new
+outcome OID and independently qualify its response; there is no automatic retry.
+If the PR has merged meanwhile, reconcile the retained outcome without sending
+another merge request.
 
 After two identical pre-dispatch failures without new evidence, stop invoking
 the same blocked route. Inspect the failure and select an already-authorized

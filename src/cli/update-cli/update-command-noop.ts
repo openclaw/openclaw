@@ -16,11 +16,11 @@ import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import type { RefuseUpdate } from "./update-command-result.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
   resolvePackageRuntimePreflight,
-  type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -149,11 +149,7 @@ export async function finishAlreadyCurrentUpdate(
       timeoutMs: params.updateStepTimeoutMs,
     });
     for (const warning of pluginWarnings) {
-      if (params.opts.json) {
-        defaultRuntime.error(warning.message);
-      } else {
-        defaultRuntime.log(warning.message);
-      }
+      defaultRuntime[params.opts.json ? "error" : "log"](warning.message);
     }
     await inspectUpdateDatabaseContexts({
       ...inspection,

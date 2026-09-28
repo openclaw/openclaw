@@ -17,7 +17,10 @@ import {
   createWorkerEnvironmentTransportLifecycle,
 } from "./environment-access.js";
 import { createWorkerEnvironmentErrorRecorder } from "./environment-errors.js";
-import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
+import {
+  joinInferenceOperations,
+  registerWorkerInferenceSessionControl,
+} from "./inference-control-internal.js";
 import { createWorkerInferenceManager } from "./inference.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
@@ -706,20 +709,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     installReconcileEnvironmentGuard,
     reconcileEnvironment,
     reconcileOnce,
-    ready: async () => {
-      const results = await Promise.allSettled([store.ready(), inference.ready()]);
-      const failures = [
-        ...new Set(
-          results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-        ),
-      ];
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Worker environment readiness failed");
-      }
-    },
+    ready: async () =>
+      await joinInferenceOperations(
+        [store.ready(), inference.ready()],
+        [],
+        "Worker environment readiness failed",
+      ),
     start,
     stop,
   };

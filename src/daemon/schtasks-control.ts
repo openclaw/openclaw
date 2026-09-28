@@ -14,10 +14,9 @@ import {
   readScheduledTaskCommand,
   resolveTaskName,
   resolveTaskScriptPath,
-  writeTaskXmlTempFile,
 } from "./schtasks-layout.js";
+import { describeUnverifiedPortListeners } from "./schtasks-port-diagnostics.js";
 import {
-  describeUnverifiedPortListeners,
   findInstalledProcessPid,
   isNodeHostArgv,
   readWindowsProcessSnapshot,
@@ -54,6 +53,7 @@ import {
   type ScheduledTaskSettlement,
 } from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
+import { writeTaskXmlTempFile } from "./schtasks-xml.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { fingerprintGatewayServiceDefinition } from "./service-rebind.js";

@@ -67,13 +67,10 @@ import ai.openclaw.app.ui.ProviderSignInDialog
 import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.ClawAgentAvatar
-import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
-import ai.openclaw.app.ui.design.ClawStatus
-import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.ProviderBrandIcon
 import ai.openclaw.app.ui.design.agentAvatarSource
@@ -143,7 +140,6 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Checklist
@@ -163,7 +159,6 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -217,7 +212,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
@@ -1732,17 +1726,14 @@ private fun ChatHeader(
 private fun HeaderIcon(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   contentDescription: String,
-  enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
-  val contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textMuted
   Surface(
     onClick = onClick,
-    enabled = enabled,
     modifier = Modifier.size(ClawTheme.spacing.touchTarget),
     shape = CircleShape,
     color = Color.Transparent,
-    contentColor = contentColor,
+    contentColor = ClawTheme.colors.text,
   ) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(20.dp))
@@ -2678,12 +2669,12 @@ private fun ToolActivityItem(
   saveableKey: String,
   parentStableKey: String,
 ) {
-  if (completedToolKind(tool.name) == CompletedToolKind.Progress) {
+  val kind = completedToolKind(tool.name)
+  if (kind == CompletedToolKind.Progress) {
     ProgressToolReceipt(tool)
     return
   }
   var expanded by rememberSaveable(parentStableKey, saveableKey) { mutableStateOf(false) }
-  val kind = completedToolKind(tool.name)
   val resultPresentation = completedToolResultPresentation(tool)
   val isError = tool.hasFailedOutcome
   val outcome = resultPresentation.outcome ?: if (live?.isComplete == false) nativeString("OpenClaw is working") else null

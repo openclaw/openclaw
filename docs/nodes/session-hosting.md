@@ -96,6 +96,14 @@ execution and other approved node commands retain their existing requirements.
 Updating a node first remains compatible with an older Gateway; the node
 advertises this support only when the Gateway understands it.
 
+Turn completion uses a bounded status wait when both the Gateway and node host
+support `node-worker-status-wait-v1`. The node wakes the waiting request as soon
+as the exact turn's terminal result is journaled; transcript settlement and
+worker cleanup ownership remain unchanged. This optional capability supports
+mixed Gateway/node versions: update either side first, and older node hosts
+continue to use status polling. A newer node advertises `workerHost.statusWait: 1`
+only to a Gateway that announces the capability. Reconnects renegotiate support.
+
 This setting enables supervised session turns on the paired device, including
 Gateway-owned workspace transfer and result reconciliation. By default, each
 node has one worker slot per available CPU core. Configure the slot count with
@@ -115,6 +123,12 @@ to receive this protection; installing a new worker bundle alone does not update
 the node's supervisor. Recovery keeps capacity occupied while the previous owner
 finishes stopping its commands. An upgraded node host preserves the released
 startup message and detached process-group ownership for older worker bundles.
+
+Installed node hosts package the POSIX launch helpers separately to reduce
+per-turn startup work. Update and restart the node host to receive this
+improvement. The worker still waits for its durable launch receipt before
+starting a turn, and cleanup continues to hold its worker slot until the
+process tree is gone.
 
 The picker derives every device row from `environments.list`. Every selected
 runtime requires an available, connected paired session host. OpenClaw worker
