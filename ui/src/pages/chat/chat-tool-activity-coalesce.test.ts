@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as canvas from "../../../../src/chat/canvas-render.js";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -15,6 +16,63 @@ function item(message: Record<string, unknown>, key = "current"): ChatItem {
 }
 
 describe("tool activity preparation cache", () => {
+  it("reuses finalized bundles across prepends and invalidates only changed sources", () => {
+    const invocation = (id: string) => {
+      const call = {
+        role: "assistant",
+        content: [
+          { type: "text", text: `before ${id}` },
+          { type: "tool_call", id, name: "custom", arguments: {} },
+          { type: "text", text: `after ${id}` },
+        ],
+      };
+      const output = { role: "toolResult", content: [result(id)] };
+      return {
+        call,
+        output,
+        items: () => [item(call, `call-${id}`), item(output, `result-${id}`)],
+      };
+    };
+    const first = invocation("first");
+    const second = invocation("second");
+    const older = invocation("older");
+    const messages = (items: ChatItem[]) =>
+      coalesceToolActivityMessages(items).flatMap((row) =>
+        row.kind === "message" ? [row.message] : [],
+      );
+    const initial = messages([...first.items(), ...second.items()]);
+    const prepare = vi.spyOn(canvas, "extractCanvasFromText");
+    initial.forEach((message) => {
+      extractToolCardsCached(message);
+      const record = message as { content: unknown[] };
+      Object.freeze(record.content);
+      Object.freeze(message);
+    });
+    const calls = prepare.mock.calls.length;
+    const rebuilt = messages([...first.items(), ...second.items()]);
+    expect(rebuilt[0]).toBe(initial[0]);
+    expect(rebuilt[1]).toBe(initial[1]);
+    const prepended = messages([...older.items(), ...first.items(), ...second.items()]);
+    expect(prepended[1]).toBe(initial[0]);
+    expect(prepended[2]).toBe(initial[1]);
+    rebuilt.forEach(extractToolCardsCached);
+    expect(prepare).toHaveBeenCalledTimes(calls + 1); // Only the newly prepended output.
+
+    first.output.content = [{ ...first.output.content[0]!, text: '{"exitCode":1}' }];
+    const replacedBlock = messages([...first.items(), ...second.items()]);
+    expect(replacedBlock[0]).not.toBe(initial[0]);
+    expect(replacedBlock[1]).toBe(initial[1]);
+    const replacedMessage = messages([
+      item({ ...first.call }, "call-first"),
+      first.items()[1]!,
+      ...second.items(),
+    ]);
+    expect(replacedMessage[0]).not.toBe(replacedBlock[0]);
+    expect(replacedMessage[1]).toBe(initial[1]);
+    expect(extractToolCardsCached(initial[0])[0]?.exitCode).toBe(0);
+    expect(extractToolCardsCached(replacedBlock[0])[0]?.exitCode).toBe(1);
+  });
+
   it.each(["identified", "anonymous sibling", "standalone"])(
     "prepares %s output once across rebuilds and older pages",
     (shape) => {

@@ -21,6 +21,7 @@ type ProjectedItem = MessageItem & {
 };
 type Source = {
   item: MessageItem;
+  originalMessage: Record<string, unknown>;
   message: Record<string, unknown>;
   index: number;
   remaining: unknown[];
@@ -43,6 +44,9 @@ type Invocation = {
   attachments: unknown[];
   projections: Projection[];
 };
+
+type CachedBundle = { inputs: unknown[]; message: ProjectedItem["message"] };
+const messagesBySource = new WeakMap<object, Map<string, CachedBundle>>();
 
 function resultBlock(card: ToolCard): Record<string, unknown> {
   return {
@@ -119,6 +123,7 @@ function readProjections(item: MessageItem, index: number): Projection[] {
   }
   const source: Source = {
     item,
+    originalMessage,
     message,
     index,
     standalone,
@@ -276,7 +281,8 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     invocations.set(invocationKey, invocation);
   }
   const rows = new Map<number, ProjectedItem[]>();
-  const bundles = new Map<string, { item: ProjectedItem; index: number }>();
+  const bundles = new Map<string, { item: ProjectedItem; index: number; inputs: unknown[] }>();
+  const memoInputs = new Map<ProjectedItem, { owner: object; inputs: unknown[] }>();
   const unchanged = new Set(sources.values());
   for (const invocation of invocations.values()) {
     const owners = new Set(invocation.projections.map((projection) => projection.source));
@@ -314,8 +320,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     ];
     // Batch only calls with the same message-scoped rendering metadata. Separate
     // result refs or completion states need separate rows, never sibling flags.
-    const bundleKey = JSON.stringify([
-      owner.source.index,
+    const renderingKey = JSON.stringify([
       owner.runId,
       Boolean(invocation.live),
       completed,
@@ -324,6 +329,18 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       invocation.live?.["__openclawToolStreamReceivedAt"],
       (names.get(identity(owner))?.size ?? 0) > 1 ? owner.name : undefined,
     ]);
+    const bundleKey = `${owner.source.index}:${renderingKey}`;
+    const inputs = [
+      renderingKey,
+      identity(owner),
+      owner.name,
+      ...invocation.projections.flatMap(({ source }) => [
+        source.originalMessage,
+        ...(Array.isArray(source.originalMessage.content)
+          ? source.originalMessage.content
+          : [source.originalMessage.content]),
+      ]),
+    ];
     const bundle = bundles.get(bundleKey);
     const prepared = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
     for (const source of [message, invocation.live, result?.source.message]) {
@@ -347,6 +364,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       }
     }
     if (bundle) {
+      bundle.inputs.push(...inputs);
       bundle.item.message.content.push(...content);
       bundle.item.message.activity = [
         ...readPreparedActivity(bundle.item.message),
@@ -377,14 +395,15 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
           : {}),
       },
     };
-    bundles.set(bundleKey, { item, index });
+    bundles.set(bundleKey, { item, index, inputs });
+    memoInputs.set(item, { owner: owner.source.originalMessage, inputs });
   }
   for (const { item, index } of bundles.values()) {
     const row = rows.get(index) ?? [];
     row.push(item);
     rows.set(index, row);
   }
-  return items.flatMap((item, index) => {
+  const result = items.flatMap((item, index) => {
     const source = sources.get(index);
     if (!source || unchanged.has(source)) {
       return [item];
@@ -441,6 +460,34 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     }
     return row;
   });
+  // Assembly and prose/media interleaving are complete. Only messages are
+  // reused: duplicate grouping can still mutate the returned item wrappers.
+  const nextBySource = new Map<object, Map<string, CachedBundle>>();
+  for (const [item, { owner, inputs }] of memoInputs) {
+    inputs.push(item.message.content.length);
+    for (const block of item.message.content) {
+      const raw = asRecord(block);
+      if (isToolCallContentType(raw?.type) || isToolResultContentType(raw?.type)) {
+        inputs.push(raw?.type, raw?.id, raw?.name);
+      } else {
+        inputs.push(block);
+      }
+    }
+    const cached = messagesBySource.get(owner)?.get(item.key);
+    if (
+      cached?.inputs.length === inputs.length &&
+      inputs.every((input, index) => input === cached.inputs[index])
+    ) {
+      item.message = cached.message;
+    }
+    const next = nextBySource.get(owner) ?? new Map<string, CachedBundle>();
+    next.set(item.key, { inputs, message: item.message });
+    nextBySource.set(owner, next);
+  }
+  for (const [owner, next] of nextBySource) {
+    messagesBySource.set(owner, next);
+  }
+  return result;
 }
 
 export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
