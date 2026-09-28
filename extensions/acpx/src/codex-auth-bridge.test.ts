@@ -271,6 +271,74 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
 
+  it("falls back to the package spec when the captured installed ACP path is reclaimed", async () => {
+    const root = testWorkspace.dir;
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const captureDir = path.join(root, "openclaw-plugin-build", "package-2026-9-5");
+    const installedBinPath = path.join(
+      captureDir,
+      "node_modules",
+      "@agentclientprotocol",
+      "codex-acp",
+      "dist",
+      "index.js",
+    );
+    await fs.mkdir(path.dirname(installedBinPath), { recursive: true });
+    await fs.writeFile(
+      installedBinPath,
+      "process.stdout.write('CAPTURED_ADAPTER_PATH_WAS_USED');\n",
+      "utf8",
+    );
+    const pluginConfig = resolveAcpxPluginConfig({ rawConfig: {}, workspaceDir: root });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    // Plugin capture directories are disposable; a durable wrapper must survive
+    // the capture dir being reclaimed by a later install or upgrade.
+    await fs.rm(captureDir, { recursive: true, force: true });
+    await expectPathMissing(installedBinPath);
+
+    // The generated wrapper derives the npm CLI path from process.execPath, so
+    // a node shim keeps the fallback observable and fully offline.
+    const shimRoot = path.join(root, "node-shim");
+    const shimNode = path.join(shimRoot, "bin", process.platform === "win32" ? "node.exe" : "node");
+    await fs.mkdir(path.dirname(shimNode), { recursive: true });
+    try {
+      await fs.link(process.execPath, shimNode);
+    } catch {
+      await fs.copyFile(process.execPath, shimNode);
+    }
+    const shimNpmCli = path.join(shimRoot, "lib", "node_modules", "npm", "bin", "npm-cli.js");
+    await fs.mkdir(path.dirname(shimNpmCli), { recursive: true });
+    await fs.writeFile(
+      shimNpmCli,
+      "process.stdout.write(JSON.stringify({ invokedAs: process.argv[1], argv: process.argv.slice(2) }));\n",
+      "utf8",
+    );
+
+    const { stdout } = await execFileAsync(shimNode, [generated.wrapperPath], {
+      cwd: root,
+      env: { ...process.env },
+    });
+
+    const launched = JSON.parse(stdout.trim()) as { invokedAs?: unknown; argv?: unknown };
+    expect(launched.invokedAs).toBe(shimNpmCli);
+    expect(launched.argv).toEqual([
+      "exec",
+      "--yes",
+      "--package",
+      "@agentclientprotocol/codex-acp@1.11.0",
+      "--",
+      "codex-acp",
+    ]);
+    expect(stdout).not.toContain("CAPTURED_ADAPTER_PATH_WAS_USED");
+  });
+
   it("keeps the orphaned wrapper alive long enough to force-kill the child process group", async () => {
     const root = testWorkspace.dir;
     const stateDir = path.join(root, "state");
