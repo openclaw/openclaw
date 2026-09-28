@@ -24,7 +24,11 @@ import {
   type ApprovalNativeRouteCoordinator,
 } from "./approval-native-route-coordinator.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
+import {
+  resolveApprovalRequestKind,
+  type ApprovalRequestInput,
+  type ChannelApprovalKind,
+} from "./approval-types.js";
 import {
   buildForwardedExecApprovalExpired,
   buildForwardedExecPendingPayload,
@@ -70,6 +74,7 @@ type ApprovalRouteRequest = {
 type PendingApproval = {
   routeRequest: ApprovalRouteRequest;
   targets: ForwardTarget[];
+  approvalRequest: ApprovalRequestInput;
 };
 
 type ApprovalRenderContext = {
@@ -166,11 +171,37 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
   };
 }
 
+function restoreApprovalRequestForSuppression(params: {
+  approvalKind: ChannelApprovalKind;
+  id: string;
+  request?: ApprovalRouteRequest | null;
+}): ApprovalRequestInput | undefined {
+  if (!params.request) {
+    return undefined;
+  }
+  // The resolved snapshot retains its original payload; reconstruct only its
+  // owner so a cache-miss notice cannot route through an exec-shaped placeholder.
+  const restored = {
+    id: params.id,
+    request: params.request,
+    createdAtMs: 0,
+    expiresAtMs: 0,
+  };
+  try {
+    return resolveApprovalRequestKind(restored) === params.approvalKind
+      ? (restored as ApprovalRequestInput)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function shouldSkipForwardingFallback(params: {
   approvalKind: ChannelApprovalKind;
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
+  approvalRequest?: ApprovalRequestInput;
   nativeRouteCoordinator: ApprovalNativeRouteCoordinator | undefined;
 }): boolean {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
@@ -187,13 +218,16 @@ function shouldSkipForwardingFallback(params: {
     return true;
   }
   const adapter = resolveChannelApprovalAdapter(plugin);
-  const suppress =
-    adapter?.delivery?.shouldSuppressForwardingFallback?.({
-      cfg: params.cfg,
-      approvalKind: params.approvalKind,
-      target: params.target,
-      request: buildSyntheticApprovalRequest(params.routeRequest),
-    }) ?? false;
+  const fallbackInput = {
+    cfg: params.cfg,
+    approvalKind: params.approvalKind,
+    target: params.target,
+    request: params.approvalRequest ?? buildSyntheticApprovalRequest(params.routeRequest),
+  };
+  if (adapter?.delivery?.shouldBlockForwardingFallback?.(fallbackInput)) {
+    return true;
+  }
+  const suppress = adapter?.delivery?.shouldSuppressForwardingFallback?.(fallbackInput) ?? false;
   if (!suppress || !plugin) {
     return false;
   }
@@ -280,7 +314,12 @@ async function deliverToTargets(params: {
   targets: ForwardTarget[];
   buildPayload: (target: ForwardTarget) => ReplyPayload;
   deliver: DeliverApprovalPayloads;
-  beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
+  beforeDeliver?: (
+    target: ForwardTarget,
+    payload: ReplyPayload,
+  ) => Promise<boolean | void> | boolean | void;
+  assertPlatformSend?: (target: ForwardTarget) => void;
+  skipSlackQueue?: boolean;
   shouldSend?: () => boolean;
 }) {
   const deliveries = params.targets.map(async (target) => {
@@ -293,7 +332,10 @@ async function deliverToTargets(params: {
     }
     try {
       const payload = params.buildPayload(target);
-      await params.beforeDeliver?.(target, payload);
+      if ((await params.beforeDeliver?.(target, payload)) === false) {
+        return;
+      }
+      const assertPlatformSend = channel === "slack" ? params.assertPlatformSend : undefined;
       const send = await params.deliver({
         cfg: params.cfg,
         channel,
@@ -301,6 +343,13 @@ async function deliverToTargets(params: {
         accountId: target.accountId,
         threadId: target.threadId,
         payloads: [payload],
+        ...(params.skipSlackQueue && channel === "slack" ? { skipQueue: true } : {}),
+        ...(assertPlatformSend
+          ? {
+              onPlatformSendDispatch: async () => assertPlatformSend(target),
+              assertDirectAdapterHandoff: () => assertPlatformSend(target),
+            }
+          : {}),
       });
       if (send.status === "failed" || send.status === "partial_failed") {
         throw send.error;
@@ -360,7 +409,7 @@ async function resolveForwardTargets(params: {
 }
 
 function createApprovalHandlers<
-  TRequest extends { id: string; request: ApprovalRouteRequest; expiresAtMs: number },
+  TRequest extends ApprovalRequestInput,
   TResolved extends { id: string; request?: ApprovalRouteRequest | null },
 >(params: {
   strategy: ApprovalStrategy<TRequest, TResolved>;
@@ -381,6 +430,7 @@ function createApprovalHandlers<
     cfg: OpenClawConfig;
     config?: ExecApprovalForwardingConfig;
     routeRequest: ApprovalRouteRequest;
+    approvalRequest?: ApprovalRequestInput;
   }): Promise<ForwardTarget[]> => {
     if (!shouldForwardRoute(paramsForRoute)) {
       return [];
@@ -408,14 +458,51 @@ function createApprovalHandlers<
           target,
           cfg: paramsForRoute.cfg,
           routeRequest: paramsForRoute.routeRequest,
+          approvalRequest: paramsForRoute.approvalRequest,
           nativeRouteCoordinator,
         }),
     );
   };
 
+  const pluginForwardingGuard = (
+    routeRequest: ApprovalRouteRequest | null,
+    approvalRequest?: ApprovalRequestInput,
+  ) => {
+    if (params.strategy.kind !== "plugin" || !routeRequest) {
+      return undefined;
+    }
+    const isBlocked = (target: ForwardTarget) =>
+      (normalizeMessageChannel(target.channel) ?? target.channel) === "slack" &&
+      shouldSkipForwardingFallback({
+        approvalKind: "plugin",
+        target,
+        cfg: params.getConfig(),
+        routeRequest,
+        approvalRequest,
+        nativeRouteCoordinator: params.getNativeApprovalRouteCoordinator(),
+      });
+    return {
+      canSend: (target: ForwardTarget) => !isBlocked(target),
+      assertSend: (target: ForwardTarget) => {
+        // Slack can wait behind another send after outbound preparation.
+        // Fence the platform handoff and each transport retry.
+        if (isBlocked(target)) {
+          throw new Error("plugin approval forwarding is no longer authorized");
+        }
+      },
+    };
+  };
+
   const deliverResolved = async (resolved: TResolved, entry?: PendingApproval): Promise<void> => {
     const cfg = params.getConfig();
     const routeRequest = entry?.routeRequest ?? extractApprovalRouteRequest(resolved.request);
+    const approvalRequest =
+      entry?.approvalRequest ??
+      restoreApprovalRequestForSuppression({
+        approvalKind: params.strategy.kind,
+        id: resolved.id,
+        request: resolved.request,
+      });
     const targets =
       entry?.targets ??
       (routeRequest
@@ -423,14 +510,19 @@ function createApprovalHandlers<
             cfg,
             config: params.strategy.config(cfg),
             routeRequest,
+            approvalRequest,
           })
         : []);
     if (!targets.length) {
       return;
     }
+    const guard = pluginForwardingGuard(routeRequest, approvalRequest);
     await deliverToTargets({
       cfg,
       targets,
+      beforeDeliver: guard?.canSend,
+      assertPlatformSend: guard?.assertSend,
+      skipSlackQueue: Boolean(guard),
       buildPayload: (target) =>
         params.strategy.buildResolvedPayload({
           cfg,
@@ -447,10 +539,19 @@ function createApprovalHandlers<
     const requestId = request.id;
     const routeRequest = extractApprovalRouteRequest(request.request) ?? {};
     // Register before route lookup so a fast resolution cannot overtake and resurrect delivery.
-    const pendingEntry = pending.begin(requestId, { routeRequest, targets: [] });
+    const pendingEntry = pending.begin(requestId, {
+      routeRequest,
+      targets: [],
+      approvalRequest: request,
+    });
     let filteredTargets: ForwardTarget[];
     try {
-      filteredTargets = await resolveTargets({ cfg, config, routeRequest });
+      filteredTargets = await resolveTargets({
+        cfg,
+        config,
+        routeRequest,
+        approvalRequest: request,
+      });
     } catch (error) {
       pending.remove(requestId, pendingEntry);
       throw error;
@@ -460,7 +561,8 @@ function createApprovalHandlers<
       return false;
     }
 
-    pendingEntry.value = { routeRequest, targets: filteredTargets };
+    pendingEntry.value = { routeRequest, targets: filteredTargets, approvalRequest: request };
+    const guard = pluginForwardingGuard(routeRequest, request);
     const buildExpiredText = params.strategy.buildExpiredText;
     if (buildExpiredText) {
       const expiresInMs = Math.max(0, request.expiresAtMs - params.nowMs());
@@ -469,6 +571,9 @@ function createApprovalHandlers<
           deliverToTargets({
             cfg,
             targets: expired.value.targets,
+            beforeDeliver: guard?.canSend,
+            assertPlatformSend: guard?.assertSend,
+            skipSlackQueue: Boolean(guard),
             buildPayload: () => ({ text: buildExpiredText(request) }),
             deliver: params.deliver,
           }),
@@ -505,7 +610,14 @@ function createApprovalHandlers<
               approvalKind: params.strategy.kind,
             },
           });
+          // A policy change during outbound preparation must not deliver a
+          // queued plugin card to a reviewer who no longer receives it.
+          return guard?.canSend(target);
         },
+        assertPlatformSend: guard?.assertSend,
+        // A recovered Slack row cannot reconstruct this approval's live
+        // reviewer policy, so a stale card must never outlive the Gateway.
+        skipSlackQueue: Boolean(guard),
         deliver: params.deliver,
         shouldSend: () => pending.isCurrent(pendingEntry),
       }).then(() => pending.completeDelivery(pendingEntry, pendingEntry.value)),

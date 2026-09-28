@@ -212,7 +212,7 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
               calendar: {
                 approvers: [pluginReviewer],
                 tools: {
-                  "app%2Fone/create%20event": { approvers: [toolReviewer] },
+                  "create%20event": { approvers: [toolReviewer] },
                 },
               },
             },
@@ -221,12 +221,8 @@ describe("isSlackPluginApprovalAuthorizedSender", () => {
       },
       channels: { slack: { allowFrom: [legacyReviewer] } },
     };
-    const tool = pluginRequest({ pluginKey: "calendar", appId: "app/one", tool: "create event" });
-    const siblingTool = pluginRequest({
-      pluginKey: "calendar",
-      appId: "app/two",
-      tool: "create event",
-    });
+    const tool = pluginRequest({ pluginKey: "calendar", tool: "create event" });
+    const siblingTool = pluginRequest({ pluginKey: "calendar", tool: "delete event" });
     const otherPlugin = pluginRequest({ pluginKey: "other" });
     const authorized = (senderId: string, request: PluginApprovalRequest) =>
       isSlackPluginApprovalAuthorizedSender({ cfg, senderId, request });

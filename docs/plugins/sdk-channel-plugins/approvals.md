@@ -23,6 +23,15 @@ only - core no longer reads approval auth hooks from that object.
 Use `approvalCapability.delivery` only for native approval routing or fallback
 suppression, and `approvalCapability.render` only when a channel truly needs
 custom approval payloads instead of the shared renderer.
+`delivery.shouldBlockForwardingFallback` rejects a fallback that cannot enforce
+the selected reviewer policy even when no native handler is running. A channel
+may require native reviewer delivery and reject all generic forwarding for a
+selected policy;
+`delivery.shouldSuppressForwardingFallback` avoids duplicate delivery only while
+the native handler is active. Both receive the approval request payload. For a
+terminal notice without a cached pending request, core reconstructs it from the
+resolved event with `createdAtMs` and `expiresAtMs` set to zero; policy checks
+should use the nested request payload.
 
 ### Approval auth
 

@@ -9,7 +9,7 @@ vi.mock("./send.js", () => ({
 
 const { slackApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
 
-describe("Slack Enterprise Grid approval delivery", () => {
+describe("Slack approval delivery", () => {
   beforeEach(() => {
     sendMessageSlackMock.mockReset().mockResolvedValue({
       channelId: "C123",
@@ -64,6 +64,11 @@ describe("Slack Enterprise Grid approval delivery", () => {
       },
       accountId: "default",
       context,
+      plannedTarget: {
+        surface: "origin",
+        reason: "preferred",
+        target: { to: "team:T123:channel:C123" },
+      },
       preparedTarget: {
         to: "channel:C123",
         teamId: "T123",
@@ -121,6 +126,11 @@ describe("Slack Enterprise Grid approval delivery", () => {
           enterprise: { enterpriseId: "E123" },
           ...(resolveClient ? { resolveClient } : {}),
         },
+        plannedTarget: {
+          surface: "origin",
+          reason: "preferred",
+          target: { to: "team:T123:channel:C123" },
+        },
         preparedTarget: {
           to: "channel:C123",
           teamId: "T123",
@@ -147,6 +157,11 @@ describe("Slack Enterprise Grid approval delivery", () => {
         enterprise: { enterpriseId: "E123" },
         resolveClient: () => teamClient,
       },
+      plannedTarget: {
+        surface: "origin",
+        reason: "preferred",
+        target: { to: "team:T123:user:U123" },
+      },
       preparedTarget: {
         to: "user:U123",
         teamId: "T123",
@@ -164,26 +179,19 @@ describe("Slack Enterprise Grid approval delivery", () => {
     );
   });
 
-  it("delivers a qualified approver DM through its authenticated workspace client", async () => {
+  it("uses the authenticated workspace client for a reviewer DM in that workspace", async () => {
     const open = vi.fn().mockResolvedValue({ channel: { id: "D123" } });
-    const appClient = {
-      conversations: { open },
-    };
-    const cfg = {
-      channels: { slack: { botToken: "xoxb-test", appToken: "xapp-test" } },
-    };
+    const client = { chat: { update: vi.fn() }, conversations: { open } };
     const context = {
-      app: { client: appClient },
+      app: { client },
       config: {},
       workspaceTeamId: "T123",
-      installationIdentity: { kind: "workspace", teamId: "T123" },
     };
 
-    const entry = await slackApprovalNativeRuntime.transport.deliverPending({
-      cfg,
+    await slackApprovalNativeRuntime.transport.deliverPending({
+      cfg: {} as never,
       accountId: "default",
       context,
-      request: EXEC_REQUEST,
       approvalKind: "exec",
       plannedTarget: {
         surface: "approver-dm",
@@ -198,34 +206,24 @@ describe("Slack Enterprise Grid approval delivery", () => {
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
       "channel:D123",
       "approve",
-      expect.objectContaining({
-        client: appClient,
-        eventScope: expect.objectContaining({ teamId: "T123", client: appClient }),
-      }),
+      expect.objectContaining({ client, eventScope: expect.objectContaining({ teamId: "T123" }) }),
     );
-    expect(entry).toEqual({
-      channelId: "C123",
-      messageTs: "1712345678.123456",
-      teamId: "T123",
-      showMessageExcerpt: false,
-    });
 
     await expect(
       slackApprovalNativeRuntime.transport.deliverPending({
-        cfg,
+        cfg: {} as never,
         accountId: "default",
         context,
-        request: EXEC_REQUEST,
         approvalKind: "exec",
         plannedTarget: {
           surface: "approver-dm",
           reason: "preferred",
-          target: { to: "team:TOTHER:user:U123" },
+          target: { to: "team:T999:user:U123" },
         },
-        preparedTarget: { to: "user:U123", teamId: "TOTHER" },
+        preparedTarget: { to: "user:U123", teamId: "T999" },
         pendingPayload: { text: "approve", blocks: [] },
       } as never),
     ).rejects.toThrow("Slack approval workspace does not match the authenticated installation");
-    expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledTimes(1);
   });
 });

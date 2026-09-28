@@ -28,9 +28,7 @@ export function resolvePluginApprovalSlackApprovers(
     if (!subject?.tool) {
       return [];
     }
-    const toolKey = subject.appId
-      ? `${encodeURIComponent(subject.appId)}/${encodeURIComponent(subject.tool)}`
-      : encodeURIComponent(subject.tool);
+    const toolKey = encodeURIComponent(subject.tool);
     if (Object.hasOwn(tools, toolKey)) {
       return tools[toolKey]?.approvers ?? [];
     }

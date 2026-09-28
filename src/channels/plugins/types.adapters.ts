@@ -474,14 +474,18 @@ export type ChannelLifecycleAdapter = {
   }) => ChannelLegacyStateMigrationPlan[] | Promise<ChannelLegacyStateMigrationPlan[]>;
 };
 
+type ChannelApprovalForwardingFallbackParams = {
+  cfg: OpenClawConfig;
+  approvalKind: ChannelApprovalKind;
+  target: ChannelApprovalForwardTarget;
+  request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+};
+
 type ChannelApprovalDeliveryAdapter = {
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
-  shouldSuppressForwardingFallback?: (params: {
-    cfg: OpenClawConfig;
-    approvalKind: ChannelApprovalKind;
-    target: ChannelApprovalForwardTarget;
-    request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-  }) => boolean;
+  /** Deny a fallback that cannot satisfy this request's reviewer policy, even without a native handler. */
+  shouldBlockForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
+  shouldSuppressForwardingFallback?: (params: ChannelApprovalForwardingFallbackParams) => boolean;
 };
 type ChannelApproveCommandBehavior =
   | { kind: "allow" }

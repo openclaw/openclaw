@@ -81,6 +81,7 @@ export function isSlackPluginApprovalPolicyRouteEligible(params: {
       Boolean(resolveSlackApprovalOriginTeamId(params.request)));
   return (
     hasAuthenticatedInstallation &&
+    isSlackApprovalAccountInRequestWorkspace(accountId, params.request) &&
     getSlackApprovalApproversForTeam({
       ...params,
       teamId: resolveSlackApprovalTeamId(params),
@@ -93,6 +94,38 @@ export type SlackOriginTarget = {
   accountId?: string | null;
   threadId?: string | number | null;
 };
+
+export function resolveSlackApproverDmTargets(params: {
+  cfg: Parameters<typeof shouldHandleSlackNativeApprovalRequest>[0]["cfg"];
+  accountId?: string | null;
+  approvalKind: ChannelApprovalKind;
+  request: SlackNativeApprovalRequest;
+}): SlackOriginTarget[] {
+  if (!shouldHandleSlackNativeApprovalRequest(params)) {
+    return [];
+  }
+  const teamId = resolveSlackApprovalTeamId(params);
+  const approvers =
+    params.approvalKind === "plugin"
+      ? isSlackPluginApprovalRequest(params.request)
+        ? getSlackApprovalApproversForTeam({ ...params, teamId, request: params.request })
+        : []
+      : getSlackExecApprovalApprovers(params);
+  return approvers.map((approver) => {
+    const target = parseSlackTarget(approver, { defaultKind: "user" });
+    if (!target || target.kind !== "user") {
+      throw new Error("Slack approval approver target must be a user");
+    }
+    return {
+      to: formatSlackTarget({
+        kind: "user",
+        id: target.id,
+        teamId: target.teamId ?? teamId,
+        explicitKind: true,
+      }),
+    };
+  });
+}
 
 type SlackForwardTarget = Parameters<
   NonNullable<
