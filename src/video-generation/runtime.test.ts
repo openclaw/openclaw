@@ -13,6 +13,7 @@ import type { VideoGenerationProvider, VideoGenerationRequest } from "./types.js
 let providers: VideoGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];
 let providerEnvVars: Record<string, string[]> = {};
+let warnings: string[] = [];
 
 const runtimeDeps = {
   getProvider: (providerId) => providers.find((provider) => provider.id === providerId),
@@ -23,7 +24,7 @@ const runtimeDeps = {
   getProviderEnvVars: (providerId) => providerEnvVars[providerId] ?? [],
   log: {
     debug: () => {},
-    warn: () => {},
+    warn: (message) => warnings.push(message),
   },
 } satisfies NonNullable<Parameters<typeof generateVideo>[1]>;
 
@@ -92,6 +93,7 @@ describe("video-generation runtime", () => {
     providers = [];
     listedConfigs = [];
     providerEnvVars = {};
+    warnings = [];
   });
 
   it("generates videos through the active video-generation provider", async () => {
@@ -210,6 +212,9 @@ describe("video-generation runtime", () => {
         error: "Your request was blocked by our moderation system.",
       },
     ]);
+    expect(warnings).toContain(
+      "video-generation candidate failed: openai/sora-2: Your request was blocked by our moderation system.",
+    );
   });
 
   it("falls through when a video provider returns an empty buffer", async () => {

@@ -609,7 +609,7 @@ describe("Where chip", () => {
   );
 
   it("hides unavailable operating systems from cloud configuration", () => {
-    const reason = "Upgrade Crabbox to 0.53.1 or newer, then restart the Gateway.";
+    const reason = "Upgrade Crabbox to enable this operating system.";
     const container = renderPicker(true, undefined, {
       cloudProfileId: "aws",
       cloudProfiles: readDraftCloudProfiles([

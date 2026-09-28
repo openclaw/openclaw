@@ -924,7 +924,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("keeps a changed result fenced when quiescence fails after apply", async () => {
-    const harness = createHarness(database, placementStore, { leaseFailureCount: 1 });
+    const harness = createHarness(database, placementStore, { leaseFailureCall: 2 });
     await harness.service.dispatch(REQUEST);
 
     await expect(
@@ -984,7 +984,9 @@ describe("worker placement dispatch reclaim", () => {
     };
     const harness = createHarness(database, placementStore, {
       priorWorkspaceResultConflict: priorConflict,
-      verifyFails: true,
+      reconcileCommitsManifest: false,
+      reconcileCommitsManifestOnApply: true,
+      verifyFailureCall: 3,
     });
     await harness.service.dispatch(REQUEST);
 

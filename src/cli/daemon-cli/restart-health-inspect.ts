@@ -34,6 +34,8 @@ export async function inspectGatewayRestart(params: {
   probeHosts?: readonly string[];
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Bound Gateway requests separately from native service/listener inspection. */
+  probeTimeoutMs?: number;
   deadline?: GatewayRestartDeadline;
   phase?: string;
 }): Promise<GatewayRestartSnapshot> {
@@ -44,15 +46,18 @@ export async function inspectGatewayRestart(params: {
       ? params.deadline.read(`${params.phase ?? "inspection"}:${phase}`, operation)
       : operation();
   const startedAtMs = performance.now();
-  const remainingTimeoutMs = () => {
+  const remainingTimeoutMs = (probeTimeoutMs?: number) => {
     const remaining =
       params.timeoutMs === undefined
         ? undefined
         : Math.max(1, params.timeoutMs - (performance.now() - startedAtMs));
     // The overall readiness deadline must not replace a shorter inspection budget.
-    return params.deadline
+    const allowance = params.deadline
       ? Math.min(Math.max(1, params.deadline.remainingMs()), remaining ?? Infinity)
       : remaining;
+    return probeTimeoutMs === undefined
+      ? allowance
+      : Math.min(probeTimeoutMs, allowance ?? Infinity);
   };
   const env = params.env ?? process.env;
   const probeHosts =
@@ -83,7 +88,7 @@ export async function inspectGatewayRestart(params: {
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
-        timeoutMs: remainingTimeoutMs(),
+        timeoutMs: remainingTimeoutMs(params.probeTimeoutMs),
         ...(signal ? { signal } : {}),
       }),
     );
@@ -133,7 +138,7 @@ export async function inspectGatewayRestart(params: {
           readGatewayStartupPhase({
             configuredProbe,
             port: params.port,
-            timeoutMs: remainingTimeoutMs(),
+            timeoutMs: remainingTimeoutMs(params.probeTimeoutMs),
             ...(signal ? { signal } : {}),
           }),
         )

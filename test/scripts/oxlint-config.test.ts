@@ -821,6 +821,382 @@ describe("oxlint config", () => {
     }
   });
 
+  it("bounds package fallback roots while preserving existing projects and ambient types", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-package-project-"));
+    const write = (file: string, content: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+    };
+    const copy = (file: string) => write(file, fs.readFileSync(file, "utf8"));
+    const packageOwners = [
+      "ai",
+      "llm-core",
+      "model-catalog-core",
+      "normalization-core",
+      "plugin-sdk",
+    ];
+    for (const file of [
+      ".oxlintrc.json",
+      "tsconfig.json",
+      "ui/src/css.d.ts",
+      ...packageOwners.map((owner) => `packages/${owner}/tsconfig.json`),
+    ])
+      copy(file);
+    write("package.json", '{"type":"module"}');
+    writeSourceProjectFixture(root);
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    // The original repository graph acquires ESNext through unrelated roots.
+    write("src/library-owner.ts", '/// <reference lib="esnext" />\nexport {};');
+    write("ui/unrelated.ts", "export {};");
+    write("extensions/unrelated.ts", "export {};");
+    const contract = "packages/example/contract.ts";
+    write(contract, "export interface Contract {} export declare const contract: Contract;");
+    for (const [index, file] of sourceAugmentations.entries()) {
+      const imported = path
+        .relative(path.dirname(file), contract)
+        .replaceAll("\\", "/")
+        .replace(/\.ts$/, ".js");
+      write(
+        file,
+        `import ${JSON.stringify(imported)}; declare module ${JSON.stringify(imported)} { interface Contract { action${index}(): Promise<void>; } }`,
+      );
+    }
+    const declarations = ["src", "packages", "ui", "extensions"].flatMap((directory) =>
+      ["ts", "mts", "cts"].map((suffix) => `${directory}/ambient.d.${suffix}`),
+    );
+    for (const [index, file] of declarations.entries()) {
+      write(file, `export {}; declare global { function ambient${index}(): Promise<void>; }`);
+    }
+    const fallback = [
+      "packages/example/owner.ts",
+      "packages/example/owner.test.ts",
+      "packages/normalization-core/src/owner.test.ts",
+      "packages/plugin-sdk/tests/owner.test.ts",
+    ];
+    for (const file of fallback) {
+      let imported = path
+        .relative(path.dirname(file), contract)
+        .replaceAll("\\", "/")
+        .replace(/\.ts$/, ".js");
+      if (!imported.startsWith(".")) imported = "./" + imported;
+      write(
+        file,
+        [
+          `import { contract } from ${JSON.stringify(imported)};`,
+          ...sourceAugmentations.map((_file, index) => `contract.action${index}();`),
+          ...declarations.map((_file, index) => `ambient${index}();`),
+          "Promise.try(() => undefined);",
+        ].join("\n"),
+      );
+    }
+    const configured = packageOwners
+      .filter((owner) => owner !== "plugin-sdk")
+      .map((owner) => `packages/${owner}/src/owner.ts`);
+    for (const file of configured) write(file, "Promise.resolve();");
+    const inferred = [
+      "packages/example/frame.js",
+      "packages/example/probe.test-support.mjs",
+      "packages/example/other.test-support.mjs",
+    ];
+    for (const file of inferred) write(file, "Promise.resolve();");
+    write(
+      "packages/example/ambient-contract.ts",
+      [
+        'import type { SessionEntry } from "../../src/config/sessions/types.js";',
+        'import asset from "./frame.js?url&no-inline";',
+        'export const hasCompatibility: "sessionFile" extends keyof SessionEntry ? true : false = false;',
+        "export const assetUrl: string = asset;",
+      ].join("\n"),
+    );
+    const selected = [...fallback, ...configured, ...inferred];
+    const lint = () =>
+      spawnSync(
+        process.execPath,
+        [
+          path.resolve("node_modules/oxlint/bin/oxlint"),
+          "--type-aware",
+          "--threads=1",
+          "--format=json",
+          ...selected,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            OXC_LOG: "debug",
+            GOMAXPROCS: "2",
+            OXLINT_TSGOLINT_PATH: resolveRepoToolBinPath(
+              process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+            ),
+          },
+        },
+      );
+    const baseline = lint();
+    copy("packages/tsconfig.json");
+    const narrowed = lint();
+    const reports = [baseline, narrowed].map((result) => {
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      return JSON.parse(result.stdout) as {
+        number_of_files: number;
+        diagnostics: Array<{ filename: string; code: string }>;
+      };
+    });
+    expect(reports.map((report) => report.number_of_files)).toEqual([
+      selected.length,
+      selected.length,
+    ]);
+    expect(reports[0]!.diagnostics.map((item) => JSON.stringify(item)).toSorted()).toEqual(
+      reports[1]!.diagnostics.map((item) => JSON.stringify(item)).toSorted(),
+    );
+    for (const file of fallback) {
+      expect(
+        reports[1]!.diagnostics
+          .filter((item) => item.filename.replaceAll("\\", "/") === file)
+          .map((item) => item.code),
+      ).toEqual(
+        Array.from(
+          { length: sourceAugmentations.length + declarations.length + 1 },
+          () => "typescript(no-floating-promises)",
+        ),
+      );
+      expect(baseline.stderr.replaceAll("\\", "/")).toContain(
+        `Got tsconfig for file ${path.join(root, file).replaceAll("\\", "/")}: ${path.join(root, "tsconfig.json").replaceAll("\\", "/")}`,
+      );
+      expect(narrowed.stderr.replaceAll("\\", "/")).toContain(
+        `Got tsconfig for file ${path.join(root, file).replaceAll("\\", "/")}: ${path.join(root, "packages/tsconfig.json").replaceAll("\\", "/")}`,
+      );
+    }
+    for (const result of [baseline, narrowed]) {
+      for (const file of configured) {
+        const project = file.split("/").slice(0, 2).join("/") + "/tsconfig.json";
+        expect(result.stderr.replaceAll("\\", "/")).toContain(
+          `Got tsconfig for file ${path.join(root, file).replaceAll("\\", "/")}: ${path.join(root, project).replaceAll("\\", "/")}`,
+        );
+      }
+      for (const file of inferred)
+        expect(result.stderr.replaceAll("\\", "/")).toContain(
+          `Unmatched file: ${path.join(root, file).replaceAll("\\", "/")}`,
+        );
+    }
+    const expanded = spawnSync(
+      resolveRepoToolBinPath("tsgo"),
+      ["--showConfig", "--project", "packages/tsconfig.json"],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(expanded.error).toBeUndefined();
+    expect(expanded.status, expanded.stdout + expanded.stderr).toBe(0);
+    const roots = (JSON.parse(expanded.stdout) as { files: string[] }).files.map((file) =>
+      path.resolve(root, "packages", file),
+    );
+    for (const file of [...fallback, ...configured, ...sourceAugmentations, ...declarations]) {
+      expect(roots, file).toContain(path.resolve(root, file));
+    }
+    for (const file of [
+      "src/library-owner.ts",
+      "ui/unrelated.ts",
+      "extensions/unrelated.ts",
+      "src/config/sessions/session-entry.test-compat.d.ts",
+      ...inferred,
+    ]) {
+      expect(roots, file).not.toContain(path.resolve(root, file));
+    }
+    const checked = spawnSync(
+      resolveRepoToolBinPath("tsgo"),
+      ["--project", "packages/tsconfig.json", "--noEmit", "--pretty", "false"],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(checked.error).toBeUndefined();
+    expect(checked.status, checked.stdout + checked.stderr).toBe(0);
+  });
+
+  it("bounds the sessions project while retaining source augmentations and typed coverage", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-session-project-"));
+    const write = (file: string, source: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, source);
+    };
+    write("package.json", '{"type":"module"}');
+    for (const file of [".oxlintrc.json", "tsconfig.json", "src/tsconfig.json"]) {
+      write(file, fs.readFileSync(file, "utf8"));
+    }
+    writeSourceProjectFixture(root);
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    const owner = "src/agents/sessions";
+    // The canonical source contract supplies these libraries even in a leaf.
+    write(
+      "src/unrelated-library-owner.ts",
+      '/// <reference lib="es2025.iterator" />\n/// <reference lib="esnext.intl" />\nexport {};',
+    );
+    write(
+      owner + "/library-contract.ts",
+      'export const attempt = Promise.try(() => 1);\nexport const iterator = Iterator.from([1]).map(value => value + 1);\nexport const date = new Intl.DateTimeFormat().format(Temporal.PlainDate.from("2026-01-01"));',
+    );
+    const contract = owner + "/contract.ts";
+    write(contract, "export interface Contract {} export declare const contract: Contract;");
+    const augmenters = sourceAugmentations;
+    for (const [index, file] of augmenters.entries()) {
+      let module = path
+        .relative(path.dirname(file), contract)
+        .replaceAll("\\", "/")
+        .replace(/\.ts$/, ".js");
+      if (!module.startsWith(".")) {
+        module = "./" + module;
+      }
+      write(
+        file,
+        "import " +
+          JSON.stringify(module) +
+          "; declare module " +
+          JSON.stringify(module) +
+          " { interface Contract { action" +
+          index +
+          "(): Promise<void>; } }",
+      );
+    }
+    const declarations = ["src", "packages", "ui", "extensions"].flatMap((directory) =>
+      ["ts", "mts", "cts"].map((suffix) => directory + "/contracts.d." + suffix),
+    );
+    for (const [index, file] of declarations.entries()) {
+      write(file, "export {}; declare global { function ambient" + index + "(): Promise<void>; }");
+    }
+    const ambientCalls = declarations.map((_file, index) => "ambient" + index + "();");
+    const source = [
+      'import { contract } from "./contract.js";',
+      ...augmenters.map((_file, index) => "contract.action" + index + "();"),
+      ...ambientCalls,
+    ].join("\n");
+    const selected = [
+      owner + "/owner.ts",
+      owner + "/owner.test.ts",
+      owner + "/helper.test-support.cjs",
+      "src/sibling.ts",
+    ];
+    write(selected[0]!, source);
+    write(selected[1]!, source);
+    write(selected[2]!, ambientCalls.join("\n"));
+    write(selected[3]!, "Promise.resolve();\n");
+    // Compatibility roots are excluded unless the inherited files contract
+    // explicitly names them; verify native expansion as well as diagnostics.
+    write(
+      owner + "/unrelated.test-compat.d.ts",
+      "declare const excludedCompatibility: unique symbol;",
+    );
+    const lint = () =>
+      spawnSync(
+        process.execPath,
+        [
+          path.resolve("node_modules/oxlint/bin/oxlint"),
+          "--type-aware",
+          "--threads=1",
+          "--format=json",
+          ...selected,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            ...process.env,
+            OXC_LOG: "debug",
+            GOMAXPROCS: "2",
+            OXLINT_TSGOLINT_PATH: path.resolve(
+              "node_modules/.bin",
+              process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+            ),
+          },
+        },
+      );
+    const libraries = (project: string) => {
+      const result = spawnSync(
+        resolveRepoToolBinPath("tsgo"),
+        ["--listFilesOnly", "--project", project],
+        { cwd: root, encoding: "utf8", timeout: 10_000 },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const names = result.stdout
+        .trim()
+        .split(/\r?\n/u)
+        .map((file) => path.basename(file))
+        .filter((file) => /^lib\..*\.d\.ts$/u.test(file))
+        .toSorted();
+      return names;
+    };
+    const baseline = lint();
+    const inheritedLibraries = libraries("src/agents/tsconfig.json");
+    write(owner + "/tsconfig.json", fs.readFileSync(owner + "/tsconfig.json", "utf8"));
+    const narrowed = lint();
+    expect(libraries(owner + "/tsconfig.json")).toEqual(inheritedLibraries);
+    const expanded = spawnSync(
+      resolveRepoToolBinPath("tsgo"),
+      ["--showConfig", "-p", owner + "/tsconfig.json"],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(expanded.error).toBeUndefined();
+    expect(expanded.status, expanded.stdout + expanded.stderr).toBe(0);
+    const roots = (JSON.parse(expanded.stdout) as { files: string[] }).files.map((file) =>
+      path.resolve(root, owner, file),
+    );
+    expect(roots).toContain(
+      path.resolve(root, "src/config/sessions/session-entry.test-compat.d.ts"),
+    );
+    expect(roots).not.toContain(path.resolve(root, owner, "unrelated.test-compat.d.ts"));
+    expect(roots).not.toContain(path.resolve(root, "src/sibling.ts"));
+    for (const file of [...selected.slice(0, 3), ...augmenters, ...declarations])
+      expect(roots, file).toContain(path.resolve(root, file));
+    const libraryCheck = spawnSync(
+      resolveRepoToolBinPath("tsgo"),
+      ["-p", owner + "/tsconfig.json", "--noEmit", "--pretty", "false"],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    expect(libraryCheck.error).toBeUndefined();
+    expect(libraryCheck.status, libraryCheck.stdout + libraryCheck.stderr).toBe(0);
+    const reports = [baseline, narrowed].map((result) => {
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      return JSON.parse(result.stdout) as {
+        number_of_files: number;
+        diagnostics: Array<{ filename: string; code: string }>;
+      };
+    });
+    expect(reports[0]!.number_of_files).toBe(selected.length);
+    expect(reports[1]!.number_of_files).toBe(selected.length);
+    expect(reports[0]!.diagnostics.map((item) => JSON.stringify(item)).toSorted()).toEqual(
+      reports[1]!.diagnostics.map((item) => JSON.stringify(item)).toSorted(),
+    );
+    for (const [index, file] of selected.entries()) {
+      expect(
+        reports[1]!.diagnostics
+          .filter((item) => item.filename.replaceAll("\\", "/") === file)
+          .map((item) => item.code),
+      ).toEqual(
+        Array.from(
+          {
+            length:
+              index < 2
+                ? augmenters.length + declarations.length
+                : index === 2
+                  ? declarations.length
+                  : 1,
+          },
+          () => "typescript(no-floating-promises)",
+        ),
+      );
+      const project = index < 3 ? owner + "/tsconfig.json" : "src/tsconfig.json";
+      expect(narrowed.stderr.replaceAll("\\", "/")).toContain(
+        "Got tsconfig for file " +
+          path.join(root, file).replaceAll("\\", "/") +
+          ": " +
+          path.join(root, project).replaceAll("\\", "/"),
+      );
+    }
+  });
+
   it("includes bundled extensions in type-aware lint coverage", () => {
     const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
 

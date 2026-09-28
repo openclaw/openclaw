@@ -159,7 +159,7 @@ describe("AppSidebar viewer presence", () => {
     ).toBe(false);
   });
 
-  it("shows only other online identities with active-first ordering and idle dimming", async () => {
+  it("shows all online identities with active-first ordering and idle dimming", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -182,7 +182,8 @@ describe("AppSidebar viewer presence", () => {
       ],
     });
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(1);
+    expect(sidebar.querySelector('[data-online-user-id="self"]')).not.toBeNull();
 
     gatewayHarness.publishEvent("presence", {
       presence: [
@@ -216,14 +217,15 @@ describe("AppSidebar viewer presence", () => {
       const rows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-online__person")];
       expect(
         rows.map((row) => row.querySelector(".sidebar-online__person-name")?.textContent?.trim()),
-      ).toEqual(["Zed", "Alice", "Bob"]);
+      ).toEqual(["Self", "Zed", "Alice", "Bob"]);
       expect(rows.map((row) => row.classList.contains("sidebar-online__person--away"))).toEqual([
+        false,
         false,
         true,
         false,
       ]);
     });
-    expect(sidebar.querySelector('[data-online-user-id="self"]')).toBeNull();
+    expect(sidebar.querySelector('[data-online-user-id="self"]')).not.toBeNull();
 
     const onlineToggle = sidebar.querySelector<HTMLButtonElement>(
       '.sidebar-online button[aria-label="Online"]',
@@ -239,7 +241,7 @@ describe("AppSidebar viewer presence", () => {
 
     onlineToggle?.click();
     await sidebar.updateComplete;
-    expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(3);
+    expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(4);
 
     const aliceRow = sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')!;
     aliceRow.click();
@@ -520,10 +522,10 @@ describe("AppSidebar viewer presence", () => {
     const facepile = sidebar.querySelector<HTMLElement>(".sidebar-online openclaw-viewer-facepile");
     await (facepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete;
     expect(facepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count")).toBe(
-      "4",
+      "5",
     );
     expect(facepile?.querySelectorAll("[data-viewer-id]")).toHaveLength(2);
-    expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+2");
+    expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
   });
 
   it("renders the self user's avatar route in the footer identity chip", async () => {

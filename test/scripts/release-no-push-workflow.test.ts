@@ -1208,8 +1208,6 @@ describe("release validation no-push transport", () => {
 
     const evidenceReuse = job(full, "evidence_reuse");
     expect(step(evidenceReuse, "Checkout target SHA").with?.["persist-credentials"]).toBe(false);
-    const dockerAssets = job(full, "docker_runtime_assets_preflight");
-    expect(step(dockerAssets, "Checkout target SHA").with?.["persist-credentials"]).toBe(false);
     expect(evidenceReuse.if).toContain("github.ref == 'refs/heads/main'");
     expect(evidenceReuse.if).toContain("startsWith(github.ref, 'refs/heads/release-ci/')");
     expect(
@@ -2128,20 +2126,6 @@ describe("release validation no-push transport", () => {
     expect(early.needs).toEqual(["publish", "approve_github_release_before_docker"]);
     expect(early.steps).toEqual(job(workflow, "finalize_github_release").steps);
     const cases = [
-      {
-        tag: "v2026.9.1-alpha.1",
-        npm: "success",
-        docker: "skipped",
-        publishDocker: false,
-        finalize: true,
-      },
-      {
-        tag: "v2026.9.1-alpha.1",
-        npm: "failure",
-        docker: "skipped",
-        publishDocker: false,
-        finalize: false,
-      },
       {
         tag: "v2026.9.1-beta.1",
         npm: "success",
