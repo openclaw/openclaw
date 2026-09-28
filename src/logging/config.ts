@@ -76,6 +76,20 @@ function resolvePartialDiagnosticLoggingConfig(logging: unknown): LoggingConfig 
       // A missing variable in one pattern must not hide a separately resolvable style.
     }
   }
+  if (Array.isArray(logging.redactAllowPatterns)) {
+    try {
+      const resolved = resolveConfigEnvVars({ redactAllowPatterns: logging.redactAllowPatterns });
+      if (
+        isObjectRecord(resolved) &&
+        Array.isArray(resolved.redactAllowPatterns) &&
+        resolved.redactAllowPatterns.every((entry) => typeof entry === "string")
+      ) {
+        partial.redactAllowPatterns = resolved.redactAllowPatterns;
+      }
+    } catch {
+      // A missing variable in one pattern must not hide a separately resolvable style.
+    }
+  }
   return Object.keys(partial).length > 0 ? (partial as LoggingConfig) : undefined;
 }
 
