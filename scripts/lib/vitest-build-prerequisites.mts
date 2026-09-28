@@ -460,8 +460,8 @@ export async function preparePrebuiltAiPackage(
     manifest.types,
     ...Object.values(manifest.exports).map((entry) => entry.types),
   ]);
-  // qaRuntime supplies JavaScript only. Repair the packed consumer's types
-  // before any workers can import files that the AI build replaces.
+  // CI's qaRuntime supplies JavaScript only. Its shard owner repairs types
+  // before reader admission; generic prebuilt readers must never rebuild them.
   if ([...declarations].some((entry) => !fs.existsSync(path.resolve(packageRoot, entry)))) {
     console.error(
       "[test] preparing missing prebuilt AI package declarations before Vitest workers",
@@ -499,7 +499,7 @@ export async function prepareVitestRuntime(
     );
   const mode = controlUi ? "private-qa" : resolveVitestPretestBuildMode(selections);
   if (!mode) {
-    return preparePrebuiltAiPackage(selections, env, options.signal);
+    return 0;
   }
   options.signal?.throwIfAborted();
   const cwd = path.resolve(import.meta.dirname, "../..");
@@ -515,10 +515,6 @@ export async function prepareVitestRuntime(
     if (code !== 0) {
       return code;
     }
-  }
-  const packageCode = await preparePrebuiltAiPackage(selections, env, options.signal);
-  if (packageCode !== 0) {
-    return packageCode;
   }
   if (!controlUi) {
     return 0;
