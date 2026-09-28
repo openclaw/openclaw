@@ -7,19 +7,20 @@ import type {
   ModelCatalogEntry,
   ModelCatalogResult,
 } from "../../api/types.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import {
   renderDecisionModelPicker,
   type DecisionModelEntry,
 } from "../../components/decision-model-picker.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
-import { renderModelPicker } from "../../components/model-picker.ts";
 import "../../components/multi-select-registration.ts";
+import { renderModelPicker } from "../../components/model-picker.ts";
 import {
   renderPanelRefreshStatus,
   type PanelRefreshStatus,
 } from "../../components/panel-refresh-status.ts";
-import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
+import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import {
   type AgentContext,
@@ -37,6 +38,7 @@ import {
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import { uploadsEnabled } from "../../lib/uploads.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -48,6 +50,7 @@ export type AgentIdentityDraft = {
 export type IdentityAvatarLoader = Pick<IdentityAvatarController, "resolve" | "imageErrorHandler">;
 
 export function renderAgentOverview(params: {
+  applicationConfig?: ApplicationConfigCapability;
   agent: AgentsListResult["agents"][number];
   basePath: string;
   defaultId: string | null;
@@ -153,7 +156,7 @@ export function renderAgentOverview(params: {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     input.value = "";
-    if (file) {
+    if (file && uploadsEnabled(params.applicationConfig)) {
       params.onIdentityAvatarSelect(file);
     }
   };
@@ -207,43 +210,50 @@ export function renderAgentOverview(params: {
               : nothing
           }
           <div class="agent-identity-editor__actions">
-            <button
-              type="button"
-              class="btn btn--sm"
-              ?disabled=${identityBusy}
-              @click=${(event: Event) => {
-                const button = event.currentTarget;
-                const input =
-                  button instanceof HTMLButtonElement ? button.nextElementSibling : null;
-                if (input instanceof HTMLInputElement) {
-                  input.click();
-                }
-              }}
-            >
-              ${
-                identityAvatarUrl
-                  ? t("agents.identity.replaceImage")
-                  : t("agents.identity.chooseImage")
-              }
-            </button>
-            <input
-              type="file"
-              accept="image/*"
-              hidden
-              ?disabled=${identityBusy}
-              @change=${handleAvatarFileSelect}
-            />
+            ${
+              uploadsEnabled(params.applicationConfig)
+                ? html`<button
+                      type="button"
+                      class="btn btn--sm"
+                      ?disabled=${identityBusy}
+                      @click=${(event: Event) => {
+                        const button = event.currentTarget;
+                        const input =
+                          button instanceof HTMLButtonElement ? button.nextElementSibling : null;
+                        if (
+                          uploadsEnabled(params.applicationConfig) &&
+                          input instanceof HTMLInputElement
+                        ) {
+                          input.click();
+                        }
+                      }}
+                    >
+                      ${
+                        identityAvatarUrl
+                          ? t("agents.identity.replaceImage")
+                          : t("agents.identity.chooseImage")
+                      }
+                    </button>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      ?disabled=${identityBusy}
+                      @change=${handleAvatarFileSelect}
+                    />`
+                : nothing
+            }
             <button
               type="button"
               class="btn btn--sm primary"
-              ?disabled=${identityBusy || !identityDirty || identityInvalid}
+              ?disabled=${identityBusy || !identityDirty || identityInvalid || (identityDraft.avatar !== null && !uploadsEnabled(params.applicationConfig))}
               @click=${() => params.onIdentitySave()}
             >
               ${params.identitySaving ? t("common.saving") : t("common.save")}
             </button>
           </div>
           <div class="settings-row__desc agent-identity-editor__hint">
-            ${t("agents.identity.fileHint")}
+            ${uploadsEnabled(params.applicationConfig) ? t("agents.identity.fileHint") : nothing}
           </div>
         </div>
       `,

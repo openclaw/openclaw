@@ -350,13 +350,9 @@ it.each([false, true])(
   },
 );
 
-it.skipIf(process.platform === "win32").each([
-  { cleanup: "cooperative", startupDelayMs: 0 },
-  { cleanup: "forced", startupDelayMs: 0 },
-  { cleanup: "cooperative", startupDelayMs: 31_000 },
-] as const)(
-  "capability probe admits only successful settled cleanup: $cleanup (startup=$startupDelayMs)",
-  async ({ cleanup, startupDelayMs }) => {
+it.skipIf(process.platform === "win32").each(["cooperative", "forced"] as const)(
+  "capability probe preserves the caller budget and requires settled cleanup: %s",
+  async (cleanup) => {
     const scratch = fsSync.realpathSync(dirs.make("native-probe-settlement-"));
     const root = fsSync.realpathSync(process.cwd());
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(scratch);
@@ -386,7 +382,6 @@ it.skipIf(process.platform === "win32").each([
       });
       await new Promise(resolve => child.once("message", resolve));
       fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ root: process.pid, child: child.pid }));
-      if (${startupDelayMs} > 0) await new Promise(resolve => setTimeout(resolve, ${startupDelayMs}));
       await runGatewayServiceUpdateCommand("check", "install", async () => {
         throw new Error("Capability probe must not enter the mutation callback");
       });
@@ -398,6 +393,8 @@ it.skipIf(process.platform === "win32").each([
     const observed: Awaited<ReturnType<typeof execCommands.runCommandWithTimeout>>[] = [];
     const actualRun = execCommands.runCommandWithTimeout;
     vi.spyOn(execCommands, "runCommandWithTimeout").mockImplementation(async (...args) => {
+      const timeoutMs = typeof args[1] === "number" ? args[1] : args[1].timeoutMs;
+      expect(timeoutMs).toBe(120_000);
       const result = await actualRun(...args);
       observed.push(result);
       return result;

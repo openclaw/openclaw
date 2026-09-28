@@ -16,17 +16,10 @@ import {
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
-function formatImageGenerationAuthHint(provider: {
-  id: string;
-  authEnvVars: readonly string[];
-}): string | undefined {
-  if (provider.id === "openai") {
-    return "set OPENAI_API_KEY or configure an OpenClaw Codex login OAuth profile (not SIWC) for openai/gpt-image-2";
-  }
-  if (provider.authEnvVars.length === 0) {
-    return undefined;
-  }
-  return `set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`;
+function formatImageGenerationAuthHint(provider: { id: string }): string | undefined {
+  return provider.id === "openai"
+    ? "set OPENAI_API_KEY or configure an OpenClaw Codex login OAuth profile (not SIWC) for openai/gpt-image-2"
+    : undefined;
 }
 
 function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {

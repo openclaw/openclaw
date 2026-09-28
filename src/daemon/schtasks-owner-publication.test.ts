@@ -10,6 +10,7 @@ import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsageMock,
   killProcessTreeMock,
+  makeSpawnSyncResult,
   resetSchtasksBaseMocks,
   withWindowsEnv,
 } from "./test-helpers/schtasks-fixtures.js";
@@ -201,6 +202,9 @@ it.each(["snapshot", "per-pid"])(
             status: 0,
             signal: null,
           };
+        }
+        if (args?.some((arg) => arg.includes("$process.StartTime"))) {
+          return makeSpawnSyncResult({ stdout: forced ? "" : "2026-09-27T00:00:00.000Z" });
         }
         if (firstSnapshot && discovery === "per-pid") {
           firstSnapshot = false;

@@ -89,7 +89,7 @@ suite.define(() => {
                     {
                       id: "openai-login",
                       brandId: "openai",
-                      label: "Sign in with ChatGPT",
+                      label: "Sign in with ChatGPT (Beta)",
                       kind: "oauth",
                       featured: true,
                     },
@@ -610,7 +610,7 @@ suite.define(() => {
                     {
                       id: "openai-token-sharing",
                       brandId: "openai",
-                      label: "Sign in with ChatGPT",
+                      label: "Sign in with ChatGPT (Beta)",
                       hint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
                       kind: "oauth",
                       featured: false,
@@ -683,7 +683,7 @@ suite.define(() => {
             has: page.locator("strong").filter({ hasText: label }),
           });
         expect(await dialog.locator("[data-models-login-choice] strong").allTextContents()).toEqual(
-          ["Sign in with ChatGPT", "Codex login (device code)", "Codex login (browser)"],
+          ["Sign in with ChatGPT (Beta)", "Codex login (device code)", "Codex login (browser)"],
         );
         expect(await dialog.locator("[data-models-login-api-key]").isVisible()).toBe(true);
         expect(await dialog.locator("select, openclaw-select-picker").count()).toBe(0);
@@ -707,7 +707,7 @@ suite.define(() => {
         }
         await gateway.deferNext("wizard.next", { answer: { stepId: "instructions" } });
         const popupReady = page.waitForEvent("popup");
-        await connectionMethod("Sign in with ChatGPT").click();
+        await connectionMethod("Sign in with ChatGPT (Beta)").click();
         const login = await gateway.waitForRequest("models.authLogin");
         expect(login.params).toEqual({
           sessionId: expect.any(String),

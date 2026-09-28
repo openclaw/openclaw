@@ -1,8 +1,3 @@
-/**
- * cron built-in tool.
- *
- * Manages scheduled jobs, wake/run actions, delivery context, and reminder-style payload normalization.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -79,8 +74,23 @@ export {
   replaceWithEffectiveCronCreatorToolAllowlist,
 } from "./cron-tool-creator-cap.js";
 
-function isMissingOrEmptyObject(value: unknown): boolean {
-  return !value || (isRecord(value) && Object.keys(value).length === 0);
+function readCronToolJob(params: Record<string, unknown>, action: "add" | "update") {
+  let recovered = false;
+  // Models sometimes flatten job fields beside action; create requires a schedule/payload signal.
+  if (!params.job || (isRecord(params.job) && Object.keys(params.job).length === 0)) {
+    const synthetic = recoverCronObjectFromFlatParams(params);
+    if (synthetic.found && (action === "update" || hasCronCreateSignal(synthetic.value))) {
+      params.job = synthetic.value;
+      recovered = true;
+    }
+  }
+  if (!params.job || typeof params.job !== "object") {
+    throw new Error("job required");
+  }
+  return {
+    job: canonicalizeCronToolObject(params.job as Record<string, unknown>),
+    recovered,
+  };
 }
 
 function readCronJobIdParam(params: Record<string, unknown>) {
@@ -101,17 +111,13 @@ function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
   return opts?.selfRemoveOnlyJobId?.trim() || undefined;
 }
 
-function isCronSelfIntrospectionAction(action: string) {
-  return action === "status" || action === "list";
-}
-
 function assertCronSelfRemoveScope(
   opts: CronToolOptions | undefined,
   action: string,
   params: Record<string, unknown>,
 ) {
   const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
-  if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
+  if (!selfRemoveOnlyJobId || action === "status" || action === "list") {
     return;
   }
   if (["next_check", "get", "remove", "runs"].includes(action)) {
@@ -121,10 +127,6 @@ function assertCronSelfRemoveScope(
     }
   }
   throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
-}
-
-function filterCronStatusResultForSelfScope(result: unknown): unknown {
-  return { enabled: isRecord(result) && result.enabled === true };
 }
 
 function formatCronTerminalPresentation(
@@ -345,7 +347,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             const result = await callGateway("cron.status", gatewayOpts, {});
             return jsonResult(
               readCronSelfRemoveOnlyJobId(opts)
-                ? filterCronStatusResultForSelfScope(result)
+                ? { enabled: isRecord(result) && result.enabled === true }
                 : result,
             );
           }
@@ -418,27 +420,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             );
           }
           case "add": {
-            // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
-            // job properties to the top level alongside `action` instead of nesting
-            // them inside `job`. When `params.job` is missing or empty, reconstruct
-            // a synthetic job object from any recognised top-level job fields.
-            // See: https://github.com/openclaw/openclaw/issues/11310
-            if (isMissingOrEmptyObject(params.job)) {
-              const synthetic = recoverCronObjectFromFlatParams(params);
-              // Only use the synthetic job if at least one meaningful field is present
-              // (schedule, payload, message, or text are the minimum signals that the
-              // LLM intended to create a job).
-              if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
-                params.job = synthetic.value;
-              }
-            }
-
-            if (!params.job || typeof params.job !== "object") {
-              throw new Error("job required");
-            }
-            const canonicalJob = stripCronCreateNullClears(
-              canonicalizeCronToolObject(params.job as Record<string, unknown>),
-            );
+            const canonicalJob = stripCronCreateNullClears(readCronToolJob(params, "add").job);
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
             assertCronPacingInput(canonicalJob.pacing);
@@ -569,21 +551,9 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
           case "update": {
             const id = requireCronJobIdParam(params);
 
-            // Flat-params recovery for update patches
-            let recoveredFlatPatch = false;
-            if (isMissingOrEmptyObject(params.job)) {
-              const synthetic = recoverCronObjectFromFlatParams(params);
-              if (synthetic.found) {
-                params.job = synthetic.value;
-                recoveredFlatPatch = true;
-              }
-            }
-
-            if (!params.job || typeof params.job !== "object") {
-              throw new Error("job required");
-            }
-            const canonicalPatch = canonicalizeCronToolObject(
-              params.job as Record<string, unknown>,
+            const { job: canonicalPatch, recovered: recoveredFlatPatch } = readCronToolJob(
+              params,
+              "update",
             );
             if (!managementAuthority) {
               assertNoCronShellExecution(canonicalPatch);

@@ -4,7 +4,6 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import type { MediaGenerationExecutionResult } from "./media-generate-background-shared.js";
-import { buildTaskRunDetails } from "./media-tool-shared.js";
 
 export type MediaGenerateToolExecutionResult = MediaGenerationExecutionResult & {
   attachments: AgentGeneratedAttachment[];
@@ -42,7 +41,9 @@ export function buildMediaGenerateToolExecutionResult(params: {
       media: { mediaUrls, attachments },
       attachments,
       paths: mediaUrls,
-      ...buildTaskRunDetails(params.taskHandle),
+      ...(params.taskHandle
+        ? { task: { taskId: params.taskHandle.taskId, runId: params.taskHandle.runId } }
+        : {}),
       ...params.details,
       attempts: result.attempts,
       ...(result.normalization ? { normalization: result.normalization } : {}),

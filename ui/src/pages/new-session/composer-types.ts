@@ -1,4 +1,5 @@
 import type { nothing, TemplateResult } from "lit";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
@@ -10,6 +11,7 @@ import type { NewSessionComposerTextareaController } from "./composer-controller
 import type { NewSessionVisibility } from "./create-params.ts";
 
 export type NewSessionComposerOptions = {
+  uploadConfig?: ApplicationConfigCapability;
   renderCritters: (floorEnabled: boolean) => TemplateResult | typeof nothing;
   attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachmentReads?: ChatAttachmentReadLifecycle;

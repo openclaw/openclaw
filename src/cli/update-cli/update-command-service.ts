@@ -475,6 +475,7 @@ export async function maybeRestartService(params: {
               resolveGatewayService(),
               activation.serviceEnv,
               activation.timeoutMs,
+              { managerUid: activation.serviceManagerUid, assertCurrent },
             );
             assertCurrent();
             await revalidateManagedGatewayServiceAfterUpdate({

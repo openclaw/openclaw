@@ -1,7 +1,7 @@
 ---
-summary: "Choose Codex login, Sign in with ChatGPT, or an API key for the OpenAI capabilities you need"
+summary: "Choose Codex login, Sign in with ChatGPT (Beta), or an API key for the OpenAI capabilities you need"
 read_when:
-  - You are choosing between Codex login, an API key, and Sign in with ChatGPT
+  - You are choosing between Codex login, an API key, and Sign in with ChatGPT (Beta)
   - You want to use OpenAI-hosted plugins with OpenClaw
   - You are connecting an OpenAI account for an agent or a person
 title: "OpenAI authentication"
@@ -13,7 +13,7 @@ Choose your OpenAI authentication method based on the access you need:
 - **Codex login:** use your ChatGPT account for Codex models. Choose browser
   OAuth locally or device code on a remote machine. OpenAI-hosted plugins require
   a grant with connector scopes.
-- **Sign in with ChatGPT (SIWC):** authorize OpenClaw as an app to use your Codex
+- **Sign in with ChatGPT (Beta)** (SIWC): authorize OpenClaw as an app to use your Codex
   allowance for eligible Responses API calls. Check shared allowance usage in
   ChatGPT. OpenAI-hosted plugins are not supported yet.
 - **API key:** use OpenAI Platform models with your project's permissions and
@@ -21,7 +21,7 @@ Choose your OpenAI authentication method based on the access you need:
 
 ## Compare capabilities
 
-|                                                        | Sign in with ChatGPT (SIWC preview)                       | Codex login (browser OAuth or device code)                  | OpenAI Platform API key                                    |
+|                                                        | Sign in with ChatGPT (Beta)                               | Codex login (browser OAuth or device code)                  | OpenAI Platform API key                                    |
 | ------------------------------------------------------ | --------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- |
 | Identity                                               | Your ChatGPT account and workspace authorizing OpenClaw   | Your ChatGPT account and workspace using the Codex product  | The API key's Platform project and permissions             |
 | Credential refresh                                     | OpenClaw refreshes its SIWC profile for this app          | OpenClaw refreshes its Codex OAuth profile                  | No OAuth refresh; rotate the key with its owner            |
@@ -107,7 +107,7 @@ manual `/compact` is unavailable. Codex login and API-key turns can use native
 [compaction](/concepts/compaction) behavior.
 
 See [runtime selection](/providers/openai/runtimes#implicit-agent-runtime) and
-[SIWC setup](/providers/openai/setup#sign-in-with-chatgpt-preview) for configuration
+[SIWC setup](/providers/openai/setup#sign-in-with-chatgpt-beta) for configuration
 and current limits.
 
 ## Shared agent credential or personal account?
@@ -135,7 +135,7 @@ still apply. See [per-person model accounts](/concepts/multi-user#per-person-mod
 ## Set up an agent's credential
 
 In **Settings → Models**, select the agent, choose **Connect provider → OpenAI**,
-then choose a sign-in method. For SIWC, choose **Sign in with ChatGPT** and approve
+then choose a sign-in method. For SIWC, choose **Sign in with ChatGPT (Beta)** and approve
 token sharing in your browser. When the account is connected, choose a model and
 use **Test & use** to verify a reply and select it.
 
@@ -149,7 +149,7 @@ openclaw models auth login --provider openai --method oauth
 # Codex login on a remote or headless machine
 openclaw models auth login --provider openai --method device-code
 
-# Sign in with ChatGPT
+# Sign in with ChatGPT (Beta)
 openclaw models auth login --provider openai --method siwc
 
 # OpenAI Platform API key

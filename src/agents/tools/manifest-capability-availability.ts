@@ -1,8 +1,3 @@
-/**
- * Manifest capability availability checks.
- *
- * Combines plugin contracts, availability, config signals, auth profiles, env candidates, and base URL guards.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -26,19 +21,16 @@ import {
   resolveProviderEntryApiKeyProfileReference,
 } from "../model-auth-provider-config.js";
 
-/** Manifest contract keys that represent provider-backed tool capabilities. */
-type CapabilityContractKey =
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders"
-  | "mediaUnderstandingProviders";
-
-type CapabilityProviderMetadataKey =
-  | "imageGenerationProviderMetadata"
-  | "videoGenerationProviderMetadata"
-  | "musicGenerationProviderMetadata";
-
 type CapabilityMetadataSnapshot = Pick<PluginMetadataSnapshot, "index" | "plugins">;
+
+const CAPABILITY_METADATA_KEYS = {
+  imageGenerationProviders: "imageGenerationProviderMetadata",
+  videoGenerationProviders: "videoGenerationProviderMetadata",
+  musicGenerationProviders: "musicGenerationProviderMetadata",
+  mediaUnderstandingProviders: undefined,
+} as const;
+
+type CapabilityContractKey = keyof typeof CAPABILITY_METADATA_KEYS;
 
 const GENERATION_AUTH_CAPABILITIES = {
   imageGenerationProviders: "image-generation",
@@ -51,22 +43,6 @@ export function capabilityAuthOperation(key: CapabilityContractKey): string | un
   return key === "mediaUnderstandingProviders" ? undefined : GENERATION_AUTH_CAPABILITIES[key];
 }
 
-function metadataKeyForCapabilityContract(
-  key: CapabilityContractKey,
-): CapabilityProviderMetadataKey | undefined {
-  switch (key) {
-    case "imageGenerationProviders":
-      return "imageGenerationProviderMetadata";
-    case "videoGenerationProviders":
-      return "videoGenerationProviderMetadata";
-    case "musicGenerationProviders":
-      return "musicGenerationProviderMetadata";
-    case "mediaUnderstandingProviders":
-      return undefined;
-  }
-  return undefined;
-}
-
 function listCapabilityAuthSignals(params: {
   plugin: PluginManifestRecord;
   key: CapabilityContractKey;
@@ -77,7 +53,7 @@ function listCapabilityAuthSignals(params: {
     NonNullable<PluginManifestRecord["imageGenerationProviderMetadata"]>[string]["authSignals"]
   >[number]["providerBaseUrl"];
 }> {
-  const metadataKey = metadataKeyForCapabilityContract(params.key);
+  const metadataKey = CAPABILITY_METADATA_KEYS[params.key];
   const metadata = metadataKey ? params.plugin[metadataKey]?.[params.providerId] : undefined;
   if (metadata?.authSignals?.length) {
     return metadata.authSignals;
@@ -122,7 +98,7 @@ function hasConfiguredCapabilityProviderSignal(params: {
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): boolean {
-  const metadataKey = metadataKeyForCapabilityContract(params.key);
+  const metadataKey = CAPABILITY_METADATA_KEYS[params.key];
   const metadata = metadataKey ? params.plugin[metadataKey]?.[params.providerId] : undefined;
   if (
     metadata?.configSignals?.some((signal) =>

@@ -28,7 +28,7 @@ export type CiCheckPlanInput = {
   lintExtensionMatrix: Matrix<StripeRow>;
 };
 
-/** Narrow the preflight's row templates without changing their resource or execution owners. */
+/** Narrow checks and pack complete extension fallback within the existing runner budget. */
 export async function createCiCheckPlan(input: CiCheckPlanInput) {
   const runs = (task: string) => input.checkMatrix.include.some((row) => row.task === task);
   const lintPlan = runs("lint")
@@ -117,9 +117,24 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
   const coreLint = lintPlan
     ? retainLintTemplates(input.lintCoreMatrix, lintPlan.core)
     : input.lintCoreMatrix.include;
-  const extensionLint = lintPlan
+  const extensionTemplates = lintPlan
     ? retainLintTemplates(input.lintExtensionMatrix, lintPlan.extensions)
     : input.lintExtensionMatrix.include;
+  // Complete hybrid fallback can share setup and SDK preparation without changing its chunks.
+  const compactExtensions =
+    input.runnerProfile === "hybrid" &&
+    runs("lint") &&
+    lintPlan === null &&
+    extensionTemplates.length === 6 &&
+    extensionTemplates.every((row, index) => row.stripe === index + 1 && !row.lint_selection_json);
+  const extensionLint: (StripeRow & { stripe_count?: number })[] = [];
+  for (const row of extensionTemplates) {
+    if (!compactExtensions) {
+      extensionLint.push(row);
+    } else if (row.stripe <= 3) {
+      extensionLint.push({ ...row, stripe_count: 3 });
+    }
+  }
   const checkJobCount =
     checkRows.length +
     (hosted ? coreRows.length + coreLint.length : 0) +

@@ -1960,7 +1960,11 @@ jobs:
             ((!releaseGate && ["push", "pull_request"].includes(eventName)) ||
               nodeRunnerBackend === "runson" || ciQualification) ? [1, 2] : [1, 2, 3, 4, 5];
           const coreLintRows = fullCoreLintStripes.map((stripe) => ({ stripe }));
-          const extensionLintRows = [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe }));
+          const compactExtensionLint = isCanonicalRepository && runnerProfile === "hybrid" &&
+            !frozenTarget && !compatibilityTarget && !releaseGate && !runCheckPlan;
+          const extensionLintRows = compactExtensionLint
+            ? [1, 2, 3].map((stripe) => ({ stripe, stripe_count: 3 }))
+            : [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe }));
           const coreTypeRows = (frozenTarget ? [1, 2] : [1, 2, 3, 4, 5]).map((stripe) => ({ stripe }));
           if (narrowCheckScope) {
             runBaselineRatchets &&= narrowCheckScope.baselineRatchets;
@@ -5237,12 +5241,13 @@ jobs:
         if: ${{ !matrix.lint_selection_json }}
         env:
           EXTENSION_STRIPE: ${{ matrix.stripe }}
+          EXTENSION_STRIPE_COUNT: ${{ matrix.stripe_count || 6 }}
           OPENCLAW_LOCAL_CHECK: "0"
         shell: bash
         run: |
           set -euo pipefail
           node --import tsx scripts/run-oxlint-shards.mts \
-            --only=extensions --extension-stripe="$EXTENSION_STRIPE/6" --threads=1
+            --only=extensions --extension-stripe="$EXTENSION_STRIPE/$EXTENSION_STRIPE_COUNT" --threads=1
 
   # Run each complete core stripe independently; the central row owns the tail.
   # Keep two compiler children per row and the frozen target's paired layout.

@@ -1,8 +1,10 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { html, nothing } from "lit";
 import { TERMINAL_UPLOAD_RETENTION_MS } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
@@ -20,6 +22,7 @@ type TerminalUploadTab = {
 };
 
 type TerminalPanelUploadHost = {
+  config?: () => ApplicationConfigCapability | undefined;
   activeTab: () => TerminalUploadTab | undefined;
   client: () => TerminalGatewayClient | null;
   isCurrent: (tab: TerminalUploadTab) => boolean;
@@ -69,6 +72,27 @@ export class TerminalPanelUploadController {
 
   constructor(private readonly host: TerminalPanelUploadHost) {}
 
+  uploadsEnabled(): boolean {
+    return uploadsEnabled(this.host.config?.());
+  }
+
+  syncPolicy(): void {
+    if (!this.uploadsEnabled()) {
+      this.cancel();
+      this.dragActive = false;
+      this.dragDepth = 0;
+    }
+  }
+
+  private admitUpload(): boolean {
+    if (this.uploadsEnabled()) {
+      return true;
+    }
+    this.host.setError(uploadsDisabledMessage());
+    this.syncPolicy();
+    return false;
+  }
+
   hasActiveTab(): boolean {
     return Boolean(this.host.activeTab());
   }
@@ -98,11 +122,17 @@ export class TerminalPanelUploadController {
   }
 
   chooseFiles = (): void => {
-    this.host.fileInput()?.click();
+    if (this.admitUpload()) {
+      this.host.fileInput()?.click();
+    }
   };
 
   handleFileSelection = (event: Event): void => {
     const input = event.currentTarget as HTMLInputElement;
+    if (!this.admitUpload()) {
+      input.value = "";
+      return;
+    }
     const files = Array.from(input.files ?? []);
     input.value = "";
     this.uploadFiles(files);
@@ -113,6 +143,13 @@ export class TerminalPanelUploadController {
   }
 
   handleDragEnter = (event: DragEvent): void => {
+    if (this.hasDraggedFiles(event) && !this.uploadsEnabled()) {
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "none";
+      }
+      return;
+    }
     if (!this.hasDraggedFiles(event) || !this.hasActiveTab() || this.hasPendingBatch()) {
       return;
     }
@@ -123,6 +160,13 @@ export class TerminalPanelUploadController {
   };
 
   handleDragOver = (event: DragEvent): void => {
+    if (this.hasDraggedFiles(event) && !this.uploadsEnabled()) {
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "none";
+      }
+      return;
+    }
     if (!this.hasDraggedFiles(event) || !this.hasActiveTab() || this.hasPendingBatch()) {
       return;
     }
@@ -158,6 +202,9 @@ export class TerminalPanelUploadController {
   };
 
   private uploadFiles(files: File[]): void {
+    if (!this.admitUpload()) {
+      return;
+    }
     const tab = this.host.activeTab();
     if (files.length === 0 || !tab || !this.host.client() || this.hasPendingBatch()) {
       return;
@@ -185,6 +232,11 @@ export class TerminalPanelUploadController {
 
   private ensureCurrent(batch: TerminalUploadBatch): boolean {
     if (!this.isActive(batch)) {
+      return false;
+    }
+    if (!this.uploadsEnabled()) {
+      this.host.setError(uploadsDisabledMessage());
+      this.cancelBatch(batch);
       return false;
     }
     if (!this.host.isCurrent(batch.tab)) {
@@ -295,6 +347,9 @@ export class TerminalPanelUploadController {
   };
 
   retry = (): void => {
+    if (!this.admitUpload()) {
+      return;
+    }
     const batch = this.batch;
     if (!batch || batch.state !== "failed" || !batch.retryable) {
       return;
@@ -358,16 +413,20 @@ export function renderTerminalPanelActions(params: {
   onHide: () => void;
 }) {
   return html`<div class="rail-header__actions tp-actions">
-    <button
-      class="rail-header__action tp-icon tp-upload"
-      type="button"
-      title=${t("terminal.addFiles")}
-      aria-label=${t("terminal.addFiles")}
-      ?disabled=${params.upload.hasPendingBatch() || !params.upload.hasActiveTab()}
-      @click=${params.upload.chooseFiles}
-    >
-      ${icons.paperclip}
-    </button>
+    ${
+      params.upload.uploadsEnabled()
+        ? html`<button
+            class="rail-header__action tp-icon tp-upload"
+            type="button"
+            title=${t("terminal.addFiles")}
+            aria-label=${t("terminal.addFiles")}
+            ?disabled=${params.upload.hasPendingBatch() || !params.upload.hasActiveTab()}
+            @click=${params.upload.chooseFiles}
+          >
+            ${icons.paperclip}
+          </button>`
+        : nothing
+    }
     ${
       params.fullscreen
         ? nothing

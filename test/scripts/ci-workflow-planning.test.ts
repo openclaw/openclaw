@@ -1568,13 +1568,23 @@ describe("ci workflow guards", () => {
           },
         ]),
       );
-      for (const [job, stripes] of [
-        ["check-lint-hosted-core-shard", expected],
-        ["check-lint-hosted-extension-shard", [1, 2, 3, 4, 5, 6]],
+      const compactExtensions =
+        options.runnerProfile !== "github" &&
+        !options.historicalCompatibility &&
+        (options.eventName !== "workflow_dispatch" || options.nodeRunnerBackend === "runson") &&
+        (!options.releaseGate || options.nodeRunnerBackend === "runson");
+      for (const [job, rows] of [
+        ["check-lint-hosted-core-shard", expected.map((stripe) => ({ stripe }))],
+        [
+          "check-lint-hosted-extension-shard",
+          compactExtensions
+            ? [1, 2, 3].map((stripe) => ({ stripe, stripe_count: 3 }))
+            : [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe })),
+        ],
       ] as const) {
         expect(
           evaluateWorkflowExpression(workflow.jobs[job].strategy.matrix, context).include,
-        ).toEqual(stripes.map((stripe) => ({ stripe })));
+        ).toEqual(rows);
       }
       expect(manifest.outputs.central_lint_selection_json).toBe("");
     });
@@ -2950,7 +2960,7 @@ describe("ci workflow guards", () => {
       expect(base).not.toContain("ci-gate");
       expect(base).not.toContain("check-lint-hosted-core-shard");
       expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
-        runnerProfile === "hybrid" ? 6 : 0,
+        runnerProfile === "hybrid" ? 3 : 0,
       );
     });
 

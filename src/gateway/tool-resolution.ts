@@ -97,6 +97,8 @@ export function resolveGatewayScopedTools(
     isGrantCurrent?: () => boolean;
     /** Authenticated standalone invocation lifetime supplied by its HTTP/RPC owner. */
     assertInvocationCurrent?: () => void;
+    /** SQL-safe input policy, separate from invocation authority that may read state. */
+    assertInputCommitAllowed?: () => void;
     excludeToolNames?: Iterable<string>;
     /** Server-minted coding tools that must be mediated through the loopback surface. */
     mediatedToolNames?: Iterable<string>;
@@ -329,6 +331,7 @@ export function resolveGatewayScopedTools(
         })
       : undefined,
     runId: params.runId,
+    assertInputCommitAllowed: params.assertInputCommitAllowed,
     assertInvocationCurrent:
       params.assertInvocationCurrent || params.isGrantCurrent
         ? () => {

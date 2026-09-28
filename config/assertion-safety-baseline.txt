@@ -1709,11 +1709,11 @@ src/agents/tools/common.ts	2
 src/agents/tools/computer-tool-node.ts	1
 src/agents/tools/computer-tool-request.ts	3
 src/agents/tools/computer-tool.ts	2
-src/agents/tools/conversation-tools.ts	3
+src/agents/tools/conversation-tools.ts	2
 src/agents/tools/cron-tool-context.ts	1
 src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
-src/agents/tools/cron-tool.ts	6
+src/agents/tools/cron-tool.ts	5
 src/agents/tools/dashboard-tool.ts	2
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	5
@@ -1723,11 +1723,10 @@ src/agents/tools/image-generate-tool.ts	2
 src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	1
 src/agents/tools/in-process-gateway.ts	1
-src/agents/tools/media-generate-tool-actions-shared.ts	1
 src/agents/tools/message-tool-discovery.ts	2
 src/agents/tools/message-tool-execution.ts	3
 src/agents/tools/mobile-ui-tool.ts	2
-src/agents/tools/music-generate-tool.ts	2
+src/agents/tools/music-generate-tool.ts	1
 src/agents/tools/nodes-tool.ts	1
 src/agents/tools/openclaw-delegate-tool.ts	1
 src/agents/tools/pdf-native-providers.ts	2
@@ -1740,7 +1739,7 @@ src/agents/tools/sessions-search-tool.ts	1
 src/agents/tools/sessions-spawn-tool.ts	5
 src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
-src/agents/tools/skill-workshop-tool-helpers.ts	3
+src/agents/tools/skill-workshop-tool-helpers.ts	1
 src/agents/tools/structured-output-tool.ts	2
 src/agents/tools/subagents-tool.ts	1
 src/agents/tools/system-agent-tool.ts	1
@@ -1754,7 +1753,6 @@ src/agents/tools/web-search-output.ts	3
 src/agents/tools/web-search-provider-common.ts	1
 src/agents/tools/web-search-provider-config.ts	1
 src/agents/tools/web-shared.ts	4
-src/agents/tools/web-tool-runtime-context.ts	1
 src/agents/transcript-policy.ts	1
 src/agents/transcript-redact-replay.ts	1
 src/agents/transcript-redact.ts	2
@@ -2344,7 +2342,6 @@ src/gateway/node-command-policy.ts	2
 src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry.ts	1
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	1
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/plugin-activation-runtime-config.ts	2
 src/gateway/probe.ts	2

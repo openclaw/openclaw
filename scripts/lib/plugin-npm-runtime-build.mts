@@ -51,6 +51,22 @@ const BUNDLED_SDK_EXPORTS: Record<string, Record<string, string[]>> = {
 const BUNDLED_SDK_PREFIX = "\0openclaw:bundled-sdk:";
 const HOST_SDK_PREFIX = "\0openclaw:host-sdk:";
 
+function selectAvailableBundledSdkExports(
+  repoRoot: string,
+  bundledSdkExports: typeof BUNDLED_SDK_EXPORTS,
+) {
+  return Object.fromEntries(
+    Object.entries(bundledSdkExports).flatMap(([specifier, sources]) => {
+      // Trusted current tooling also builds immutable older source roots. Only
+      // inject compatibility code owned by that selected root; absent additions stay host-owned.
+      const availableSources = Object.fromEntries(
+        Object.entries(sources).filter(([source]) => fs.existsSync(path.join(repoRoot, source))),
+      );
+      return Object.keys(availableSources).length > 0 ? [[specifier, availableSources]] : [];
+    }),
+  );
+}
+
 function createBundledSdkExportsPlugin(
   repoRoot: string,
   bundledSdkExports: typeof BUNDLED_SDK_EXPORTS,
@@ -570,7 +586,7 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   // owns isolated per-turn state; its host error formatter stays external below.
   // Retire this binding when Telegram's declared host floor includes that contract.
   const bundleTelegramLifecycle = plan.packageJson.name === "@openclaw/telegram";
-  const bundledSdkExports = {
+  const bundledSdkExports = selectAvailableBundledSdkExports(plan.repoRoot, {
     ...BUNDLED_SDK_EXPORTS,
     ...(bundleTelegramLifecycle
       ? {
@@ -579,7 +595,7 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
           },
         }
       : {}),
-  };
+  });
   const bundledSdkImports = {
     [BUNDLED_GRAPHEME_SDK_IMPORT]: path.join(
       plan.repoRoot,
