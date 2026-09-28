@@ -280,6 +280,32 @@ describe("sidebar people workload", () => {
     );
   });
 
+  it("lists running people first within each presence group, by name and never by count", async () => {
+    const { sidebar, gateway } = await mountWorkload(async () =>
+      summary([
+        { profileId: "zed", open: 1, running: 1 },
+        { profileId: "bruno", open: 17, running: 17 },
+        { profileId: "agata", open: 2, running: 2 },
+      ]),
+    );
+    const people = [
+      ["bruno", "bruno", NOW - 180_000],
+      ["amy", "amy", NOW],
+      ["agata", "Ágata", NOW - 180_000],
+      ["zed", "Zed", NOW],
+    ] as const;
+    gateway.publishEvent("presence", {
+      presence: people.map(([id, name, lastActivityAt]) => ({
+        instanceId: "tab-" + id,
+        ts: NOW,
+        lastActivityAt,
+        user: { id, identity: { type: "profile", id }, name },
+      })),
+    });
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["Zed", "amy", "Ágata", "bruno"]);
+  });
+
   it("does not turn a failed summary into zero and recovers through the visible retry", async () => {
     const response = vi
       .fn<() => Promise<SessionsListResult>>()

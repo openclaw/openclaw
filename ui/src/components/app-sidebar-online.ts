@@ -40,6 +40,19 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
     counts && user.identity?.type === "profile"
       ? (counts.get(user.identity.id) ?? { open: 0, running: 0 })
       : null;
+  // Presence group, then anyone running (not how many), then name; ties keep the projected order.
+  const now = Date.now();
+  const activityOrder = { active: 0, idle: 1, unknown: 2 };
+  const running = (user: PresenceViewer) => Number((countsFor(user)?.running ?? 0) > 0);
+  const listUsers = onlineUsers.toSorted(
+    (a, b) =>
+      activityOrder[presenceViewerActivity(a, now)] -
+        activityOrder[presenceViewerActivity(b, now)] ||
+      running(b) - running(a) ||
+      presenceViewerLabel(a).localeCompare(presenceViewerLabel(b), undefined, {
+        sensitivity: "base",
+      }),
+  );
   const routing = personActivityRouting(
     { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
     () => host.dismissTransientMenus(),
@@ -88,7 +101,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
         collapsed
           ? nothing
           : html`<div class="sidebar-online__list">
-                ${repeat(onlineUsers, presenceUserKey, (user) => {
+                ${repeat(listUsers, presenceUserKey, (user) => {
                   const activityState = presenceViewerActivity(user);
                   const workload = countsFor(user);
                   const workloadLabel = workload
