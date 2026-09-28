@@ -94,26 +94,18 @@ async function runVideoGenerate(params: {
   timeoutMs?: number;
   agent?: string;
 }) {
-  const {
-    requireProviderModelOverride,
-    resolveCapabilityProviderAgentId,
-    resolveLocalCapabilityRuntimeConfig,
-  } = await import("./shared.js");
+  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
   const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
   const { generateVideo } = await import("../../video-generation/runtime.js");
   const { readResponseWithLimit } = await import("../../infra/http-body.js");
   const { resolveGeneratedMediaMaxBytes } = await import("../../media/configured-max-bytes.js");
   const { publishOutputFileAtomically, writeOutputAsset } = await import("../media-output.js");
   requireProviderModelOverride(params.model);
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  const { cfg, agentDir } = await resolveLocalCapabilityAgent({
     commandName: "infer video.generate",
     targetIds: getModelsCommandSecretTargetIds(),
+    agent: params.agent,
   });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video.generate");
-  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
-  const agentDir = resolveAgentDir(cfg, agentId);
   const result = await generateVideo({
     cfg,
     agentDir,
@@ -212,22 +204,15 @@ async function runVideoGenerate(params: {
 }
 
 async function runVideoDescribe(params: { file: string; model?: string; agent?: string }) {
-  const {
-    requireProviderModelOverride,
-    resolveCapabilityProviderAgentId,
-    resolveLocalCapabilityRuntimeConfig,
-  } = await import("./shared.js");
+  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
   const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
   const { describeVideoFile } = await import("../../media-understanding/runtime.js");
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
     commandName: "infer video.describe",
     targetIds: getModelsCommandSecretTargetIds(),
+    agent: params.agent,
+    surface: "infer video describe",
   });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe");
-  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
-  const agentDir = resolveAgentDir(cfg, agentId);
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),

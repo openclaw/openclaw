@@ -225,6 +225,9 @@ checks and records `update-admission-unsupported-target`. If the candidate times
 out, crashes, or returns no valid protocol-1 verdict, it records
 `update-admission-fallback` and uses those same installed checks. These warnings
 are informational; the installed checks determine whether the update proceeds.
+Both warning steps retain their identity, status, and timestamps when history
+compacts at its 128-step or 16 KiB limit. Warning text can be compacted to fit
+that limit. This requires no migration and does not change admission decisions.
 
 Use `--admission installed` to force the installed checks. The default option is
 `--admission auto`; this option has no environment-variable form. `--dry-run` always

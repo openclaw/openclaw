@@ -45,6 +45,7 @@ export type SystemPresence = {
 type StoredPresence = {
   presence: SystemPresence;
   freshness: number;
+  pending: boolean;
 };
 
 // The gateway owns a private key; caller-supplied string identities remain peers.
@@ -71,8 +72,12 @@ function freshnessNow(): number {
   return freshnessTime;
 }
 
-function setPresence(key: string | symbol, presence: SystemPresence) {
-  entries.set(key, { presence, freshness: freshnessNow() });
+function setPresence(
+  key: string | symbol,
+  presence: SystemPresence,
+  pending = entries.get(key)?.pending ?? false,
+) {
+  entries.set(key, { presence, freshness: freshnessNow(), pending });
 }
 
 function initSelfPresence() {
@@ -233,7 +238,11 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
   };
 }
 
-export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
+export function upsertPresence(
+  key: string,
+  presence: Partial<SystemPresence>,
+  options?: { pending: boolean },
+) {
   const normalizedKey =
     normalizeOptionalLowercaseString(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
   const existing = entries.get(normalizedKey)?.presence ?? ({} as SystemPresence);
@@ -252,7 +261,16 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
         presence.mode ?? existing.mode ?? "unknown"
       }`,
   };
-  setPresence(normalizedKey, merged);
+  setPresence(normalizedKey, merged, options?.pending);
+}
+
+/** Only the connection that staged a row may make it visible to other readers. */
+export function commitPresence(key: string, connectionId: string): void {
+  const normalizedKey = normalizeOptionalLowercaseString(key);
+  const entry = normalizedKey ? entries.get(normalizedKey) : undefined;
+  if (entry?.presence.connectionId === connectionId) {
+    entry.pending = false;
+  }
 }
 
 /** Renews an existing connection-owned presence row without recreating expired metadata. */
@@ -269,7 +287,7 @@ export function touchPresence(key: string): boolean {
   return true;
 }
 
-export function listSystemPresence(): SystemPresence[] {
+export function listSystemPresence(options?: { includeConnectionId?: string }): SystemPresence[] {
   touchSelfPresence();
   const now = freshnessNow();
   for (const [key, entry] of entries) {
@@ -287,5 +305,13 @@ export function listSystemPresence(): SystemPresence[] {
       entries.delete(key);
     }
   }
-  return [...entries.values()].map((entry) => entry.presence).toSorted((a, b) => b.ts - a.ts);
+  return [...entries.values()]
+    .filter(
+      (entry) =>
+        !entry.pending ||
+        (options?.includeConnectionId !== undefined &&
+          entry.presence.connectionId === options.includeConnectionId),
+    )
+    .map((entry) => entry.presence)
+    .toSorted((a, b) => b.ts - a.ts);
 }
