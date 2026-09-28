@@ -1,21 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import type { NodeWorkerSupervisorIdentity } from "./node-supervisor-protocol.js";
-
-export function nodeWorkerTurnMatchesIdentity(
-  receipt: NodeWorkerSupervisorIdentity,
-  expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    receipt.launchId === expected.launchId &&
-    receipt.planHash === expected.planHash &&
-    receipt.environmentId === expected.environmentId &&
-    receipt.sessionId === expected.sessionId &&
-    receipt.ownerEpoch === expected.ownerEpoch &&
-    receipt.placementGeneration === expected.placementGeneration &&
-    receipt.runId === expected.runId
-  );
-}
 
 export const workerProtocolIdentifier = (label: string, maxChars = 256) =>
   z.custom<string>(

@@ -3,7 +3,7 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
-import { nodeWorkerTurnMatchesIdentity } from "../worker/protocol-record.js";
+import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-protocol.js";
 import {
   buildWorkerProcessTurn,
   type WorkerProcessResult,

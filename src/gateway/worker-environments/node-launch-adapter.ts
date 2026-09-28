@@ -22,8 +22,8 @@ import {
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
+  nodeWorkerTurnMatchesIdentity,
 } from "../../worker/node-supervisor-protocol.js";
-import { nodeWorkerTurnMatchesIdentity } from "../../worker/protocol-record.js";
 import {
   parseWorkerAdmissionDeadlineResult,
   WORKER_ADMISSION_DEADLINE_MS,

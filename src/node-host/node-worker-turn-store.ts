@@ -1,5 +1,5 @@
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
-import { nodeWorkerTurnMatchesIdentity } from "../worker/protocol-record.js";
+import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-protocol.js";
 import type { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import type {
   NodeWorkerJournalAuthority,
