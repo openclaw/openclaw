@@ -18,6 +18,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
 import {
   hasActiveNativeApprovalRoute,
   type ApprovalNativeRouteCoordinator,
@@ -179,6 +180,12 @@ function shouldSkipForwardingFallback(params: {
   // Channel adapters can suppress generic fallback delivery when they already
   // own native approval UX for the same target.
   const plugin = getLoadedChannelPlugin(channel);
+  if (
+    params.approvalKind === "plugin" &&
+    !canChannelEnforcePluginReviewerPolicy(params.cfg, channel, plugin?.approvalCapability)
+  ) {
+    return true;
+  }
   const adapter = resolveChannelApprovalAdapter(plugin);
   const suppress =
     adapter?.delivery?.shouldSuppressForwardingFallback?.({

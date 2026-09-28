@@ -174,6 +174,7 @@ const baseSlackNativeAdapter = baseSlackApprovalCapability.native;
 
 export const slackApprovalCapability: ChannelApprovalCapability = {
   ...baseSlackApprovalCapability,
+  supportsScopedPluginApprovalApprovers: true,
   resolveReviewerSenderId: ({ senderId, spaceId }) => {
     try {
       const parsed = senderId ? parseSlackTarget(senderId, { defaultKind: "user" }) : undefined;
@@ -185,7 +186,13 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
     }
   },
   getActionAvailabilityState: (params) =>
-    params.approvalKind === "plugin" && params.cfg.approvals?.plugin?.slack
+    params.approvalKind === "plugin" &&
+    params.cfg.approvals?.plugin?.slack &&
+    // An unmatched override retains legacy /approve availability even when
+    // native exec delivery is off; only a selected list changes that route.
+    (!params.request ||
+      !isSlackPluginApprovalRequest(params.request) ||
+      resolvePluginApprovalSlackApprovers(params.cfg, params.request) !== undefined)
       ? {
           kind:
             params.request &&

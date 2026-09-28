@@ -29,6 +29,12 @@ custom approval payloads instead of the shared renderer.
 - `approvalCapability.authorizeActorAction` and
   `approvalCapability.getActionAvailabilityState` are the canonical
   approval-auth seam.
+- A channel that enforces host-configured, request-scoped plugin reviewer lists
+  for native cards, forwarded prompts, and final decisions sets
+  `approvalCapability.supportsScopedPluginApprovalApprovers: true`. When a
+  reviewer policy exists for the channel, the host declines plugin approval
+  routes and decisions through an older capability without this marker. Keep
+  the marker absent until every approval path enforces the selected list.
 - If plugin `/approve` authorization needs a space-qualified reviewer ID,
   implement `approvalCapability.resolveReviewerSenderId`. Core passes `cfg`,
   `accountId`, `senderId`, and `spaceId`, then uses the result only for plugin

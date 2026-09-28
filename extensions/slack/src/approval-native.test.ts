@@ -736,6 +736,46 @@ describe("slack native approval adapter", () => {
     ).toEqual({ kind: "disabled" });
   });
 
+  it("retains legacy approval availability when another plugin alone has Slack reviewers", () => {
+    const cfg = {
+      ...buildConfig({
+        allowFrom: ["U11111111"],
+        execApprovals: { enabled: false, approvers: ["U11111111"], target: "dm" },
+      }),
+      approvals: {
+        plugin: {
+          slack: {
+            plugins: { calendar: { approvers: ["team:T11111111:user:U22222222"] } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceAccountId: "default",
+      turnSourceTo: "team:T11111111:channel:C11111111",
+      policySubject: { pluginKey: "diffs", tool: "diffs" },
+    });
+
+    expect(
+      slackApprovalCapability.getActionAvailabilityState?.({
+        cfg,
+        accountId: "default",
+        action: "approve",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toBe(false);
+  });
+
   it("enables native plugin delivery from plugin approvers without exec approvers", async () => {
     const cfg = buildConfig({
       allowFrom: ["U123OWNER"],

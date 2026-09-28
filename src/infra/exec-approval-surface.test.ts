@@ -280,6 +280,22 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     });
   });
 
+  it("reports no plugin approval route when the channel cannot enforce scoped reviewers", () => {
+    const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
+    getChannelPluginMock.mockReturnValue({
+      meta: { label: "Slack" },
+      approvalCapability: { getActionAvailabilityState },
+    });
+    const cfg = {
+      approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+    } as never;
+
+    expect(
+      resolveApprovalInitiatingSurfaceState({ channel: "slack", cfg, approvalKind: "plugin" }),
+    ).toMatchObject({ kind: "disabled", channel: "slack" });
+    expect(getActionAvailabilityState).not.toHaveBeenCalled();
+  });
+
   it("loads config lazily when cfg is omitted and marks unsupported channels", () => {
     loadConfigMock.mockReturnValueOnce({ loaded: true });
     getChannelPluginMock.mockImplementation((channel: string) =>

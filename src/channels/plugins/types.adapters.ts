@@ -527,6 +527,8 @@ export type ChannelApprovalAdapter = {
 };
 
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
+  /** Confirms that this channel enforces configured plugin reviewer lists for delivery and decisions. */
+  supportsScopedPluginApprovalApprovers?: true;
   authorizeActorAction?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

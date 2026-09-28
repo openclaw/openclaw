@@ -11,6 +11,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
@@ -67,6 +68,12 @@ export function resolveApprovalInitiatingSurfaceState(params: {
 
   const cfg = params.cfg ?? getRuntimeConfig();
   const capability = resolveChannelApprovalCapability(getChannelPlugin(channel));
+  if (
+    params.approvalKind === "plugin" &&
+    !canChannelEnforcePluginReviewerPolicy(cfg, channel, capability)
+  ) {
+    return { kind: "disabled", channel, channelLabel, accountId };
+  }
   // Prefer the exec-specific hook, then the generic approval hook, before
   // falling back to basic deliverability for channels without native state.
   const state =

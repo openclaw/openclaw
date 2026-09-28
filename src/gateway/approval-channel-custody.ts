@@ -5,6 +5,7 @@ import {
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { canChannelEnforcePluginReviewerPolicy } from "../infra/approval-channel-policy-support.js";
 import {
   doesApprovalRequestSelectChannelAccount,
   type ApprovalRequestLike,
@@ -29,6 +30,12 @@ export function prepareApprovalChannelCustody(params: {
   }
   const plugin = getLoadedChannelPlugin(channel);
   const capability = resolveChannelApprovalCapability(plugin);
+  if (
+    params.approvalKind === "plugin" &&
+    !canChannelEnforcePluginReviewerPolicy(params.cfg, channel, capability)
+  ) {
+    return null;
+  }
   const authorizeActorAction = capability?.authorizeActorAction;
   if (!authorizeActorAction) {
     // Without channel approver settings, an OpenClaw change needs a configured
