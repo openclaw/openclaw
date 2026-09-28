@@ -2168,6 +2168,10 @@ try {
     const worker = readFileSync(swiftScriptPath, "utf8");
     const build = worker.indexOf('swift build -c "$BUILD_CONFIG" --jobs');
     expect(worker).toContain('chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"');
+    // A reused scratch path must never reach SwiftPM's pin-dropping full resolver first.
+    expect(worker).toContain(
+      'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve --force-resolved-versions',
+    );
     expect(worker).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
     expect(worker).toContain('cp "$resolved_snapshot" "$resolved_file"');
     expect(worker).toContain("identity in result");
@@ -2177,6 +2181,50 @@ try {
     expect(worker.indexOf("verify_snapshot_swift_lock", build)).toBeGreaterThan(build);
     expect(worker).toContain(
       'cp "$ROOT_DIR/apps/macos-mlx-tts/Package.resolved" "$MLX_TTS_HELPER_ROOT/Package.resolved"',
+    );
+  });
+
+  it("names every pin the edited Peekaboo resolution moved away from the committed lock", () => {
+    const root = tempDirs.make("openclaw-snapshot-swift-lock-");
+    const packageRoot = path.join(root, "package");
+    const baseline = path.join(root, "Package.resolved.committed");
+    mkdirSync(packageRoot);
+    const pin = (identity: string, version: string, revision: string) => ({
+      identity,
+      kind: "remoteSourceControl",
+      location: `https://github.com/example/${identity}.git`,
+      state: { revision, version },
+    });
+    const cmark = pin("swift-cmark", "0.8.0", "c".repeat(40));
+    const markdown = pin("swift-markdown", "0.8.0", "d".repeat(40));
+    writeFileSync(
+      baseline,
+      JSON.stringify({
+        version: 3,
+        pins: [pin("peekaboo", "4.6.0", "b".repeat(40)), cmark, markdown],
+      }),
+    );
+    const verify = (pins: unknown[]) => {
+      writeFileSync(
+        path.join(packageRoot, "Package.resolved"),
+        JSON.stringify({ version: 3, pins }),
+      );
+      return runHelper(`
+        set -euo pipefail
+        SWIFT_PACKAGE_LOCK_BASELINE=${JSON.stringify(baseline)}
+        SWIFT_PACKAGE_ROOT=${JSON.stringify(packageRoot)}
+        ${scriptBlock("verify_snapshot_swift_lock() {", "create_verified_peekaboo_snapshot() {", swiftScriptPath)}
+        verify_snapshot_swift_lock
+      `);
+    };
+
+    const unchanged = verify([cmark, markdown]);
+    expect(unchanged.status, unchanged.stderr).toBe(0);
+
+    const drifted = verify([pin("swift-cmark", "0.9.0", "e".repeat(40)), markdown]);
+    expect(drifted.status).toBe(1);
+    expect(drifted.stderr).toBe(
+      `ERROR: Peekaboo snapshot resolution does not match the committed Package.resolved: swift-cmark: 0.8.0 ${"c".repeat(40)} from https://github.com/example/swift-cmark.git -> 0.9.0 ${"e".repeat(40)} from https://github.com/example/swift-cmark.git\n`,
     );
   });
 
