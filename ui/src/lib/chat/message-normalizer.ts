@@ -455,7 +455,14 @@ function expandTextContent(
   };
 }
 
+const normalizedMessages = new WeakMap<object, NormalizedMessage>();
+
 export function normalizeMessage(message: unknown): NormalizedMessage {
+  const original = asOptionalRecord(message);
+  const cached = original && normalizedMessages.get(original);
+  if (cached) {
+    return cached;
+  }
   const m =
     asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
     {};
@@ -593,7 +600,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   content = stripMessageDisplayMetadata(content);
   const senderSession = readMessageSenderSession(m.senderSession);
 
-  return {
+  const normalized: NormalizedMessage = {
     role,
     content,
     timestamp,
@@ -613,4 +620,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
+  // Retained and live messages are immutable snapshots. Missing timestamps
+  // still resolve against the current clock on each call.
+  if (original && asFiniteNumber(m.timestamp) !== undefined) {
+    normalizedMessages.set(original, normalized);
+  }
+  return normalized;
 }

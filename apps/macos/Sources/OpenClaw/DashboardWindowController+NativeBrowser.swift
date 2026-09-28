@@ -26,10 +26,15 @@ extension DashboardWindowController {
             case let .navigate(tabId, url):
                 try self.nativeBrowser.navigate(tabId: tabId, url: url)
             case let .action(.download, tabId):
-                self.downloadBrowserReply(tabId: tabId, replyHandler: replyHandler)
+                self.performBrowserRequest(replyHandler: replyHandler) { browser, isCurrent in
+                    let cancelled = try await browser.download(tabId: tabId, isCurrent: isCurrent)
+                    return ["ok": true, "cancelled": cancelled]
+                }
                 return
             case let .action(.snapshot, tabId):
-                self.captureBrowserReply(tabId: tabId, point: nil, replyHandler: replyHandler)
+                self.performBrowserRequest(replyHandler: replyHandler) { browser, _ in
+                    try await browser.snapshot(tabId: tabId)
+                }
                 return
             case let .action(action, tabId):
                 try self.nativeBrowser.perform(action, tabId: tabId)
@@ -38,7 +43,9 @@ extension DashboardWindowController {
             case let .releaseScope(scope):
                 self.nativeBrowser.releaseScope(scope)
             case let .inspect(tabId, x, y):
-                self.captureBrowserReply(tabId: tabId, point: (x, y), replyHandler: replyHandler)
+                self.performBrowserRequest(replyHandler: replyHandler) { browser, _ in
+                    try await browser.inspect(tabId: tabId, x: x, y: y)
+                }
                 return
             }
             replyHandler(["ok": true], nil)
@@ -68,9 +75,10 @@ extension DashboardWindowController {
             ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
-    private func downloadBrowserReply(
-        tabId: String,
-        replyHandler: @escaping DashboardBrowserMessageHandler.ReplyHandler)
+    private func performBrowserRequest(
+        replyHandler: @escaping DashboardBrowserMessageHandler.ReplyHandler,
+        operation: @escaping @MainActor (
+            DashboardNativeBrowserHost, @escaping @MainActor () -> Bool) async throws -> [String: Any])
     {
         let sourceID = self.notificationSourceID
         Task { @MainActor [weak self] in
@@ -78,34 +86,8 @@ extension DashboardWindowController {
                 guard let self, self.canUseBrowserDocument(sourceID: sourceID) else {
                     throw DashboardBrowserError.unavailable
                 }
-                let cancelled = try await self.nativeBrowser.download(tabId: tabId) { [weak self] in
+                let reply = try await operation(self.nativeBrowser) { [weak self] in
                     self?.canUseBrowserDocument(sourceID: sourceID) == true
-                }
-                guard self.canUseBrowserDocument(sourceID: sourceID) else {
-                    throw DashboardBrowserError.unavailable
-                }
-                replyHandler(["ok": true, "cancelled": cancelled], nil)
-            } catch {
-                replyHandler(["ok": false, "error": error.localizedDescription], nil)
-            }
-        }
-    }
-
-    private func captureBrowserReply(
-        tabId: String,
-        point: (Double, Double)?,
-        replyHandler: @escaping DashboardBrowserMessageHandler.ReplyHandler)
-    {
-        let sourceID = self.notificationSourceID
-        Task { @MainActor [weak self] in
-            do {
-                guard let self, self.canUseBrowserDocument(sourceID: sourceID) else {
-                    throw DashboardBrowserError.unavailable
-                }
-                let reply: [String: Any] = if let point {
-                    try await self.nativeBrowser.inspect(tabId: tabId, x: point.0, y: point.1)
-                } else {
-                    try await self.nativeBrowser.snapshot(tabId: tabId)
                 }
                 guard self.canUseBrowserDocument(sourceID: sourceID) else {
                     throw DashboardBrowserError.unavailable

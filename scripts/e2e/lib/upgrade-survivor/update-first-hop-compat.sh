@@ -195,7 +195,11 @@ PLUGIN_CONFIG
   fi
   openclaw gateway install --force --json \
     >"$ARTIFACT_DIR/$lane-service-install.json" \
-    2>"$ARTIFACT_DIR/$lane-service-install.err"
+    2>"$ARTIFACT_DIR/$lane-service-install.err" || {
+      docker_e2e_print_log "$ARTIFACT_DIR/$lane-service-install.json" >&2
+      docker_e2e_print_log "$ARTIFACT_DIR/$lane-service-install.err" >&2
+      return 1
+    }
   wait_service_active
   cp "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE" "$ARTIFACT_DIR/$lane-before.pid"
   record_service_state "$ARTIFACT_DIR/$lane-service-before.txt"
@@ -220,6 +224,7 @@ reset_lane() {
     "$HOME/.openclaw" \
     "$HOME/.config/systemd/user/openclaw-gateway.service" \
     "$HOME/.config/systemd/user/default.target.wants/openclaw-gateway.service"
+  systemctl --user daemon-reload || return "$?"
 }
 
 run_negative_control() {

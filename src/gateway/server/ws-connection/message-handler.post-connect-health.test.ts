@@ -51,6 +51,7 @@ import {
   createGatewayHarnessGate,
   captureSecurityEvents,
   createCloseMock,
+  createBackendClient,
   createConnectedTestClient,
   createHealthSummary,
   createSetCloseCauseMock,
@@ -59,6 +60,7 @@ import {
   localUserIngressFor,
   NODE_PAIR_REMOVE_PARAMS,
   useGatewayTestConfig,
+  waitForFast,
   withGatewayTestState,
   type CloseGatewayConnection,
 } from "./message-handler.post-connect-health.test-support.js";
@@ -158,14 +160,11 @@ vi.mock("../../../config/config.js", () => ({
   loadConfig: loadConfigMock,
 }));
 
-function createBackendClient() {
-  return { id: "gateway-client", version: "dev", platform: "test", mode: "backend" };
-}
-
 vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
 vi.mock("../../../infra/system-presence.js", () => ({
+  commitPresence: vi.fn(),
   upsertPresence: upsertPresenceMock,
   listSystemPresence: vi.fn(() => []),
 }));
@@ -183,10 +182,6 @@ vi.mock("../health-state.js", () => ({
 beforeEach(() => {
   loadConfigMock.mockReset();
 });
-
-function waitForFast(assertion: () => void | Promise<void>) {
-  return vi.waitFor(assertion, { interval: 1 });
-}
 
 function connectTrustedProxyUser(
   connId: string,
@@ -367,6 +362,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
               identity: { type: "profile", id: profileId },
             }),
           }),
+          { pending: true },
         );
       }
     });
@@ -1741,6 +1737,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       expect(upsertPresenceMock).toHaveBeenCalledWith(
         "conn-time-zone",
         expect.objectContaining({ timeZone: "Europe/Vienna" }),
+        { pending: true },
       );
     });
   });
@@ -1772,6 +1769,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         expect.objectContaining({
           user: { id: "alice@example.com", email: "alice@example.com" },
         }),
+        { pending: true },
       );
     });
     expect(harness.client).toMatchObject({ authenticatedUserId: "alice@example.com" });

@@ -36,7 +36,15 @@ struct ControlUIDocumentNativeAuthTests {
         let server = try await DashboardHTTPFixture.start(
             html: """
             <html><body><script>
-            window.webkit.messageHandlers.fixtureReady.postMessage({});
+            Object.defineProperty(window, '__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__', {
+              value: {contract:1, documentId:crypto.randomUUID()}
+            });
+            window.webkit.messageHandlers.openclawConversation.postMessage({
+              contract:1, documentId:window.__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__.documentId,
+              type:'ready', surface:'conversation', capabilities:[]
+            }).then(reply => {
+              if (reply.ok) window.webkit.messageHandlers.fixtureReady.postMessage({});
+            });
             </script></body></html>
             """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
         defer { server.stop() }
@@ -84,6 +92,7 @@ struct ControlUIDocumentNativeAuthTests {
                 let document = try await manager.conversationDocument(for: .profile("conversation-fixture")) {
                     controller, _ in controller.add(ready, name: "fixtureReady")
                 }
+                try Self.scopeNativeIdentity(document, stateDirectory: stateDir)
                 let bridge = NativeConversationBridge(document: document)
                 hostedBridge = bridge
                 bridge.load(server.url("/control/chat/main"))
@@ -95,7 +104,7 @@ struct ControlUIDocumentNativeAuthTests {
                 #expect(bootstrap["token"] as? String == "accepted-native-token")
                 #expect(document.currentURL.fragment == nil)
                 let accepted = try await Self.decodeReply(Self.challenge(in: document.webView))
-                let result = try #require(accepted["result"] as? [String: Any])
+                let result = try #require(accepted["result"] as? [String: Any], "Native auth reply: \(accepted)")
                 #expect(result["auth"] as? [String: String] == ["token": "accepted-native-token"])
                 #expect(result["scopes"] as? [String] == ["operator.read"])
                 let device = try #require(result["device"] as? [String: Any])
@@ -357,8 +366,9 @@ struct ControlUIDocumentNativeAuthTests {
                 #expect(try await webView.evaluateJavaScript("window.unsavedDraft") as? String == "keep me")
                 #expect(retained.documentHost.hasCurrentNativeStartupCredentials)
                 #expect(retained.auth.legacyCredentials == ["token": "accepted-profile-token"])
+                try Self.scopeNativeIdentity(retained.documentHost, stateDirectory: stateDir)
                 let response = try await Self.decodeReply(Self.challenge(in: webView))
-                let result = try #require(response["result"] as? [String: Any])
+                let result = try #require(response["result"] as? [String: Any], "Native auth reply: \(response)")
                 #expect(result["scopes"] as? [String] == ["operator.read", "operator.write"])
                 #expect(session.snapshotMakeCount() == 2)
                 webView.reload()
@@ -372,6 +382,22 @@ struct ControlUIDocumentNativeAuthTests {
             await oldObservation?.value
             await connection.shutdown()
             try outcome.get()
+        }
+    }
+
+    /// WebKit callbacks do not inherit the test task's identity directory. Keep
+    /// the real provider and its live validity checks inside the same private fixture.
+    private static func scopeNativeIdentity(_ document: ControlUIDocumentHost, stateDirectory: URL) throws {
+        let provider = try #require(document.nativeGatewayAuthProvider)
+        document.nativeGatewayAuthProvider = { nonce, signedAt in
+            let response = try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+                try await provider(nonce, signedAt)
+            }
+            return DashboardNativeGatewayAuth(json: response.json, isCurrent: {
+                DeviceIdentityPaths.$scopedStateDirURL.withValue(stateDirectory) {
+                    response.isCurrent()
+                }
+            })
         }
     }
 

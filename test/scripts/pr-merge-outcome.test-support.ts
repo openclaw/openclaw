@@ -915,8 +915,22 @@ fi
         );
         return { ...result, output: result.stdout + result.stderr };
       },
-      adminPriorCi: (path: string, confirmed = true, recoveryOid = "") =>
-        run(false, repo, "squash", recoveryOid, "", "", "", "", false, "", false, path, confirmed),
+      adminPriorCi: (path: string, confirmed = true, recoveryOid = "", replacementHead = "") =>
+        run(
+          false,
+          repo,
+          "squash",
+          recoveryOid,
+          replacementHead,
+          "",
+          "",
+          "",
+          false,
+          "",
+          false,
+          path,
+          confirmed,
+        ),
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),

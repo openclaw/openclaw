@@ -132,14 +132,15 @@ async function cancelQueuedSteeringMessage(
 }
 
 /**
- * Sends a steering message and resolves only after the matching user
- * `message_end` event appears. If the run ends or times out first, the pending
- * queue entry is removed so an abandoned steer does not leak into a later turn.
+ * Tracks one steer until commit or terminal cleanup. Admission-only receipts
+ * resolve after enqueue, but retain exact-message cleanup until the run ends.
+ * Commit-waiting callers also retain their delivery deadline.
  */
-async function steerAndWaitForTranscriptCommit(
+async function steerWithTranscriptLifecycle(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
   timeoutMs: number,
+  waitForTranscriptCommit: boolean,
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
   images?: ImageContent[],
   media?: MediaFact[],
@@ -267,6 +268,14 @@ async function steerAndWaitForTranscriptCommit(
         reportAcceptance(true);
         if (abortRequested) {
           rejectAfterCancellation("queued steering message was cancelled before delivery");
+        } else if (!waitForTranscriptCommit && acceptanceOpen) {
+          // The caller now owns an admission receipt. Only the receiving run
+          // owns later consumption or withdrawal; do not retain a global failure
+          // listener or the completed caller's abort signal after this point.
+          clearTimeout(timer);
+          unsubscribePersistenceFailure();
+          abortSignal?.removeEventListener("abort", onAbort);
+          resolve();
         }
       },
       (err: unknown) => {
@@ -342,7 +351,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     options?.onQueueAccepted?.(true);
     return;
   }
-  if (options?.waitForTranscriptCommit !== true) {
+  if (options?.waitForTranscriptCommit === undefined) {
     try {
       await steerActiveSession(
         activeSession,
@@ -363,10 +372,11 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     return;
   }
   try {
-    await steerAndWaitForTranscriptCommit(
+    await steerWithTranscriptLifecycle(
       activeSession,
       text,
       options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
+      options.waitForTranscriptCommit,
       options.userTurnTranscriptRecorder,
       options.images,
       options.media,

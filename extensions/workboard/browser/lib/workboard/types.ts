@@ -25,8 +25,6 @@ type WorkboardLifecycleState =
 export type WorkboardLifecycle = {
   session: GatewaySessionRow | null;
   state: WorkboardLifecycleState;
-  targetStatus?: WorkboardStatus;
-  sourceUpdatedAt?: number;
 };
 
 type WorkboardDependencyParent = {
@@ -128,5 +126,4 @@ export type WorkboardUiState = {
   draggedCardId: string | null;
   dragOverStatus: WorkboardStatus | null;
   dragBeforeCardId: string | null;
-  capturingSessionKeys: Set<string>;
 };

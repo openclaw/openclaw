@@ -519,8 +519,8 @@ Regular stable publication automatically requests Linux bundles after the
 GitHub release becomes visible. `OpenClaw Release Publish` and `OpenClaw Release
 Button` both use the same Linux release owner; the request can finish before
 the build, signing, and publication do. Their summaries report Linux as pending
-until its own assets verify. Beta and alpha prereleases, and extended-stable
-publication, do not request Linux bundles.
+until its own assets verify. Beta prereleases and extended-stable publication do
+not request Linux bundles.
 
 For independent recovery, manually dispatch `Linux App Release Request` from `main`. Provide the existing
 stable release tag in `tag`; prerelease tags are rejected because their semver

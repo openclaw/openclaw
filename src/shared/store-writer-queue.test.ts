@@ -253,6 +253,198 @@ it("retains each queued writer's caller context through async and reentrant work
   expect(queues.size).toBe(0);
 });
 
+it("admits disjoint keys without bypassing an earlier overlapping waiter", async () => {
+  vi.useFakeTimers();
+  const queues = new Map<string, StoreWriterQueue>();
+  const releaseFirst = createDeferred();
+  const joinedEntered = createDeferred();
+  const releaseJoined = createDeferred();
+  const order: string[] = [];
+  const write = (keys: string[], name: string, run: () => Promise<void>) =>
+    runQueuedStoreWrite({
+      queues,
+      storePath: "keyed-fifo",
+      label: name,
+      keys,
+      fn: async () => {
+        order.push(name);
+        await run();
+      },
+    });
+  const first = write(["a"], "first", () => releaseFirst.promise);
+  const joined = write(["a", "b"], "joined", async () => {
+    joinedEntered.resolve();
+    await releaseJoined.promise;
+  });
+  const follower = write(["b"], "follower", async () => {});
+  const independent = write(["c"], "independent", async () => {});
+
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual(["first", "independent"]);
+    releaseFirst.resolve();
+    await joinedEntered.promise;
+    expect(order).toEqual(["first", "independent", "joined"]);
+    releaseJoined.resolve();
+    await Promise.all([first, joined, follower]);
+    expect(order).toEqual(["first", "independent", "joined", "follower"]);
+  } finally {
+    releaseFirst.resolve();
+    releaseJoined.resolve();
+    await Promise.allSettled([first, joined, follower, independent]);
+    vi.useRealTimers();
+  }
+});
+
+it("holds a full-store barrier until every keyed writer settles and excludes later keys", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const gates = [
+    { key: "a", entered: createDeferred(), release: createDeferred() },
+    { key: "b", entered: createDeferred(), release: createDeferred() },
+  ] as const;
+  const barrierEntered = createDeferred();
+  const releaseBarrier = createDeferred();
+  const order: string[] = [];
+  const writers = gates.map(({ key, entered, release }) =>
+    runQueuedStoreWrite({
+      queues,
+      storePath: "keyed-barrier",
+      label: key,
+      keys: [key],
+      fn: async () => {
+        entered.resolve();
+        await release.promise;
+        order.push(key);
+      },
+    }),
+  );
+  const barrier = runQueuedStoreWrite({
+    queues,
+    storePath: "keyed-barrier",
+    label: "barrier",
+    fn: async () => {
+      order.push("barrier");
+      barrierEntered.resolve();
+      await releaseBarrier.promise;
+    },
+  });
+  const later = runQueuedStoreWrite({
+    queues,
+    storePath: "keyed-barrier",
+    label: "later",
+    keys: ["c"],
+    fn: async () => {
+      order.push("later");
+    },
+  });
+
+  try {
+    await Promise.all(gates.map(({ entered }) => entered.promise));
+    gates[0].release.resolve();
+    await writers[0];
+    expect(order).toEqual(["a"]);
+    gates[1].release.resolve();
+    await barrierEntered.promise;
+    expect(order).toEqual(["a", "b", "barrier"]);
+    releaseBarrier.resolve();
+    await Promise.all([...writers, barrier, later]);
+    expect(order).toEqual(["a", "b", "barrier", "later"]);
+  } finally {
+    for (const { release } of gates) {
+      release.resolve();
+    }
+    releaseBarrier.resolve();
+    await Promise.allSettled([...writers, barrier, later]);
+  }
+});
+
+it("cancels an overlapping waiter while retaining keyed caller context and active settlement", async () => {
+  const contexts = new AsyncLocalStorage<string>();
+  const queues = new Map<string, StoreWriterQueue>();
+  const releaseActive = createDeferred();
+  const activeController = new AbortController();
+  const waitingController = new AbortController();
+  const denied = new Error("keyed writer revoked");
+  const order: string[] = [];
+  const write = (owner: string, keys: string[], wait: Promise<void>, signal?: AbortSignal) =>
+    contexts.run(owner, () =>
+      runQueuedStoreWrite({
+        queues,
+        storePath: "keyed-cancellation",
+        label: owner,
+        keys,
+        signal,
+        fn: async () => {
+          order.push(owner);
+          await wait;
+          return runQueuedStoreWrite({
+            queues,
+            storePath: "keyed-cancellation",
+            label: "retained-owner",
+            keys,
+            reentrant: true,
+            fn: async () => contexts.getStore(),
+          });
+        },
+      }),
+    );
+  const active = write("active", ["a"], releaseActive.promise, activeController.signal);
+  const canceled = write("canceled", ["a", "b"], Promise.resolve(), waitingController.signal);
+  const canceledOutcome = expect(canceled).rejects.toBe(denied);
+  const independent = write("independent", ["b"], Promise.resolve());
+  const follower = write("follower", ["a"], Promise.resolve());
+
+  try {
+    activeController.abort(denied);
+    waitingController.abort(denied);
+    await canceledOutcome;
+    await expect(independent).resolves.toBe("independent");
+    expect(order).toEqual(["active", "independent"]);
+    releaseActive.resolve();
+    await expect(Promise.all([active, follower])).resolves.toEqual(["active", "follower"]);
+    expect(order).toEqual(["active", "independent", "follower"]);
+  } finally {
+    releaseActive.resolve();
+    await Promise.allSettled([active, canceled, independent, follower, canceledOutcome]);
+  }
+});
+
+it("reenters only keys covered by the active writer", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const expanded = vi.fn(async () => {});
+  const value = await runQueuedStoreWrite({
+    queues,
+    storePath: "keyed-reentrancy",
+    label: "outer",
+    keys: ["a", "b"],
+    fn: async () => {
+      const nested = await runQueuedStoreWrite({
+        queues,
+        storePath: "keyed-reentrancy",
+        label: "covered",
+        keys: ["a"],
+        reentrant: true,
+        fn: async () => "covered",
+      });
+      for (const keys of [["a", "c"], undefined]) {
+        await expect(
+          runQueuedStoreWrite({
+            queues,
+            storePath: "keyed-reentrancy",
+            label: "expanded",
+            keys,
+            reentrant: true,
+            fn: expanded,
+          }),
+        ).rejects.toThrow("Cannot expand an active store writer's keys");
+      }
+      return nested;
+    },
+  });
+  expect(value).toBe("covered");
+  expect(expanded).not.toHaveBeenCalled();
+});
+
 it("cancels only waiting writers while retaining active settlement and follower FIFO", async () => {
   const queues = new Map<string, StoreWriterQueue>();
   const release = createDeferred();

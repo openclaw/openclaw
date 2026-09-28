@@ -132,7 +132,7 @@ struct GatewayConnectionDashboardIdentityTests {
                 try await fixture.reconnect(announcement: announcement)
 
                 let expectedURL = try announcement.flatMap(URL.init(string:)) ?? GatewayEndpointStore.dashboardURL(
-                    for: fixture.config, mode: .remote, authToken: fixture.config.token)
+                    for: fixture.config, mode: .remote, authToken: nil)
                 let unchanged = announcement == originalURL.absoluteString
                 let refreshed = ContinuousClock.now + .seconds(5)
                 while unchanged || manager._testAuxiliaryWindows().contains(where: {

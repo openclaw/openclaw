@@ -72,6 +72,9 @@ it.each([
     const mode=process.argv[process.argv.indexOf("--update-executor")+1];
     const action=process.argv[3];
     if(mode==="check") {
+      // EOF follows the parent's committed PID/start binding; receipts observe that bound row.
+      const {finished}=await import("node:stream/promises");
+      await finished(process.stdin.resume(),{cleanup:true});
       if(!process.argv.includes("--json")) {
         process.stdout.write("Recorded warnings from the current update. ");
       }
@@ -94,8 +97,6 @@ it.each([
     }
     else if(mode==="check" && ${JSON.stringify(supported)}==="without-backup") {
       process.stdout.write(JSON.stringify({updateExecutor:"root-spawner-v1",targetRootBinding:true}));
-      const {finished}=await import("node:stream/promises");
-      await finished(process.stdin.resume(),{cleanup:true});
     }
     else try { await runGatewayServiceUpdateCommand(mode,action,async()=>{
       fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({pid:process.pid,parent:process.ppid,noRespawn:process.env.OPENCLAW_NO_RESPAWN}));
@@ -182,7 +183,14 @@ it.each([
       await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.stat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
     }
-    const probe = JSON.parse(await fs.readFile(probeReceipt, "utf8"));
+    const probe = JSON.parse(
+      await fs.readFile(probeReceipt, "utf8").catch((cause: unknown) => {
+        throw new Error(
+          `${cause instanceof Error ? cause.message : String(cause)}; native probe receipt runner: ${JSON.stringify(observed)}`,
+          { cause },
+        );
+      }),
+    );
     expect(probe).toMatchObject({ owner: runId, helper: process.pid });
     expect(probe.pid).not.toBe(process.pid);
     expect(probe.key.startsWith(root + "/.openclaw-update-child-")).toBe(true);
