@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import {
   cleanupMcpCliTestState,
   createWorkspace,
@@ -29,9 +30,13 @@ async function withMcpHome(run: (home: string, workspaceDir: string) => Promise<
 }
 
 async function writeMcpServers(home: string, servers: Record<string, unknown>): Promise<void> {
+  await writeMcpConfig(home, { mcp: { servers } });
+}
+
+async function writeMcpConfig(home: string, config: Record<string, unknown>): Promise<void> {
   await fs.writeFile(
     path.join(home, ".openclaw", "openclaw.json"),
-    `${JSON.stringify({ mcp: { servers } })}\n`,
+    `${JSON.stringify(config)}\n`,
     "utf8",
   );
 }
@@ -97,7 +102,7 @@ describe("mcp cli", () => {
       expect(JSON.parse(lastLogLine())).toEqual({
         url: "https://mcp.example.com/mcp",
         transport: "streamable-http",
-        headers: { Authorization: "Bearer token" },
+        headers: { Authorization: REDACTED_SENTINEL },
         auth: "oauth",
         oauth: { scope: "docs.read" },
         toolFilter: { include: ["search", "read_*"] },
@@ -362,7 +367,7 @@ describe("mcp cli", () => {
     });
   });
 
-  it("labels listed MCP servers as OpenClaw-managed", async () => {
+  it("labels effective MCP servers and excludes the mcporter registry", async () => {
     await withMcpHome(async () => {
       await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
       mockLog.mockClear();
@@ -370,9 +375,9 @@ describe("mcp cli", () => {
       await runMcpCommand(["mcp", "list"]);
 
       const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(output).toContain("OpenClaw-managed MCP servers (");
+      expect(output).toContain("Available MCP servers (");
       expect(output).toContain("- context7");
-      expect(output).toContain("OpenClaw-managed mcp.servers entries");
+      expect(output).toContain("enabled plugin MCP servers are merged with mcp.servers overrides");
       expect(output).toContain("does not include mcporter servers from config/mcporter.json");
     });
   });
@@ -862,7 +867,7 @@ describe("mcp cli", () => {
       mockLog.mockClear();
       await runMcpCommand(["mcp", "list"]);
       const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(output).toContain("No OpenClaw-managed MCP servers configured in ");
+      expect(output).toContain("No MCP servers available in ");
       expect(output).toContain("does not include mcporter servers from config/mcporter.json");
     });
   });
@@ -1007,7 +1012,7 @@ describe("mcp cli", () => {
 
       await expect(runMcpCommand(["mcp", "unset", "missing"])).rejects.toThrow("__exit__:1");
       expect(lastErrorLine()).toBe(
-        `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see configured servers.`,
+        `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see available servers.`,
       );
     });
   });

@@ -149,6 +149,11 @@ describe("mcp cli OAuth", () => {
         "--auth",
         "oauth",
       ]);
+      await expect(runMcpCommand(["mcp", "login", "docs", "--code", "abc123"])).rejects.toThrow(
+        "__exit__:1",
+      );
+      expect(completeMcpOAuthAuthorization).not.toHaveBeenCalled();
+      await runMcpCommand(["mcp", "configure", "docs", "--enable"]);
       await runMcpCommand(["mcp", "login", "docs", "--code", "abc123"]);
 
       expect(completeMcpOAuthAuthorization).toHaveBeenCalledWith(
@@ -164,8 +169,8 @@ describe("mcp cli OAuth", () => {
       await runMcpCommand(["mcp", "status", "--json"]);
       expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
         name: "docs",
-        enabled: false,
-        ok: false,
+        enabled: true,
+        ok: true,
         requestTimeoutMs: 9_000,
         auth: "oauth",
       });

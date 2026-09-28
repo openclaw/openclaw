@@ -7,28 +7,28 @@ read_when:
   - Setting the Codex tool approval mode for a saved server
 ---
 
-This page covers the OpenClaw MCP client-side registry: the subcommands that
-read and write `mcp.servers` definitions, their Codex approval behavior, and
-ready-made server recipes.
+This page covers the OpenClaw MCP client-side registry: its effective server
+inventory, the `mcp.servers` overrides you can edit, Codex approval behavior,
+and ready-made server recipes.
 
 ## OpenClaw as an MCP client registry
 
 This is the `openclaw mcp list`, `show`, `status`, `doctor`, `probe`, `add`, `set`,
 `configure`, `tools`, `login`, `logout`, `reload`, and `unset` path.
 
-These commands do not expose OpenClaw over MCP. They manage OpenClaw-managed MCP server definitions under `mcp.servers` in OpenClaw config. They do not read mcporter servers from `config/mcporter.json`.
+These commands do not expose OpenClaw over MCP. Read commands combine server declarations from enabled OpenClaw plugins with operator-owned definitions under `mcp.servers`; a configured server with the same name overrides the plugin declaration, and `enabled: false` suppresses that plugin server while keeping the disabled config entry visible. Write commands (`add`, `set`, `configure`, `tools`, and `unset`) edit only `mcp.servers`. These commands do not read mcporter servers from `config/mcporter.json`.
 
 Those saved definitions are for runtimes that OpenClaw launches or configures later, such as embedded OpenClaw and other runtime adapters. OpenClaw stores the definitions centrally so those runtimes do not need to keep their own duplicate MCP server lists.
 
 <AccordionGroup>
   <Accordion title="Important behavior">
-    - these commands only read or write OpenClaw config
+    - read commands inspect the combined inventory; write commands change only `mcp.servers`
     - `status`, `list`, `show`, `doctor` without `--probe`, `set`, `configure`, `tools`, `logout`, `reload`, and `unset` do not connect to the target MCP server
-    - `login` performs the MCP OAuth network flow for the configured HTTP server and saves the resulting local credentials
+    - `login` performs the MCP OAuth network flow for the selected HTTP server and saves the resulting local credentials
     - `status --verbose` prints resolved transport, auth, timeout, filter, and parallel-tool-call hints without connecting
-    - `doctor` checks saved definitions for local setup problems such as missing stdio commands, invalid working directories, missing TLS files, disabled servers, literal sensitive header/env values, and incomplete OAuth authorization
+    - `doctor` checks available definitions for local setup problems such as missing stdio commands, invalid working directories, missing TLS files, disabled servers, literal sensitive header/env values, and incomplete OAuth authorization
     - `doctor --probe` adds the same live connection proof as `probe` after static checks pass
-    - `probe` connects to the selected server or all configured servers, lists tools, and reports capabilities/diagnostics
+    - `probe` connects to the selected server or all enabled servers, lists tools, and reports capabilities/diagnostics
     - `add` builds a definition from flags and probes before saving unless `--no-probe` is set or OAuth authorization is needed first
     - runtime adapters decide which transport shapes they actually support at execution time
     - `enabled: false` keeps a server saved but excludes it from embedded runtime discovery
@@ -54,7 +54,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
 
-### Saved MCP server definitions
+### Effective MCP server inventory
 
 Commands:
 
@@ -75,16 +75,17 @@ Commands:
 Notes:
 
 - `list` sorts server names.
-- `show` without a name prints the full configured MCP server object.
-- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
+- `list` and `show` include MCP servers declared by enabled plugin manifests and explicit `mcp.servers` entries. User config wins when both define the same name; a disabled explicit config entry remains visible and suppresses its plugin default. Missing plugin server prerequisites are written to stderr as safe diagnostics, keeping `--json` output machine-readable.
+- `show` without a name prints the full effective MCP server inventory. Sensitive headers, URLs, and credential-bearing stdio arguments are redacted in text and JSON output.
+- `status` classifies effective transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization.
 - `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
-- `probe` connects to enabled saved servers and reports tool counts, resources/prompts support, list-change support, and diagnostics. If none are enabled, plain output explains that no servers can be probed and shows add/enable commands; `--json` keeps its empty result envelope. A named disabled server is rejected with an enable hint.
+- `probe` connects to enabled effective servers and reports tool counts, resources/prompts support, list-change support, and diagnostics. If none are enabled, plain output explains that no servers can be probed and shows add/enable commands; `--json` keeps its empty result envelope. A named disabled server is rejected with an enable hint.
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
-- `set` expects one JSON object value on the command line.
-- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
+- `set` expects one JSON object value on the command line. Use it to create or replace a config override for a plugin-declared server.
+- `configure` updates existing saved entries only: enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints. Add `--probe` to verify the updated server before saving.
 - `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
-- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
-- `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
+- `login` runs the OAuth flow for available HTTP servers configured with `auth: "oauth"`, including plugin-declared servers. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
+- `logout` clears stored OAuth credentials for the named available server without removing its plugin declaration or saved config.
 - `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
 - Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
 - `unset` fails if the named server does not exist.

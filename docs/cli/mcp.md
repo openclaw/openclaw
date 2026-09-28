@@ -16,7 +16,7 @@ sidebarTitle: "MCP"
 `serve` is OpenClaw acting as an MCP server. The other subcommands are OpenClaw acting as an MCP client-side registry for servers its own runtimes may consume later.
 
 <Note>
-  `list`, `show`, `set`, and `unset` only read and write OpenClaw-managed `mcp.servers` entries in OpenClaw config. They do not include mcporter servers from `config/mcporter.json`; use `mcporter list` for that registry.
+  Read commands (`list`, `show`, `status`, `doctor`, `probe`, `login`, and `logout`) include MCP servers declared by enabled OpenClaw plugins, with `mcp.servers` overrides taking precedence. Write commands change only `mcp.servers`. These commands do not include mcporter servers from `config/mcporter.json`; use `mcporter list` for that registry.
 </Note>
 
 Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness session itself and route that runtime through ACP.
