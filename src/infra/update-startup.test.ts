@@ -22,7 +22,10 @@ import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { writeUpdateInstallReceiptRowSync } from "./restart-sentinel-store.js";
 import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
-import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
+import {
+  createGatewayUpdateLifecycle,
+  currentUpdateCheckLifecycle,
+} from "./update-check-lifecycle.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import { createDevGitStatus } from "./update-startup-git.test-support.js";
@@ -374,25 +377,7 @@ describe("update-startup", () => {
     const second = getUpdateEffectiveChannel();
     await vi.advanceTimersByTimeAsync(0);
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
-    releaseStatus?.({
-      root: "/opt/openclaw",
-      installKind: "git",
-      packageManager: "pnpm",
-      git: {
-        root: "/opt/openclaw",
-        sha: "current-sha",
-        tag: null,
-        branch: "main",
-        upstream: "origin/main",
-        upstreamSource: "tracking",
-        upstreamSha: "upstream-sha",
-        commitAtMs: null,
-        dirty: false,
-        ahead: 0,
-        behind: 0,
-        fetchOk: false,
-      },
-    });
+    releaseStatus?.(createDevGitStatus({ behind: 0, fetchOk: false }));
 
     await expect(Promise.all([first, second])).resolves.toEqual(["dev", "dev"]);
     await expect(getUpdateEffectiveChannel()).resolves.toBe("dev");
@@ -455,8 +440,9 @@ describe("update-startup", () => {
       getEmbeddedRuns: () => 0,
       getBackgroundExecSessions: () => 0,
       getCronRuns: () => 0,
-      getActiveTasks: () => 0,
-      getTaskBlockers: () => [],
+      getAgentRuns: () => 0,
+      getAcpRuns: () => 0,
+      getMediaRuns: () => 0,
       getRootRequests: () => 0,
       getSessionAdmissions: () => 0,
       getSessionMutations: () => 0,
@@ -2303,7 +2289,8 @@ describe("update-startup", () => {
   });
 
   it("ends a held stable campaign when its replacement target is not yet due", async () => {
-    const campaign = new UpdateCampaignController();
+    const campaign = new UpdateCampaignController(scheduler);
+    currentUpdateCheckLifecycle().campaign = campaign;
     const runAutoUpdate = createAutoUpdateSuccessMock();
     const cfg = { update: { channel: "stable" as const, auto: { enabled: true } } };
     mockPackageUpdateStatus("latest", "2.0.0");
@@ -2317,7 +2304,6 @@ describe("update-startup", () => {
       runGatewayUpdateCheck({
         cfg,
         activeWorkInspectors: idleActiveWorkInspectors(),
-        updateCampaign: campaign,
         runAutoUpdate,
       });
 

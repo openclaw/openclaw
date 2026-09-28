@@ -31,6 +31,11 @@ Internal updates, including subagent completion reports, also use this steering 
 
 In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
 
+A steered channel reply carries that message's quoted or forwarded context into
+the model input. Quoted content stays conversation data; commands and answers to
+pending questions use the literal incoming text. Text-only transcript entries
+also retain the literal input.
+
 The native Codex app-server harness exposes `turn/steer` instead of OpenClaw runtime's internal steering queue. OpenClaw batches queued prompts for the configured quiet window, then sends a single `turn/steer` request with all collected user input in arrival order. Codex's upstream turn scheduler owns its tool scheduling and drains pending input at model boundaries; OpenClaw does not add per-tool preemption to that runtime. A transcript commit confirms persistence, not that a later model request has read the input.
 
 Codex review and manual compaction turns reject same-turn steering. When a runtime cannot accept steering in `steer` mode, OpenClaw waits for the active run to finish before starting the prompt.
@@ -73,13 +78,24 @@ Visible user turns started through the `agent` RPC can also receive compatible
 steering. Direct background turns with optional replies leave new human messages
 queued for a followup turn that can provide the required answer.
 
-Authorized participants with matching tool permissions can steer from different
-browsers. The running turn keeps its original approval destination. A different
-browser identity alone does not defer the message, but changes to permissions,
-execution policy, workspace, or bound tools can require a followup turn.
-Reconnecting as the same authenticated user preserves steering when permissions
-and model access remain unchanged. The active turn keeps its original browser,
-tool, and approval bindings; steering does not transfer them to the new connection.
+Different signed-in people with the same permissions can steer each other's
+active turn, including from different browsers or after reconnecting. The turn
+keeps its original owner's authority, tool bindings, and approval destination.
+Personal tools (`screen` and `theme`) act for one named person. When several
+people have steered the turn, the agent must pass that person's verified
+`requester_profile.id` as `user` to choose whose view or appearance to change,
+and ask if it is unclear. Each authenticated Control UI message includes its
+requester's verified profile id in the agent's user-role conversation context.
+Personal instructions and other personal settings without a `user` selector
+cannot be read or changed from a turn several people have steered. The person
+should ask in their own turn with a new Control UI message. For Crabbox open-and-show requests in a
+mixed-person turn, create the environment without `presentation`, then use
+`screen` with `desktop_show` or `portal_show`, its `environmentId`, and the
+requester's `requester_profile.id` as `user`.
+Different permissions (role scopes, session access cap, sandbox requirement,
+allowed agents, model access, access grant, or tool policy) queue the message as
+a followup; changes to execution policy, workspace, or bound tools can also
+require a followup.
 
 Automatic credential rotation and model fallback also retain the active turn.
 New input can steer that turn while the selected model remains unchanged, fallback
@@ -89,8 +105,8 @@ turn. Answers to a pending question still go to the question's original owner.
 
 [Personal `USER.md` context](/concepts/user-model#personal-user-files-on-a-shared-gateway)
 follows the session's assigned human owner, otherwise its authenticated human
-creator. Another participant can steer normally without switching that personal
-context, and collected messages keep the same session selection. Reassignment
+creator. Another participant with the same permissions can steer without switching
+that personal context, and collected messages keep the same session selection. Reassignment
 takes effect on the next new turn; it does not replace the running turn's personal
 instructions. Personal context selection does not grant tool permissions or
 change the approval destination.

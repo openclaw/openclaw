@@ -927,6 +927,12 @@ describe("config cli integration", () => {
         expect(output.errors.join("\n")).toContain(
           "conditional config set expectation did not match the authored config",
         );
+        expect(output.errors.join("\n")).toContain("No settings were saved");
+        expect(output.errors.join("\n")).toContain(
+          "Review the current config and any conditional expectations before retrying",
+        );
+        expect(output.errors.join("\n")).not.toContain("changed while this command was writing");
+        expect(output.errors.join("\n")).not.toContain("Re-run the same command");
         expect(output.errors.join("\n")).not.toContain("18789");
         expect(output.errors.join("\n")).not.toContain("19002");
       },

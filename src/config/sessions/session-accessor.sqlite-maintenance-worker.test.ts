@@ -3,11 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, StatementSync as NativeStatement } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../../infra/node-sqlite.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  resolveStateDatabaseCoordinatorPath,
-} from "../../infra/state-database-coordinator.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -19,7 +15,6 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
@@ -87,13 +82,6 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
       if (scenario === "removal") {
         seedStale(1);
       }
-      const coordinatorPath = resolveNodeSqliteLocation(
-        resolveStateDatabaseCoordinatorPath({
-          databasePath: resolveOpenClawStateSqlitePath(state.env),
-          runtimeDirectory: captureStateDatabaseCoordinatorRuntime().directory,
-          uid: process.getuid?.(),
-        }),
-      );
       const policy = resolveMaintenanceConfigFromInput({
         mode: "enforce",
         maxEntries: scenario === "warm-cap" ? 1 : 100,
@@ -120,8 +108,6 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
       const counts = { prepare: 0, exec: 0, get: 0, all: 0, run: 0, iterate: 0 };
       const preparedSql: string[] = [];
       const executedSql: string[] = [];
-      const executions: Array<{ database: DatabaseSync; location: string | null; sql: string }> =
-        [];
       // oxlint-disable-next-line typescript/unbound-method -- Forward the native operation with its exact database receiver.
       const originalPrepare = DatabaseSync.prototype.prepare;
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
@@ -142,7 +128,6 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
           apply(target, receiver: DatabaseSync, args) {
             if (observation.getStore()) {
               counts.exec += 1;
-              executions.push({ database: receiver, location: receiver.location(), sql: args[0] });
             }
             return Reflect.apply(target, receiver, args);
           },
@@ -184,12 +169,7 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
         ),
       ).toEqual([]);
       if (!remove) {
-        // Worker admission retains a separate lifecycle lock. Planning must still
-        // perform no parent SQL against session data or any other database.
-        const coordinatorExecutions = executions.filter(
-          ({ location }) => resolveNodeSqliteLocation(location ?? "") === coordinatorPath,
-        );
-        expect({ ...counts, exec: counts.exec - coordinatorExecutions.length }).toEqual({
+        expect(counts).toEqual({
           prepare: 0,
           exec: 0,
           get: 0,
@@ -197,11 +177,6 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
           run: 0,
           iterate: 0,
         });
-        expect(coordinatorExecutions.map(({ sql }) => sql)).toEqual([
-          "PRAGMA busy_timeout = 0; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;",
-          "ROLLBACK",
-        ]);
-        expect(new Set(coordinatorExecutions.map(({ database }) => database)).size).toBe(1);
         expect(preservation).not.toHaveBeenCalled();
       }
       expect(loadSessionEntry(active)?.label).toBe("updated");

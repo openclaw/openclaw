@@ -161,6 +161,23 @@ describe("createHostedOutboundMediaStore", () => {
     return createStoreFixture(namespace).store;
   }
 
+  it.each(["read", "readMetadata"] as const)(
+    "releases a failed %s acquisition so deletion can reclaim its rows",
+    async (operation) => {
+      loadWebMediaMock.mockResolvedValueOnce(imageMedia());
+      const { metadataStore, chunkStore, store } = createStoreFixture("failed-reader-media");
+      await prepare(store);
+      const failure = new Error("metadata read failed");
+      vi.spyOn(metadataStore, "lookup").mockRejectedValueOnce(failure);
+
+      await expect(store[operation]("abc123abc123abc123abc123")).rejects.toBe(failure);
+      await store.delete("abc123abc123abc123abc123");
+
+      expect(await metadataStore.entries()).toEqual([]);
+      expect(await chunkStore.entries()).toEqual([]);
+    },
+  );
+
   it.each([true, false])(
     "stores hosted media chunks and reads them back (bulk: %s)",
     async (bulkReads) => {

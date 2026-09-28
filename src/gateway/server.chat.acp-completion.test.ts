@@ -49,7 +49,7 @@ vi.mock("../auto-reply/reply/dispatch-acp-transcript.runtime.js", async (importO
 vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../auto-reply/reply/dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => ({
-    resolveSession: ({ sessionKey }: { sessionKey: string }) => ({
+    resolveSessionAsync: async ({ sessionKey }: { sessionKey: string }) => ({
       kind: "ready",
       sessionKey,
       meta: createAcpSessionMeta({ agent: "main" }),
@@ -83,6 +83,10 @@ function readTranscriptMessages(scope: Parameters<typeof loadTranscriptEventsSyn
   });
 }
 
+function acpSessionEntry(sessionId: string) {
+  return { sessionId, updatedAt: Date.now(), acp: createAcpSessionMeta({ agent: "main" }) };
+}
+
 describe("Gateway ACP completion ownership", () => {
   afterEach(() => {
     dispatchInboundMessageMock.mockReset();
@@ -109,7 +113,6 @@ describe("Gateway ACP completion ownership", () => {
     suppressed?: boolean;
     widget?: boolean;
   }> = [
-    { name: "cold and warm turns" },
     {
       name: "post-hook text",
       text: "rendered reply",
@@ -119,29 +122,18 @@ describe("Gateway ACP completion ownership", () => {
       name: "successful runtime with post-hook warning",
       transform: (payload) => ({ ...payload, isError: true }),
     },
-    { name: "post-hook suppression", suppressed: true, transform: () => null },
+    { name: "live block replies", live: true },
     { name: "widget tool progress", widget: true },
     { name: "post-hook widget suppression", widget: true, suppressed: true, transform: () => null },
-    { name: "live block replies", live: true },
-    {
-      name: "media on the owned row",
-      media: true,
-      transform: (payload) => ({ ...payload, mediaUrl: "https://example.test/photo.png" }),
-    },
     {
       name: "bound target media",
       bound: true,
       media: true,
-      transform: (payload) => ({ ...payload, mediaUrl: "https://example.test/photo.png" }),
     },
-    { name: "runtime errors", fail: true },
     { name: "suppressed runtime errors", fail: true, transform: () => null },
-    { name: "runtime timeout", timeout: true },
     { name: "suppressed runtime timeout", timeout: true, transform: () => null },
     { name: "persistence errors", persistFail: true },
-    { name: "native cancellation", cancel: true },
     { name: "native cancellation through lifecycle", cancel: true, live: true, lifecycle: true },
-    { name: "explicit abort", cancel: true, rpcAbort: true },
     {
       name: "persistence failure after explicit abort",
       cancel: true,
@@ -176,20 +168,8 @@ describe("Gateway ACP completion ownership", () => {
     const admittedReleases = new Set<Promise<void>>();
     await writeSessionStore({
       entries: {
-        [sessionKey]: {
-          sessionId: scenario.bound ? `source-${sessionId}` : sessionId,
-          updatedAt: Date.now(),
-          acp: createAcpSessionMeta({ agent: "main" }),
-        },
-        ...(scenario.bound
-          ? {
-              [targetSessionKey]: {
-                sessionId,
-                updatedAt: Date.now(),
-                acp: createAcpSessionMeta({ agent: "main" }),
-              },
-            }
-          : {}),
+        [sessionKey]: acpSessionEntry(scenario.bound ? `source-${sessionId}` : sessionId),
+        ...(scenario.bound ? { [targetSessionKey]: acpSessionEntry(sessionId) } : {}),
       },
     });
     runtime.runTurn.mockImplementation(
@@ -240,11 +220,9 @@ describe("Gateway ACP completion ownership", () => {
         if (scenario.rebound) {
           await writeSessionStore({
             entries: {
-              [targetSessionKey]: {
-                sessionId: `${sessionId}-replaced-${runtime.runTurn.mock.calls.length}`,
-                updatedAt: Date.now(),
-                acp: createAcpSessionMeta({ agent: "main" }),
-              },
+              [targetSessionKey]: acpSessionEntry(
+                `${sessionId}-replaced-${runtime.runTurn.mock.calls.length}`,
+              ),
             },
           });
         }

@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   type WorkerProfile,
@@ -24,7 +23,13 @@ import { operationLeaseId, parseCrabboxProfile } from "./crabbox-worker-profile.
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 import {
   active,
+  catalogJson,
   classProfile,
+  commandResult,
+  createProviderFixtures,
+  nodeEnrollmentFixture,
+  OPENCLAW_ROOT,
+  WORKER_WALLPAPER_PATH,
   inspectCases,
   mappedCatalog,
 } from "./crabbox-worker-provider.test-support.js";
@@ -46,11 +51,8 @@ vi.mock("./crabbox-managed-binary.js", () => ({
 const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
 const LEASE_ID = "cbx_6071fc2062a6";
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
-const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
 const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
-const WORKER_WALLPAPER_PATH = fileURLToPath(
-  new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
-);
+
 const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
 // These lifecycle cases opt out of capture; defaults and checkpoints have boundary coverage
 // in the warm-image suite and the classless plugin lifecycle cases.
@@ -69,7 +71,9 @@ const NON_RUNNABLE_STATES = [
   "stopped_with_code",
   "terminated",
 ];
-const providers = new Set<ReturnType<typeof createCrabboxWorkerProvider>>();
+const { providers, createProvider } = createProviderFixtures({
+  isExecutable: (candidate) => candidate === SIBLING_BINARY,
+});
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     try {
@@ -99,18 +103,6 @@ type CrabboxWorkerProviderDependencies = NonNullable<
 >;
 type CrabboxCommandRunner = NonNullable<CrabboxWorkerProviderDependencies["runCommand"]>;
 
-function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
 function inspectJson(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     id: LEASE_ID,
@@ -135,17 +127,11 @@ function providerWithRawRunner(
   warn?: (message: string) => void,
   sleep: (milliseconds: number) => Promise<void> = async () => {},
 ): WorkerProvider {
-  const provider = createCrabboxWorkerProvider({
-    state: crabboxState,
+  const provider = createProvider({
     runCommand,
-    openclawRoot: OPENCLAW_ROOT,
-    pathEnv: "",
-    isExecutable: (candidate) => candidate === SIBLING_BINARY,
     sleep,
-    wallpaperPath: WORKER_WALLPAPER_PATH,
     ...(warn ? { warn } : {}),
   });
-  providers.add(provider);
   return {
     ...provider,
     provision: (profile, operationId, options) =>
@@ -158,15 +144,7 @@ function providerWithRawRunner(
         ...options,
         beginNodeEnrollment:
           options?.beginNodeEnrollment ??
-          (async () => ({
-            mode: "connect" as const,
-            setupCode: "secret-setup-value",
-            setupId: "setup-id",
-            openclawVersion: "2026.8.1",
-            nodeBootstrap: createNodeBootstrapFixture(),
-            displayName: "Cloud worker test",
-            waitForDeviceId: async () => "device-1",
-          })),
+          (async () => nodeEnrollmentFixture("secret-setup-value", "Cloud worker test")),
       }),
   };
 }
@@ -192,17 +170,10 @@ function failedNodeEnrollment(
   error: Error,
 ): NonNullable<Parameters<WorkerProvider["provision"]>[2]> {
   return {
-    beginNodeEnrollment: async () => ({
-      mode: "connect",
-      setupCode: "secret-setup-value",
-      setupId: "setup-id",
-      openclawVersion: "2026.8.1",
-      nodeBootstrap: createNodeBootstrapFixture(),
-      displayName: "Cloud worker test",
-      waitForDeviceId: async () => {
+    beginNodeEnrollment: async () =>
+      nodeEnrollmentFixture("secret-setup-value", "Cloud worker test", async () => {
         throw error;
-      },
-    }),
+      }),
   };
 }
 
@@ -289,13 +260,11 @@ describe("Crabbox worker provider", () => {
     const runCommand = vi.fn<CrabboxCommandRunner>(async (argv) => {
       if (argv[1] === "providers") {
         return commandResult({
-          stdout: JSON.stringify([
-            {
-              provider: "aws",
-              targets: ["linux", "windows/wsl2", "macos"],
-              classCatalog: mappedCatalog([classProfile("standard", { vcpu: 8 })]),
-            },
-          ]),
+          stdout: catalogJson(
+            "aws",
+            ["linux", "windows/wsl2", "macos"],
+            [classProfile("standard", { vcpu: 8 })],
+          ),
         });
       }
       if (argv[1] === "config") {
@@ -450,16 +419,14 @@ describe("Crabbox worker provider", () => {
   it("caps the enrollable OS catalog in stable catalog order", async () => {
     const provider = providerWithRunner(async () =>
       commandResult({
-        stdout: JSON.stringify([
-          {
-            provider: "aws",
-            targets: ["linux", "windows/wsl2"],
-            classCatalog: mappedCatalog([
-              ...Array.from({ length: 65 }, (_, index) => classProfile(`class-${index}`)),
-              classProfile("tiny", {}, { target: "windows", windowsMode: "wsl2" }),
-            ]),
-          },
-        ]),
+        stdout: catalogJson(
+          "aws",
+          ["linux", "windows/wsl2"],
+          [
+            ...Array.from({ length: 65 }, (_, index) => classProfile(`class-${index}`)),
+            classProfile("tiny", {}, { target: "windows", windowsMode: "wsl2" }),
+          ],
+        ),
       }),
     );
     const options = await provider.listMachineOptions?.({ ...PROFILE, class: "class-0" });
@@ -674,20 +641,18 @@ describe("Crabbox worker provider", () => {
   it("offers all canonical-only Machine0 classes with their primary resources", async () => {
     const provider = providerWithRunner(async () =>
       commandResult({
-        stdout: JSON.stringify([
-          {
-            provider: "machine0",
-            targets: ["linux"],
-            classCatalog: mappedCatalog([
-              classProfile("tiny", { type: "large", vcpu: 2, memory: { value: 4, unit: "GB" } }),
-              classProfile("small", { type: "xl", vcpu: 4, memory: { value: 8, unit: "GB" } }),
-              classProfile("standard", { type: "xxl", vcpu: 8, memory: { value: 16, unit: "GB" } }),
-              classProfile("fast", { type: "xxxl", vcpu: 16, memory: { value: 64, unit: "GB" } }),
-              classProfile("large", { type: "4xl", vcpu: 32, memory: { value: 128, unit: "GB" } }),
-              classProfile("beast", { type: "5xl", vcpu: 48, memory: { value: 192, unit: "GB" } }),
-            ]),
-          },
-        ]),
+        stdout: catalogJson(
+          "machine0",
+          ["linux"],
+          [
+            classProfile("tiny", { type: "large", vcpu: 2, memory: { value: 4, unit: "GB" } }),
+            classProfile("small", { type: "xl", vcpu: 4, memory: { value: 8, unit: "GB" } }),
+            classProfile("standard", { type: "xxl", vcpu: 8, memory: { value: 16, unit: "GB" } }),
+            classProfile("fast", { type: "xxxl", vcpu: 16, memory: { value: 64, unit: "GB" } }),
+            classProfile("large", { type: "4xl", vcpu: 32, memory: { value: 128, unit: "GB" } }),
+            classProfile("beast", { type: "5xl", vcpu: 48, memory: { value: 192, unit: "GB" } }),
+          ],
+        ),
       }),
     );
     expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "machine0" })).toEqual([
@@ -730,19 +695,17 @@ describe("Crabbox worker provider", () => {
     async ({ backend, type, cpu, memoryGb, unit }) => {
       const provider = providerWithRunner(async () =>
         commandResult({
-          stdout: JSON.stringify([
-            {
-              provider: backend,
-              targets: ["linux"],
-              classCatalog: mappedCatalog([
-                classProfile("standard", {
-                  type,
-                  vcpu: cpu ?? null,
-                  memory: memoryGb ? { value: memoryGb, unit } : null,
-                }),
-              ]),
-            },
-          ]),
+          stdout: catalogJson(
+            backend,
+            ["linux"],
+            [
+              classProfile("standard", {
+                type,
+                vcpu: cpu ?? null,
+                memory: memoryGb ? { value: memoryGb, unit } : null,
+              }),
+            ],
+          ),
         }),
       );
       expect(await provider.listMachineOptions?.({ ...PROFILE, provider: backend })).toEqual([
@@ -771,15 +734,11 @@ describe("Crabbox worker provider", () => {
     async ({ value, unit, memoryGb }) => {
       const provider = providerWithRunner(async () =>
         commandResult({
-          stdout: JSON.stringify([
-            {
-              provider: "aws",
-              targets: ["linux"],
-              classCatalog: mappedCatalog([
-                classProfile("standard", { vcpu: 8, memory: { value, unit } }),
-              ]),
-            },
-          ]),
+          stdout: catalogJson(
+            "aws",
+            ["linux"],
+            [classProfile("standard", { vcpu: 8, memory: { value, unit } })],
+          ),
         }),
       );
       expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
@@ -798,34 +757,32 @@ describe("Crabbox worker provider", () => {
   it("preserves advertised order, defaults, and independently optional resources", async () => {
     const provider = providerWithRunner(async () =>
       commandResult({
-        stdout: JSON.stringify([
-          {
-            provider: "aws",
-            targets: ["linux"],
-            classCatalog: mappedCatalog([
-              classProfile("standard", { vcpu: 128 }, { target: "windows", windowsMode: "normal" }),
-              classProfile("standard", { vcpu: 64 }, { architecture: "arm64" }),
-              classProfile("memory", { memory: { value: 16, unit: "GB" } }),
-              classProfile(
-                "standard",
-                { vcpu: 8 },
-                {
-                  fallbacks: [
-                    {
-                      type: "fallback",
-                      architecture: "amd64",
-                      vcpu: 32,
-                      memory: { value: 64, unit: "GB" },
-                    },
-                  ],
-                },
-              ),
-              classProfile("unknown"),
-              classProfile("standard", { vcpu: 99, memory: { value: 99, unit: "GB" } }),
-            ]),
-            classes: [{ class: "standard", vcpu: 128, memoryGb: 256 }],
-          },
-        ]),
+        stdout: catalogJson(
+          "aws",
+          ["linux"],
+          [
+            classProfile("standard", { vcpu: 128 }, { target: "windows", windowsMode: "normal" }),
+            classProfile("standard", { vcpu: 64 }, { architecture: "arm64" }),
+            classProfile("memory", { memory: { value: 16, unit: "GB" } }),
+            classProfile(
+              "standard",
+              { vcpu: 8 },
+              {
+                fallbacks: [
+                  {
+                    type: "fallback",
+                    architecture: "amd64",
+                    vcpu: 32,
+                    memory: { value: 64, unit: "GB" },
+                  },
+                ],
+              },
+            ),
+            classProfile("unknown"),
+            classProfile("standard", { vcpu: 99, memory: { value: 99, unit: "GB" } }),
+          ],
+          { classes: [{ class: "standard", vcpu: 128, memoryGb: 256 }] },
+        ),
       }),
     );
     expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
@@ -887,15 +844,11 @@ describe("Crabbox worker provider", () => {
       calls.push({ binary, argv });
       const vcpu = binary.endsWith("other-crabbox") ? 8 : 32;
       return commandResult({
-        stdout: JSON.stringify([
-          {
-            provider: "aws",
-            targets: ["linux"],
-            classCatalog: mappedCatalog([
-              classProfile("standard", { vcpu, memory: { value: vcpu * 2, unit: "GB" } }),
-            ]),
-          },
-        ]),
+        stdout: catalogJson(
+          "aws",
+          ["linux"],
+          [classProfile("standard", { vcpu, memory: { value: vcpu * 2, unit: "GB" } })],
+        ),
       });
     });
 
@@ -962,20 +915,18 @@ describe("Crabbox worker provider", () => {
       .mockImplementationOnce(result)
       .mockResolvedValue(
         commandResult({
-          stdout: JSON.stringify([
-            {
-              provider: "hetzner",
-              targets: ["linux"],
-              classCatalog: mappedCatalog([
-                classProfile("tiny", { type: "ccx13", vcpu: 2, memory: { value: 8, unit: "GB" } }),
-                classProfile("standard", {
-                  type: "ccx33",
-                  vcpu: 8,
-                  memory: { value: 32, unit: "GB" },
-                }),
-              ]),
-            },
-          ]),
+          stdout: catalogJson(
+            "hetzner",
+            ["linux"],
+            [
+              classProfile("tiny", { type: "ccx13", vcpu: 2, memory: { value: 8, unit: "GB" } }),
+              classProfile("standard", {
+                type: "ccx33",
+                vcpu: 8,
+                memory: { value: 32, unit: "GB" },
+              }),
+            ],
+          ),
         }),
       );
     const provider = providerWithRawRunner(runCommand, warn);
@@ -1014,15 +965,11 @@ describe("Crabbox worker provider", () => {
     await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(2));
     healthy.resolve(
       commandResult({
-        stdout: JSON.stringify([
-          {
-            provider: "aws",
-            targets: ["linux"],
-            classCatalog: mappedCatalog([
-              classProfile("standard", { vcpu: 32, memory: { value: 64, unit: "GB" } }),
-            ]),
-          },
-        ]),
+        stdout: catalogJson(
+          "aws",
+          ["linux"],
+          [classProfile("standard", { vcpu: 32, memory: { value: 64, unit: "GB" } })],
+        ),
       }),
     );
     const expected = [
@@ -1085,13 +1032,7 @@ describe("Crabbox worker provider", () => {
       result: () =>
         Promise.resolve(
           commandResult({
-            stdout: JSON.stringify([
-              {
-                provider: "gcp",
-                targets: ["linux"],
-                classCatalog: mappedCatalog([classProfile("standard", { vcpu: 32 })]),
-              },
-            ]),
+            stdout: catalogJson("gcp", ["linux"], [classProfile("standard", { vcpu: 32 })]),
           }),
         ),
     },
@@ -1895,8 +1836,7 @@ describe("Crabbox worker provider", () => {
   it("stops an AWS lease when provider metadata reports an instance profile", async () => {
     const calls: string[][] = [];
     let warmed = false;
-    const provider = createCrabboxWorkerProvider({
-      state: crabboxState,
+    const provider = createProvider({
       runCommand: async (argv) => {
         calls.push(argv);
         if (argv[1] === "config") {
@@ -1921,13 +1861,8 @@ describe("Crabbox worker provider", () => {
         }
         return commandResult();
       },
-      openclawRoot: OPENCLAW_ROOT,
-      pathEnv: "",
-      isExecutable: (candidate) => candidate === SIBLING_BINARY,
       sleep: async () => {},
-      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
-    providers.add(provider);
 
     await expect(
       provider.provision(PROFILE, OPERATION_ID, { assertCurrent: () => {} }),
@@ -2145,29 +2080,6 @@ describe("Crabbox worker provider", () => {
     expect(calls.map((argv) => argv[1])).toEqual(["config"]);
   });
 
-  const provisionTimeoutCases = [
-    { name: "normal without setup", profile: { ...PROFILE }, minutes: 84 },
-    {
-      name: "normal with setup",
-      profile: { ...PROFILE, setup: "install-node" },
-      minutes: 99,
-    },
-    { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 149 },
-    {
-      name: "desktop with setup",
-      profile: { ...PROFILE, desktop: true, setup: "install-node" },
-      minutes: 164,
-    },
-  ] satisfies Array<{ name: string; profile: WorkerProfile; minutes: number }>;
-  it.each(provisionTimeoutCases)(
-    "includes provision phases and cleanup for $name",
-    ({ profile, minutes }) => {
-      const provider = providerWithRunner(async () => commandResult());
-
-      expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(minutes * 60_000 + 15_000);
-    },
-  );
-
   it("collects redacted node evidence before stopping an unenrolled lease", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const pairingSecret = "pairing-secret-value-0123456789";
@@ -2365,14 +2277,14 @@ describe("Crabbox worker provider", () => {
     {
       providerId: "aws",
       warmupTimeoutMs: 50 * 60_000,
-      lifecycleTimeoutMs: 60_000,
-      provisionTimeoutMs: 84 * 60_000 + 15_000,
+      lifecycleTimeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
+      provisionTimeoutMs: 83 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS + 15_000,
     },
     {
       providerId: "hetzner",
       warmupTimeoutMs: 50 * 60_000,
-      lifecycleTimeoutMs: 60_000,
-      provisionTimeoutMs: 84 * 60_000 + 15_000,
+      lifecycleTimeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
+      provisionTimeoutMs: 83 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS + 15_000,
     },
     {
       providerId: "machine0",
@@ -2483,8 +2395,9 @@ describe("Crabbox worker provider", () => {
       let inspections = 0;
       const delays: number[] = [];
       const provider = providerWithRunner(
-        async (argv) => {
+        async (argv, options) => {
           if (argv[1] === "inspect" || argv[1] === "status") {
+            expect(options.timeoutMs).toBeGreaterThan(60_000);
             inspections += 1;
             return commandResult({
               stdout: inspectJson({ ready: inspections > 1, sshHostKey: HOST_KEY }),
@@ -2538,8 +2451,8 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each([
-    { providerId: "aws", enrollmentDeadlineMs: 66 * 60_000 },
-    { providerId: "hetzner", enrollmentDeadlineMs: 66 * 60_000 },
+    { providerId: "aws", enrollmentDeadlineMs: 65 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS },
+    { providerId: "hetzner", enrollmentDeadlineMs: 65 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS },
     { providerId: "machine0", enrollmentDeadlineMs: 75 * 60_000 },
   ])(
     "reserves diagnostics and full $providerId cleanup after late node enrollment failure",
@@ -2942,8 +2855,7 @@ describe("Crabbox worker provider", () => {
     let nowMs = 1_000;
     let inspections = 0;
     const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const provider = createCrabboxWorkerProvider({
-      state: crabboxState,
+    const provider = createProvider({
       runCommand: async (argv) => {
         calls.push(argv);
         if (argv[1] === "config") {
@@ -2957,15 +2869,10 @@ describe("Crabbox worker provider", () => {
         }
         return commandResult();
       },
-      openclawRoot: OPENCLAW_ROOT,
-      pathEnv: "",
-      isExecutable: (candidate) => candidate === SIBLING_BINARY,
       sleep: async () => {
         nowMs += resolveCrabboxProvisionBaseTimeoutMs(PROFILE) + 1;
       },
-      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
-    providers.add(provider);
 
     try {
       await expect(
@@ -3061,18 +2968,13 @@ describe("Crabbox worker provider", () => {
   it("routes lifecycle calls from the passed profile context", async () => {
     const binary = path.resolve(path.sep, "custom", "crabbox");
     const calls: string[][] = [];
-    const provider = createCrabboxWorkerProvider({
-      state: crabboxState,
+    const provider = createProvider({
       runCommand: async (argv) => {
         calls.push(argv);
         return argv[1] === "inspect" ? commandResult({ stdout: inspectJson() }) : commandResult();
       },
-      openclawRoot: OPENCLAW_ROOT,
-      pathEnv: "",
       isExecutable: () => false,
-      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
-    providers.add(provider);
     const lease = lifecycleLease(LEASE_ID, { ...PROFILE, binary, provider: "coder" });
 
     await expect(provider.inspect(lease)).resolves.toStrictEqual(active);

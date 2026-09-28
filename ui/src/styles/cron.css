@@ -1140,7 +1140,7 @@
   }
 
   .cron-editor-actions {
-    padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
+    padding-bottom: var(--space-3);
   }
 
   .cron-editor-actions > .btn {
@@ -1245,7 +1245,7 @@
 }
 
 .shell--embed-settings .cron-editor-actions {
-  padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
+  padding-bottom: var(--space-3);
 }
 
 /* Web Awesome popup surfaces own positioning, dismissal, and focus. */

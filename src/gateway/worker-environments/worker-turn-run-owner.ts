@@ -20,6 +20,7 @@ import {
   markDiagnosticOwnedToolActivity,
   markDiagnosticRunProgress,
 } from "../../logging/diagnostic-run-activity.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
@@ -72,6 +73,13 @@ export function createWorkerTurnRunOwner(params: {
           : undefined,
     );
   };
+  const restartSignal = getGatewayRestartDrainSignal();
+  const onRestart = () => cancel("restart");
+  if (restartSignal.aborted) {
+    onRestart();
+  } else {
+    restartSignal.addEventListener("abort", onRestart, { once: true });
+  }
   const isCurrent = () =>
     activeOwners.get(claim.sessionId) === owner &&
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
@@ -111,6 +119,7 @@ export function createWorkerTurnRunOwner(params: {
     startedAtMs,
     diagnosticOwner,
     closeDiagnostics: () => {
+      restartSignal.removeEventListener("abort", onRestart);
       closed = true;
       closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
       if (activeOwners.get(claim.sessionId) === owner) {

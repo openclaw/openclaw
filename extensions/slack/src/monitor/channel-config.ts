@@ -80,6 +80,10 @@ export function resolveSlackChannelConfig(params: {
   const requireMention =
     firstDefined(resolved.requireMention, fallback?.requireMention, requireMentionDefault) ??
     requireMentionDefault;
+  const requireMentionInBotThreads = firstDefined(
+    resolved.requireMentionInBotThreads,
+    fallback?.requireMentionInBotThreads,
+  );
   const ignoreOtherMentions = firstDefined(
     resolved.ignoreOtherMentions,
     fallback?.ignoreOtherMentions,
@@ -103,6 +107,7 @@ export function resolveSlackChannelConfig(params: {
   const result: SlackChannelConfigResolved = {
     allowed,
     requireMention,
+    requireMentionInBotThreads,
     ignoreOtherMentions,
     replyToMode,
     allowBots,

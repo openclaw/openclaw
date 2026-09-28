@@ -425,7 +425,8 @@ describe("isHighSignalLiveModelRef", () => {
     expectHighSignal("zai", "glm-5.1", true);
     expectHighSignal("fireworks", "accounts/fireworks/models/glm-5", false);
     expectHighSignal("fireworks", "accounts/fireworks/models/glm-5p1", false);
-    expectHighSignal("fireworks", "accounts/fireworks/routers/glm-5p2-fast", true);
+    expectHighSignal("fireworks", "accounts/fireworks/routers/glm-5p2-fast", false);
+    expectHighSignal("fireworks", "accounts/fireworks/routers/glm-5p3-fast", true);
     expectHighSignal("fireworks", "accounts/fireworks/models/gpt-oss-120b", false);
     expectHighSignal("fireworks", "accounts/fireworks/models/minimax-m2p7", false);
   });
@@ -477,7 +478,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
   it("preserves slashes inside prioritized model ids", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toContainEqual({
       provider: "fireworks",
-      id: "accounts/fireworks/routers/glm-5p2-fast",
+      id: "accounts/fireworks/routers/glm-5p3-fast",
     });
   });
 });
@@ -544,13 +545,14 @@ describe("selectHighSignalLiveItems", () => {
     ]);
   });
 
-  it("selects the current Fireworks router instead of unavailable base models", () => {
+  it("selects the current Fireworks router instead of retired or unavailable models", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
     const items = [
       { provider: "fireworks", id: "accounts/fireworks/models/glm-4p7" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
       { provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" },
+      { provider: "fireworks", id: "accounts/fireworks/routers/glm-5p3-fast" },
       { provider: "fireworks", id: "accounts/fireworks/models/gpt-oss-120b" },
     ].filter(isHighSignalLiveModelRef);
 
@@ -561,7 +563,7 @@ describe("selectHighSignalLiveItems", () => {
         (item) => item,
         (item) => item.provider,
       ),
-    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" }]);
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p3-fast" }]);
   });
 });
 

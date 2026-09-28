@@ -485,6 +485,21 @@ export function loadBundledEntryExportSync<T>(
   return record[reference.exportName] as T;
 }
 
+function createBundledEntryRuntimeSetter(
+  importMetaUrl: string,
+  reference: BundledEntryModuleRef | undefined,
+): ((runtime: BundledChannelRuntime) => void) | undefined {
+  return reference
+    ? (runtime) => {
+        const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
+          importMetaUrl,
+          reference,
+        );
+        setter(runtime);
+      }
+    : undefined;
+}
+
 /** Defines the full bundled channel entry contract used by core plugin registration. */
 export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   id,
@@ -529,15 +544,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
           options,
         )
     : undefined;
-  const setChannelRuntime = runtime
-    ? (pluginRuntime: BundledChannelRuntime) => {
-        const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
-          importMetaUrl,
-          runtime,
-        );
-        setter(pluginRuntime);
-      }
-    : undefined;
+  const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
 
   return {
     kind: "bundled-channel-entry",
@@ -600,15 +607,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
   // Setup loads stay light; expose only the setter needed to inject the active runtime
   // without importing the full channel entry.
-  const setChannelRuntime = runtime
-    ? (pluginRuntime: BundledChannelRuntime) => {
-        const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
-          importMetaUrl,
-          runtime,
-        );
-        setter(pluginRuntime);
-      }
-    : undefined;
+  const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
   const loadLegacyStateMigrationDetector = legacyStateMigrations
     ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>(
@@ -625,6 +624,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
           options,
         )
     : undefined;
+
   return {
     kind: "bundled-channel-setup-entry",
     loadSetupPlugin: (options) =>

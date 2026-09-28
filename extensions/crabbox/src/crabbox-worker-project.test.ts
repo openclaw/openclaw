@@ -8,12 +8,13 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import {
   createNodeBootstrapFixture,
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   CHECKPOINT_ID,
@@ -22,10 +23,8 @@ import {
   createProjectOptions as projectOptions,
   CLASSLESS_PROFILE,
   PROFILE,
-  commandResult,
   checkpointResult,
   createWarmProvider,
-  openWarmImageStore,
   tempDirs,
   type CommandCall,
 } from "./crabbox-worker-warm-image.test-support.js";

@@ -71,7 +71,8 @@ function describePlannedChange(change: HeartbeatMonitorChange): string {
   const cadence =
     schedule.kind === "every" ? formatDurationCompact(schedule.everyMs) : schedule.kind;
   const action = change.kind === "create" ? "Create" : "Update";
-  return `${action} heartbeat monitor for agent "${change.agentId}" at ${cadence}.`;
+  const state = change.input.enabled ? `at ${cadence}` : "as disabled";
+  return `${action} heartbeat monitor for agent "${change.agentId}" ${state}.`;
 }
 
 function noteWarnings(warnings: readonly string[], storePath: string): void {

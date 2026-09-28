@@ -336,14 +336,14 @@ describe("node worker supervisor container isolation", () => {
     }
   });
 
-  it("uses the documented Node 24.19.0 image when no override is configured", async () => {
+  it("uses the documented Node 24.21.0 image when no override is configured", async () => {
     const fixture = containerFixture();
     const input = testWorkerLaunchInput(fixture.workspaceDir, "container-default-image");
     try {
       await fixture.supervisor.launch(input, endpoint);
       await waitForTerminal(fixture.supervisor, input.launchId);
       expect(fixture.events().find((event) => event.argv[0] === "create")?.container?.image).toBe(
-        "node:24.19.0-slim",
+        "node:24.21.0-slim",
       );
     } finally {
       await fixture.supervisor.close();
@@ -416,9 +416,9 @@ describe("node worker supervisor container isolation", () => {
         expect(failed.state).toBe("failed");
         expect(requestedTimeouts).toEqual([30_000]);
         expect(failed.errorText).toContain(
-          `Command timed out after ${30_000 / DAEMON_TIMER_SCALE} milliseconds:`,
+          "Container command timed out after 30000 milliseconds: docker info",
         );
-        expect(failed.errorText).toContain("docker info --format '{{.ID}}'");
+        expect(failed.errorText).not.toContain(fixture.containerEngine.command);
         expect(await fixture.supervisor.status(input.launchId)).toMatchObject({
           state: "failed",
           errorText: failed.errorText,

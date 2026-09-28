@@ -75,7 +75,7 @@ type BuildChannelInboundEventAccess = {
     mentionedUserIds?: string[];
     mentionedSubteamIds?: string[];
     mentionSource?: MentionSource;
-    implicitMentionKinds?: InboundImplicitMentionKind[];
+    implicitMentionKinds?: readonly InboundImplicitMentionKind[];
     requireMention?: boolean;
     effectiveWasMentioned?: boolean;
   };
@@ -312,7 +312,7 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   finalizeOptions?: FinalizeInboundContextOptions;
 }): FinalizeChannelInboundContextResult<T> {
   const mediaPayload = params.media
-    ? definedFields(buildChannelInboundMediaPayload([...params.media]))
+    ? definedFields(buildChannelInboundMediaPayload(params.media))
     : {};
   const baseContext = {
     ...params.originalContext,
@@ -343,7 +343,17 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   };
 }
 
-function finalizeChannelInboundContextValue<T extends Record<string, unknown>>(
+/**
+ * @deprecated Public compatibility for callers that already prepared legacy
+ * prompt fields. New channel code should use `buildChannelInboundEventContext`.
+ */
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
+  params: FinalizeChannelInboundContextAsyncParams<T>,
+): Promise<FinalizeChannelInboundContextResult<T>>;
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
+  params: FinalizeChannelInboundContextParams<T>,
+): FinalizeChannelInboundContextResult<T>;
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
   params: FinalizeChannelInboundContextParams<T> &
     Partial<ChannelInboundSupplementalResolutionOptions>,
 ): MaybePromise<FinalizeChannelInboundContextResult<T>> {
@@ -368,23 +378,6 @@ function finalizeChannelInboundContextValue<T extends Record<string, unknown>>(
     return Promise.resolve(prepared).then(finish);
   }
   return isPromiseLike(prepared) ? prepared.then(finish) : finish(prepared);
-}
-
-/**
- * @deprecated Public compatibility for callers that already prepared legacy
- * prompt fields. New channel code should use `buildChannelInboundEventContext`.
- */
-export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
-  params: FinalizeChannelInboundContextAsyncParams<T>,
-): Promise<FinalizeChannelInboundContextResult<T>>;
-export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
-  params: FinalizeChannelInboundContextParams<T>,
-): FinalizeChannelInboundContextResult<T>;
-export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
-  params: FinalizeChannelInboundContextParams<T> &
-    Partial<ChannelInboundSupplementalResolutionOptions>,
-): MaybePromise<FinalizeChannelInboundContextResult<T>> {
-  return finalizeChannelInboundContextValue(params);
 }
 
 function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
@@ -570,13 +563,13 @@ function buildChannelInboundEventContextValue(
     context,
   };
   const result = params.resolveSupplementalMedia
-    ? finalizeChannelInboundContextValue({
+    ? finalizeChannelInboundContext({
         ...finalizeParams,
         resolveSupplementalMedia: true,
         suppressSelfQuoteBody: params.suppressSelfQuoteBody,
         suppressSelfQuoteMedia: params.suppressSelfQuoteMedia,
       })
-    : finalizeChannelInboundContextValue(finalizeParams);
+    : finalizeChannelInboundContext(finalizeParams);
   const unwrap = (finalized: FinalizeChannelInboundContextResult<typeof context>) =>
     finalized.context as BuiltChannelInboundEventContext;
   return isPromiseLike(result) ? result.then(unwrap) : unwrap(result);

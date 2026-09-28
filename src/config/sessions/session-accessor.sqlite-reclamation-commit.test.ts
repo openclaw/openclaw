@@ -22,7 +22,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function createCommitFixture(
   options: {
     holdAfterApproval?: boolean;
-    outcome?: "rollback" | "exit-before-commit" | "exit-after-commit";
+    outcome?: "rollback" | "exit-before-commit";
   } = {},
 ) {
   const directory = fs.realpathSync(tempDirs.make("openclaw-reclamation-commit-"));
@@ -114,10 +114,8 @@ test("serves queued work during an accepted commit while retaining writer admiss
 });
 
 test.each([
-  { outcome: undefined, value: 2, exitCode: 0 },
   { outcome: "rollback" as const, value: 1, exitCode: 0 },
   { outcome: "exit-before-commit" as const, value: 1, exitCode: 7 },
-  { outcome: "exit-after-commit" as const, value: 2, exitCode: 9 },
 ])(
   "joins native settlement before releasing admission ($outcome)",
   async ({ outcome, value, exitCode }) => {

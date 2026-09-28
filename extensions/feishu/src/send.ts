@@ -331,14 +331,10 @@ export async function getMessageFeishu(params: {
   }
 }
 
-type FeishuThreadMessageInfo = {
-  messageId: string;
-  senderId?: string;
-  senderType?: string;
-  content: string;
-  contentType: string;
-  createTime?: number;
-};
+type FeishuThreadMessageInfo = Pick<
+  FeishuMessageInfo,
+  "messageId" | "senderId" | "senderType" | "content" | "contentType" | "createTime"
+>;
 
 /**
  * List messages in a Feishu thread (topic).

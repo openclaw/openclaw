@@ -8,13 +8,13 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-ca
 import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { stampConfigWriteMetadata } from "../config/io.meta.js";
-import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
   promptDefaultModel,
   promptModelAllowlist,
-} from "./model-picker.js";
+} from "../flows/model-picker.js";
+import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());

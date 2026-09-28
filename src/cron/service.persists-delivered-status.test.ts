@@ -1,7 +1,7 @@
 // Delivered status tests cover persistence of cron delivery outcomes.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -29,6 +29,13 @@ import {
 import { abortActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import type { CronServiceDeps } from "./service/state.js";
 import type { CronDeliveryTrace } from "./types.js";
+
+beforeEach(async () => {
+  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
+  );
+  mocks.fetchWithSsrFGuard.mockReset().mockImplementation(actual.fetchWithSsrFGuard);
+});
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
@@ -278,7 +285,7 @@ async function runIsolatedJobAndReadState(params: {
 describe("CronService persists delivered status", () => {
   it("settles isolated-agent webhook delivery before recording the run", async () => {
     let finishedDeliveryStatus: string | undefined;
-    const sendCronWebhook = vi.fn(async () => {});
+    const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
     const updated = await runIsolatedJobAndReadState({
       job: buildWebhookIsolatedAgentTurnJob("webhook-delivered"),
       sendCronWebhook,
@@ -357,18 +364,8 @@ describe("CronService persists delivered status", () => {
           }
           return await runCronCommandJob({ job, abortSignal, nowMs: Date.now });
         },
-        sendCronWebhook: async ({ event, abortSignal }) => {
-          expect(abortSignal.aborted).toBe(false);
-          const response = await fetch(webhookUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(event),
-            signal: abortSignal,
-          });
-          if (!response.ok) {
-            throw new Error(`Webhook request failed with HTTP ${response.status}`);
-          }
-        },
+        sendCronWebhook: (params) =>
+          sendGatewayCronWebhook({ ...params, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } }),
         onEvent: (event) => {
           if (event.action === "finished") {
             finishedEvent = event;
@@ -453,14 +450,8 @@ describe("CronService persists delivered status", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       runCommandJob: async ({ job, abortSignal }) =>
         await runCronCommandJob({ job, abortSignal, nowMs: Date.now }),
-      sendCronWebhook: async ({ event, abortSignal }) => {
-        await fetch(webhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(event),
-          signal: abortSignal,
-        });
-      },
+      sendCronWebhook: (params) =>
+        sendGatewayCronWebhook({ ...params, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } }),
       onEvent: (event) => {
         if (event.action === "finished") {
           resolveFinished(event);
@@ -502,14 +493,14 @@ describe("CronService persists delivered status", () => {
       expect(event).toMatchObject({
         status: "ok",
         summary: "HOOKSCHED_PAYLOAD",
-        delivered: false,
-        deliveryStatus: "not-delivered",
+        delivered: undefined,
+        deliveryStatus: "unknown",
       });
       expect(event.deliveryError).toContain("webhook delivery timed out");
       expect(cron.getJob(job.id)?.state).toMatchObject({
         lastRunStatus: "ok",
-        lastDelivered: false,
-        lastDeliveryStatus: "not-delivered",
+        lastDelivered: undefined,
+        lastDeliveryStatus: "unknown",
       });
       expect(cron.getJob(job.id)?.state.lastDeliveryError).toContain("webhook delivery timed out");
       expect(cron.getJob(job.id)?.state.runningAtMs).toBeUndefined();
@@ -538,14 +529,8 @@ describe("CronService persists delivered status", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       runCommandJob: async ({ job, abortSignal }) =>
         await runCronCommandJob({ job, abortSignal, nowMs: Date.now }),
-      sendCronWebhook: async ({ event, abortSignal }) => {
-        await fetch(webhookUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(event),
-          signal: abortSignal,
-        });
-      },
+      sendCronWebhook: (params) =>
+        sendGatewayCronWebhook({ ...params, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } }),
       onEvent: (event) => {
         if (event.action === "finished") {
           resolveFinished(event);
@@ -580,15 +565,15 @@ describe("CronService persists delivered status", () => {
       expect(event).toMatchObject({
         status: "ok",
         summary: "HOOKSCHED_PAYLOAD",
-        delivered: false,
-        deliveryStatus: "not-delivered",
+        delivered: undefined,
+        deliveryStatus: "unknown",
       });
       expect(event.deliveryError).toContain("webhook delivery cancelled");
       expect(event.deliveryError).toContain("Cancelled by operator.");
       expect(cron.getJob(job.id)?.state).toMatchObject({
         lastRunStatus: "ok",
-        lastDelivered: false,
-        lastDeliveryStatus: "not-delivered",
+        lastDelivered: undefined,
+        lastDeliveryStatus: "unknown",
       });
       expect(cron.getJob(job.id)?.state.lastDeliveryError).toContain("webhook delivery cancelled");
       expect(cron.getJob(job.id)?.state.runningAtMs).toBeUndefined();
@@ -598,124 +583,132 @@ describe("CronService persists delivered status", () => {
     }
   });
 
-  it("preserves Gateway-delivered when cancellation races with post-2xx cleanup", async () => {
-    const requests: string[] = [];
-    const server = createServer((request, response) => {
-      let body = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk) => {
-        body += chunk;
-      });
-      request.on("end", () => {
-        requests.push(body);
-        response.writeHead(200, {
-          Connection: "close",
-          "Content-Type": "text/plain",
+  it.each([200, 503])(
+    "preserves HTTP %s when cancellation races with response cleanup",
+    async (responseStatus) => {
+      const requests: string[] = [];
+      const server = createServer((request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => {
+          body += chunk;
         });
-        response.flushHeaders();
-        response.write("accepted");
+        request.on("end", () => {
+          requests.push(body);
+          response.writeHead(responseStatus, {
+            Connection: "close",
+            "Content-Type": "text/plain",
+          });
+          response.flushHeaders();
+          response.write("accepted");
+        });
       });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address() as AddressInfo;
-    const webhookUrl = `http://127.0.0.1:${address.port}/hook`;
-    let resolveCleanupStarted!: () => void;
-    const cleanupStarted = new Promise<void>((resolve) => {
-      resolveCleanupStarted = resolve;
-    });
-    let resolveCleanup!: () => void;
-    const cleanup = new Promise<void>((resolve) => {
-      resolveCleanup = resolve;
-    });
-    mocks.fetchWithSsrFGuard.mockImplementationOnce(async (value: unknown) => {
-      const request = value as {
-        url: string;
-        init?: RequestInit;
-        signal?: AbortSignal;
-      };
-      const response = await fetch(request.url, {
-        ...request.init,
-        ...(request.signal ? { signal: request.signal } : {}),
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
       });
-      return {
-        response,
-        finalUrl: request.url,
-        release: async () => {
-          resolveCleanupStarted();
-          await cleanup;
+      const address = server.address() as AddressInfo;
+      const webhookUrl = `http://127.0.0.1:${address.port}/hook`;
+      let resolveCleanupStarted!: () => void;
+      const cleanupStarted = new Promise<void>((resolve) => {
+        resolveCleanupStarted = resolve;
+      });
+      let resolveCleanup!: () => void;
+      const cleanup = new Promise<void>((resolve) => {
+        resolveCleanup = resolve;
+      });
+      mocks.fetchWithSsrFGuard.mockImplementationOnce(async (value: unknown) => {
+        const request = value as {
+          url: string;
+          init?: RequestInit;
+          signal?: AbortSignal;
+        };
+        const response = await fetch(request.url, {
+          ...request.init,
+          ...(request.signal ? { signal: request.signal } : {}),
+        });
+        return {
+          response,
+          finalUrl: request.url,
+          release: async () => {
+            resolveCleanupStarted();
+            await cleanup;
+          },
+        };
+      });
+      let resolveFinished!: (event: CronEvent) => void;
+      const finished = new Promise<CronEvent>((resolve) => {
+        resolveFinished = resolve;
+      });
+      const store = await makeStorePath();
+      const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
+        storePath: store.storePath,
+        cronEnabled: true,
+        log: noopLogger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        runCommandJob: vi.fn(async () => ({
+          status: "ok" as const,
+          summary: "HOOKSCHED_PAYLOAD",
+        })),
+        sendCronWebhook: async (params) => await sendGatewayCronWebhook(params),
+        onEvent: (event) => {
+          if (event.action === "finished") {
+            resolveFinished(event);
+          }
         },
-      };
-    });
-    let resolveFinished!: (event: CronEvent) => void;
-    const finished = new Promise<CronEvent>((resolve) => {
-      resolveFinished = resolve;
-    });
-    const store = await makeStorePath();
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      runCommandJob: vi.fn(async () => ({
-        status: "ok" as const,
-        summary: "HOOKSCHED_PAYLOAD",
-      })),
-      sendCronWebhook: async (params) => await sendGatewayCronWebhook(params),
-      onEvent: (event) => {
-        if (event.action === "finished") {
-          resolveFinished(event);
+      });
+
+      await cron.start();
+      try {
+        const job = await cron.add({
+          name: "command webhook settled cancellation race",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "command", argv: ["ignored"] },
+          delivery: { mode: "webhook", to: webhookUrl },
+        });
+        const runPromise = cron.run(job.id, "force");
+        await cleanupStarted;
+        expect(abortActiveCronTaskRuns("Cancelled after webhook acceptance.")).toBe(1);
+
+        const event = await finished;
+        resolveCleanup();
+        await runPromise;
+        expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
+        expect(requests).toHaveLength(1);
+        expect(JSON.parse(requests[0] ?? "{}")).toMatchObject({
+          jobId: job.id,
+          summary: "HOOKSCHED_PAYLOAD",
+        });
+        expect(event).toMatchObject({
+          status: "ok",
+          delivered: responseStatus === 200,
+          deliveryStatus: responseStatus === 200 ? "delivered" : "not-delivered",
+        });
+        if (responseStatus === 200) {
+          expect(event.deliveryError).toBeUndefined();
+        } else {
+          expect(event.deliveryError).toContain("Webhook request failed with HTTP 503");
+          expect(event.deliveryError).toContain("Cancelled after webhook acceptance.");
         }
-      },
-    });
-
-    await cron.start();
-    try {
-      const job = await cron.add({
-        name: "command webhook settled cancellation race",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "command", argv: ["ignored"] },
-        delivery: { mode: "webhook", to: webhookUrl },
-      });
-      const runPromise = cron.run(job.id, "force");
-      await cleanupStarted;
-      expect(abortActiveCronTaskRuns("Cancelled after webhook acceptance.")).toBe(1);
-
-      const event = await finished;
-      resolveCleanup();
-      await runPromise;
-      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
-      expect(requests).toHaveLength(1);
-      expect(JSON.parse(requests[0] ?? "{}")).toMatchObject({
-        jobId: job.id,
-        summary: "HOOKSCHED_PAYLOAD",
-      });
-      expect(event).toMatchObject({
-        status: "ok",
-        delivered: true,
-        deliveryStatus: "delivered",
-      });
-      expect(event.deliveryError).toBeUndefined();
-      expect(cron.getJob(job.id)?.state).toMatchObject({
-        lastRunStatus: "ok",
-        lastDelivered: true,
-        lastDeliveryStatus: "delivered",
-      });
-      expect(cron.getJob(job.id)?.state.lastDeliveryError).toBeUndefined();
-    } finally {
-      resolveCleanup();
-      cron.stop();
-      await closeWebhookServer(server);
-    }
-  });
+        expect(cron.getJob(job.id)?.state).toMatchObject({
+          lastRunStatus: "ok",
+          lastDelivered: responseStatus === 200,
+          lastDeliveryStatus: responseStatus === 200 ? "delivered" : "not-delivered",
+        });
+        expect(cron.getJob(job.id)?.state.lastDeliveryError).toBe(event.deliveryError);
+      } finally {
+        resolveCleanup();
+        cron.stop();
+        await closeWebhookServer(server);
+      }
+    },
+  );
 
   it("persists and emits verified mode-none message-tool delivery", async () => {
     let finishedEvent: { delivered?: boolean; deliveryStatus?: string } | undefined;

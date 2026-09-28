@@ -156,13 +156,6 @@ function relevantBuildUploads(
   });
 }
 
-function nextBuildNumber(uploads: IosRemoteBuildUpload[], shortVersion: string): number {
-  const builds = relevantBuildUploads(uploads, shortVersion).map((upload) =>
-    normalizeBuildNumber(upload.buildNumber),
-  );
-  return builds.length === 0 ? 1 : Math.max(...builds) + 1;
-}
-
 function assertExplicitSelection(
   plan: Pick<IosReleasePlan, "appStoreRevision" | "buildNumber">,
   input: IosReleasePlanInput,
@@ -298,7 +291,7 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
     );
   }
   const uploads = relevantBuildUploads(input.buildUploads, appStoreVersion);
-  const buildNumber = nextBuildNumber(input.buildUploads, appStoreVersion);
+  const buildNumber = Math.max(0, ...uploads.map((upload) => Number(upload.buildNumber))) + 1;
   const baselines = input.releaseNotesBaselines;
   const baseline = baselines?.[0];
   if (

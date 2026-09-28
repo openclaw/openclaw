@@ -144,12 +144,25 @@ vi.mock("../../infra/gateway-owner-lease.js", () => ({
         },
 }));
 
+vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/update-check-lifecycle.js")>();
+  return {
+    ...actual,
+    currentUpdateCheckLifecycle: () => ({
+      ...actual.currentUpdateCheckLifecycle(),
+      campaign: {
+        adopt: adoptCampaignMock,
+        clear: clearCampaignMock,
+        getState: getCampaignStateMock,
+        bindRun: vi.fn(),
+      },
+    }),
+  };
+});
+
 vi.mock("../../infra/update-campaign.js", () => ({
-  gatewayUpdateCampaign: {
-    adopt: adoptCampaignMock,
-    clear: clearCampaignMock,
-    getState: getCampaignStateMock,
-    bindRun: vi.fn(),
+  UpdateCampaignController: function unexpectedCampaignConstruction() {
+    throw new Error("update.run must consume its existing campaign owner");
   },
 }));
 

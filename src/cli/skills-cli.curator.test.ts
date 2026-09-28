@@ -109,7 +109,10 @@ describe("skills curator cli", () => {
     delete mocks.config.gateway;
     mocks.getSkillCuratorStatus.mockReset().mockReturnValue(status);
     mocks.releaseGatewayLock.mockReset();
-    mocks.acquireGatewayLock.mockReset().mockResolvedValue({ release: mocks.releaseGatewayLock });
+    mocks.acquireGatewayLock.mockReset().mockResolvedValue({
+      run: <T>(action: () => T) => action(),
+      release: mocks.releaseGatewayLock,
+    });
     mocks.callGateway.mockReset().mockImplementation(async (request: { method: string }) => {
       if (request.method === "skills.curator.status") {
         return status;
@@ -306,7 +309,7 @@ describe("skills curator cli", () => {
       expect(mocks.acquireGatewayLock).toHaveBeenCalledWith({
         allowInTests: true,
         port: 18789,
-        role: "skill-workshop-apply",
+        role: "sqlite-maintenance",
         timeoutMs: 250,
       });
       expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(3);

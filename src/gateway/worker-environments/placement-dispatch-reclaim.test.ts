@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { createCommandTest } from "../../../test/helpers/command-fixture.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -24,6 +23,7 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
 
 const tempDirs = createTempDirTracker();
+const it = createCommandTest();
 
 describe("worker placement dispatch reclaim", () => {
   let root: string;
@@ -39,6 +39,53 @@ describe("worker placement dispatch reclaim", () => {
   afterEach(async () => {
     await closeStateDatabaseForTest();
     tempDirs.cleanup();
+  });
+
+  it("admits an unrelated provider provision after Stop while another provision never settles", async () => {
+    const harness = createHarness(database, placementStore, {
+      workspacePath: root,
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    const coordinated = coordinateWorkerPlacementDispatch(harness.service, (_request, run) =>
+      run(),
+    );
+    await coordinated.dispatch(REQUEST);
+    const provisionEntered = createDeferredCore();
+    const nextProvisionEntered = createDeferredCore();
+    const provision = createDeferredCore<typeof harness.ready>();
+    const create = vi.mocked(harness.environments.createWithRequest);
+    create
+      .mockClear()
+      .mockImplementationOnce(async () => {
+        provisionEntered.resolve();
+        return await provision.promise;
+      })
+      .mockImplementation(async () => {
+        nextProvisionEntered.resolve();
+        return await provision.promise;
+      });
+    void coordinated
+      .dispatch({
+        ...REQUEST,
+        sessionId: "pending-session",
+        sessionKey: "agent:main:pending-session",
+      })
+      .catch(provisionEntered.reject);
+    await provisionEntered.promise;
+    await expect(coordinated.reclaim(REQUEST)).resolves.toMatchObject({ state: "reclaimed" });
+
+    void coordinated
+      .dispatch({
+        ...REQUEST,
+        sessionId: "new-session",
+        sessionKey: "agent:main:new-session",
+      })
+      .catch(nextProvisionEntered.reject);
+    await nextProvisionEntered.promise;
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(placementStore.get("new-session")).toMatchObject({ state: "provisioning" });
+    expect(placementStore.get("pending-session")).toMatchObject({ state: "provisioning" });
   });
 
   it("releases a failed reclaim before an older provisioning recovery without losing accepted work", async () => {
@@ -105,9 +152,12 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.placements.current()).toMatchObject({
       state: "draining",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
-      turnClaim: null,
+      turnClaim: { owner: "worker" },
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      { workspaceAcceptedAtMs: expect.any(Number) },
+    ]);
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
     expect(harness.log).toContain("placement:draining");
     expect(harness.log).toContain("workspace:resume");
   });
@@ -722,14 +772,12 @@ describe("worker placement dispatch reclaim", () => {
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
   });
 
-  it("releases a failed stop claim so reclaim can be retried", async () => {
+  it("releases a failed stop claim so reclaim can be retried", async ({ command }) => {
     const workspacePath = path.join(root, "retry-workspace");
-    await fs.mkdir(workspacePath);
-    const initialized = await runCommandWithTimeout(
-      ["git", "-C", workspacePath, "init", "--quiet"],
-      { timeoutMs: 10_000 },
-    );
-    expect(initialized.code).toBe(0);
+    const initialized = await command.run("git", ["init", "--quiet", workspacePath], {
+      timeout: 10_000,
+    });
+    expect(initialized.status).toBe(0);
     const harness = createHarness(database, placementStore, {
       reconcileFailureCount: 1,
       workspacePath,

@@ -1,10 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import { assertProposalId } from "./store-record.js";
 import { appendSkillProposalEvent, type NewSkillProposalEvent } from "./store-sqlite-event.js";
-import { parseSkillProposalRow, updateProposal } from "./store-sqlite-record.js";
-import type { SkillWorkshopDatabase } from "./store-sqlite-schema.js";
+import { readStoredProposalInDatabase, updateProposal } from "./store-sqlite-record.js";
 import type { SkillProposalEvent, SkillProposalEvaluation, SkillProposalRecord } from "./types.js";
 
 export type RecordSkillProposalEvaluationInput = {
@@ -20,18 +18,11 @@ export function recordSkillProposalEvaluationInDatabase(
   params: RecordSkillProposalEvaluationInput,
 ): { record: SkillProposalRecord; event: SkillProposalEvent } {
   assertProposalId(params.proposalId);
-  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-  const current = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("skill_workshop_proposals")
-      .selectAll()
-      .where("proposal_id", "=", params.proposalId),
-  );
-  const record = current ? parseSkillProposalRow(current) : null;
-  if (!current || !record) {
+  const current = readStoredProposalInDatabase(db, params.proposalId);
+  if (!current) {
     throw new Error(`Skill proposal not found: ${params.proposalId}`);
   }
+  const { record } = current;
   if (
     record.status !== "pending" ||
     record.proposedVersion !== params.expectedProposedVersion ||
@@ -46,7 +37,7 @@ export function recordSkillProposalEvaluationInDatabase(
     updatedAt: params.evaluation.completedAt,
     evaluation: params.evaluation,
   };
-  updateProposal(db, current, next);
+  updateProposal(db, current.row, next);
   return {
     record: next,
     event: appendSkillProposalEvent(db, params.event),

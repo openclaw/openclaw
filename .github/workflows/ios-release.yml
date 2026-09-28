@@ -58,8 +58,20 @@ env:
   NODE_VERSION: "24.21.0"
 
 jobs:
+  qualify:
+    if: inputs.operation == 'release' && github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
+    permissions:
+      contents: read
+    # Qualification rebuilds tracked plugin manifests; keep its workspace separate
+    # from the clean checkout that admits the release.
+    uses: ./.github/workflows/ios-release-e2e.yml
+    with:
+      target_sha: ${{ github.sha }}
+      mode: stock
+
   release:
     name: Prepare and upload iOS release
+    needs: qualify
     if: inputs.operation == 'release' && github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
     permissions:
       contents: write
@@ -88,7 +100,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
+        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
         with:
           ruby-version: "3.4.10"
           bundler: "4.0.21"
@@ -126,23 +138,6 @@ jobs:
           watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
           test -n "$watch_toolchain"
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
-
-      - name: Qualify native iOS pairing and chat
-        id: qualification
-        run: |
-          set -euo pipefail
-          node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
-            --mode stock --target-sha "$(git rev-parse HEAD)" \
-            --output "$RUNNER_TEMP/ios-release-e2e-proof.json"
-
-      - name: Retain sanitized iOS qualification proof
-        if: always() && steps.qualification.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: ios-release-e2e-stock
-          path: ${{ runner.temp }}/ios-release-e2e-proof.json
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Create apps-signing read token
         id: apps-signing-token

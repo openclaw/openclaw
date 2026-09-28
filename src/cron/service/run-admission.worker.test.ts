@@ -21,14 +21,16 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import * as cronStore from "../store.js";
 import {
-  claimCronRunReceiptInDatabase,
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptAsync,
+  CronRunReceiptConflictError,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   trackCronRunReceiptSettlement,
 } from "../store/run-receipt-store.js";
+import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
 import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
@@ -134,13 +136,14 @@ it("fences an activation whose durable receipt was replaced after reservation", 
       finishedAtMs: state.deps.nowMs(),
     });
     const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath: state.deps.storePath,
       job,
       agentId: original.agentId,
       startedAtMs: original.startedAtMs,
     });
     const replacement = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({
+      claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
         resolveAgentId: () => original.agentId,
@@ -345,6 +348,67 @@ it("publishes cleanup once without replay after a committed reply is lost", asyn
     }
   });
 });
+
+it.each(["lost reply", "postcommit conflict error"] as const)(
+  "cleans up a committed reservation after %s without replay",
+  async (failure) => {
+    await withOpenClawTestState({ label: "cron-reservation-lost-reply" }, async (fixture) => {
+      const now = Date.now();
+      const storePath = fixture.statePath("cron", "jobs.json");
+      const job = createDueIsolatedJob({ id: "lost-reservation", nowMs: now, nextRunAtMs: now });
+      const runner = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronRegressionState({
+        storePath,
+        defaultAgentId: "main",
+        nowMs: () => now,
+        runIsolatedAgentJob: runner,
+      });
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      await list(state);
+      const reply =
+        failure === "lost reply" ? loseFirstCronMutationReply("cron.reserveRuns") : undefined;
+      const publication =
+        failure === "postcommit conflict error"
+          ? vi.spyOn(cronStore, "noteCronJobsStoreCommit").mockImplementationOnce(() => {
+              const receipt = runOpenClawStateWriteTransaction(({ db }) =>
+                findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId: job.id }),
+              );
+              if (!receipt) {
+                throw new Error("Fixture publication did not follow its native commit");
+              }
+              throw new CronRunReceiptConflictError({
+                ...receipt,
+                status: "running",
+                finishedAtMs: null,
+              });
+            })
+          : undefined;
+      try {
+        await expect(
+          persistQueuedCronRunReservations({ state, candidates: [job], reservedAtMs: now }),
+        ).rejects.toBeInstanceOf(Error);
+        if (reply) {
+          await reply.waitForExit();
+          expect(reply.wasDropped()).toBe(true);
+          expect(reply.attempts).toEqual(["cron.reserveRuns"]);
+        }
+        expect(runner).not.toHaveBeenCalled();
+        expect(state.queuedRunReservationsByJobId.size).toBe(0);
+        expect(listForeignReceipts(state)).toEqual([]);
+        expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
+        const receipts = openOpenClawStateDatabase()
+          .db.prepare("SELECT status FROM cron_run_receipts WHERE job_id = ?")
+          .all(job.id);
+        expect(receipts).toEqual([{ status: "skipped" }]);
+      } finally {
+        await reply?.close();
+        publication?.mockRestore();
+        stop(state);
+        await state.op;
+      }
+    });
+  },
+);
 
 it("preserves durable deletion authority during stopped activation rollback", async () => {
   await withReservation(async ({ state, job, identity, readJob, readReceipt }) => {

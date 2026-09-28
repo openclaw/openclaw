@@ -20,6 +20,7 @@ import {
   type RfbPreauthDescriptor,
   type RfbPreauthPeer,
   RfbPreauthTimeoutError,
+  writeRfbPreauthFrame,
 } from "./rfb-preauth.js";
 import { createRfbClientMessageFilter } from "./rfb-view-only-filter.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
@@ -91,13 +92,6 @@ export function mintDesktopObserverToken(params: {
   return { ...minted, ...(audio ? { audio: audio.descriptor } : {}) };
 }
 
-function consumeDesktopObserverToken(
-  token: string,
-  nowMs = Date.now(),
-): DesktopObserverTokenEntry | undefined {
-  return observerTokens.consume(token, nowMs);
-}
-
 export async function releaseDesktopObserverToken(
   wsPath: string,
   requester: DesktopObserveRequester | undefined,
@@ -141,63 +135,40 @@ function rawDataBuffer(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
-class WebSocketPreauthPeer implements RfbPreauthPeer {
-  private readonly reader = new RfbPreauthBuffer();
+class WebSocketPreauthPeer extends RfbPreauthBuffer implements RfbPreauthPeer {
   private readonly onMessage = (data: RawData, isBinary: boolean) => {
     if (!isBinary) {
-      this.reader.fail(new Error("RFB browser sent a non-binary handshake frame"));
+      this.fail(new Error("RFB browser sent a non-binary handshake frame"));
     } else {
-      this.reader.push(rawDataBuffer(data));
+      this.push(rawDataBuffer(data));
     }
   };
   private readonly onClose = () => {
-    this.reader.fail(new Error("RFB browser closed during authentication negotiation"));
+    this.fail(new Error("RFB browser closed during authentication negotiation"));
   };
   private readonly onError = () => {
-    this.reader.fail(new Error("RFB browser failed during authentication negotiation"));
+    this.fail(new Error("RFB browser failed during authentication negotiation"));
   };
 
   constructor(private readonly ws: WebSocket) {
+    super();
     ws.on("message", this.onMessage);
     ws.once("close", this.onClose);
     ws.once("error", this.onError);
-  }
-
-  async readExactly(length: number, signal: AbortSignal): Promise<Buffer> {
-    return await this.reader.readExactly(length, signal);
   }
 
   async write(buffer: Buffer, signal: AbortSignal): Promise<void> {
     if (signal.aborted) {
       throw signal.reason;
     }
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => signal.removeEventListener("abort", onAbort);
-      const onAbort = () => {
-        cleanup();
-        reject(
-          signal.reason instanceof Error
-            ? signal.reason
-            : new Error("RFB authentication negotiation aborted"),
-        );
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      this.ws.send(buffer, { binary: true }, (error) => {
-        cleanup();
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
+    await writeRfbPreauthFrame(signal, (done) => this.ws.send(buffer, { binary: true }, done));
   }
 
   detach(): Buffer {
     this.ws.off("message", this.onMessage);
     this.ws.off("close", this.onClose);
     this.ws.off("error", this.onError);
-    return this.reader.takeBuffered();
+    return this.takeBuffered();
   }
 }
 
@@ -216,7 +187,7 @@ export function handleDesktopObserveUpgrade(
     return false;
   }
   const token = resource.searchParams.get("token") ?? "";
-  const entry = consumeDesktopObserverToken(token);
+  const entry = observerTokens.consume(token);
   if (!entry || entry.requester?.isCurrent() === false) {
     entry?.audio?.close();
     rejectWebSocketUpgrade(socket, { status: 401 });

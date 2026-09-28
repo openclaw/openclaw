@@ -30,6 +30,7 @@ import {
 
 const ROW_SNAPSHOT_REASONS = new Set([
   "patch",
+  "participants",
   "placement",
   "send",
   "steer",
@@ -332,6 +333,7 @@ export function isPrimarySessionListQuery(options: SessionListScope): boolean {
     !query.search &&
     !query.ownerId &&
     query.involvingMe !== true &&
+    query.includeOwnerSessionCounts !== true &&
     query.excludeSubagents !== true &&
     query.excludeCron !== true &&
     query.excludeSystem !== true &&

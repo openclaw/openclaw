@@ -4,12 +4,29 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { createModelAuthAvailabilityResolver } from "../model-auth-availability.js";
 import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
 
+function authStore(
+  apiKeyProfile: string,
+  oauthProfile: string,
+  expiresInMs: number,
+): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      [apiKeyProfile]: { type: "api_key", provider: "openai", key: "fixture-key" },
+      [oauthProfile]: {
+        type: "oauth",
+        provider: "openai",
+        access: "fixture-access",
+        refresh: "fixture-refresh",
+        expires: Date.now() + expiresInMs,
+      },
+    },
+  };
+}
+
 describe("prepared primary route inheritance", () => {
   it.each([
-    { primary: "metered", runtime: "openclaw" },
-    { primary: "gpt-5.5", runtime: "openclaw" },
     { primary: "metered@openai:platform", runtime: "codex" },
-    { primary: "openai/gpt-5.5", runtime: "openclaw" },
     { primary: "openai/gpt-5.5@openai:platform", runtime: "codex" },
     { primary: "gpt-5.5@openai:platform", runtime: "openclaw", profileMetadata: false },
     {
@@ -53,19 +70,6 @@ describe("prepared primary route inheritance", () => {
               },
             },
       };
-      const authProfileStore: AuthProfileStore = {
-        version: 1,
-        profiles: {
-          "openai:platform": { type: "api_key", provider: "openai", key: "fixture-key" },
-          "openai:chatgpt": {
-            type: "oauth",
-            provider: "openai",
-            access: "fixture-access",
-            refresh: "fixture-refresh",
-            expires: Date.now() + 60_000,
-          },
-        },
-      };
       const prepared = prepareAgentRuntimeAuth({
         config,
         agentId: "assistant",
@@ -74,7 +78,7 @@ describe("prepared primary route inheritance", () => {
         ...(observedResponses
           ? { modelApi: "openai-responses", modelBaseUrl: "https://api.openai.com/v1" }
           : {}),
-        authProfileStore,
+        authProfileStore: authStore("openai:platform", "openai:chatgpt", 60_000),
         env: {},
       });
       expect(prepared.plan).toMatchObject({
@@ -132,19 +136,7 @@ describe("explicit authentication before inherited billing intent", () => {
         },
       },
     };
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:default": { type: "api_key", provider: "openai", key: "synthetic-api-key" },
-        "openai:chatgpt-default": {
-          type: "oauth",
-          provider: "openai",
-          access: "synthetic-access",
-          refresh: "synthetic-refresh",
-          expires: Date.now() + 600_000,
-        },
-      },
-    };
+    const store = authStore("openai:default", "openai:chatgpt-default", 600_000);
     const prepared = prepareAgentRuntimeAuth({
       provider: "openai",
       modelId: "gpt-5.4-mini",

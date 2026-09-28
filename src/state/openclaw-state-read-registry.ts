@@ -10,7 +10,7 @@ import { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lea
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
 import type {
   OpenClawStateReadCommand,
-  OpenClawStateReadReply,
+  OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
 
 export function readStateRegistryCommand(
@@ -28,37 +28,33 @@ export function readStateRegistryCommand(
         | "sandboxRegistry.browsers";
     }
   >,
-): OpenClawStateReadReply {
-  const admitted = { ok: true, sourceAdmitted: true } as const;
+): OpenClawStateReadResult {
   if (command.type === "sandboxRegistry.list") {
-    return { ...admitted, type: command.type, entries: readSandboxRegistryInDatabase(db) };
+    return { type: command.type, entries: readSandboxRegistryInDatabase(db) };
   }
   if (command.type === "sandboxRegistry.get") {
     return {
-      ...admitted,
       type: command.type,
       entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
     };
   }
   if (command.type === "sandboxRegistry.runtimeIds") {
     return {
-      ...admitted,
       type: command.type,
       runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
     };
   }
   if (command.type === "sandboxRegistry.browsers") {
-    return { ...admitted, type: command.type, entries: readSandboxBrowserRegistryInDatabase(db) };
+    return { type: command.type, entries: readSandboxBrowserRegistryInDatabase(db) };
   }
   if (command.type === "worktrees.cleanupState") {
     return {
-      ...admitted,
       type: command.type,
       records: listRegistryWorktreesInDatabase(db),
       leases: readWorktreeRunLeaseStateInDatabase(db),
     };
   }
   return command.type === "fleet.list"
-    ? { ...admitted, type: command.type, cells: listFleetCellsInDatabase(db) }
-    : { ...admitted, type: command.type, cell: getFleetCellInDatabase(db, command.tenantId) };
+    ? { type: command.type, cells: listFleetCellsInDatabase(db) }
+    : { type: command.type, cell: getFleetCellInDatabase(db, command.tenantId) };
 }

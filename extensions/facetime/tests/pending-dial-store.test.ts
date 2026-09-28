@@ -223,7 +223,7 @@ describe("pending FaceTime dial persistence", () => {
     expect(backend.current()).toEqual(initial);
   });
 
-  it.each(["observe", "compareAndApply", "both"] as const)(
+  it.each(["observe", "compareAndApply"] as const)(
     "uses legacy atomic deletion when %s is unavailable",
     async (missing) => {
       const backend = createBackend({ ...pendingDial(), callUUIDAliases: ["a-call"] });

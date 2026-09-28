@@ -30,15 +30,6 @@ import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { finalizeRoleSnapshot, findRoleSnapshotLineRef } from "./browser/pw-role-snapshot.js";
 import { neutralizeMediaDirectives } from "./browser/vision.js";
 
-type BrowserExternalJsonKind =
-  | "snapshot"
-  | "console"
-  | "requests"
-  | "errors"
-  | "tabs"
-  | "act"
-  | "download";
-
 const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
   snapshot: "\n[truncated — retry with a smaller maxChars or limit]",
   console: "\n[truncated — retry with a stricter level or targetId]",
@@ -47,7 +38,9 @@ const BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS = {
   tabs: "\n[truncated — retry with action=snapshot and a specific targetId]",
   act: "\n[truncated — inspect the affected targetId with action=snapshot]",
   download: "\n[truncated — retry with a specific targetId and download ref]",
-} satisfies Record<BrowserExternalJsonKind, string>;
+};
+
+type BrowserExternalJsonKind = keyof typeof BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS;
 
 function truncateBrowserToolText(value: string, marker: string, maxChars: number) {
   const bounded = truncateSanitizedExternalContent(value, maxChars);
@@ -199,7 +192,7 @@ export async function executeSnapshotAction(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = getRuntimeConfig().browser?.snapshotDefaults;
@@ -274,7 +267,7 @@ export async function executeSnapshotAction(params: {
     refsFallback = "role";
     snapshot = await readSnapshot({ ...snapshotQuery, refs: "role" });
   }
-  params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
+  await params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
   const identity = { format: snapshot.format, targetId: snapshot.targetId, url: snapshot.url };
   const dialogState = {
     ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),

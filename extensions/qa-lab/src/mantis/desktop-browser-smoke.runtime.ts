@@ -93,9 +93,11 @@ function renderRemoteScript(params: {
   const shellOutputDir = shellQuote(params.remoteOutputDir);
   const videoDurationSeconds = Math.max(1, Math.floor(params.videoDurationSeconds));
   const profileArchiveEnv = params.browserProfileArchiveEnv;
-  const profileDir = shellQuote(
-    params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`,
-  );
+  const profilePath = params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`;
+  const homePrefix = /^(?:~|\$HOME)\//u.exec(profilePath)?.[0];
+  const profileDir = homePrefix
+    ? `"$HOME"/${shellQuote(profilePath.slice(homePrefix.length))}`
+    : shellQuote(profilePath);
   const temporaryProfile = params.browserProfileDir ? "false" : "true";
   const inputModeJson = shellQuote(JSON.stringify(params.htmlBase64 ? "html-file" : "url"));
   const openedUrlJson = shellQuote(

@@ -3,7 +3,6 @@
 
 import type { SpawnSyncOptions } from "node:child_process";
 import { performance } from "node:perf_hooks";
-import prettyMilliseconds from "pretty-ms";
 import { resolveNodeRuntimeExecutable } from "../src/infra/node-runtime-executable.ts";
 import {
   finalizeBuildStepCache,
@@ -17,6 +16,8 @@ import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
+import { formatDurationElapsed } from "./lib/format-duration.mts";
+import { resolveLiveManagedGatewayDistFence } from "./lib/live-gateway-dist-fence.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
 import { preflightInstalledSourceArtifacts } from "./lib/source-update-artifact-preflight.mts";
@@ -46,6 +47,12 @@ export type BuildAllStep = BuildCacheStep &
   );
 
 type BuildAllTiming = { label: string; durationMs: number; status: string };
+
+export type BuildAllResult = {
+  exitCode: number;
+  timings: BuildAllTiming[];
+  admissionRefused?: true;
+};
 type BuildAllStepParams = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -492,7 +499,7 @@ export function formatBuildAllDuration(durationMs: number) {
       : clampedMs < 10_000
         ? Math.round(clampedMs / 10) * 10
         : Math.round(clampedMs / 100) * 100;
-  return prettyMilliseconds(roundedMs, {
+  return formatDurationElapsed(roundedMs, {
     secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
   });
 }
@@ -516,6 +523,7 @@ export async function runBuildAllSteps(
   profile: string,
   params: {
     cacheEnabled?: boolean;
+    cwd?: string;
     env?: NodeJS.ProcessEnv;
     finalizeCache?: typeof finalizeBuildStepCache;
     logger?: Pick<Console, "error" | "warn">;
@@ -528,7 +536,7 @@ export async function runBuildAllSteps(
     ) => { status: number | null } | Promise<{ status: number | null }>;
     steps?: BuildAllStep[];
   } = {},
-) {
+): Promise<BuildAllResult> {
   await preflightInstalledSourceArtifacts(params.env ?? process.env);
   const { env: buildEnv, heapShortfall } = resolveBuildAllTsdownPlan(
     profile,
@@ -538,6 +546,19 @@ export async function runBuildAllSteps(
   const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;
+  // One owner for both `pnpm build` and run-node dirty-tree auto-build: both
+  // enter here before clean:dist can delete hashed modules a live Gateway still imports.
+  const fence = await resolveLiveManagedGatewayDistFence(params.cwd ?? process.cwd(), {
+    env: buildEnv,
+  });
+  if (fence.refuse) {
+    logger.error(fence.message);
+    return {
+      exitCode: 1,
+      timings: [] satisfies BuildAllTiming[],
+      admissionRefused: true,
+    };
+  }
   const now = params.now ?? performance.now.bind(performance);
   const resolveCacheState = params.resolveCacheState ?? resolveBuildStepCacheState;
   const restoreCache = params.restoreCache ?? restoreBuildStepCacheOutputs;
@@ -595,28 +616,19 @@ export async function runBuildAllSteps(
     const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
     const result = await runStep(invocation);
     const durationMs = cacheDurationMs + now() - startedAt;
-    if (typeof result.status === "number") {
-      if (result.status !== 0) {
-        timings.push({ label: step.label, status: "failed", durationMs });
-        logger.error(
-          `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
-        );
-        exitCode = result.status;
-        break;
-      }
-      // Runtime-only tsdown cleans its output roots. Cache hits restore
-      // declarations again after that pass so the full build stays complete.
-      if (!finalizeCache(step, cacheState, { env: buildEnv, reusedCache })) {
-        throw new Error(`Build cache changed during ${step.label}; rerun the build`);
-      }
-      timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
-      logger.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
-      continue;
+    if (result.status !== 0) {
+      timings.push({ label: step.label, status: "failed", durationMs });
+      logger.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
+      exitCode = typeof result.status === "number" ? result.status : 1;
+      break;
     }
-    timings.push({ label: step.label, status: "failed", durationMs });
-    logger.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
-    exitCode = 1;
-    break;
+    // Runtime-only tsdown cleans its output roots. Cache hits restore
+    // declarations again after that pass so the full build stays complete.
+    if (!finalizeCache(step, cacheState, { env: buildEnv, reusedCache })) {
+      throw new Error(`Build cache changed during ${step.label}; rerun the build`);
+    }
+    timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
+    logger.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
   }
   logger.error(formatBuildAllTimingSummary(timings));
   return { exitCode, timings };
@@ -628,16 +640,21 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     args = parseBuildAllArgs(process.argv.slice(2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(2);
+    process.exitCode = 2;
   }
   if (args?.help) {
     console.log(buildAllUsage());
-  } else {
-    const result = await withDistArtifactOwnership(process.cwd(), () =>
-      runBuildAllSteps(args.profile),
+  } else if (args) {
+    const { runLegacySourceUpdateBuild } = await import("./lib/source-update-build.mts");
+    const legacyExit = await runLegacySourceUpdateBuild(args.profile, (env) =>
+      runBuildAllSteps(args.profile, { env }),
     );
-    if (result.exitCode !== 0) {
-      process.exit(result.exitCode);
+    const exitCode =
+      legacyExit ??
+      (await withDistArtifactOwnership(process.cwd(), () => runBuildAllSteps(args.profile)))
+        .exitCode;
+    if (exitCode !== 0) {
+      process.exitCode = exitCode;
     }
   }
 }

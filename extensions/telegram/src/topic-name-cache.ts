@@ -9,6 +9,7 @@ const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
 
 type TopicEntry = {
   name: string;
+  creatorUserId?: number;
   iconColor?: number;
   iconCustomEmojiId?: string;
   closed?: boolean;
@@ -41,7 +42,10 @@ function createTopicNameStoreState(namespace: string): TopicNameStoreState {
     lastUpdatedAt: 0,
     store: new Map(),
     hydrated: false,
-    persistentStore: openTopicNamePersistentStore(namespace),
+    persistentStore: getTelegramRuntime().state.openKeyedStore<TopicEntry>({
+      namespace,
+      maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
+    }),
   };
 }
 
@@ -56,13 +60,6 @@ function cacheKey(chatId: number | string, threadId: number | string): string {
 function resolveTopicNameCacheNamespace(scope: string): string {
   const hash = createHash("sha256").update(scope).digest("hex").slice(0, 16);
   return `${STORE_NAMESPACE_PREFIX}.${hash}`;
-}
-
-function openTopicNamePersistentStore(namespace: string): TopicNamePersistentStore {
-  return getTelegramRuntime().state.openKeyedStore<TopicEntry>({
-    namespace,
-    maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
-  });
 }
 
 function evictOldest(store: TopicNameStore): string | undefined {
@@ -154,12 +151,14 @@ export async function updateTopicName(
   const iconColor = patch.iconColor ?? existing?.iconColor;
   const iconCustomEmojiId = patch.iconCustomEmojiId ?? existing?.iconCustomEmojiId;
   const closed = patch.closed ?? existing?.closed;
+  const creatorUserId = patch.creatorUserId ?? existing?.creatorUserId;
   const merged: TopicEntry = {
     name: patch.name ?? existing?.name ?? "",
     updatedAt: nextUpdatedAt(scope),
     ...(iconColor !== undefined ? { iconColor } : {}),
     ...(iconCustomEmojiId !== undefined ? { iconCustomEmojiId } : {}),
     ...(closed !== undefined ? { closed } : {}),
+    ...(creatorUserId !== undefined ? { creatorUserId } : {}),
   };
   if (!merged.name) {
     return;
@@ -186,4 +185,29 @@ export async function getTopicName(
     await state.persistentStore.register(key, entry);
   }
   return entry?.name;
+}
+
+export async function recordTopicCreation(
+  chatId: number | string,
+  threadId: number | string,
+  creation: Pick<TopicEntry, "name" | "creatorUserId" | "iconColor" | "iconCustomEmojiId">,
+  scope?: string,
+): Promise<void> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  // A late creation service message must not undo a subsequent rename or close.
+  const patch = state.store.has(cacheKey(chatId, threadId))
+    ? { creatorUserId: creation.creatorUserId }
+    : { ...creation, closed: false };
+  await updateTopicName(chatId, threadId, patch, scope);
+}
+
+export async function getTopicCreatorUserId(
+  chatId: number | string,
+  threadId: number | string,
+  scope?: string,
+): Promise<number | undefined> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  return state.store.get(cacheKey(chatId, threadId))?.creatorUserId;
 }

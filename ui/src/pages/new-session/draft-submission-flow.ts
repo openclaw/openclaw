@@ -9,6 +9,7 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
+import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -403,6 +404,16 @@ export class DraftSubmissionFlow {
       this.noteBlockedSubmitAttempt();
       return;
     }
+    if (
+      !uploadsEnabled(context.config) &&
+      (this.attachmentDraft.attachments.length ||
+        this.pendingPlacement.attachments?.length ||
+        startup?.params.attachments?.length)
+    ) {
+      this.error = uploadsDisabledMessage();
+      this.callbacks.requestUpdate();
+      return;
+    }
     const preparedTitle = this.callbacks.takePreparedTitle?.();
     this.blockedSubmitGate = null;
     const input = prepareDraftSubmission(context, this, this.place, startup, background);
@@ -513,6 +524,9 @@ export class DraftSubmissionFlow {
       if (placementTarget && !submissionPlacementRecovery) {
         this.setPlacementRecoveryUnavailable();
         return;
+      }
+      if (input.apiAttachments?.length) {
+        assertUploadsEnabled(context.config);
       }
       const createRequest =
         input.pendingPlacement && this.pendingPlacement.phase !== "creating"

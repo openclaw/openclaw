@@ -21,7 +21,20 @@ import type {
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
+export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = unknown[]> = {
+  messages: Messages;
+  activity?: AgentHistoryActivity[];
+  messagesBytes: number;
+  responseHistoryBytes: number;
+  omission?: { omittedCount: number; normalizedBytes: number };
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+  completeSnapshot?: true;
+};
+
 export type ChatHistoryPage = {
+  encodedResponse?: ChatHistoryResponsePage<Uint8Array>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
@@ -41,6 +54,7 @@ export type ChatHistoryPage = {
 };
 
 export type ChatHistoryPageParams = {
+  encodeResponse?: boolean;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
   sessionId: string | undefined;
@@ -150,7 +164,7 @@ export type SessionHistoryWorkerRequest =
     }
   | {
       kind: "transcript-binding";
-      params: { target: SessionTranscriptReadScope; run?: { id: string; maxBytes: number } };
+      params: { target: SessionTranscriptReadScope };
     }
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
   | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }

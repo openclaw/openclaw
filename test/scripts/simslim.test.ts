@@ -8,7 +8,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const simulatorId = "11111111-2222-3333-4444-555555555555";
 const keptCategories =
   "widgets,siri,icloud,store,pim,web,health,photos,apps,messaging,connectivity,telemetry,other";
-const checksum = "c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19";
+const checksum = "eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d";
 type Command = { tool: string; args: string[] };
 
 function runFixture(
@@ -29,7 +29,7 @@ function runFixture(
   writeFileSync(
     runner,
     String.raw`
-import { appendFileSync, copyFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 const [tool, ...args] = process.argv.slice(2);
 const root = process.env.SIMSLIM_FIXTURE_ROOT;
@@ -48,13 +48,16 @@ if (tool === "uname") {
   copyFileSync(path.join(root, "bin", "simslim"), path.join(args[args.indexOf("-C") + 1], "simslim"));
 } else if (tool === "simslim") {
   if (args[0] === "--version") {
-    console.log(failure === "version" ? "simslim 0.9.0" : "simslim 0.8.0");
+    console.log(failure === "version" ? "simslim 0.9.0" : "simslim 0.10.0");
     if (failure === "version-exit") process.exit(23);
   } else if (args[0] === failure) {
     process.exit(23);
+  } else if (args[0] === "on") {
+    writeFileSync(path.join(root, "simslim-applied"), "");
   }
-} else if (tool === "xcrun" && failure === "readiness") {
-  process.exit(23);
+} else if (tool === "xcrun") {
+  const phase = existsSync(path.join(root, "simslim-applied")) ? "reboot-readiness" : "initial-readiness";
+  if (failure === phase) process.exit(23);
 }
 `,
   );
@@ -123,7 +126,7 @@ describe.skipIf(process.platform === "win32")("simslim installer", () => {
       "120",
       "--output",
       expect.stringContaining("simslim.tar.gz"),
-      "https://github.com/MobAI-App/simslim/releases/download/v0.8.0/simslim-v0.8.0-macos-arm64.tar.gz",
+      "https://github.com/MobAI-App/simslim/releases/download/v0.10.0/simslim-v0.10.0-macos-arm64.tar.gz",
     ]);
     expect(commands.find(({ tool }) => tool === "shasum")?.args).toEqual([
       "-a",
@@ -163,10 +166,11 @@ describe.skipIf(process.platform === "win32")("simslim installer", () => {
 });
 
 describe.skipIf(process.platform === "win32")("iOS simulator preparation", () => {
-  it("applies and verifies the same conservative profile on the explicit simulator", () => {
+  it("boots the explicit simulator before applying and verifying the conservative profile", () => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh");
     expect(result.status, result.stderr).toBe(0);
     expect(commands).toEqual([
+      { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
       { tool: "simslim", args: ["on", simulatorId, "--except", keptCategories] },
       { tool: "xcrun", args: ["simctl", "bootstatus", simulatorId, "-b"] },
       { tool: "simslim", args: ["verify", simulatorId, "--except", keptCategories] },
@@ -197,9 +201,10 @@ describe.skipIf(process.platform === "win32")("iOS simulator preparation", () =>
   });
 
   it.each([
-    ["on", 1],
-    ["readiness", 2],
-    ["verify", 3],
+    ["initial-readiness", 1],
+    ["on", 2],
+    ["reboot-readiness", 3],
+    ["verify", 4],
   ] as const)("preserves %s failure without subsequent calls", (failure, count) => {
     const { result, commands } = runFixture("ios-simulator-prepare.sh", { failure });
     expect(result.status).toBe(23);

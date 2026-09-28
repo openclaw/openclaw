@@ -72,6 +72,8 @@ export type ControlUiBootstrapConfig = {
    * switch removes the surface rather than showing a button that errors on open.
    */
   terminalEnabled?: boolean;
+  /** Whether clients may upload files and images (`gateway.uploads.enabled`). */
+  uploadsEnabled?: boolean;
   /** Whether the Labs-gated CLI agents model-picker group is enabled. */
   cliAgentsEnabled?: boolean;
   /** Only explicit no-auth Gateways permit native asset loading without scoped cookies. */

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { readCurrentConfigForPolicyCheck } from "../config/io.runtime.js";
 import type { ConfigReplaceResult } from "../config/mutate.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -19,6 +18,7 @@ import {
   type PluginLifecycleLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
+import { withPluginSourceCleanup } from "./source-cleanup.js";
 
 export type PluginInstallRuntimeCommit = {
   pluginId: string;
@@ -140,22 +140,21 @@ export class PluginInstallRuntimeBatch {
             ) {
               throw new Error(`Retired plugin source changed before cleanup: ${sourcePath}`);
             }
-            const config = readCurrentConfigForPolicyCheck({
-              configPath,
-              env: this.options.env ?? process.env,
-            });
             if (
               createInstalledPluginOwnershipResolver(index, this.options.env).isSourceInUse(
                 sourcePath,
-                config.plugins?.load?.paths ?? [],
+                [],
               )
             ) {
               throw new Error(`Retired plugin source acquired a current owner: ${sourcePath}`);
             }
             assertOwned();
           };
-          assertUnclaimed();
-          await cleanup(assertUnclaimed, warn);
+          await withPluginSourceCleanup(
+            sourcePath,
+            { configPath, env: this.options.env, assertCurrent: assertUnclaimed },
+            (assertCurrent) => cleanup(assertCurrent, warn),
+          );
         });
       },
     };
@@ -285,7 +284,7 @@ export class PluginInstallRuntimeBatch {
         if (!index) {
           throw new Error("Plugin index disappeared before source cleanup");
         }
-        // Index producers share this lease; these cleanups retire filesystem sources only.
+        // Index producers share this lease; cleanups retire filesystem sources only.
         const records = index.installRecords;
         const assertCurrent = () => {
           assertOwned();

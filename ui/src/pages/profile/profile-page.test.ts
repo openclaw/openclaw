@@ -4,12 +4,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import * as avatarProcessing from "./avatar-processing.ts";
 import type { ModelAccounts } from "./model-accounts.ts";
 import {
   createConnectedContext,
@@ -17,6 +20,7 @@ import {
   mountProfilePage,
   type ProfilePageElement,
 } from "./profile-page.test-support.ts";
+import { ProfilePage } from "./profile-page.ts";
 
 const modelAccountCatalog = {
   providers: [
@@ -900,5 +904,57 @@ it("uses the canonical self profile after a merge while presence still carries i
       provider: "openai",
       method: "browser",
     }),
+  );
+});
+
+it("rechecks avatar upload policy after processing and rerenders on config updates", async () => {
+  const profile = { ...modelAccountProfile };
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: profile.id, accounts: [], links: [] };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: "Ada",
+  });
+  const config = createApplicationConfigCapability({ resourceBasePath: "" });
+  const identityLoad = vi.spyOn(
+    ProfilePage.prototype as unknown as { loadIdentity(): Promise<void> },
+    "loadIdentity",
+  );
+  const page = mountProfilePage({ ...harness.context, config }) as ProfilePageElement & {
+    saveIdentity(change: { kind: "avatar"; file: File }): Promise<void>;
+  };
+  await identityLoad.mock.results[0]?.value;
+  await page.updateComplete;
+  const processed =
+    createDeferred<Awaited<ReturnType<typeof avatarProcessing.processProfileAvatar>>>();
+  const process = vi
+    .spyOn(avatarProcessing, "processProfileAvatar")
+    .mockReturnValue(processed.promise);
+  const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+  const saving = page.saveIdentity({ kind: "avatar", file });
+  expect(process).toHaveBeenCalledOnce();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ uploadsEnabled: false }))),
+  );
+  await config.refresh();
+  await page.updateComplete;
+  expect(page.querySelector('input[type="file"]')).toBeNull();
+  processed.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
+  await saving;
+  await page.updateComplete;
+  expect(request.mock.calls.some(([method]) => method === "users.setAvatar")).toBe(false);
+  expect(page.querySelector(".identity-error")?.textContent).toContain(uploadsDisabledMessage());
+  await page.saveIdentity({ kind: "avatar", file });
+  expect(process).toHaveBeenCalledOnce();
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+    false,
   );
 });

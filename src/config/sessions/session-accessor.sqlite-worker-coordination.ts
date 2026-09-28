@@ -1,27 +1,15 @@
-import { performance } from "node:perf_hooks";
 import { threadId, type MessagePort } from "node:worker_threads";
-import {
-  createSqliteLifecycleAggregateError,
-  runWithSqliteCoordinator,
-  SqliteCoordinatorError,
-} from "../../infra/sqlite-coordinator.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertStateDatabaseAccessAllowed } from "../../infra/gateway-state-owner.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
-  acquireSqliteWorkerLifecycle,
-  createSqliteWorkerLifecyclePreparation,
-} from "../../infra/sqlite-worker-lifecycle-preparation.js";
+  createSqliteWorkerOperationAdmission,
+  requestSqliteWorkerOperationAdmission,
+  withSqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import { acquireStateDatabaseCoordinatorWithWait } from "../../infra/state-database-coordinator-acquisition.js";
-import {
-  attachStateLifecycleDelegate,
-  resolveStateDatabaseCoordinatorPath,
-  tryCreateStateLifecycleDelegate,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../../infra/state-database-coordinator.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
@@ -34,34 +22,10 @@ export type SqliteMutationWorkerCoordination = {
   actorId: string;
   databasePath: string;
   stateContext: SqliteWorkerStateContext;
-  stateLifecycle?: MessagePort;
-  reconciliation?: {
-    identity: string;
-    open: MessagePort;
-    close: MessagePort;
-  };
+  reconciliation?: { identity: string; admission: MessagePort };
 };
 
-async function prepareLifecycleDelegate(context: OpenClawStateWorkerContext, actorId: string) {
-  // This custody also drains retained workers after read admission is revoked.
-  // Request owners validate new work; cleanup keeps its original native custody.
-  const coordinator = await acquireStateDatabaseCoordinatorWithWait({
-    operation: "mutation-worker-admission",
-    databasePath: context.admission.databasePath,
-    runtime: context.coordinatorRuntime,
-    deadlineMs: performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  });
-  return withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
-    runWithSqliteCoordinator(coordinator, "SQLite mutation Worker lifecycle admission", () => {
-      return tryCreateStateLifecycleDelegate({
-        databasePath: context.admission.databasePath,
-        actorId,
-      });
-    }),
-  );
-}
-
-/** The original request owns this pin until its result or native exit is settled. */
+/** The request owns its native worker until a result or confirmed exit settles. */
 export async function withSqliteMutationWorkerCoordination<T>(
   context: OpenClawStateWorkerContext,
   transport: SqliteMutationWorkerTransport,
@@ -70,7 +34,6 @@ export async function withSqliteMutationWorkerCoordination<T>(
 ): Promise<T> {
   const worker = transport.channel;
   const actorId = `${sqliteMutationWorkerThreadId(transport)}:${operationId}`;
-  // Preparation can fail before the mutation request installs its transport owner.
   const preparingError = () => {};
   worker.on("error", preparingError);
   try {
@@ -82,7 +45,7 @@ export async function withSqliteMutationWorkerCoordination<T>(
   }
 }
 
-/** Each transport joins its native operation before relinquishing shared-state custody. */
+/** Join uncertain native work before the transport can release its owned resources. */
 export async function withSqliteWorkerLifecycleCoordination<T>(
   context: OpenClawStateWorkerContext,
   actorId: string,
@@ -90,173 +53,59 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
   settleFailure: () => Promise<void>,
   mode: "retained" | "reconciliation" = "retained",
 ): Promise<T> {
-  let delegate: ReturnType<typeof tryCreateStateLifecycleDelegate>;
-  const phaseDelegates: NonNullable<typeof delegate>[] = [];
-  const phases: ReturnType<typeof createSqliteWorkerLifecyclePreparation>[] = [];
-  const controller = new AbortController();
-  let releaseService: (() => void) | undefined;
-  let outcome: { value: T } | { error: unknown };
-  try {
-    delegate =
-      mode === "retained"
-        ? await prepareLifecycleDelegate(context, actorId)
-        : withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
-            tryCreateStateLifecycleDelegate({
-              databasePath: context.admission.databasePath,
-              actorId,
-            }),
-          );
-    const identity = context.admission.identity.key;
-    let openAdmitted = false;
-    const preparePhase = (phase: "open" | "close") => {
-      const runtime =
-        phase === "close"
-          ? { ...context.coordinatorRuntime, keepAlive: false }
-          : context.coordinatorRuntime;
-      const preparation = createSqliteWorkerLifecyclePreparation({
-        signal: controller.signal,
-        assertCurrent() {
-          // Sealing new reads cannot revoke cleanup of this already-admitted native operation.
-          if (phase === "open" || !openAdmitted) {
+  const identity = context.admission.identity.key;
+  let opened = false;
+  const admission =
+    mode === "reconciliation"
+      ? createSqliteWorkerOperationAdmission((request, grant) => {
+          const facts = request.facts;
+          if (
+            request.stage !== "prepare" ||
+            !isRecord(facts) ||
+            facts.kind !== "transcript-reconciliation" ||
+            facts.actorId !== actorId ||
+            (facts.phase !== "open" && facts.phase !== "close")
+          ) {
+            throw new Error("Transcript reconciliation admission differs from its operation");
+          }
+          // Read revocation seals new work, but cannot revoke cleanup of an accepted open.
+          if (facts.phase === "open" || !opened) {
             context.admission.assertCurrent();
           }
           assertExistingDatabaseIdentity(context.admission.databasePath, identity);
-        },
-        borrow: () =>
-          withStateDatabaseCoordinatorRuntimeDirectory(runtime, () => {
-            delegate ??= tryCreateStateLifecycleDelegate({
-              databasePath: context.admission.databasePath,
-              actorId,
-            });
-            // Every phase needs a fresh port; retain the first late parent owner through settlement.
-            const phaseDelegate = delegate
-              ? tryCreateStateLifecycleDelegate({
-                  databasePath: context.admission.databasePath,
-                  actorId: `${actorId}:${phase}`,
-                })
-              : undefined;
-            if (phaseDelegate) {
-              phaseDelegates.push(phaseDelegate);
-            }
-            return phaseDelegate?.port;
-          }),
-        admit: () => undefined,
-        dispatch() {
-          if (phase === "open") {
-            openAdmitted = true;
+          assertStateDatabaseAccessAllowed(context.admission.databasePath);
+          if (!grant()) {
+            throw new Error("Transcript reconciliation admission expired");
           }
-        },
-        receiveResult() {
-          throw new Error("Reconciliation lifecycle preparation received an unexpected result");
-        },
-      });
-      phases.push(preparation);
-      return preparation.port;
-    };
-    if (!delegate && mode === "reconciliation") {
-      releaseService = retainSqliteWriteAdmissionService(
-        [
-          resolveStateDatabaseCoordinatorPath({
-            databasePath: context.admission.databasePath,
-            runtimeDirectory: context.coordinatorRuntime.directory,
-            uid: process.getuid?.(),
-          }),
-        ],
-        () => phases.forEach((phase) => phase.service()),
-      );
-    }
-    outcome = {
-      value: await run({
-        actorId,
-        databasePath: context.admission.databasePath,
-        stateContext: {
-          environment: context.environment,
-          coordinatorRuntime: context.coordinatorRuntime,
-        },
-        // Channel allocation stays inside dispatch, where failure joins native exit.
-        get stateLifecycle() {
-          return delegate?.port;
-        },
-        ...(!delegate && mode === "reconciliation"
-          ? {
-              reconciliation: {
-                identity,
-                open: preparePhase("open"),
-                close: preparePhase("close"),
-              },
-            }
-          : {}),
-      }),
-    };
+          opened ||= facts.phase === "open";
+        })
+      : undefined;
+  const releaseService = admission
+    ? retainSqliteWriteAdmissionService([context.admission.databasePath], () => admission.service())
+    : undefined;
+  try {
+    return await run({
+      actorId,
+      databasePath: context.admission.databasePath,
+      stateContext: { environment: context.environment },
+      ...(admission ? { reconciliation: { identity, admission: admission.port } } : {}),
+    });
   } catch (error) {
-    outcome = { error };
     try {
       await settleFailure();
     } catch (exitError) {
-      outcome.error = new AggregateError(
-        [error, exitError],
+      throw new AggregateError(
+        [admission?.failure ?? error, exitError],
         "SQLite mutation and Worker exit failed",
-        {
-          cause: error,
-        },
+        { cause: exitError },
       );
     }
+    // A refused grant retires the worker; confirmed exit must not hide the owner's refusal.
+    throw admission?.failure ?? error;
+  } finally {
+    admission?.finish();
+    releaseService?.();
   }
-  const cleanupErrors: unknown[] = [];
-  for (const finish of [
-    ...phases.map((phase) => () => phase.finish()),
-    ...(releaseService ? [releaseService] : []),
-  ]) {
-    try {
-      finish();
-    } catch (error) {
-      cleanupErrors.push(error);
-    }
-  }
-  for (const held of [...phaseDelegates, ...(delegate ? [delegate] : [])]) {
-    try {
-      held.release();
-    } catch (error) {
-      cleanupErrors.push(error);
-      if (!held.closed) {
-        const release = () => {
-          held.release();
-          unregister();
-        };
-        const unregister = registerOpenClawStateDatabaseAsyncResource({
-          close: async (identity) => {
-            if (!identity || identity.key === context.admission.identity.key) {
-              release();
-            }
-          },
-        });
-        context.maintenanceScope?.own(held, "shared-resources", release);
-      }
-    }
-  }
-  if (cleanupErrors.length) {
-    const error =
-      cleanupErrors.length === 1
-        ? cleanupErrors[0]
-        : new AggregateError(cleanupErrors, "SQLite coordinator cleanup failed");
-    if ("error" in outcome) {
-      throw createSqliteLifecycleAggregateError(
-        [outcome.error, error],
-        "SQLite mutation and coordinator cleanup failed",
-        outcome.error,
-      );
-    }
-    process.emitWarning(
-      new SqliteCoordinatorError(
-        "SQLite mutation settled before coordinator cleanup failed",
-        error,
-      ),
-    );
-  }
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return outcome.value;
 }
 
 export async function runWithSqliteMutationWorkerCoordination<
@@ -275,75 +124,34 @@ export async function runWithSqliteMutationWorkerCoordination<
   ) {
     throw new Error("SQLite mutation Worker shared-state owner changed");
   }
-  const delegate = coordination.stateLifecycle
-    ? await attachStateLifecycleDelegate(coordination.stateLifecycle, {
-        actorId: coordination.actorId,
-        databasePath: coordination.databasePath,
-        runtimeDirectory: coordination.stateContext.coordinatorRuntime.directory,
-      })
-    : undefined;
-  try {
-    return await withStateDatabaseCoordinatorRuntimeDirectory(
-      coordination.stateContext.coordinatorRuntime,
-      () => {
-        const operation = () =>
-          run({ ...options, env: { ...options.env, ...coordination.stateContext.environment } });
-        return delegate ? delegate.run(operation) : operation();
-      },
-    );
-  } finally {
-    delegate?.close();
-  }
+  return await run({
+    ...options,
+    env: { ...options.env, ...coordination.stateContext.environment },
+  });
 }
 
-/** Reconciliation keeps its durable agent lease while yielding between native state phases. */
+/** Reconciliation retains its native handles and durable agent lease between grants. */
 export async function runSqliteReconciliationLifecyclePhase<T>(
   coordination: SqliteMutationWorkerCoordination,
   phase: "open" | "close",
   operation: () => T,
   onUnsettled: () => void,
 ): Promise<T> {
-  const preparation = coordination.reconciliation;
-  if (!preparation) {
-    // The caller's whole-request delegate retains its original borrowing contract.
-    return operation();
+  const retained = coordination.reconciliation;
+  if (!retained) {
+    throw new Error("Transcript reconciliation requires its retained admission");
   }
-  const runtime =
-    phase === "close"
-      ? { ...coordination.stateContext.coordinatorRuntime, keepAlive: false }
-      : coordination.stateContext.coordinatorRuntime;
-  const port = preparation[phase];
-  const prepared = await acquireSqliteWorkerLifecycle({
-    port,
-    databasePath: coordination.databasePath,
-    actorId: `${coordination.actorId}:${phase}`,
-    deadlineNs: process.hrtime.bigint() + BigInt(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) * 1_000_000n,
-    runtime,
-    onUnsettled,
-  });
   try {
-    return withStateDatabaseCoordinatorRuntimeDirectory(runtime, () => {
-      const run = () => {
-        assertExistingDatabaseIdentity(coordination.databasePath, preparation.identity);
-        return operation();
-      };
-      return runWithSqliteCoordinator(
-        {
-          release() {
-            try {
-              prepared.coordinator?.release();
-            } catch (error) {
-              onUnsettled();
-              throw error;
-            }
-          },
-        },
-        `transcript reconciliation ${phase}`,
-        () => (prepared.delegate ? prepared.delegate.run(run) : run()),
-      );
+    return withSqliteWorkerOperationAdmission({ port: retained.admission }, () => {
+      requestSqliteWorkerOperationAdmission({
+        stage: "prepare",
+        facts: { kind: "transcript-reconciliation", actorId: coordination.actorId, phase },
+      });
+      assertExistingDatabaseIdentity(coordination.databasePath, retained.identity);
+      return operation();
     });
-  } finally {
-    prepared.delegate?.close();
-    port.close();
+  } catch (error) {
+    onUnsettled();
+    throw error;
   }
 }

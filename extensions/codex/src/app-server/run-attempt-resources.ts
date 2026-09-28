@@ -15,7 +15,6 @@ import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import { resolveCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
-import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import { getCodexInferenceThreadQualification } from "./inference-routing.js";
@@ -24,14 +23,14 @@ import {
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
   createCodexNativeHookRelay,
-  emitCodexNativePreToolUseFailureDiagnostic,
-  type CodexNativePreToolUseFailure,
   type CodexNativeHookRelay,
 } from "./native-hook-relay.js";
+import { createCodexNativePreToolUseFailureBuffer } from "./native-pre-tool-use-failures.js";
 import {
   CodexNativeProcessAuthority,
   hasCodexNativeBackgroundProcesses,
 } from "./native-process-authority.js";
+import { createNativeSubagentAssignmentStore } from "./native-subagent-assignment-store.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
@@ -129,10 +128,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       | Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>>
       | undefined,
     runtimeContinuationStarted: false,
-    nativePreToolUseFailureFallbackActive: false,
-    nativePreToolUseFailureFallbackTerminalReason: undefined as
-      | CodexNativePreToolUseFailure["disposition"]
-      | undefined,
     releaseSharedClientLease: undefined as (() => void) | undefined,
     startupClientUnsafe: false,
     turnStartAttempted: false,
@@ -145,38 +140,14 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       | (() => Promise<CodexAppServerThreadLifecycleBinding>)
       | undefined,
   };
-  const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
   const projectorRef: { current?: CodexAppServerEventProjector } = {};
-  const emitNativePreToolUseFailure = (failure: CodexNativePreToolUseFailure) => {
-    emitCodexNativePreToolUseFailureDiagnostic({
-      agentId: sessionAgentId,
-      sessionId: params.sessionId,
-      sessionKey: contextSessionKey,
-      runId: params.runId,
-      signal: runAbortController.signal,
-      failure,
-      ...(state.nativePreToolUseFailureFallbackActive
-        ? {
-            terminalReason:
-              state.nativePreToolUseFailureFallbackTerminalReason ?? failure.disposition,
-          }
-        : {}),
-    });
-  };
-  const flushPendingNativePreToolUseFailures = () => {
-    for (const failure of pendingNativePreToolUseFailures.splice(0)) {
-      emitNativePreToolUseFailure(failure);
-    }
-  };
-  const activateNativePreToolUseFailureFallback = () => {
-    if (!state.nativePreToolUseFailureFallbackActive) {
-      state.nativePreToolUseFailureFallbackTerminalReason = runAbortController.signal.aborted
-        ? resolveCodexToolAbortTerminalReason(runAbortController.signal)
-        : undefined;
-      state.nativePreToolUseFailureFallbackActive = true;
-    }
-    flushPendingNativePreToolUseFailures();
-  };
+  const nativePreToolUseFailures = createCodexNativePreToolUseFailureBuffer({
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: contextSessionKey,
+    runId: params.runId,
+    signal: runAbortController.signal,
+  });
   const releaseSharedClientLeaseOnce = () => {
     const release = state.releaseSharedClientLease;
     if (!release) {
@@ -327,6 +298,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
               ),
           }
         : undefined;
+    const assignmentStore =
+      historyOwner && submissionStore
+        ? createNativeSubagentAssignmentStore({
+            bindingStore,
+            identity: bindingIdentity,
+            owner: historyOwner,
+            assertLifecycleCurrent: () => submissionStore.assertCurrent(),
+          })
+        : undefined;
     const assertRegistrationCurrent = () => {
       runAbortController.signal.throwIfAborted();
       params.hostCapabilities.assertActive();
@@ -362,9 +342,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         unqualifiedModelExecution: modelSource && !configurationQualification ? true : undefined,
         onUnqualifiedModelCancelled: connection.abortExplicitly,
         requesterSessionKey: params.sessionKey,
-        taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+        completionScope: params.agentHarnessCompletionScope,
         historyOwner,
         submissionStore,
+        assignmentStore,
         agentId: sessionAgentId,
         assertCurrent: assertRegistrationCurrent,
         retainClient: () => retainSharedCodexAppServerClientIfCurrent(client),
@@ -373,7 +354,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         claimDirectChild: (childThreadId) => nativeHookRelay?.claimDirectChild(childThreadId),
         rejectPendingDirectChild: (childThreadId, reason) =>
           nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
-        ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
+        ...(params.sessionKey && params.agentHarnessCompletionScope
           ? {
               onDirectChildAccepted: () => {
                 state.runtimeContinuationStarted = true;
@@ -382,6 +363,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           : {}),
       });
       try {
+        await registration.ready;
         assertRegistrationCurrent();
         state.nativeSubagentMonitor = registration;
       } catch (error) {
@@ -477,7 +459,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     return released;
   };
   const cleanupBeforeActiveTurn = async () => {
-    await runCleanupStep("codex-pre-turn-hook-fallback", activateNativePreToolUseFailureFallback);
+    await runCleanupStep("codex-pre-turn-hook-fallback", () =>
+      nativePreToolUseFailures.activateFallback(runAbortController.signal.aborted),
+    );
     await runCleanupStep("codex-pre-turn-subscription", async () => {
       const { thread } = state;
       if (!thread || subscriptionSettlement?.thread === thread || state.startupClientUnsafe) {
@@ -536,7 +520,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     previousRelay?.unregister();
     await previousRelay?.drain();
     connection.assertCurrent();
-    const requiresProcessAdmission = nativeProcessAuthority && runtime.nativeToolSurfaceEnabled;
+    const requiresProcessAdmission =
+      nativeProcessAuthority?.requiresProcessAdmission && runtime.nativeToolSurfaceEnabled;
     const requiresModelAdmission =
       nativeModelAdmission !== undefined && decision.nativeModelInputTools !== undefined;
     const requiresExecutionAdmission = requiresProcessAdmission || requiresModelAdmission;
@@ -602,10 +587,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         const projector = projectorRef.current;
         if (projector) {
           projector.recordNativeToolPreToolUseFailure(failure);
-        } else if (state.nativePreToolUseFailureFallbackActive) {
-          emitNativePreToolUseFailure(failure);
         } else {
-          pendingNativePreToolUseFailures.push(failure);
+          nativePreToolUseFailures.record(failure);
         }
       },
     });
@@ -624,9 +607,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       nativeHookRelayGeneration: state.nativeHookRelay?.generation,
     };
   };
-  const nativeProcessAuthority =
-    sandbox?.enabled && sandbox.backend && params.hostCapabilities.retainSourceAuthority
-      ? new CodexNativeProcessAuthority(params.hostCapabilities, (error) => {
+  const nativeProcessAuthority = params.hostCapabilities.retainSourceAuthority
+    ? new CodexNativeProcessAuthority(
+        params.hostCapabilities,
+        (error) => {
           const message = formatErrorMessage(error);
           embeddedAgentLog.warn("codex native background work remains unsettled", {
             runId: params.runId,
@@ -637,21 +621,22 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             stream: "codex_app_server.lifecycle",
             data: { phase: "background_cleanup_failed", error: message },
           });
-        })
-      : undefined;
+        },
+        Boolean(sandbox?.enabled && sandbox.backend),
+      )
+    : undefined;
   return {
     prompt,
     trajectoryRecorder,
     state,
     projectorRef,
-    pendingNativePreToolUseFailures,
+    pendingNativePreToolUseFailures: nativePreToolUseFailures.pending,
     nativeModelAdmission,
     nativeProcessAuthority,
     releaseNativeProcessAuthority,
     markTrajectoryEndRecorded: () => {
       state.trajectoryEndRecorded = true;
     },
-    activateNativePreToolUseFailureFallback,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
     runCleanupStep,

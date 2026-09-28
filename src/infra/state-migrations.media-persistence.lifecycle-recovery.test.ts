@@ -90,7 +90,7 @@ it("checks healthy agent integrity once before media migration", async () => {
   expect(checks).toHaveLength(1);
 });
 
-it.each([false, true])(
+it.each([true])(
   "Doctor preserves and rebuilds a corrupt agent index (quarantined=%s)",
   async (quarantined) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

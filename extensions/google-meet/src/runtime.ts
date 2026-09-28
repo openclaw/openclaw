@@ -14,7 +14,6 @@ import {
   type MeetingSessionLeaveResult,
   type MeetingParticipationAttempt,
   type MeetingParticipationRequest,
-  type MeetingParticipationSource,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "openclaw/plugin-sdk/meeting-runtime";
@@ -252,14 +251,6 @@ export class GoogleMeetRuntime {
 
   participate(sessionId: string, request: MeetingParticipationRequest) {
     return this.#sessions.participate(sessionId, request);
-  }
-
-  observeParticipationSource(sessionId: string, source: MeetingParticipationSource) {
-    return this.#sessions.observeParticipationSource(sessionId, source);
-  }
-
-  inspectParticipationSource(sessionId: string, sourceId: string) {
-    return this.#sessions.inspectParticipationSource(sessionId, sourceId);
   }
 
   async transcript(sessionId: string, options: { sinceIndex?: number } = {}) {

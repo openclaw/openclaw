@@ -24,7 +24,7 @@ export function createAgentHarnessAssistantMessage(
   text: string,
   options: AgentHarnessAssistantMessageOptions,
 ): AssistantMessage {
-  const message = {
+  return {
     role: "assistant",
     content: options.content ?? [{ type: "text", text }],
     api: attribution.api,
@@ -41,8 +41,7 @@ export function createAgentHarnessAssistantMessage(
       (options.promptError ? formatErrorMessage(options.promptError) : undefined),
     ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}),
     timestamp: options.timestamp ?? Date.now(),
-  } satisfies AssistantMessage;
-  return message;
+  };
 }
 
 export function createAgentHarnessToolCallMessage(

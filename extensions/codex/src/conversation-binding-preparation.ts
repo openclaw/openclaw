@@ -239,12 +239,14 @@ async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
     modelProvider: params.modelProvider,
     ...agentLookup,
   });
-  const modelSelection = resolveOptionalThreadRequestModelSelection({
-    model: params.model,
-    modelProvider,
-    authProfileId: params.authProfileId,
-    ...agentLookup,
-  });
+  const modelSelection = params.model?.trim()
+    ? resolveCodexAppServerRequestModelSelection({
+        model: params.model,
+        modelProvider,
+        authProfileId: params.authProfileId,
+        ...agentLookup,
+      })
+    : undefined;
   const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
@@ -655,25 +657,6 @@ function resolveThreadRequestModelProvider(params: {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
-}
-
-function resolveOptionalThreadRequestModelSelection(params: {
-  model?: string;
-  modelProvider?: string;
-  authProfileId?: string;
-  agentDir?: string;
-  config?: CodexAppServerAuthProfileLookup["config"];
-}): { model: string; modelProvider?: string } | undefined {
-  if (!params.model?.trim()) {
-    return undefined;
-  }
-  return resolveCodexAppServerRequestModelSelection({
-    model: params.model,
-    modelProvider: params.modelProvider,
-    authProfileId: params.authProfileId,
-    agentDir: params.agentDir,
-    config: params.config,
-  });
 }
 
 export function resolveModelBackedReviewerPolicyProvider(params: {

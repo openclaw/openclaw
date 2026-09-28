@@ -1883,13 +1883,16 @@ def capture_release_ios_screenshot!(
   FileUtils.rm_rf(result_bundle_path)
   FileUtils.mkdir_p(File.dirname(result_bundle_path))
   begin
+    app_identifier = bundle_identifier_for_product(
+      File.join(derived_data_path, "Build", "Products", "Debug-iphonesimulator", "OpenClaw.app")
+    )
     installed_apps = sh(
       "/bin/bash", "-o", "pipefail", "-c",
       "#{shell_join(["xcrun", "simctl", "listapps", device_udid])} | /usr/bin/plutil -convert json -o - -",
       log: false
     )
-    if JSON.parse(installed_apps).key?(APP_STORE_APP_IDENTIFIER)
-      sh("xcrun", "simctl", "uninstall", device_udid, APP_STORE_APP_IDENTIFIER)
+    if JSON.parse(installed_apps).key?(app_identifier)
+      sh("xcrun", "simctl", "uninstall", device_udid, app_identifier)
     end
     # Keep independent XCTest sessions without Snapshot rebooting the simulator or
     # querying build settings again just to choose its log filename.

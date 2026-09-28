@@ -785,11 +785,6 @@ export function ensureLocalNpmShim(lane: LaneState) {
   chmodSync(shimPath, 0o755);
 }
 
-function readInstalledPackageManifest(prefixDir: string) {
-  const packageRoot = installedPackageRoot(prefixDir);
-  return readInstalledPackageManifestFromPackageRoot(packageRoot);
-}
-
 function readInstalledPackageManifestFromPackageRoot(packageRoot: string) {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
@@ -800,7 +795,9 @@ function readInstalledPackageManifestFromPackageRoot(packageRoot: string) {
 }
 
 export function readInstalledVersion(prefixDir: string) {
-  const { packageJson } = readInstalledPackageManifest(prefixDir);
+  const { packageJson } = readInstalledPackageManifestFromPackageRoot(
+    installedPackageRoot(prefixDir),
+  );
   return typeof packageJson.version === "string" ? packageJson.version.trim() : "";
 }
 
@@ -811,16 +808,11 @@ export function readInstalledMetadataFromCliPath(cliPath: string, platform = pro
 }
 
 export function readInstalledMetadata(prefixDir: string) {
-  const { packageJson, packageRoot } = readInstalledPackageManifest(prefixDir);
-  return readInstalledMetadataFromManifest(packageJson, packageRoot);
+  return readInstalledMetadataFromPackageRoot(installedPackageRoot(prefixDir));
 }
 
 function readInstalledMetadataFromPackageRoot(packageRoot: string) {
   const { packageJson } = readInstalledPackageManifestFromPackageRoot(packageRoot);
-  return readInstalledMetadataFromManifest(packageJson, packageRoot);
-}
-
-function readInstalledMetadataFromManifest(packageJson: PackageJson, packageRoot: string) {
   const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   if (!existsSync(buildInfoPath)) {
     throw new Error(`Installed build info missing: ${buildInfoPath}`);

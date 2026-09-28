@@ -72,6 +72,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
+import { createLocalChatPreferenceProps } from "./local-chat-preference-props.ts";
 import { renderMcp, renderMcpIntro } from "./mcp.ts";
 import { renderMeetingCapture } from "./meeting-capture.ts";
 import { renderMemoryPage } from "./memory-page.ts";
@@ -1047,14 +1048,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           ? (this.hiddenSessionCatalogLabelsTask.value ?? EMPTY_SESSION_CATALOG_LABELS)
           : EMPTY_SESSION_CATALOG_LABELS,
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
-      chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
-      setChatMessageMaxWidth: (value) => this.applySettings({ chatMessageMaxWidth: value }),
-      chatShowTaskProgress:
-        this.settings.chatShowTaskProgress ?? UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
-      setChatShowTaskProgress: (enabled) => this.applySettings({ chatShowTaskProgress: enabled }),
-      chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
-      setChatCollapseTaskProgress: (enabled) =>
-        this.applySettings({ chatCollapseTaskProgress: enabled }),
+      ...createLocalChatPreferenceProps(this.settings, (patch) => this.applySettings(patch)),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.applySettings({ showAdvancedSettings: enabled }),
       forceShowAdvanced: this.pageId === "advanced",

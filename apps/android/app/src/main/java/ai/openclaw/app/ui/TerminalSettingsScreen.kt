@@ -4,8 +4,6 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -27,7 +25,7 @@ internal fun TerminalSettingsScreen(
   val controlPage by viewModel.gatewayControlPage.collectAsState()
   ControlUiScreenFrame(
     title = nativeString("Terminal"),
-    icon = Icons.Outlined.Terminal,
+    icon = SettingsRoute.Terminal.icon,
     onBack = onBack,
     modifier = Modifier.imePadding(),
   ) {

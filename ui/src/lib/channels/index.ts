@@ -362,7 +362,6 @@ async function mutateChannelPairing<T>(
 type ChannelsLifecycle = {
   whatsappEpoch: number;
   pairingEpoch: number;
-  whatsappOperationSeq: number;
 };
 
 const channelsLifecycles = new WeakMap<ChannelsState, ChannelsLifecycle>();
@@ -372,7 +371,7 @@ function getChannelsLifecycle(state: ChannelsState): ChannelsLifecycle {
   if (existing) {
     return existing;
   }
-  const created = { whatsappEpoch: 0, pairingEpoch: 0, whatsappOperationSeq: 0 };
+  const created = { whatsappEpoch: 0, pairingEpoch: 0 };
   channelsLifecycles.set(state, created);
   return created;
 }
@@ -388,15 +387,10 @@ async function runWhatsAppRequest<T>(
     return false;
   }
   const lifecycle = getChannelsLifecycle(state);
-  const operationSeq = lifecycle.whatsappOperationSeq + 1;
-  lifecycle.whatsappOperationSeq = operationSeq;
   state.whatsappBusy = true;
   const whatsappEpoch = lifecycle.whatsappEpoch;
   const isCurrent = () =>
-    state.connected &&
-    state.client === client &&
-    lifecycle.whatsappEpoch === whatsappEpoch &&
-    lifecycle.whatsappOperationSeq === operationSeq;
+    state.connected && state.client === client && lifecycle.whatsappEpoch === whatsappEpoch;
   try {
     const result = await request(client);
     if (!isCurrent()) {
@@ -560,7 +554,6 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     }
     if (clientChanged || connectionChanged || whatsappAdminAccessChanged) {
       lifecycle.whatsappEpoch += 1;
-      lifecycle.whatsappOperationSeq += 1;
       state.whatsappBusy = false;
       state.whatsappLoginSessionKey = null;
       if (!nextWhatsAppAdminAccess) {
@@ -621,7 +614,6 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       const lifecycle = getChannelsLifecycle(state);
       lifecycle.whatsappEpoch += 1;
       lifecycle.pairingEpoch += 1;
-      lifecycle.whatsappOperationSeq += 1;
       state.pairingRefreshSeq += 1;
       state.pairingBusyRequestId = null;
       state.whatsappBusy = false;

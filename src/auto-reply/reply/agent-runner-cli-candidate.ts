@@ -15,18 +15,18 @@ import {
 } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../agents/media-generation-activity.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelFallbackResultClassification } from "../../agents/model-fallback-attempt.js";
 import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -163,8 +163,18 @@ export async function runCliFallbackCandidate(
         // Placement admission may wait behind an older turn. Snapshot placement,
         // permission, and native resume identity only after this turn owns it.
         const sessionEntry = sessionTarget
-          ? loadSessionEntry({ ...sessionTarget, readConsistency: "latest" })
+          ? await withSessionEntryReadOnlyInWorker(
+              sessionTarget,
+              assertSettlementCurrent,
+              async (read) => {
+                if (!read.ok) {
+                  throw read.error;
+                }
+                return read.value;
+              },
+            )
           : turn.getActiveSessionEntry();
+        assertSettlementCurrent();
         if (
           sessionTarget &&
           (sessionEntry?.sessionId !== sessionTarget.sessionId ||
@@ -187,7 +197,10 @@ export async function runCliFallbackCandidate(
               config: params.runtimeConfig,
             }).authProfileId;
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
-        const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
+        const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(
+          turn.sessionKey,
+          turn.followupRun.run.agentId,
+        );
         let droppedCliSessionReplacement = false;
         const candidateResult = await runCliAgentWithLifecycle({
           runId: params.runId,
@@ -208,6 +221,7 @@ export async function runCliFallbackCandidate(
                       hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
                         turn.sessionKey,
                         mediaTaskIdsBefore,
+                        turn.followupRun.run.agentId,
                       ),
                     })
                   ) {

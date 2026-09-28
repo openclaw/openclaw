@@ -18,7 +18,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-terminal",
@@ -44,46 +44,17 @@ describe("worker placement terminal persistence", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function advanceToActive(
+  function advanceToActive(
     identity: WorkerSessionPlacementIdentity = SESSION,
     environmentId = `environment-${identity.sessionId}`,
     executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   ) {
-    let placement = await store.startDispatch({ ...identity, executionMode });
-    for (const step of [
-      { to: "provisioning", patch: { environmentId } },
-      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-      {
-        to: "starting",
-        patch: {
-          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-          remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
-        },
-      },
-    ] as const) {
-      placement = store.transition({
-        sessionId: identity.sessionId,
-        from: placement.state,
-        expectedGeneration: placement.generation,
-        ...step,
-      });
-    }
-    seedAttachedPlacementEnvironment(database, {
-      environmentId,
-      sessionId: identity.sessionId,
-      ownerEpoch: 7,
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
-    });
-    if (placement.state !== "active") {
-      throw new Error("expected active worker placement");
-    }
-    return placement;
+    return advancePlacementFixtureToActive(
+      store,
+      database,
+      { ...identity, executionMode },
+      { environmentId, remoteWorkspaceDir: `/workspace/${identity.sessionId}` },
+    );
   }
 
   async function pendingResult(identity = SESSION) {

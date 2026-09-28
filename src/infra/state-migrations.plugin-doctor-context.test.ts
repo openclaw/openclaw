@@ -297,4 +297,46 @@ describe("plugin doctor session identity evidence", () => {
       },
     );
   });
+
+  it("revokes retained ingress purge after Doctor repair authority expires", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-doctor-expired-purge", applyEnv: false },
+      async ({ env, stateDir }) => {
+        let active = true;
+        const context = createPluginDoctorStateMigrationContext({
+          pluginId: "migration-fixture",
+          env,
+          config: {},
+          channelIngress: {
+            channelIds: ["migration-fixture"],
+            stateDir,
+            mutation: {
+              assertCurrent() {
+                if (!active) {
+                  throw new Error("repair owner expired");
+                }
+              },
+            },
+          },
+        });
+        const ingress = context.channelIngressQueues?.[0];
+        const queue = ingress?.openChannelIngressQueue?.<string>();
+        const inspection = ingress?.openChannelIngressQueueForInspection<string>();
+        const purge = queue?.purge?.bind(queue);
+        if (!queue || !purge || !inspection) {
+          throw new Error("Doctor repair did not provide ingress purge");
+        }
+
+        await queue.enqueue("authorized", "inside repair");
+        await expect(purge()).resolves.toBe(1);
+        await expect(queue.listPending()).resolves.toEqual([]);
+
+        await queue.enqueue("retained", "must survive expired repair");
+        active = false;
+
+        await expect(Promise.resolve().then(() => purge())).rejects.toThrow("repair owner expired");
+        expect((await inspection.listPending()).map((entry) => entry.id)).toEqual(["retained"]);
+      },
+    );
+  });
 });

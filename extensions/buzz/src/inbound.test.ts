@@ -103,6 +103,7 @@ function createBus(): BuzzBus {
       channelIds: [ROOM_ID],
     }),
     refreshDirectory: vi.fn(async () => {}),
+    isBotOwnedThread: vi.fn(async () => false),
     sendText: vi.fn(async () => "reply-event-1"),
     sendTyping: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
@@ -540,31 +541,45 @@ describe("handleBuzzInbound", () => {
   });
 
   it.each([
-    ["membership", true],
-    ["shutdown", false],
+    ["membership", true, "admission"],
+    ["shutdown", false, "admission"],
+    ["membership", false, "thread ownership"],
+    ["shutdown", false, "thread ownership"],
   ] as const)(
-    "rechecks %s after asynchronous ingress admission (mentioned: %s)",
-    async (change, mentioned) => {
+    "rechecks %s (mentioned: %s) after asynchronous %s",
+    async (change, mentioned, boundary) => {
       const runtime = createPluginRuntimeMock();
       setBuzzRuntime(runtime);
       const resolveIngress = runtime.channel.inbound.ingress.resolveStable;
       const abort = new AbortController();
       let currentMember = true;
-      let releaseAdmission: () => void = () => {};
-      const admissionGate = new Promise<void>((resolve) => {
-        releaseAdmission = resolve;
+      const waiting = createDeferred<void>();
+      const admissionGate = createDeferred<void>();
+      const bus = createBus();
+      vi.mocked(bus.isBotOwnedThread).mockImplementationOnce(async () => {
+        waiting.resolve();
+        await admissionGate.promise;
+        return true;
       });
       const resolveStable = vi.spyOn(runtime.channel.inbound.ingress, "resolveStable");
       resolveStable.mockImplementationOnce(async (params) => {
         const access = await resolveIngress(params);
-        await admissionGate;
+        if (boundary === "admission") {
+          waiting.resolve();
+          await admissionGate.promise;
+        }
         return access;
       });
       const params = {
-        account: createAccount(),
+        account: createAccount({
+          groups: { [ROOM_ID]: { requireMentionInBotThreads: false } },
+        }),
         cfg: {} satisfies OpenClawConfig,
-        bus: createBus(),
-        message: createMessage({ mentionedPubkeys: mentioned ? [BOT_PUBLIC_KEY] : [] }),
+        bus,
+        message: createMessage({
+          mentionedPubkeys: mentioned ? [BOT_PUBLIC_KEY] : [],
+          threadId: boundary === "thread ownership" ? "thread-root" : undefined,
+        }),
         signal: abort.signal,
         assertCurrent: () => {
           abort.signal.throwIfAborted();
@@ -574,13 +589,13 @@ describe("handleBuzzInbound", () => {
         },
       };
       const inbound = handleBuzzInbound(params);
-      await vi.waitFor(() => expect(resolveStable).toHaveBeenCalledOnce());
+      await waiting.promise;
       if (change === "membership") {
         currentMember = false;
       } else {
         abort.abort(new Error("Buzz bus closed"));
       }
-      releaseAdmission();
+      admissionGate.resolve();
 
       await expect(inbound).rejects.toThrow(
         change === "membership" ? "no longer a room member" : "Buzz bus closed",

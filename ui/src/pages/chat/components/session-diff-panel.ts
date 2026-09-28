@@ -433,7 +433,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         ${t(
           result.unavailableReason === "workspace_stopped"
             ? "chat.sessionDiff.workspaceStoppedFile"
-            : "chat.sessionDiff.tooLarge",
+            : "chat.sessionDiff.previewUnavailable",
         )}
       </div>`;
     }
@@ -613,7 +613,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
           result.unavailableReason === "unknown_commit"
             ? html`<div class="session-diff__note">${t("chat.sessionDiff.unknownCommit")}</div>`
             : result.files.length === 0
-              ? result.unavailableReason === "workspace_stopped"
+              ? result.unavailableReason === "workspace_stopped" || result.truncated === true
                 ? nothing
                 : html`<div class="session-diff__note">${t("chat.sessionDiff.empty")}</div>`
               : views.map((view) => this.renderFile(view, result))

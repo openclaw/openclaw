@@ -168,6 +168,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
           onAgentEvent,
         },
         resolvedSessionKey: "agent:main:transport-drop",
+        fallbackConfigured: scenario.fallbackConfigured ?? false,
+        suspendForFailure: vi.fn(),
         startedAtMs: Date.now(),
         laneController: { throwIfAborted: vi.fn() },
       },
@@ -176,6 +178,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         modelId,
         model: { id: modelId },
         genericCompactionRecoveryAllowed: scenario.compactionEnabled ?? false,
+        attemptedThinking: new Set(["off"]),
+        maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
         snapshot: () => ({
           thinkLevel: "off",
           agentHarness: { id: "openclaw" },

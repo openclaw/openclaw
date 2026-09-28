@@ -135,8 +135,8 @@ describe("WhatsApp approval reactions", () => {
           remoteJid: "15551230000@s.whatsapp.net",
           messageId: "msg-invalid-kind",
           approvalId: "exec-invalid-kind",
-          // @ts-expect-error Runtime callers must not register missing or unsupported kinds.
-          approvalKind,
+          // Runtime callers must not register missing or unsupported kinds.
+          approvalKind: approvalKind as unknown as "exec",
           allowedDecisions: ["allow-once"],
         }),
       ).toBeNull();

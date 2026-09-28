@@ -17,22 +17,6 @@ const cfg: OpenClawConfig = {
 const target = "dm-chat-handoff";
 const mediaUrl = "https://example.com/photo.jpg";
 
-function requireMessageMediaSend() {
-  const send = zaloPlugin.message?.send?.media;
-  if (!send) {
-    throw new Error("Expected Zalo message adapter media sender");
-  }
-  return send;
-}
-
-function requireLegacyMediaSend() {
-  const send = zaloPlugin.outbound?.sendMedia;
-  if (!send) {
-    throw new Error("Expected Zalo legacy media sender");
-  }
-  return send;
-}
-
 function requirePayloadSend() {
   const send = zaloPlugin.outbound?.sendPayload;
   if (!send) {
@@ -55,28 +39,6 @@ afterEach(() => {
 });
 
 it.each([
-  {
-    route: "message adapter",
-    send: (assertDirectAdapterHandoff: () => void) =>
-      requireMessageMediaSend()({
-        cfg,
-        to: target,
-        text: "caption",
-        mediaUrl,
-        assertDirectAdapterHandoff,
-      }),
-  },
-  {
-    route: "legacy adapter",
-    send: (assertDirectAdapterHandoff: () => void) =>
-      requireLegacyMediaSend()({
-        cfg,
-        to: target,
-        text: "caption",
-        mediaUrl,
-        assertDirectAdapterHandoff,
-      }),
-  },
   {
     route: "payload adapter",
     send: (assertDirectAdapterHandoff: () => void) =>
@@ -101,17 +63,11 @@ it.each([
       }),
   },
 ])("rejects revoked $route handoffs after photo preparation", async ({ send }) => {
-  let markLookupStarted: (() => void) | undefined;
-  let finishLookup: (() => void) | undefined;
-  const lookupStarted = new Promise<void>((resolve) => {
-    markLookupStarted = resolve;
-  });
-  const lookupFinished = new Promise<void>((resolve) => {
-    finishLookup = resolve;
-  });
+  const lookupStarted = Promise.withResolvers<void>();
+  const lookupFinished = Promise.withResolvers<void>();
   resolvePinnedHostnameWithPolicyMock.mockImplementationOnce(async () => {
-    markLookupStarted?.();
-    await lookupFinished;
+    lookupStarted.resolve();
+    await lookupFinished.promise;
     return {
       hostname: "example.com",
       addresses: ["93.184.216.34"],
@@ -130,9 +86,9 @@ it.each([
   });
 
   const result = send(assertDirectAdapterHandoff);
-  await lookupStarted;
+  await lookupStarted.promise;
   current = false;
-  finishLookup?.();
+  lookupFinished.resolve();
 
   await expect(result).rejects.toBe(authorityError);
   expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();

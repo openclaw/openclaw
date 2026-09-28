@@ -53,10 +53,10 @@ export function buildCaptureTimelineModel(params: {
       eventsForLane[0]?.ts ?? maxTs,
     );
     const laneSpanMs = Math.max(1, laneMaxTs - laneMinTs);
+    const spanStart = state.captureTimelineSparklineMode === "lane-relative" ? laneMinTs : minTs;
+    const spanMs =
+      state.captureTimelineSparklineMode === "lane-relative" ? laneSpanMs : totalSpanMs;
     for (const event of eventsForLane) {
-      const spanStart = state.captureTimelineSparklineMode === "lane-relative" ? laneMinTs : minTs;
-      const spanMs =
-        state.captureTimelineSparklineMode === "lane-relative" ? laneSpanMs : totalSpanMs;
       const rawIndex = spanMs <= 0 ? 0 : Math.floor(((event.ts - spanStart) / spanMs) * binCount);
       const index = Math.max(0, Math.min(binCount - 1, rawIndex));
       bins[index] = (bins[index] ?? 0) + 1;
@@ -66,14 +66,8 @@ export function buildCaptureTimelineModel(params: {
       ${bins
         .map((count, index) => {
           const height = Math.max(12, Math.round((count / maxBin) * 100));
-          const spanStartTs =
-            state.captureTimelineSparklineMode === "lane-relative"
-              ? laneMinTs + (laneSpanMs * index) / binCount
-              : minTs + (totalSpanMs * index) / binCount;
-          const spanEndTs =
-            state.captureTimelineSparklineMode === "lane-relative"
-              ? laneMinTs + (laneSpanMs * (index + 1)) / binCount
-              : minTs + (totalSpanMs * (index + 1)) / binCount;
+          const spanStartTs = spanStart + (spanMs * index) / binCount;
+          const spanEndTs = spanStart + (spanMs * (index + 1)) / binCount;
           const startPct = ((spanStartTs - minTs) / Math.max(1, totalSpanMs)) * 100;
           const endPct = ((spanEndTs - minTs) / Math.max(1, totalSpanMs)) * 100;
           const binLabel = `${laneId} · ${formatTime(spanStartTs)} → ${formatTime(spanEndTs)} · ${count} events`;

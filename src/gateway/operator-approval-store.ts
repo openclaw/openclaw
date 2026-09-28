@@ -185,7 +185,6 @@ function execute<Key extends Operation>(
     {
       // Native guards run only after FIFO and outside worker-held transactions.
       assertCurrent: native ? undefined : assertOperationCurrent,
-      requireStateLifecycle: true,
       ...(native ? {} : { createAdmission }),
     },
     assertOperationCurrent,

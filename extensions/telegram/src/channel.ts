@@ -235,7 +235,7 @@ const telegramChannelOutbound = createTelegramOutboundAdapter({
       ...(threadId !== undefined ? { messageThreadId: threadId } : {}),
     }).catch(() => {});
   },
-  shouldTreatDeliveredTextAsVisible: shouldTreatTelegramDeliveredTextAsVisible,
+  shouldTreatDeliveredTextAsVisible: ({ kind }) => kind !== "final",
   targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
   preferFinalAssistantVisibleText: true,
 });
@@ -299,12 +299,6 @@ function matchTelegramAcpConversation(params: {
     parentConversationId: incoming.chatId,
     matchPriority: 2,
   };
-}
-
-function shouldTreatTelegramDeliveredTextAsVisible(params: {
-  kind: "tool" | "block" | "final";
-}): boolean {
-  return params.kind !== "final";
 }
 
 function targetsMatchTelegramReplySuppression(params: {
@@ -436,15 +430,6 @@ function resolveTelegramDeliveryTarget(params: {
   };
 }
 
-function resolveTelegramRouteTarget(raw: string) {
-  const target = parseTelegramTarget(raw);
-  return {
-    to: target.chatId,
-    threadId: target.messageThreadId,
-    chatType: target.chatType === "unknown" ? undefined : target.chatType,
-  };
-}
-
 function shouldStripTelegramThreadFromAnnounceOrigin(params: {
   requester: {
     channel?: string;
@@ -468,7 +453,7 @@ function shouldStripTelegramThreadFromAnnounceOrigin(params: {
   if (!requesterChannel && !requesterTo.startsWith("telegram:")) {
     return true;
   }
-  const requesterTarget = resolveTelegramRouteTarget(requesterTo);
+  const requesterTarget = parseTelegramTarget(requesterTo);
   if (requesterTarget.chatType !== "group") {
     return true;
   }
@@ -476,8 +461,8 @@ function shouldStripTelegramThreadFromAnnounceOrigin(params: {
   if (!entryTo) {
     return false;
   }
-  const entryTarget = resolveTelegramRouteTarget(entryTo);
-  return entryTarget.to !== requesterTarget.to;
+  const entryTarget = parseTelegramTarget(entryTo);
+  return entryTarget.chatId !== requesterTarget.chatId;
 }
 
 function resolveTelegramOutboundSessionRoute(params: {
@@ -773,7 +758,10 @@ export const telegramPlugin = createChatChannelPlugin({
       // fast path cannot drift from plugin behavior (pinned by contract test).
       resolveSessionConversation: resolveTelegramSessionConversation,
       resolveSessionTarget: resolveTelegramSessionTarget,
-      inferTargetChatType: ({ to }) => resolveTelegramRouteTarget(to).chatType,
+      inferTargetChatType: ({ to }) => {
+        const { chatType } = parseTelegramTarget(to);
+        return chatType === "unknown" ? undefined : chatType;
+      },
       preserveHeartbeatThreadIdForGroupRoute: true,
       formatTargetDisplay: ({ target, display, kind }) => {
         const formatted = display?.trim();
@@ -808,7 +796,8 @@ export const telegramPlugin = createChatChannelPlugin({
         const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
         const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
         if (previousToken !== nextToken) {
-          await clearTelegramAccountRuntimeCache(accountId);
+          // Startup needs the previous identity to reset that bot's ingress before replacement.
+          await deleteStartupBotInfoCache(accountId);
         }
       },
       onAccountRemoved: async ({ accountId }) => {

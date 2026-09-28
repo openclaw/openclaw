@@ -112,7 +112,12 @@ const {
         queueSize: 0,
         pendingReplies: 0,
         embeddedRuns: 0,
-        activeTasks: 0,
+        cronRuns: 0,
+        backgroundExecSessions: 0,
+        rootRequests: 0,
+        agentRuns: 0,
+        acpRuns: 0,
+        mediaRuns: 0,
         totalActive: 0,
       },
       blockers: [],
@@ -151,14 +156,6 @@ function enqueueSystemEventWithReceipt(text: string, opts?: unknown) {
   return systemEventReceiptRemoveMock;
 }
 
-function requestHeartbeat(...args: unknown[]) {
-  return requestHeartbeatMock(...args);
-}
-
-function requestHeartbeatAndWait(...args: unknown[]) {
-  return requestHeartbeatAndWaitMock(...args);
-}
-
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
   enqueueSystemEventWithReceipt,
@@ -170,8 +167,8 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
   );
   return {
     ...actual,
-    requestHeartbeat,
-    requestHeartbeatAndWait,
+    requestHeartbeat: requestHeartbeatMock,
+    requestHeartbeatAndWait: requestHeartbeatAndWaitMock,
   };
 });
 
@@ -811,12 +808,12 @@ describe("buildGatewayCronService", () => {
   });
 
   it("converges Workshop after a heartbeat inventory failure and cancels its retry on stop", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const clock = createGatewaySchedulerClock(Date.now());
     const cfg = {
       ...createCronConfig("server-cron-monitor-partial-failure"),
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } satisfies OpenClawConfig;
-    const state = loadCronService(cfg);
+    const state = loadCronService(cfg, { scheduler: createTestGatewayScheduler(clock.clock) });
     const listJobs = state.cron.list.bind(state.cron);
     const inventory = vi
       .spyOn(state.cron, "list")
@@ -835,11 +832,10 @@ describe("buildGatewayCronService", () => {
       );
       state.cron.stop();
       const callsBeforeStop = inventory.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(30_000);
+      await clock.advanceBy(30_000);
       expect(inventory).toHaveBeenCalledTimes(callsBeforeStop);
     } finally {
       state.cron.stop();
-      vi.useRealTimers();
     }
   });
 

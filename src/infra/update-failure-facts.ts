@@ -1,5 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -209,14 +210,8 @@ export function parseConfigFailureFacts(
   stdout: string,
   env: NodeJS.ProcessEnv,
 ): UpdateFailureFact[] {
-  let report: unknown;
-  try {
-    report = JSON.parse(stdout);
-  } catch {
-    // A failed command may exit before it writes its configuration report.
-    return [];
-  }
-  if (!isRecord(report) || !Array.isArray(report.issues)) {
+  const report = safeParseJsonRecord(stdout);
+  if (!Array.isArray(report?.issues)) {
     return [];
   }
   return normalizeUpdateFailureFacts(

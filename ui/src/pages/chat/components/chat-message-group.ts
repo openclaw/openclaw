@@ -256,7 +256,7 @@ export function renderActivityGroup(
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const groupSummaryLabel = runningOperation
     ? `${runningOperation.title}…`
-    : summarizeToolGroup(visibleActivity, { includeFailureCount: activityExpanded });
+    : summarizeToolGroup(visibleActivity, { includeInlineOutcomes: activityExpanded });
   const toolCardOverrides = new Map<ToolCard, unknown>();
   function renderOperation(group: ToolCallGroup<ToolCard>): unknown {
     const { card, children } = group;

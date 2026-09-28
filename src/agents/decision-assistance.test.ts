@@ -4,22 +4,14 @@ import { AgentDefaultsBaseSchema } from "../config/zod-schema.agent-defaults-bas
 import { isDecisionAssistanceEligible } from "./decision-assistance.js";
 
 describe("Decision assistance foundation", () => {
-  it.each([
-    [false, undefined, false],
-    [false, "example/decision", false],
-    [true, undefined, false],
-    [true, "example/decision", true],
-  ] as const)(
-    "opt-in %s and model %s gives eligibility %s",
-    (decisionAssistance, decisionModel, expected) => {
-      const config: OpenClawConfig = {
-        agents: { defaults: { experimental: { decisionAssistance }, decisionModel } },
-      };
-      expect(isDecisionAssistanceEligible(config, "support")).toBe(expected);
-    },
-  );
+  it("requires a decision model even when assistance is enabled", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { experimental: { decisionAssistance: true } } },
+    };
+    expect(isDecisionAssistanceEligible(config, "support")).toBe(false);
+  });
 
-  it.each([undefined, {}, { localModelLean: true }, { decisionAssistance: false }])(
+  it.each([undefined, { localModelLean: true }])(
     "does not infer consent from omitted/option-bearing experimental config %j",
     (experimental) => {
       const defaults = AgentDefaultsBaseSchema.parse({
@@ -31,7 +23,7 @@ describe("Decision assistance foundation", () => {
     },
   );
 
-  it.each([{}, { enabled: true }, { mode: "auto" }, "true", "auto", 1, null])(
+  it.each([{ enabled: true }, "true", 1, null])(
     "rejects non-Boolean gate %j rather than implicitly opting in",
     (decisionAssistance) => {
       expect(

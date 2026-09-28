@@ -25,7 +25,9 @@ const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
 
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: backendMocks.resolveRuntimeModelAttempt,
-  runEmbeddedSettledTurnFinalizationWithBackend: backendMocks.runSettledFinalization,
+}));
+vi.mock("../../harness/selection.js", () => ({
+  runAgentHarnessSettledTurnFinalization: backendMocks.runSettledFinalization,
 }));
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
@@ -75,44 +77,37 @@ describe("prepareTerminalWithSettledTurnFinalization after an idle prompt timeou
     admission.close();
   });
 
-  it("keeps the timeout authoritative when finalization stays empty", async () => {
-    const attempt = settledIdleTimeoutAttempt();
-    const emptyAssistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "" }],
-    });
-    backendMocks.runSettledFinalization.mockResolvedValue({
-      outcome: "empty",
-      result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
-    });
+  it.each(["empty", "failed"])(
+    "keeps the timeout authoritative after %s finalization",
+    async (outcome) => {
+      const attempt = settledIdleTimeoutAttempt();
+      if (outcome === "failed") {
+        backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("finalizer failed"));
+      } else {
+        const emptyAssistant = buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "" }],
+        });
+        backendMocks.runSettledFinalization.mockResolvedValue({
+          outcome: "empty",
+          result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
+        });
+      }
 
-    const result = await prepareTerminalWithSettledTurnFinalization(
-      createSettledFinalizationTestInput(attempt, admittedRunContext),
-    );
+      const result = await prepareTerminalWithSettledTurnFinalization(
+        createSettledFinalizationTestInput(attempt, admittedRunContext),
+      );
 
-    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
-    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
-    expect(result.finalizationOutcome).toBe("failed");
-    expect(result.attempt).toBe(attempt);
-    expect(isEmbeddedRunTerminalTimeout(result.terminalState.outcome)).toBe(true);
-    expect(result.prepared.timedOutDuringPrompt).toBe(true);
-    expect(result.prepared.payloadsWithToolMedia ?? []).not.toContainEqual(
-      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
-    );
-  });
-
-  it("keeps the timeout authoritative when finalization fails", async () => {
-    const attempt = settledIdleTimeoutAttempt();
-    backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("finalizer failed"));
-
-    const result = await prepareTerminalWithSettledTurnFinalization(
-      createSettledFinalizationTestInput(attempt, admittedRunContext),
-    );
-
-    expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
-    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
-    expect(result.finalizationOutcome).toBe("failed");
-    expect(result.attempt).toBe(attempt);
-    expect(isEmbeddedRunTerminalTimeout(result.terminalState.outcome)).toBe(true);
-    expect(result.prepared.timedOutDuringPrompt).toBe(true);
-  });
+      expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(
+        outcome === "empty" ? 2 : 1,
+      );
+      expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
+      expect(result.finalizationOutcome).toBe("failed");
+      expect(result.attempt).toBe(attempt);
+      expect(isEmbeddedRunTerminalTimeout(result.terminalState.outcome)).toBe(true);
+      expect(result.prepared.timedOutDuringPrompt).toBe(true);
+      expect(result.prepared.payloadsWithToolMedia ?? []).not.toContainEqual(
+        expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+      );
+    },
+  );
 });

@@ -501,16 +501,14 @@ class GatewayDiscovery(
 
   private fun preferredDnsNetwork(): android.net.Network? {
     val cm = connectivity ?: return null
-
     // Prefer VPN (Tailscale) when present; otherwise use the active network.
-    trackedNetworks(cm)
-      .firstOrNull { n ->
-        val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-      }?.let { return it }
-
-    return cm.activeNetwork
+    return preferredVpnNetwork(cm) ?: cm.activeNetwork
   }
+
+  private fun preferredVpnNetwork(cm: ConnectivityManager): Network? =
+    trackedNetworks(cm).firstOrNull { network ->
+      cm.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+    }
 
   private fun trackedNetworks(cm: ConnectivityManager): List<Network> =
     buildList {
@@ -524,11 +522,7 @@ class GatewayDiscovery(
     val candidateNetworks =
       buildList {
         // Put VPN DNS first so Tailscale split-horizon names win over public DNS.
-        trackedNetworks(cm)
-          .firstOrNull { n ->
-            val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-          }?.let(::add)
+        preferredVpnNetwork(cm)?.let(::add)
         cm.activeNetwork?.let(::add)
       }.distinct()
 

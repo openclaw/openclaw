@@ -8,10 +8,10 @@ import {
   formatMatrixMessageText,
 } from "../media-text.js";
 import { formatPollAsText, isPollStartType, parsePollStartContent } from "../poll-types.js";
+import { RelationType } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { isMatrixAudioContent } from "./preflight-audio.js";
 import type { RoomMessageEventContent, MatrixRawEvent } from "./types.js";
-import { RelationType } from "./types.js";
 
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
