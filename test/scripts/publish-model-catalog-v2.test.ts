@@ -157,6 +157,59 @@ function pairFixture(existing = true) {
 }
 
 describe("publish model catalog v2", () => {
+  it.each([true, false])(
+    "publishes through both output symlinks and keeps the links (existing=%s)",
+    async (existing) => {
+      const fixture = pairFixture(existing);
+      const targets = fixture.outputs.map((file, index) => {
+        const target = path.join(`${path.dirname(file)}-target`, "catalog.json");
+        fs.mkdirSync(path.dirname(target));
+        if (existing) {
+          fs.renameSync(file, target);
+        }
+        // A symlink/.. parent must resolve on disk, not collapse lexically.
+        if (index === 0) {
+          fs.mkdirSync(path.join(path.dirname(target), "nested"));
+          fs.symlinkSync(path.join(path.dirname(target), "nested"), `${file}.parent`, "dir");
+        }
+        const link = index === 0 ? "catalog.json.parent/../catalog.json" : `${file}.link`;
+        if (index === 1) {
+          fs.symlinkSync(target, link);
+        }
+        fs.symlinkSync(link, file);
+        return { file, target, link };
+      });
+      await expect(fixture.run()).resolves.toMatchObject({ wrote: true });
+      targets.forEach(({ file, target, link }, index) => {
+        expect(fs.lstatSync(file).isSymbolicLink()).toBe(true);
+        expect(fs.readlinkSync(file)).toBe(link);
+        expect(JSON.parse(fs.readFileSync(target, "utf8")).schemaVersion).toBe(index + 1);
+        expect(fs.readFileSync(file)).toEqual(fs.readFileSync(target));
+        expect(
+          fs.readdirSync(path.dirname(target)).filter((name) => name.startsWith(".catalog-pair-")),
+        ).toEqual([]);
+      });
+    },
+  );
+
+  it.each([true, false])("rejects two links to one target (existing=%s)", async (existing) => {
+    const fixture = pairFixture(false);
+    const target = path.join(path.dirname(fixture.outputs[0]), "target.json");
+    if (existing) {
+      fs.writeFileSync(target, "original");
+    }
+    fixture.outputs.forEach((file) => fs.symlinkSync(target, file));
+    await expect(fixture.run()).rejects.toThrow("must name different files");
+    expect(fs.existsSync(target)).toBe(existing);
+    if (existing) {
+      expect(fs.readFileSync(target, "utf8")).toBe("original");
+    }
+    fixture.outputs.forEach((file, index) => {
+      expect(fs.readlinkSync(file)).toBe(target);
+      expect(fixture.recovery(index)).toEqual([]);
+    });
+  });
+
   it("rejects a real second-parent failure before replacing v1", async () => {
     const fixture = pairFixture();
     fs.unlinkSync(fixture.outputs[1]);
@@ -329,7 +382,7 @@ describe("publish model catalog v2", () => {
         throw new Error("fixture recovery is missing");
       }
       const target = entry === "directory" ? dir : path.join(dir, "next.json");
-      const previous = lstat(target);
+      const previous = lstat(target, { bigint: true });
       fs.renameSync(target, `${target}.original`);
       if (entry === "directory") {
         fs.mkdirSync(target);
@@ -347,8 +400,8 @@ describe("publish model catalog v2", () => {
           // Only cleanup sees Windows' unknown path-stat identity; publication uses the host.
           vi.spyOn(process, "platform", "get").mockReturnValue("win32");
           return Object.assign(current, {
-            dev: identity === "dev" ? 0 : previous.dev,
-            ino: identity === "ino" ? 0 : previous.ino + (identity === "changed" ? 1 : 0),
+            dev: identity === "dev" ? 0n : previous.dev,
+            ino: identity === "ino" ? 0n : previous.ino + (identity === "changed" ? 1n : 0n),
           });
         }
         return current;
@@ -361,6 +414,71 @@ describe("publish model catalog v2", () => {
     });
     expect(fixture.warnings.mock.calls.flat().join("")).toContain(
       "pair published; recovery cleanup failed; retained",
+    );
+  });
+
+  it.each([
+    ["directory", "dev"],
+    ["directory", "ino"],
+    ["file", "dev"],
+    ["file", "ino"],
+  ] as const)("retains recovery %s when %s differs above 2^53", async (entry, field) => {
+    const fixture = pairFixture();
+    const lstat = fs.lstatSync;
+    const fstat = fs.fstatSync;
+    const open = fs.openSync;
+    const rename = fs.promises.rename;
+    const descriptors = new Set<number>();
+    let published = false;
+    const original = 2n ** 53n;
+    const replacement = original + 1n;
+    expect(Number(original)).toBe(Number(replacement));
+    const recoveryEntry = (file: fs.PathLike) => {
+      const name = path.basename(String(file));
+      return entry === "directory" ? name.startsWith(".catalog-pair-") : name === "next.json";
+    };
+    vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+      const fd = open(file, flags, mode);
+      descriptors.delete(fd);
+      if (recoveryEntry(file)) {
+        descriptors.add(fd);
+      }
+      return fd;
+    });
+    vi.spyOn(fs, "fstatSync").mockImplementation((fd, options) => {
+      const stat = fstat(fd, options);
+      return descriptors.has(fd)
+        ? Object.assign(stat, { [field]: options?.bigint ? original : Number(original) })
+        : stat;
+    });
+    vi.spyOn(fs, "lstatSync").mockImplementation((file, options) => {
+      const stat = lstat(file, options);
+      const identity = published ? replacement : original;
+      return stat && recoveryEntry(file)
+        ? Object.assign(stat, { [field]: options?.bigint ? identity : Number(identity) })
+        : stat;
+    });
+    vi.spyOn(fs.promises, "rename").mockImplementation(async (source, destination) => {
+      await rename(source, destination);
+      if (destination === fixture.outputs[1]) {
+        published = true;
+      }
+    });
+    const unlink = vi.spyOn(fs, "unlinkSync");
+    await expect(fixture.run()).resolves.toMatchObject({ wrote: true });
+    expect(unlink).not.toHaveBeenCalled();
+    fixture.outputs.forEach((file, index) => {
+      expect(JSON.parse(fs.readFileSync(file, "utf8")).schemaVersion).toBe(index + 1);
+      const [dir] = fixture.recovery(index);
+      if (!dir) {
+        throw new Error("fixture recovery is missing");
+      }
+      expect(fs.readFileSync(path.join(dir, "previous.json"), "utf8")).toBe(
+        `previous v${index + 1}`,
+      );
+    });
+    expect(fixture.warnings.mock.calls.flat().join("")).toContain(
+      `recovery ${entry} identity is unknown or changed`,
     );
   });
 

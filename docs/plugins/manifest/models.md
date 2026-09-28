@@ -131,9 +131,12 @@ v2, never v1. Invalid manifest lists are omitted; invalid remote v2 lists are re
 
 The catalog generator opts into local paired output with `--out <v1-file> --out-v2 <v2-file>`.
 It validates both bundles and prepares candidate bytes and previous-file backups
-before replacing either output. Paired destinations must be distinct regular files
-or absent; output-directory aliases are resolved before preparation. The v1-only
-writer is unchanged.
+before replacing either output. Paired destinations must resolve to distinct regular
+files or absent targets. Output symlinks and directory aliases are resolved before
+preparation; publication replaces each target in its real parent and leaves output
+symlinks intact. Dangling output symlinks create their targets if the target parents
+exist. Missing target parents and symlink cycles fail before either output is replaced.
+The v1-only writer is unchanged.
 
 Each file is replaced separately: this is **not** a multi-file atomic transaction.
 Use a single publisher and do not serve or deploy the pair until the command succeeds.
