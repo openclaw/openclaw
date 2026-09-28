@@ -22,7 +22,7 @@ it("combines cross-turn changes in a fixed window while authoritative reads stay
     expect(broadcast).not.toHaveBeenCalled();
     upsertPresence("coalesced-person", { watchedSessions: ["agent:main:middle"] });
     publisher.publish();
-    vi.advanceTimersByTime(39);
+    vi.advanceTimersByTime(189);
     expect(broadcast).not.toHaveBeenCalled();
     upsertPresence("coalesced-person", { watchedSessions: ["agent:main:latest"] });
     publisher.publish();
@@ -60,9 +60,9 @@ it("combines cross-turn changes in a fixed window while authoritative reads stay
     expect(broadcast).toHaveBeenCalledTimes(4);
     broadcast.mockImplementationOnce(() => publisher.publish());
     publisher.publish();
-    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(200);
     expect(broadcast).toHaveBeenCalledTimes(5);
-    vi.advanceTimersByTime(49);
+    vi.advanceTimersByTime(199);
     expect(broadcast).toHaveBeenCalledTimes(5);
     vi.advanceTimersByTime(1);
     expect(broadcast).toHaveBeenCalledTimes(6);
