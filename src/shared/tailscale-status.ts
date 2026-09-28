@@ -1,5 +1,8 @@
 // Tailscale status helpers parse and validate status payloads from Tailscale.
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 
 export type TailscaleStatusCommandResult = {
@@ -45,17 +48,112 @@ const TailscaleServeConfigSchema = z.object({
   AllowFunnel: z.record(z.string(), z.boolean()).optional(),
 });
 
-function parsePossiblyNoisyStatus(raw: string): z.infer<typeof TailscaleStatusSchema> | null {
+const TailscaleServeObservationConfigSchema = TailscaleServeConfigSchema.extend({
+  Services: z.record(z.string(), TailscaleServeConfigSchema).optional(),
+});
+
+const TailscaleServeStatusSchema = TailscaleServeObservationConfigSchema.extend({
+  Foreground: z.record(z.string(), TailscaleServeObservationConfigSchema).optional(),
+});
+
+export type TailscaleServeRouteObservation = {
+  management: "background" | "foreground";
+  session?: string;
+  host: string;
+  port: number;
+  path: string;
+  target: string | null;
+  funnel: boolean;
+};
+
+type TailscaleServeRouteInspection =
+  | { status: "ok"; routes: TailscaleServeRouteObservation[] }
+  | { status: "unavailable" }
+  | { status: "invalid" };
+
+function sanitizeTailscaleRouteText(value: string): string {
+  return truncateUtf16Safe(sanitizeTerminalText(value), 512);
+}
+
+function sanitizeTailscaleRouteTarget(value: string | undefined): string | null {
+  const sanitized = value ? sanitizeTailscaleRouteText(value) : "";
+  return sanitized ? redactSensitiveUrlLikeString(sanitized) : null;
+}
+
+function parsePossiblyNoisyStatus<T>(raw: string, schema: z.ZodType<T>): T | null {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start === -1 || end <= start) {
     return null;
   }
-  return safeParseJsonWithSchema(TailscaleStatusSchema, raw.slice(start, end + 1));
+  return safeParseJsonWithSchema(schema, raw.slice(start, end + 1));
+}
+
+/** Parses all observable HTTPS Serve routes without making an ownership decision. */
+function extractTailscaleServeRouteObservations(
+  raw: string,
+): TailscaleServeRouteObservation[] | null {
+  const status = parsePossiblyNoisyStatus(raw, TailscaleServeStatusSchema);
+  if (!status) {
+    return null;
+  }
+
+  const configs: Array<{
+    management: TailscaleServeRouteObservation["management"];
+    session?: string;
+    config: z.infer<typeof TailscaleServeObservationConfigSchema>;
+  }> = [{ management: "background", config: status }];
+  for (const [session, config] of Object.entries(status.Foreground ?? {})) {
+    configs.push({
+      management: "foreground",
+      session: sanitizeTailscaleRouteText(session),
+      config,
+    });
+  }
+
+  for (const { config, management, session } of configs.slice()) {
+    for (const service of Object.values(config.Services ?? {})) {
+      configs.push({ management, session, config: service });
+    }
+  }
+  const routes: TailscaleServeRouteObservation[] = [];
+  for (const entry of configs) {
+    for (const [hostPort, server] of Object.entries(entry.config.Web ?? {})) {
+      let endpoint: URL;
+      try {
+        endpoint = new URL(`https://${hostPort}`);
+      } catch {
+        continue;
+      }
+      const port = Number.parseInt(endpoint.port || "443", 10);
+      if (entry.config.TCP?.[String(port)]?.HTTPS !== true) {
+        continue;
+      }
+      for (const [path, handler] of Object.entries(server.Handlers)) {
+        routes.push({
+          management: entry.management,
+          ...(entry.session ? { session: entry.session } : {}),
+          host: endpoint.hostname.toLowerCase(),
+          port,
+          path: sanitizeTailscaleRouteText(path),
+          target: sanitizeTailscaleRouteTarget(handler.Proxy),
+          funnel: entry.config.AllowFunnel?.[hostPort] === true,
+        });
+      }
+    }
+  }
+  return routes.toSorted(
+    (a, b) =>
+      a.management.localeCompare(b.management) ||
+      (a.session ?? "").localeCompare(b.session ?? "") ||
+      a.host.localeCompare(b.host) ||
+      a.port - b.port ||
+      a.path.localeCompare(b.path),
+  );
 }
 
 function extractTailnetHostFromStatusJson(raw: string): string | null {
-  const parsed = parsePossiblyNoisyStatus(raw);
+  const parsed = parsePossiblyNoisyStatus(raw, TailscaleStatusSchema);
   const dns = parsed?.Self?.DNSName;
   if (dns && dns.length > 0) {
     return dns.replace(/\.$/, "");
@@ -94,12 +192,7 @@ export function extractTailscaleServeGatewayUrls(
   gatewayPort: number,
   forAdoption = false,
 ): string[] | null {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  const config =
-    end > start && start >= 0
-      ? safeParseJsonWithSchema(TailscaleServeConfigSchema, raw.slice(start, end + 1))
-      : null;
+  const config = parsePossiblyNoisyStatus(raw, TailscaleServeConfigSchema);
   if (!config) {
     return null;
   }
@@ -138,17 +231,16 @@ type TailscaleServeGatewayInspection =
   | { status: "unavailable" }
   | { status: "invalid" };
 
-/** Inspects persistent Serve routes without collapsing malformed output into route absence. */
-export async function inspectTailscaleServeGatewayUrlsWithRunner(
-  gatewayPort: number,
-  runCommandWithTimeout?: TailscaleStatusCommandRunner,
-  forAdoption = false,
-): Promise<TailscaleServeGatewayInspection> {
+async function inspectTailscaleServeStatusWithRunner<T>(
+  runCommandWithTimeout: TailscaleStatusCommandRunner | undefined,
+  parse: (raw: string) => T | null,
+  isPreferred: (value: T) => boolean,
+): Promise<{ status: "ok"; value: T } | { status: "unavailable" } | { status: "invalid" }> {
   if (!runCommandWithTimeout) {
     return { status: "unavailable" };
   }
-  let sawValidStatus = false;
   let sawInvalidStatus = false;
+  let fallback: { value: T } | undefined;
   for (const candidate of TAILSCALE_STATUS_COMMAND_CANDIDATES) {
     try {
       const result = await runCommandWithTimeout([candidate, "serve", "status", "--json"], {
@@ -157,23 +249,49 @@ export async function inspectTailscaleServeGatewayUrlsWithRunner(
       if (result.code !== 0 || !result.stdout.trim()) {
         continue;
       }
-      const urls = extractTailscaleServeGatewayUrls(result.stdout, gatewayPort, forAdoption);
-      if (!urls) {
-        sawInvalidStatus = true;
+      const value = parse(result.stdout);
+      if (value !== null) {
+        if (isPreferred(value)) {
+          return { status: "ok", value };
+        }
+        fallback ??= { value };
         continue;
       }
-      sawValidStatus = true;
-      if (urls.length > 0) {
-        return { status: "ok", urls };
-      }
+      sawInvalidStatus = true;
     } catch {
       continue;
     }
   }
-  if (sawValidStatus) {
-    return { status: "ok", urls: [] };
+  if (fallback) {
+    return { status: "ok", value: fallback.value };
   }
   return { status: sawInvalidStatus ? "invalid" : "unavailable" };
+}
+
+/** Inspects persistent and foreground Serve routes without adopting or mutating them. */
+export async function inspectTailscaleServeRoutesWithRunner(
+  runCommandWithTimeout?: TailscaleStatusCommandRunner,
+): Promise<TailscaleServeRouteInspection> {
+  const inspection = await inspectTailscaleServeStatusWithRunner(
+    runCommandWithTimeout,
+    extractTailscaleServeRouteObservations,
+    (routes) => routes.length > 0,
+  );
+  return inspection.status === "ok" ? { status: "ok", routes: inspection.value } : inspection;
+}
+
+/** Inspects persistent Serve routes without collapsing malformed output into route absence. */
+export async function inspectTailscaleServeGatewayUrlsWithRunner(
+  gatewayPort: number,
+  runCommandWithTimeout?: TailscaleStatusCommandRunner,
+  forAdoption = false,
+): Promise<TailscaleServeGatewayInspection> {
+  const inspection = await inspectTailscaleServeStatusWithRunner(
+    runCommandWithTimeout,
+    (raw) => extractTailscaleServeGatewayUrls(raw, gatewayPort, forAdoption),
+    (urls) => urls.length > 0,
+  );
+  return inspection.status === "ok" ? { status: "ok", urls: inspection.value } : inspection;
 }
 
 /** Resolves the host published to clients for tailnet or Tailscale Serve gateway modes. */

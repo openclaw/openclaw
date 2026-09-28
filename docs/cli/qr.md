@@ -92,6 +92,14 @@ QR setup, join codes, and cloud enrollment preserve context paths in fully
 qualified URLs. The device-pair plugin's `/pair` command retains its historical
 origin-only URLs, including when the configured `publicUrl` contains a path.
 
+If a Tailscale setup code is generated but the mobile app cannot connect, run
+the read-only [Tailscale pairing preflight](/gateway/tailscale#diagnose-mobile-pairing-through-tailscale)
+before issuing another code:
+
+```bash
+openclaw doctor --lint --only core/doctor/tailscale-pairing --json
+```
+
 ## Auth resolution (no `--remote`)
 
 Gateways with `gateway.auth.mode="trusted-proxy"` can generate setup codes without a shared token or password.

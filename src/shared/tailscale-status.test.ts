@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   extractTailscaleServeGatewayUrls,
+  inspectTailscaleServeRoutesWithRunner,
   inspectTailscaleServeGatewayUrlsWithRunner,
   resolveTailnetHostWithRunner,
   resolveTailscalePublishedHost,
@@ -9,6 +10,133 @@ import {
 } from "./tailscale-status.js";
 
 describe("shared/tailscale-status", () => {
+  it.each(["background", "foreground"] as const)(
+    "observes %s named-service routes without adopting them",
+    async (management) => {
+      const config = {
+        Services: {
+          "svc:gateway": {
+            TCP: { "443": { HTTPS: true } },
+            Web: {
+              "gateway.tail.ts.net:443": {
+                Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+              },
+            },
+          },
+        },
+      };
+      const raw = JSON.stringify(
+        management === "foreground" ? { Foreground: { session: config } } : config,
+      );
+
+      await expect(
+        inspectTailscaleServeRoutesWithRunner(vi.fn().mockResolvedValue({ code: 0, stdout: raw })),
+      ).resolves.toEqual({
+        status: "ok",
+        routes: [
+          {
+            management,
+            ...(management === "foreground" ? { session: "session" } : {}),
+            host: "gateway.tail.ts.net",
+            port: 443,
+            path: "/",
+            target: "http://127.0.0.1:18789",
+            funnel: false,
+          },
+        ],
+      });
+      expect(extractTailscaleServeGatewayUrls(raw, 18789)).toEqual([]);
+      expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual([]);
+    },
+  );
+
+  it("observes background and foreground HTTPS routes without granting ownership", async () => {
+    const fixturePassword = ["example", "password", "not-real"].join("-");
+    const fixtureToken = ["example", "token", "not-real"].join("-");
+    const fixtureProxy = new URL("http://127.0.0.1:18789/");
+    fixtureProxy.username = "example-user";
+    fixtureProxy.password = fixturePassword;
+    fixtureProxy.searchParams.set("access_token", fixtureToken);
+    const raw = JSON.stringify({
+      TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
+      Web: {
+        "node.tail.ts.net:443": {
+          Handlers: {
+            "/": { Proxy: "http://127.0.0.1:8096" },
+            "/openclaw": { Proxy: "http://127.0.0.1:18789" },
+          },
+        },
+      },
+      Foreground: {
+        "session\u001b[31m": {
+          TCP: { "8443": { HTTPS: true } },
+          Web: {
+            "node.tail.ts.net:8443": {
+              Handlers: {
+                "/": {
+                  Proxy: `${fixtureProxy.toString()}\u001b[2J`,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const inspection = await inspectTailscaleServeRoutesWithRunner(
+      vi.fn().mockResolvedValue({ code: 0, stdout: raw }),
+    );
+    expect(inspection.status).toBe("ok");
+    const routes = inspection.status === "ok" ? inspection.routes : undefined;
+    expect(routes).toEqual([
+      {
+        management: "background",
+        host: "node.tail.ts.net",
+        port: 443,
+        path: "/",
+        target: "http://127.0.0.1:8096",
+        funnel: false,
+      },
+      {
+        management: "background",
+        host: "node.tail.ts.net",
+        port: 443,
+        path: "/openclaw",
+        target: "http://127.0.0.1:18789",
+        funnel: false,
+      },
+      expect.objectContaining({
+        management: "foreground",
+        session: "session",
+        host: "node.tail.ts.net",
+        port: 8443,
+        path: "/",
+        funnel: false,
+      }),
+    ]);
+    expect(routes?.[2]?.target).not.toContain(fixturePassword);
+    expect(routes?.[2]?.target).not.toContain(fixtureToken);
+    expect(routes?.[2]?.target).not.toContain("\u001b");
+
+    expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual([]);
+  });
+
+  it("inspects route observations without collapsing invalid status into no routes", async () => {
+    const invalid = vi.fn().mockResolvedValue({ code: 0, stdout: "not-json" });
+    const empty = vi.fn().mockResolvedValue({ code: 0, stdout: "{}" });
+
+    await expect(inspectTailscaleServeRoutesWithRunner(invalid)).resolves.toEqual({
+      status: "invalid",
+    });
+    await expect(inspectTailscaleServeRoutesWithRunner(empty)).resolves.toEqual({
+      status: "ok",
+      routes: [],
+    });
+    expect(empty).toHaveBeenCalledWith(["tailscale", "serve", "status", "--json"], {
+      timeoutMs: 5000,
+    });
+  });
+
   it("keeps the deprecated named-Service formatter for shipped plugin SDK callers", () => {
     expect(
       resolveTailscalePublishedHost({
@@ -229,5 +357,28 @@ describe("shared/tailscale-status", () => {
       urls: [],
     });
     await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, malformed)).resolves.toEqual([]);
+  });
+
+  it("keeps searching command candidates after a valid empty Serve status", async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 0, stdout: "{}" })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: JSON.stringify({
+          TCP: { "443": { HTTPS: true } },
+          Web: {
+            "backup.tail.ts.net:443": {
+              Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+            },
+          },
+        }),
+      });
+
+    await expect(inspectTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual({
+      status: "ok",
+      urls: ["wss://backup.tail.ts.net"],
+    });
+    expect(run).toHaveBeenCalledTimes(2);
   });
 });

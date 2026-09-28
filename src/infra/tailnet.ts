@@ -15,7 +15,8 @@ export function isTailnetIPv4(address: string): boolean {
   return isIpInCidr(address, TAILNET_IPV4_CIDR);
 }
 
-function isTailnetIPv6(address: string): boolean {
+/** Returns true when an address is inside Tailscale's IPv6 ULA prefix. */
+export function isTailnetIPv6(address: string): boolean {
   // Tailscale IPv6 ULA prefix: fd7a:115c:a1e0::/48
   // (stable across tailnets; nodes get per-device suffixes)
   return isIpInCidr(address, TAILNET_IPV6_CIDR);

@@ -185,7 +185,7 @@ function isFullAccessMobilePairingUrl(url: string): boolean {
   }
 }
 
-function validateMobilePairingUrl(url: string, source?: string): string | null {
+export function validateMobilePairingUrl(url: string, source?: string): string | null {
   let parsed: URL;
   try {
     parsed = new URL(url);

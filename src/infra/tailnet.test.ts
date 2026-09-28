@@ -2,7 +2,12 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
-import { isTailnetIPv4, pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "./tailnet.js";
+import {
+  isTailnetIPv4,
+  isTailnetIPv6,
+  pickPrimaryTailnetIPv4,
+  pickPrimaryTailnetIPv6,
+} from "./tailnet.js";
 
 describe("tailnet helpers", () => {
   afterEach(() => {
@@ -14,6 +19,13 @@ describe("tailnet helpers", () => {
     expect(isTailnetIPv4("100.127.255.254")).toBe(true);
     expect(isTailnetIPv4("100.63.255.255")).toBe(false);
     expect(isTailnetIPv4("192.168.1.10")).toBe(false);
+  });
+
+  it("detects tailscale ipv6 ranges", () => {
+    expect(isTailnetIPv6("fd7a:115c:a1e0::1")).toBe(true);
+    expect(isTailnetIPv6("fd7a:115c:a1e0:ffff::1")).toBe(true);
+    expect(isTailnetIPv6("fd7a:115c:a1df:ffff::1")).toBe(false);
+    expect(isTailnetIPv6("fd12:3456::1")).toBe(false);
   });
 
   it("picks the first available tailnet addresses", () => {
