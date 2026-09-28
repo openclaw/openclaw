@@ -301,6 +301,30 @@ export default {
     );
     expect(brokenBaseOutput).not.toContain("startup CSS gzip vs base:");
     expect(fs.readFileSync(identityCapture, "utf8").trim().split("\n")).toHaveLength(1);
+    const candidateConfig = fs.readFileSync(path.join(root, "ui/vite.config.ts"), "utf8");
+    const signalMarker = path.join(temporaryRoot, "signaled-base-config");
+    write(
+      "ui/vite.config.ts",
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(signalMarker)}, "loaded");
+export default { plugins: [{ name: "signal", buildStart() { process.kill(process.pid, "SIGTERM"); } }] };
+`,
+    );
+    git("add", ".");
+    git("commit", "--quiet", "-m", "signaled base");
+    const signaledBase = git("rev-parse", "HEAD");
+    expect(git("show", `${signaledBase}:ui/vite.config.ts`)).toContain("process.kill(process.pid");
+    write("ui/vite.config.ts", candidateConfig);
+    git("add", ".");
+    git("commit", "--quiet", "-m", "repair signaled base");
+    const signaledBaseResult = runComparison(signaledBase);
+    const signaledBaseOutput = `${signaledBaseResult.stdout}${signaledBaseResult.stderr}`;
+    expect(fs.readFileSync(signalMarker, "utf8")).toBe("loaded");
+    expect(signaledBaseResult.status, signaledBaseOutput).toBe(1);
+    expect(signaledBaseOutput).toContain("node failed (SIGTERM)");
+    expect(signaledBaseOutput).not.toContain(
+      "Base Control UI source does not build with the candidate toolchain",
+    );
     const protectedRoot = path.join(temporaryRoot, "protected");
     fs.mkdirSync(protectedRoot);
     fs.writeFileSync(path.join(protectedRoot, "sentinel"), "keep");

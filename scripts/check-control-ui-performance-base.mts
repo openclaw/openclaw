@@ -28,7 +28,9 @@ function run(
   acceptFailure = false,
 ): boolean {
   const result = spawnSync(command, args, { cwd, env, stdio: "inherit" });
-  if (result.error || (!acceptFailure && result.status !== 0)) {
+  // A historical source mismatch may exit nonzero; a signal means no trustworthy
+  // build outcome exists and must never enter the absolute-only fallback.
+  if (result.error || result.signal !== null || (!acceptFailure && result.status !== 0)) {
     throw new Error(
       `${path.basename(command)} failed (${result.signal ?? result.status ?? "launch"})`,
       {
@@ -161,14 +163,17 @@ function main(): void {
     // Both builds use the candidate's toolchain and shared dependencies; only
     // base-only dependencies come from its lockfile. Calling Vite directly
     // keeps historical policy out; one identity isolates source bytes.
-    run(process.execPath, [viteBin, "build"], path.join(repoRoot, "ui"), buildEnv);
-    const baseBuildPassed = run(
-      process.execPath,
-      [viteBin, "build"],
-      path.join(baseRoot, "ui"),
-      buildEnv,
-      true,
-    );
+    const candidateUiRoot = path.join(repoRoot, "ui");
+    const baseUiRoot = path.join(baseRoot, "ui");
+    const candidateBuildArgs = [
+      viteBin,
+      "build",
+      "--config",
+      path.join(candidateUiRoot, "vite.config.ts"),
+    ];
+    const baseBuildArgs = [viteBin, "build", "--config", path.join(baseUiRoot, "vite.config.ts")];
+    run(process.execPath, candidateBuildArgs, candidateUiRoot, buildEnv);
+    const baseBuildPassed = run(process.execPath, baseBuildArgs, baseUiRoot, buildEnv, true);
     const loader = path.join(repoRoot, "scripts/tsx.mjs");
     run(process.execPath, [
       "--import",
