@@ -76,6 +76,9 @@ vi.mock("node:fs", async (importOriginal) => {
         if (content !== undefined) {
           return content;
         }
+        throw Object.assign(new Error("Synthetic Codex requirements file is absent"), {
+          code: "ENOENT",
+        });
       }
       return actual.readFileSync(
         filePath,
@@ -662,7 +665,10 @@ describe("codex conversation binding", () => {
             pluginConfig: {},
             runtime: {
               modelAuth: { resolveProviderIdForAuth: agentRuntimeMocks.resolveProviderIdForAuth },
-              state: { openSyncKeyedStore: () => stateStore },
+              state: {
+                openSyncKeyedStore: () => stateStore,
+                openKeyedStore: () => stateStore,
+              },
             } as never,
             on,
           }),
@@ -3456,7 +3462,7 @@ describe("codex conversation binding", () => {
     expect(requests[2]?.params.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });
 
-  it("does not silently decline auto-mode approvals during missing thread recovery", async () => {
+  it("refuses auto-mode bound approvals before connecting to the native thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestConversationBinding(sessionFile, {
       threadId: "thread-old",
@@ -3464,47 +3470,6 @@ describe("codex conversation binding", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        requests.push({ method, params: requestParams });
-        if (method === "turn/start" && requestParams.threadId === "thread-old") {
-          throw new Error("thread not found: thread-old");
-        }
-        if (method === "thread/start") {
-          return {
-            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
-            model: "gpt-5.4-mini",
-          };
-        }
-        if (method === "turn/start" && requestParams.threadId === "thread-new") {
-          setImmediate(() => {
-            for (const handler of notificationHandlers) {
-              handler({
-                method: "turn/completed",
-                params: {
-                  threadId: "thread-new",
-                  turn: {
-                    id: "turn-new",
-                    status: "completed",
-                    items: [{ id: "assistant-1", type: "agentMessage", text: "Recovered" }],
-                  },
-                },
-              });
-            }
-          });
-          return { turn: { id: "turn-new" } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      }),
-      addNotificationHandler: vi.fn((handler) => {
-        notificationHandlers.push(handler);
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
-
     const result = await handleCodexConversationInboundClaim(
       {
         content: "hi again",
@@ -3547,7 +3512,7 @@ describe("codex conversation binding", () => {
     expect(result?.reply?.text).toContain(
       "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
     );
-    expect(requests).toEqual([]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("creates a fresh thread when recovery finds the binding already cleared", async () => {
@@ -4202,39 +4167,43 @@ describe("codex conversation binding", () => {
       const result = handleCodexConversationInboundClaim(event, ctx, {
         pluginConfig: { appServer: { requestTimeoutMs: 100 } },
       });
-      const turnStart = await waitForRequest("turn/start");
-      const interrupt = await waitForRequest("turn/interrupt");
-      expect(interrupt.params).toEqual({ threadId: "thread-1", turnId: "" });
-      harness.send({ id: turnStart.id, result: { turn: { id: "turn-1" } } });
-      harness.send(
-        interruptFails
-          ? { id: interrupt.id, error: { code: -32_000, message: "startup interrupt failed" } }
-          : { id: interrupt.id, result: {} },
-      );
-      if (sessionKey && !interruptFails) {
-        const unsubscribe = await waitForRequest("thread/unsubscribe");
-        harness.send({ id: unsubscribe.id, result: {} });
-      }
+      try {
+        const turnStart = await waitForRequest("turn/start");
+        const interrupt = await waitForRequest("turn/interrupt");
+        expect(interrupt.params).toEqual({ threadId: "thread-1", turnId: "" });
+        harness.send({ id: turnStart.id, result: { turn: { id: "turn-1" } } });
+        harness.send(
+          interruptFails
+            ? { id: interrupt.id, error: { code: -32_000, message: "startup interrupt failed" } }
+            : { id: interrupt.id, result: {} },
+        );
+        if (sessionKey && !interruptFails) {
+          const unsubscribe = await waitForRequest("thread/unsubscribe");
+          harness.send({ id: unsubscribe.id, result: {} });
+        }
 
-      await expect(result).resolves.toEqual({
-        handled: true,
-        reply: { text: "Codex app-server turn failed: turn/start timed out" },
-      });
-      expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
-        "turn/start",
-        "turn/interrupt",
-        ...(sessionKey && !interruptFails ? ["thread/unsubscribe"] : []),
-      ]);
-      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledTimes(
-        interruptFails ? 1 : 0,
-      );
-      expect(
-        readCodexConversationActiveTurn(testConversationIdentity(sessionFile)),
-      ).toBeUndefined();
-      if (sessionKey) {
-        await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+        await expect(result).resolves.toEqual({
+          handled: true,
+          reply: { text: "Codex app-server turn failed: turn/start timed out" },
+        });
+        expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
+          "turn/start",
+          "turn/interrupt",
+          ...(sessionKey && !interruptFails ? ["thread/unsubscribe"] : []),
+        ]);
+        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).toHaveBeenCalledTimes(
+          interruptFails ? 1 : 0,
+        );
+        expect(
+          readCodexConversationActiveTurn(testConversationIdentity(sessionFile)),
+        ).toBeUndefined();
+        if (sessionKey) {
+          await expect(readTestConversationBinding(sessionFile)).resolves.toBeUndefined();
+        }
+      } finally {
+        harness.client.close();
+        await Promise.allSettled([result]);
       }
-      harness.client.close();
     },
   );
 
@@ -4768,7 +4737,7 @@ describe("codex conversation binding", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("infers custom model providers for legacy bound turns without stored modelProvider", async () => {
+  it("refuses legacy custom-provider bindings requiring interactive approvals before connecting", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestConversationBinding(sessionFile, {
       threadId: "thread-1",
@@ -4777,11 +4746,6 @@ describe("codex conversation binding", () => {
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
-    const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(
-      createCompletingBoundTurnClient(turnStartParams),
-    );
-
     await expect(
       handleCodexConversationInboundClaim(
         {
@@ -4826,7 +4790,6 @@ describe("codex conversation binding", () => {
       },
     });
 
-    expect(turnStartParams).toEqual([]);
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 });

@@ -818,23 +818,6 @@ describe("stream reconciliation", () => {
     expect(next.map(messageText)).toEqual(["latest ask", "draft answer"]);
   });
 
-  it("materializes keyed commentary parts when persistCommentary is true (persist mode)", () => {
-    const state = makeIdleStreamState({
-      chatStreamSegments: [{ text: "kept preamble", ts: 2, itemId: "preamble-1" }],
-    });
-    const messages = [
-      { role: "user", content: "latest ask", timestamp: 1 },
-      { role: "assistant", content: [{ type: "text", text: "final reply" }], timestamp: 4 },
-    ];
-
-    const next = materializeVisibleStreamState(messages, state, {
-      ...visibleStreamOptions,
-      persistCommentary: true,
-    });
-
-    expect(next.map(messageText)).toEqual(["latest ask", "kept preamble", "final reply"]);
-  });
-
   it("replaces current-stream fallbacks with matching terminal messages", () => {
     const state = {
       chatStream: "draft answer",

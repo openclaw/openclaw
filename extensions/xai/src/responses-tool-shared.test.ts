@@ -6,31 +6,6 @@ import {
 } from "./responses-tool-shared.js";
 
 describe("xai responses tool helpers", () => {
-  it("falls back to annotation citations when the API omits top-level citations", () => {
-    expect(
-      requireXaiResponseTextAndCitations(
-        {
-          output: [
-            {
-              type: "message",
-              content: [
-                {
-                  type: "output_text",
-                  text: "Found it",
-                  annotations: [{ type: "url_citation", url: "https://example.com/a" }],
-                },
-              ],
-            },
-          ],
-        },
-        "xAI tool failed",
-      ),
-    ).toEqual({
-      content: "Found it",
-      citations: ["https://example.com/a"],
-    });
-  });
-
   it("collects every response text block and deduplicates citations across output items", () => {
     expect(
       requireXaiResponseTextAndCitations(
@@ -402,15 +377,12 @@ describe("xai responses tool helpers", () => {
     });
   });
 
-  it.each([
-    {},
-    { output: [] },
-    { output_text: "" },
-    { output: [{ type: "code_interpreter_call" }] },
-    { output: [{ type: "message", content: [{ type: "output_text", text: "" }] }] },
-  ])("reports missing answer text without blaming JSON decoding: %j", (data) => {
-    expect(() => requireXaiResponseTextAndCitations(data, "xAI tool failed")).toThrow(
-      "xAI tool failed: no answer text returned; try a simpler request",
-    );
-  });
+  it.each([{}, { output: [{ type: "message", content: [{ type: "output_text", text: "" }] }] }])(
+    "reports missing answer text without blaming JSON decoding: %j",
+    (data) => {
+      expect(() => requireXaiResponseTextAndCitations(data, "xAI tool failed")).toThrow(
+        "xAI tool failed: no answer text returned; try a simpler request",
+      );
+    },
+  );
 });

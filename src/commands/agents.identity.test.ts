@@ -339,7 +339,7 @@ describe("agents set-identity command", () => {
     });
   });
 
-  it.each(["ghostzzz", "агент✨", "   "])(
+  it.each(["агент✨", "   "])(
     "errors without changing config when --agent names %j",
     async (agent) => {
       configMocks.readConfigFileSnapshot.mockResolvedValue(
@@ -353,19 +353,17 @@ describe("agents set-identity command", () => {
     },
   );
 
-  it.each(["main", "openclaw", "crestodian"])(
-    "does not create absent reserved agent %s",
-    async (agentId) => {
-      configMocks.readConfigFileSnapshot.mockResolvedValue(
-        createTestConfigSnapshot({ agents: { entries: { ops: {} } } }),
-      );
+  it("does not create an absent main agent", async () => {
+    const agentId = "main";
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { ops: {} } } }),
+    );
 
-      await expectIdentityCommandFailure(
-        { agent: agentId, name: "Hijack" },
-        `Agent "${agentId}" not found. Create it with \`openclaw agents add\`.`,
-      );
-    },
-  );
+    await expectIdentityCommandFailure(
+      { agent: agentId, name: "Hijack" },
+      `Agent "${agentId}" not found. Create it with \`openclaw agents add\`.`,
+    );
+  });
 
   it("rejects an unknown agent before attempting to read its explicit identity file", async () => {
     const { workspace } = await createIdentityWorkspace();

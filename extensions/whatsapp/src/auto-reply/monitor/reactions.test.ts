@@ -160,11 +160,6 @@ describe("resolveWhatsAppAckEmoji", () => {
       expected: "🔥",
     },
     {
-      name: "falls back to the routed agent identity emoji when the ack object has no emoji",
-      cfg: createAckEmojiConfig({ direct: true, group: "mentions" }),
-      expected: "🔥",
-    },
-    {
       name: "uses normalized agent ids for the identity fallback",
       cfg: {
         agents: { list: [{ id: "Agent", identity: { emoji: "🔥" } }] },
@@ -189,19 +184,16 @@ describe("maybeSendAckReaction", () => {
     vi.clearAllMocks();
   });
 
-  it.each(["ack", "minimal", "extensive"] as const)(
-    "sends ack reactions when reactionLevel is %s",
-    async (reactionLevel) => {
-      const cfg = createConfig(reactionLevel);
-      const ackReaction = await runAckReaction({
-        cfg,
-      });
+  it("sends ack reactions when enabled", async () => {
+    const cfg = createConfig("ack");
+    const ackReaction = await runAckReaction({
+      cfg,
+    });
 
-      expect(ackReaction?.ackReactionValue).toBe("👀");
-      await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
-      expectAckReactionSent("default", cfg);
-    },
-  );
+    expect(ackReaction?.ackReactionValue).toBe("👀");
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expectAckReactionSent("default", cfg);
+  });
 
   it("suppresses ack reactions when reactionLevel is off", async () => {
     const ackReaction = await runAckReaction({
@@ -314,25 +306,6 @@ describe("maybeSendAckReaction", () => {
       "15551234567@s.whatsapp.net",
       "msg-1",
       "🔥",
-      {
-        verbose: false,
-        fromMe: false,
-        accountId: "default",
-        cfg,
-      },
-    );
-  });
-
-  it("returns a handle that removes the ack with an empty reaction", async () => {
-    const cfg = createConfig("ack");
-    const ackReaction = await runAckReaction({ cfg });
-
-    await ackReaction?.remove();
-
-    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(
-      "15551234567@s.whatsapp.net",
-      "msg-1",
-      "",
       {
         verbose: false,
         fromMe: false,

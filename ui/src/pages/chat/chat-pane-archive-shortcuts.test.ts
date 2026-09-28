@@ -72,12 +72,13 @@ describe("direct session archive shortcuts", () => {
   it("uses the header lifecycle and Undo for the current session via the keyboard", async () => {
     const { pane, state, patch, row } = fixture();
     vi.mocked(showToast).mockClear();
+    const headerAction = vi.spyOn(pane, "handleHeaderSessionAction");
     const event = press(pane);
     expect(event.defaultPrevented).toBe(true);
-    await vi.waitFor(() =>
-      expect(showToast).toHaveBeenCalledWith(
-        expect.objectContaining({ actionLabel: t("common.undo") }),
-      ),
+    expect(headerAction).toHaveBeenCalledExactlyOnceWith({ kind: "toggle-archived" }, row);
+    await headerAction.mock.results[0]?.value;
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ actionLabel: t("common.undo") }),
     );
     expect(patch).toHaveBeenCalledExactlyOnceWith(
       row.key,

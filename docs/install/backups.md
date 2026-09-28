@@ -69,10 +69,18 @@ workspaces remain ordinary workspace files. [Backup CLI](/cli/backup)
 documents every flag, owner-declared regenerable resources, volatile files,
 and verification details.
 
-If the configuration is malformed, `--no-include-workspace` can still produce a
-partial recovery archive for state, config, and credentials. Its skipped
-diagnostics identify agent and plugin ownership that could not be resolved;
-repair the configuration before relying on an archive as complete.
+If the configuration is malformed, state archive creation fails because agent
+and plugin ownership cannot be resolved. `--no-include-workspace` only excludes
+workspace files; it does not bypass ownership discovery. Before repairing the
+configuration, save the active config file:
+
+```bash
+openclaw backup create --only-config --output ~/Backups/openclaw --verify
+```
+
+This saves only the active JSON config file, without parsing it or including
+its `$include` dependencies. Repair the configuration, then rerun the full
+archive command above to protect state, credentials, agents, and workspaces.
 
 Archives are full copies: each run re-uploads everything. They are the right
 tool before an update, reset, uninstall, or machine move, and a reasonable

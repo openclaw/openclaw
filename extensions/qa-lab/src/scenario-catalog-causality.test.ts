@@ -349,7 +349,7 @@ describe("qa scenario catalog causality", () => {
     const childIndex = actions.findIndex(
       (action) =>
         (action as { call?: string; saveAs?: string }).call === "waitForCondition" &&
-        (action as { saveAs?: string }).saveAs === "childTask",
+        (action as { saveAs?: string }).saveAs === "childRun",
     );
     const childWait = actions[childIndex] as
       | { args?: Array<{ lambda?: { expr?: string } }> }
@@ -357,11 +357,10 @@ describe("qa scenario catalog causality", () => {
 
     expect(prompt).toContain("expectsCompletionMessage false");
     expect(prompt).toContain("do not call sessions_yield or wait for the child");
-    expect(childWait?.args?.[0]?.lambda?.expr).toContain("task.status === 'completed'");
+    expect(childWait?.args?.[0]?.lambda?.expr).toContain("run.execution.status === 'terminal'");
+    expect(childWait?.args?.[0]?.lambda?.expr).toContain("run.execution.outcome?.status === 'ok'");
     expect(childWait?.args?.[0]?.lambda?.expr).not.toContain("terminalOutcome");
-    expect(childWait?.args?.[0]?.lambda?.expr).toContain(
-      "task.deliveryStatus === 'not_applicable'",
-    );
+    expect(childWait?.args?.[0]?.lambda?.expr).toContain("run.delivery?.status === 'not_required'");
     expect(outboundIndex).toBeGreaterThanOrEqual(0);
     expect(childIndex).toBeGreaterThan(outboundIndex);
 
@@ -371,7 +370,7 @@ describe("qa scenario catalog causality", () => {
         flow: {
           steps: [
             {
-              name: "accepts a successful silent child task",
+              name: "accepts a successful silent child run",
               actions: [
                 { set: "sessionKey", value: "agent:qa:restart-proof" },
                 ...childAssertionPath,
@@ -380,21 +379,16 @@ describe("qa scenario catalog causality", () => {
           ],
         },
         api: {
-          env: {
-            gateway: {
-              call: async () => ({
-                tasks: [
-                  {
-                    title: "restart-proof-child",
-                    sessionKey: "agent:qa:restart-proof",
-                    childSessionKey: "agent:qa:restart-proof:child",
-                    status: "completed",
-                    deliveryStatus: "not_applicable",
-                  },
-                ],
-              }),
+          readNativeQaSubagentRuns: async () => [
+            {
+              runId: "restart-proof-child-run",
+              label: "restart-proof-child",
+              requesterSessionKey: "agent:qa:restart-proof",
+              childSessionKey: "agent:qa:restart-proof:child",
+              execution: { status: "terminal", outcome: { status: "ok" } },
+              delivery: { status: "not_required" },
             },
-          },
+          ],
           readSessionTranscriptSummary: async () => ({ finalText: "CHILD-RESTART-OK" }),
         },
       }),

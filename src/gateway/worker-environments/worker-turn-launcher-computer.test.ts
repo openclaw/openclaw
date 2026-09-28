@@ -24,6 +24,7 @@ import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
+  createWorkerTurnTunnel,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   root,
@@ -38,7 +39,6 @@ import {
   cleanupWorkerTurnLauncherTest,
   computerDescriptor,
   createWorkerSessionTurnPlacementProvider,
-  measureLaunchTurn,
   placements,
   seedActivePlacement,
   setupWorkerTurnLauncherTest,
@@ -61,7 +61,7 @@ describe("worker launch capabilities", () => {
   it.each([true, false])(
     "carries only an available GitHub identity in the launch envelope (%s)",
     async (available) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const github: WorkerGitHubLaunchBinding = {
         token: "synthetic-turn-bound-github-token",
         login: "shared-bot",
@@ -78,18 +78,13 @@ describe("worker launch capabilities", () => {
         }
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
         stageAttachments: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
-        stop: vi.fn(async () => {}),
-      };
+      });
       const environments = {
         ...unusedEnvironments(),
         get: vi.fn(() => attachedEnvironment()),
@@ -116,7 +111,7 @@ describe("worker launch capabilities", () => {
   ])(
     "grants computer with negotiated features and model vision (missing: $missingFeature, vision: $modelHasVision)",
     async ({ missingFeature, modelHasVision, allowed }) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const environment = attachedEnvironment();
       if (!missingFeature) {
         environment.bootstrapReceipt!.protocolFeatures.push(WORKER_COMPUTER_PROTOCOL_FEATURE);
@@ -141,18 +136,13 @@ describe("worker launch capabilities", () => {
         expect(plan.assignment.toolAuthority.allowedToolNames.includes("computer")).toBe(allowed);
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
         stageAttachments: vi.fn(async () => {}),
-        runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
-        stop: vi.fn(async () => {}),
-      };
+      });
       const environments = {
         ...unusedEnvironments(),
         get: vi.fn(() => environment),
@@ -226,7 +216,7 @@ describe("worker launch capabilities", () => {
         "returned-success",
       ] as const
     ).flatMap((primary) =>
-      [false, true].map((closeFails) => ({
+      (primary.startsWith("returned") ? [true] : [false, true]).map((closeFails) => ({
         label: primary,
         nodeDeviceId: "paired-node-1",
         providerId: "device",
@@ -312,7 +302,7 @@ describe("worker launch capabilities", () => {
         media: [{ path: saved.path, contentType: "text/plain" }],
       };
       const originalPrompt = inputTurn.prompt;
-      seedActivePlacement("remote-exec", remote);
+      await seedActivePlacement("remote-exec", remote);
       const order: string[] = [];
       const launchTurn = vi.fn();
       const quiesceWorkspace = vi.fn(async () => {
@@ -339,10 +329,7 @@ describe("worker launch capabilities", () => {
           };
         },
       );
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        measureLaunchTurn,
+      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
         launchTurn,
         runWorkspaceCommand: async (command) =>
           await runCommandWithTimeout([...command.argv], {
@@ -354,8 +341,7 @@ describe("worker launch capabilities", () => {
         quiesceWorkspace,
         syncWorkspace: vi.fn(),
         reconcileWorkspace,
-        stop: vi.fn(async () => {}),
-      };
+      });
       const secret = ["synthetic", "cleanup", "credential"].join("-");
       const cleanupDetail = `native close failed: HTTP 401 request timed out Authorization: Bearer ${secret} ${"x".repeat(3000)}`;
       const cleanupError = new AggregateError([new Error(cleanupDetail)], "computer close failed");

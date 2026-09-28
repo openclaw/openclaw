@@ -8,6 +8,7 @@ import {
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { PluginCandidate } from "./discovery.js";
+import { normalizeManifestCatalog } from "./manifest-capability-normalizers.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
   BundledChannelConfigCollector,
@@ -17,7 +18,6 @@ import { loadManifestThemeDefinitions } from "./manifest-theme-definitions.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   type OpenClawPackageManifest,
-  type PluginManifestCatalog,
   type PluginManifest,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
@@ -332,26 +332,6 @@ function mergeCatalogChannelConfigs(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function mergeManifestCatalog(
-  manifestCatalog: PluginManifestCatalog | undefined,
-  officialCatalog: PluginManifestCatalog | undefined,
-): PluginManifestCatalog | undefined {
-  const featuredCandidate = manifestCatalog?.featured ?? officialCatalog?.featured;
-  const orderCandidate = manifestCatalog?.order ?? officialCatalog?.order;
-  const featured = typeof featuredCandidate === "boolean" ? featuredCandidate : undefined;
-  const order =
-    typeof orderCandidate === "number" && Number.isFinite(orderCandidate)
-      ? orderCandidate
-      : undefined;
-  if (featured === undefined && order === undefined) {
-    return undefined;
-  }
-  return {
-    ...(featured !== undefined ? { featured } : {}),
-    ...(order !== undefined ? { order } : {}),
-  };
-}
-
 export function buildPluginManifestRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -412,7 +392,10 @@ export function buildPluginManifestRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
-    catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
+    catalog: normalizeManifestCatalog({
+      featured: params.manifest.catalog?.featured ?? officialCatalogManifest?.catalog?.featured,
+      order: params.manifest.catalog?.order ?? officialCatalogManifest?.catalog?.order,
+    }),
     ...resolvePortablePluginIcons({
       rootDir: params.candidate.rootDir,
       rejectHardlinks: params.rejectHardlinks,
@@ -463,6 +446,7 @@ export function buildPluginManifestRecord(params: {
     qaRunners: params.manifest.qaRunners,
     dashboard: params.manifest.dashboard,
     controlUi: params.manifest.controlUi,
+    uiCapabilities: params.manifest.uiCapabilities,
     themes: params.manifest.themes,
     themeDefinitions: loadManifestThemeDefinitions({
       pluginId,

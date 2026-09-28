@@ -4,6 +4,7 @@ import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sql } from "kysely";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
+import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
 import {
   executeSqliteQuerySync,
@@ -21,6 +22,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "./sqlite-transaction.js";
+import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import { quarantineManagedHandoffStore } from "./update-managed-service-handoff-store-repair.js";
 import { createPrivateWindowsFile } from "./windows-private-directory.js";
 
@@ -43,17 +45,7 @@ function initializeLeaseSchema(db: HandoffDatabase): void {
   );
 }
 
-function errorCode(error: unknown): string | undefined {
-  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : undefined;
-}
-
-export type ManagedUpdateLeaseDatabaseIdentity = Readonly<{
-  databasePath: string;
-  databaseIdentity: string;
-  parentIdentity: string;
-}>;
+export type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 
 function assertPath(stat: Stats | BigIntStats, kind: "directory" | "file") {
   if (
@@ -139,7 +131,7 @@ function createMissingDatabaseFile(
             0o600,
           );
   } catch (error) {
-    if (errorCode(error) !== "EEXIST") {
+    if (!hasErrnoCode(error, "EEXIST")) {
       throw error;
     }
   }
@@ -195,8 +187,8 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
   databasePath: string,
 ): ManagedUpdateLeaseDatabaseIdentity {
   const canonical = fs.realpathSync(databasePath);
-  const file = fs.lstatSync(canonical);
-  const parent = fs.lstatSync(path.dirname(canonical));
+  const file = fs.lstatSync(canonical, { bigint: true });
+  const parent = fs.lstatSync(path.dirname(canonical), { bigint: true });
   assertPath(file, "file");
   assertPath(parent, "directory");
   return Object.freeze({
@@ -236,12 +228,9 @@ export function createManagedHandoffLeaseDatabase(
         validate: (db: HandoffDatabase) => {
           let validate = validations.get(db);
           if (!validate) {
-            const query = prepareSqliteQuerySync<void, LeaseTable>(db, () =>
+            validate = prepareSqliteQuerySync<void, LeaseTable>(db, () =>
               leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
             );
-            validate = () => {
-              query();
-            };
             validations.set(db, validate);
           }
           validate();

@@ -14,6 +14,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import type { ResolvedCrabboxSandboxConfig } from "./crabbox-sandbox-config.js";
 import { CRABBOX_SANDBOX_LEASE_ID_PATTERN } from "./crabbox-sandbox-lease.js";
+import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 export const CRABBOX_SANDBOX_BACKEND_ID = "crabbox";
 const CRABBOX_SANDBOX_SLUG = "openclaw-sandbox";
@@ -127,7 +128,7 @@ async function inspectLease(client: CrabboxSandboxClient, leaseId: string, cwd?:
     "inspect",
     ["inspect", "--id", leaseId, "--json"],
     cwd,
-    60_000,
+    CRABBOX_LIFECYCLE_TIMEOUT_MS,
   );
   let parsed: unknown;
   try {

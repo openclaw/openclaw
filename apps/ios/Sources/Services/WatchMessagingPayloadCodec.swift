@@ -26,11 +26,6 @@ enum WatchMessagingPayloadCodec {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    static func exactNonEmpty(_ value: String?) -> String? {
-        guard let value, !value.isEmpty else { return nil }
-        return value
-    }
-
     static func encodeNotificationPayload(
         id: String,
         params: OpenClawWatchNotifyParams,
@@ -45,15 +40,9 @@ enum WatchMessagingPayloadCodec {
             "priority": params.priority?.rawValue ?? OpenClawNotificationPriority.active.rawValue,
             "sentAtMs": self.nowMs(),
         ]
-        if let promptId = nonEmpty(params.promptId) {
-            payload["promptId"] = promptId
-        }
-        if let sessionKey = nonEmpty(params.sessionKey) {
-            payload["sessionKey"] = sessionKey
-        }
-        if let gatewayStableID = GatewayStableIdentifier.exact(gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
+        payload["promptId"] = self.nonEmpty(params.promptId)
+        payload["sessionKey"] = self.nonEmpty(params.sessionKey)
+        payload["gatewayStableID"] = GatewayStableIdentifier.exact(gatewayStableID)
         if let chatDeliveryContext,
            let context = try? OpenClawWatchChatDeliveryCodec.encode(chatDeliveryContext)
         {
@@ -61,27 +50,17 @@ enum WatchMessagingPayloadCodec {
             payload["gatewayStableID"] = chatDeliveryContext.gatewayStableID
             payload["chatDeliveryContext"] = context
         }
-        if let kind = nonEmpty(params.kind) {
-            payload["kind"] = kind
-        }
-        if let details = nonEmpty(params.details) {
-            payload["details"] = details
-        }
-        if let expiresAtMs = params.expiresAtMs {
-            payload["expiresAtMs"] = expiresAtMs
-        }
-        if let risk = params.risk {
-            payload["risk"] = risk.rawValue
-        }
+        payload["kind"] = self.nonEmpty(params.kind)
+        payload["details"] = self.nonEmpty(params.details)
+        payload["expiresAtMs"] = params.expiresAtMs
+        payload["risk"] = params.risk?.rawValue
         if let actions = params.actions, !actions.isEmpty {
             payload["actions"] = actions.map { action in
                 var encoded: [String: Any] = [
                     "id": action.id,
                     "label": action.label,
                 ]
-                if let style = nonEmpty(action.style) {
-                    encoded["style"] = style
-                }
+                encoded["style"] = self.nonEmpty(action.style)
                 return encoded
             }
         }
@@ -102,30 +81,14 @@ enum WatchMessagingPayloadCodec {
             "commandText": item.commandText,
             "allowedDecisions": item.allowedDecisions.map(\.rawValue),
         ]
-        if let gatewayStableID = GatewayStableIdentifier.exact(item.gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
-        if let commandPreview = nonEmpty(item.commandPreview) {
-            payload["commandPreview"] = commandPreview
-        }
-        if let warningText = nonEmpty(item.warningText) {
-            payload["warningText"] = warningText
-        }
-        if let host = nonEmpty(item.host) {
-            payload["host"] = host
-        }
-        if let nodeId = nonEmpty(item.nodeId) {
-            payload["nodeId"] = nodeId
-        }
-        if let agentId = nonEmpty(item.agentId) {
-            payload["agentId"] = agentId
-        }
-        if let expiresAtMs = item.expiresAtMs {
-            payload["expiresAtMs"] = expiresAtMs
-        }
-        if let risk = item.risk {
-            payload["risk"] = risk.rawValue
-        }
+        payload["gatewayStableID"] = GatewayStableIdentifier.exact(item.gatewayStableID)
+        payload["commandPreview"] = self.nonEmpty(item.commandPreview)
+        payload["warningText"] = self.nonEmpty(item.warningText)
+        payload["host"] = self.nonEmpty(item.host)
+        payload["nodeId"] = self.nonEmpty(item.nodeId)
+        payload["agentId"] = self.nonEmpty(item.agentId)
+        payload["expiresAtMs"] = item.expiresAtMs
+        payload["risk"] = item.risk?.rawValue
         return payload
     }
 
@@ -136,12 +99,8 @@ enum WatchMessagingPayloadCodec {
             "type": OpenClawWatchPayloadType.execApprovalPrompt.rawValue,
             "approval": self.encodeExecApprovalItem(message.approval),
         ]
-        if let sentAtMs = message.sentAtMs {
-            payload["sentAtMs"] = sentAtMs
-        }
-        if let resetResolutionAttemptId = exactNonEmpty(message.resetResolutionAttemptId) {
-            payload["resetResolutionAttemptId"] = resetResolutionAttemptId
-        }
+        payload["sentAtMs"] = message.sentAtMs
+        payload["resetResolutionAttemptId"] = ExactOpaqueIdentifier.exact(message.resetResolutionAttemptId)
         return payload
     }
 
@@ -152,24 +111,12 @@ enum WatchMessagingPayloadCodec {
             "type": OpenClawWatchPayloadType.execApprovalResolved.rawValue,
             "approvalId": message.approvalId,
         ]
-        if let gatewayStableID = GatewayStableIdentifier.exact(message.gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
-        if let decision = message.decision {
-            payload["decision"] = decision.rawValue
-        }
-        if let outcome = message.outcome {
-            payload["outcome"] = outcome.rawValue
-        }
-        if let resolvedAtMs = message.resolvedAtMs {
-            payload["resolvedAtMs"] = resolvedAtMs
-        }
-        if let source = nonEmpty(message.source) {
-            payload["source"] = source
-        }
-        if let outcomeText = nonEmpty(message.outcomeText) {
-            payload["outcomeText"] = outcomeText
-        }
+        payload["gatewayStableID"] = GatewayStableIdentifier.exact(message.gatewayStableID)
+        payload["decision"] = message.decision?.rawValue
+        payload["outcome"] = message.outcome?.rawValue
+        payload["resolvedAtMs"] = message.resolvedAtMs
+        payload["source"] = self.nonEmpty(message.source)
+        payload["outcomeText"] = self.nonEmpty(message.outcomeText)
         return payload
     }
 
@@ -181,12 +128,8 @@ enum WatchMessagingPayloadCodec {
             "approvalId": message.approvalId,
             "reason": message.reason.rawValue,
         ]
-        if let gatewayStableID = GatewayStableIdentifier.exact(message.gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
-        if let expiredAtMs = message.expiredAtMs {
-            payload["expiredAtMs"] = expiredAtMs
-        }
+        payload["gatewayStableID"] = GatewayStableIdentifier.exact(message.gatewayStableID)
+        payload["expiredAtMs"] = message.expiredAtMs
         return payload
     }
 
@@ -197,21 +140,11 @@ enum WatchMessagingPayloadCodec {
             "type": OpenClawWatchPayloadType.execApprovalSnapshot.rawValue,
             "approvals": message.approvals.map(self.encodeExecApprovalItem),
         ]
-        if let gatewayStableID = GatewayStableIdentifier.exact(message.gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
-        if let sentAtMs = message.sentAtMs {
-            payload["sentAtMs"] = sentAtMs
-        }
-        if let snapshotId = nonEmpty(message.snapshotId) {
-            payload["snapshotId"] = snapshotId
-        }
-        if let requestId = exactNonEmpty(message.requestId) {
-            payload["requestId"] = requestId
-        }
-        if let requestGatewayStableID = GatewayStableIdentifier.exact(message.requestGatewayStableID) {
-            payload["requestGatewayStableID"] = requestGatewayStableID
-        }
+        payload["gatewayStableID"] = GatewayStableIdentifier.exact(message.gatewayStableID)
+        payload["sentAtMs"] = message.sentAtMs
+        payload["snapshotId"] = self.nonEmpty(message.snapshotId)
+        payload["requestId"] = ExactOpaqueIdentifier.exact(message.requestId)
+        payload["requestGatewayStableID"] = GatewayStableIdentifier.exact(message.requestGatewayStableID)
         return payload
     }
 
@@ -232,40 +165,22 @@ enum WatchMessagingPayloadCodec {
             "talkSpeaking": message.talkSpeaking,
             "pendingApprovalCount": message.pendingApprovalCount,
         ]
-        if let agentAvatarURL = nonEmpty(message.agentAvatarURL) {
-            payload["agentAvatarUrl"] = agentAvatarURL
+        payload["agentAvatarUrl"] = self.nonEmpty(message.agentAvatarURL)
+        payload["agentAvatarText"] = self.nonEmpty(message.agentAvatarText)
+        payload["gatewayStableID"] = GatewayStableIdentifier.exact(message.gatewayStableID)
+        payload["sentAtMs"] = message.sentAtMs
+        payload["chatItems"] = message.chatItems?.map { item in
+            var encoded: [String: Any] = [
+                "id": item.id,
+                "role": item.role,
+                "text": item.text,
+            ]
+            encoded["timestampMs"] = item.timestampMs
+            return encoded
         }
-        if let agentAvatarText = nonEmpty(message.agentAvatarText) {
-            payload["agentAvatarText"] = agentAvatarText
-        }
-        if let gatewayStableID = GatewayStableIdentifier.exact(message.gatewayStableID) {
-            payload["gatewayStableID"] = gatewayStableID
-        }
-        if let sentAtMs = message.sentAtMs {
-            payload["sentAtMs"] = sentAtMs
-        }
-        if let chatItems = message.chatItems {
-            payload["chatItems"] = chatItems.map { item in
-                var encoded: [String: Any] = [
-                    "id": item.id,
-                    "role": item.role,
-                    "text": item.text,
-                ]
-                if let timestampMs = item.timestampMs {
-                    encoded["timestampMs"] = timestampMs
-                }
-                return encoded
-            }
-        }
-        if let chatStatus = message.chatStatus {
-            payload["chatStatus"] = self.encodeAppStatus(chatStatus)
-        }
-        if let chatStatusText = nonEmpty(message.chatStatusText) {
-            payload["chatStatusText"] = chatStatusText
-        }
-        if let snapshotId = nonEmpty(message.snapshotId) {
-            payload["snapshotId"] = snapshotId
-        }
+        payload["chatStatus"] = message.chatStatus.map(self.encodeAppStatus)
+        payload["chatStatusText"] = self.nonEmpty(message.chatStatusText)
+        payload["snapshotId"] = self.nonEmpty(message.snapshotId)
         if let context = message.chatDeliveryContext,
            let encoded = try? OpenClawWatchChatDeliveryCodec.encode(context)
         {
@@ -276,15 +191,11 @@ enum WatchMessagingPayloadCodec {
 
     private static func encodeAppStatus(_ status: OpenClawWatchAppStatus) -> [String: Any] {
         var payload: [String: Any] = ["code": status.code.rawValue]
-        if let localizationKey = exactNonEmpty(status.localizationKey) {
-            payload["localizationKey"] = localizationKey
-        }
+        payload["localizationKey"] = ExactOpaqueIdentifier.exact(status.localizationKey)
         if !status.arguments.isEmpty {
             payload["arguments"] = status.arguments
         }
-        if let verbatim = exactNonEmpty(status.verbatim) {
-            payload["verbatim"] = verbatim
-        }
+        payload["verbatim"] = ExactOpaqueIdentifier.exact(status.verbatim)
         return payload
     }
 
@@ -358,7 +269,7 @@ enum WatchMessagingPayloadCodec {
         else {
             return nil
         }
-        let replyId = self.exactNonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
+        let replyId = ExactOpaqueIdentifier.exact(payload["replyId"] as? String) ?? UUID().uuidString
         let gatewayStableID = GatewayStableIdentifier.exact(payload["gatewayStableID"] as? String)
         let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         return WatchExecApprovalResolveEvent(
@@ -380,7 +291,7 @@ enum WatchMessagingPayloadCodec {
         // Version-skew compat: shipped Watch binaries request snapshots without requestId or
         // heldApprovals. A missing key decodes as the shipped shape (present-but-malformed
         // still rejects); remove once the minimum paired Watch app version sends heldApprovals.
-        let requestId = self.exactNonEmpty(payload["requestId"] as? String) ?? UUID().uuidString
+        let requestId = ExactOpaqueIdentifier.exact(payload["requestId"] as? String) ?? UUID().uuidString
         let rawHeldApprovals: [Any]
         if let rawHeldApprovalsValue = payload["heldApprovals"] {
             guard let heldApprovalsArray = rawHeldApprovalsValue as? [Any] else { return nil }
@@ -398,7 +309,7 @@ enum WatchMessagingPayloadCodec {
             }
             let activeResolutionAttemptId: String?
             if let rawAttemptId = item["activeResolutionAttemptId"] {
-                guard let attemptId = exactNonEmpty(rawAttemptId as? String) else {
+                guard let attemptId = ExactOpaqueIdentifier.exact(rawAttemptId as? String) else {
                     return nil
                 }
                 activeResolutionAttemptId = attemptId

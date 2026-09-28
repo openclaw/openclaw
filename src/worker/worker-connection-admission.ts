@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { Value } from "typebox/value";
 import type { RawData } from "ws";
 import { GatewayWebSocketTlsPinError } from "../../packages/gateway-client/src/websocket-transport.js";
@@ -18,7 +19,6 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import {
   WorkerAdmissionError,
   WorkerConnectionInterruptedError,
-  toWorkerConnectionError,
   type WorkerConnectionOptions,
 } from "./worker-connection-contract.js";
 import {
@@ -126,7 +126,7 @@ export function connectWorkerConnectionAttempt(
           error instanceof GatewayWebSocketTlsPinError
             ? new WorkerConnectionEndpointError(error.message)
             : new WorkerConnectionInterruptedError(
-                `${kind}: ${toWorkerConnectionError(error).message}`,
+                `${kind}: ${toStructuredErrorObject(error).message}`,
               ),
         );
       }

@@ -1,9 +1,9 @@
-// Control UI view renders usage screen content.
 import { html, nothing } from "lit";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
+import { icons } from "../../components/icons.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
   renderSettingsPage,
@@ -585,7 +585,7 @@ export function renderUsage(props: UsageProps) {
                                       removeQueryToken(filters.queryDraft, label),
                                     )}
                                 >
-                                  ×
+                                  ${icons.x}
                                 </button>
                               </openclaw-tooltip>
                             </span>
@@ -737,7 +737,7 @@ export function renderUsage(props: UsageProps) {
                         displayActions.onSessionSortChange,
                         displayActions.onSessionSortDirChange,
                         displayActions.onSessionsTabChange,
-                        display.visibleColumns,
+                        undefined,
                         totalSessions,
                         filterActions.onClearSessions,
                       )}

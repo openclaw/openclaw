@@ -87,9 +87,7 @@ export function isMainSessionRecoveryLifecycleEvent(params: {
       (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
     ),
   );
-  return (
-    matchesFence && (phase === "start" || ((phase === "end" || phase === "error") && interrupted))
-  );
+  return matchesFence && (phase === "start" || interrupted);
 }
 
 function settleForegroundOwner(

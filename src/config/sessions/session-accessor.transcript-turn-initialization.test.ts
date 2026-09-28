@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -159,6 +161,83 @@ describe("first transcript turn initialization", () => {
         expect(onMessageCommitted).toHaveBeenCalledTimes(1);
         expect(order).toEqual(mode === "inline" ? ["committed", "published"] : ["committed"]);
       } finally {
+        unsubscribe();
+      }
+    },
+  );
+
+  it.for(["success", "callback failure", "completion failure"] as const)(
+    "joins accepted committed work before publication or %s settlement",
+    async (mode, test) => {
+      const accepted = createDeferred();
+      const release = createDeferred();
+      const order: string[] = [];
+      const failure = new Error(mode);
+      const unsubscribe = onSessionTranscriptUpdate((update) => {
+        if (update.target.sessionId === sessionId) {
+          order.push("published");
+        }
+      });
+      let callbacks = 0;
+      const append = admit({
+        updateMode: "inline",
+        messages: [
+          { message: { role: "user", content: operation.objective } },
+          { message: { role: "assistant", content: "Committed reply" } },
+        ],
+        onMessageCommitted: (_receipt, acceptCompletion) => {
+          const index = ++callbacks;
+          order.push(`accepted:${index}`);
+          acceptCompletion(async () => {
+            await release.promise;
+            order.push(`completed:${index}`);
+            if (mode === "completion failure" && index === 1) {
+              throw failure;
+            }
+          });
+          if (index === 2) {
+            accepted.resolve();
+            if (mode === "callback failure") {
+              throw failure;
+            }
+          }
+        },
+      });
+      const outcome = append.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await racePromiseWithAbortSignal(
+          Promise.race([
+            accepted.promise,
+            outcome.then(() => {
+              throw new Error("Commit settled before both callbacks accepted work");
+            }),
+          ]),
+          test.signal,
+        );
+        expect(order).toEqual(["accepted:1", "accepted:2"]);
+        release.resolve();
+        const result = await outcome;
+        if (mode === "success") {
+          expect(result).toMatchObject({ value: { appendedCount: 2 } });
+          expect(order).toEqual([
+            "accepted:1",
+            "accepted:2",
+            "completed:1",
+            "completed:2",
+            "published",
+            "published",
+          ]);
+        } else {
+          expect(result).toEqual({ error: failure });
+          expect(order).toEqual(["accepted:1", "accepted:2", "completed:1", "completed:2"]);
+        }
+        expect(counts()).toEqual({ nodes: 1, windows: 1, events: 3, receipts: 1 });
+      } finally {
+        release.resolve();
+        await outcome;
         unsubscribe();
       }
     },

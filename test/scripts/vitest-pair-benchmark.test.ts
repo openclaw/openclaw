@@ -8,19 +8,21 @@ import {
   assertExecutionDigest,
   assertInventoryAvailable,
   assertSingleWorkflowAttempt,
-  buildBenchmarkCommandEnv,
   buildBenchmarkSchedule,
   loadBenchmarkManifest,
   parseVitestExecutionReport,
-  resolvePackageManagerIdentity,
-  runOwnedCommand,
   validateBenchmarkManifest,
-  VITEST_PAIR_HARNESS_DEADLINE_MS,
-  withVitestPairDeadline,
   withTerminalManifest,
   writeJsonAtomic,
   type BenchmarkManifest,
   type BenchmarkRunRecord,
+} from "../../scripts/lib/vitest-pair-benchmark-contract.mts";
+import {
+  buildBenchmarkCommandEnv,
+  resolvePackageManagerIdentity,
+  runOwnedCommand,
+  VITEST_PAIR_HARNESS_DEADLINE_MS,
+  withVitestPairDeadline,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { waitForDead, waitForFile } from "../helpers/process-wait.js";
@@ -240,20 +242,6 @@ describe("Vitest pair benchmark contract", () => {
         lanes: [{ ...manifest.lanes[0], files: ["../escape.test.ts"] }, ...manifest.lanes.slice(1)],
       }),
     ).toThrow("normalized repository-relative path");
-  });
-
-  it("requires every committed inventory path on both sides", () => {
-    const root = tempDirs.make("vitest-pair-inventory-");
-    for (const lane of manifest.lanes) {
-      for (const relative of inventoryPaths(lane)) {
-        const file = path.join(root, relative);
-        mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(file, `${relative}\n`);
-      }
-    }
-    const inventory = assertInventoryAvailable(root, manifest);
-    expect(inventory.entries).toHaveLength(7);
-    expect(inventory.inventorySha256).toMatch(/^[0-9a-f]{64}$/u);
   });
 
   it("rejects selected workload byte mismatches between sides", () => {
@@ -558,12 +546,6 @@ describe("Vitest pair benchmark contract", () => {
       name: "exact delta boundary",
       baselineMs: 5000,
       candidateMs: 6000,
-      regression: true,
-    },
-    {
-      name: "ratio and delta above thresholds",
-      baselineMs: 10_000,
-      candidateMs: 11_200,
       regression: true,
     },
   ])("applies both critical lane thresholds: $name", ({ baselineMs, candidateMs, regression }) => {

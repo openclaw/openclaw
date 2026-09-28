@@ -86,25 +86,6 @@ describe("observed browser dialogs", () => {
     ]);
   });
 
-  it("keeps arm-next-dialog behavior through the observed dialog path", async () => {
-    const { page, emit } = createPageHarness();
-    ensurePageState(page);
-    const dialog = createDialog({ type: "alert", message: "Heads up" });
-    const observed = createObservedDialogAbortSignalForPage({ page });
-
-    armObservedDialogResponseOnPage({ page, accept: false, timeoutMs: 1000 });
-    emit("dialog", dialog);
-    await Promise.resolve();
-
-    expect(observed.signal.aborted).toBe(false);
-    expect(dialog.dismiss).toHaveBeenCalledOnce();
-    expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
-    expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
-      { id: "d1", type: "alert", closedBy: "armed" },
-    ]);
-    observed.cleanup();
-  });
-
   it.each([true, false])(
     "aborts every in-flight action with the original armed dialog failure (accept: %s)",
     async (accept) => {

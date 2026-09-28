@@ -101,12 +101,16 @@ export function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): st
 function resolveProviderSimpleCompletionApi(
   model: Model,
   auth?: AiProviderStreamHookContext["auth"],
+  agentId?: string,
 ): Api {
   const parts = [model.provider, model.id, model.api, model.baseUrl || "default"];
   // Registered wrappers retain their preparation context. A credential switch
   // must select its own policy instead of reusing another grant's wrapper.
   if (auth) {
     parts.push(auth.mode, auth.authFlow ?? "");
+  }
+  if (agentId) {
+    parts.push("agent", agentId);
   }
   return `${PROVIDER_SIMPLE_COMPLETION_API_PREFIX}${parts
     .map((part) => encodeURIComponent(part))
@@ -124,6 +128,7 @@ function applyProviderSimpleCompletionWrapper(
   cfg?: unknown,
   hookSourceApi: Api = model.api,
   auth?: AiProviderStreamHookContext["auth"],
+  agentId?: string,
 ): Model {
   if (model.api.startsWith(PROVIDER_SIMPLE_COMPLETION_API_PREFIX)) {
     return model;
@@ -146,6 +151,7 @@ function applyProviderSimpleCompletionWrapper(
       model,
       sourceApi: hookSourceApi,
       auth,
+      agentId,
       streamFn: sourceStreamFn,
     },
   });
@@ -153,8 +159,17 @@ function applyProviderSimpleCompletionWrapper(
     return model;
   }
 
-  const api = resolveProviderSimpleCompletionApi(model, auth);
-  return registerCustomApi(registry, api, streamFn) ? projectModel(model, { api }) : model;
+  // The registered simple-completion alias is only a dispatch key. Keep the
+  // original wire API visible while the wrapped stream applies request-body
+  // policy; the source stream projects back to dispatchApi before calling the
+  // provider, so provider routing still uses its registered alias.
+  const registeredStreamFn: StreamFn = (runtimeModel, context, options) =>
+    streamFn(projectModel(runtimeModel, { api: hookSourceApi }), context, options);
+
+  const api = resolveProviderSimpleCompletionApi(model, auth, agentId);
+  return registerCustomApi(registry, api, registeredStreamFn)
+    ? projectModel(model, { api })
+    : model;
 }
 
 function prepareCodexSimpleTransportModel<TApi extends Api>(
@@ -264,8 +279,9 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   model: Model<TApi>;
   cfg?: unknown;
   auth?: AiProviderStreamHookContext["auth"];
+  agentId?: string;
 }): Model {
-  const { apiRegistry, model, cfg, auth } = params;
+  const { apiRegistry, model, cfg, auth, agentId } = params;
   const providerStreamModel = prepareProviderStreamModel({ model, cfg, apiRegistry });
   if (providerStreamModel) {
     return applyProviderSimpleCompletionWrapper(
@@ -274,6 +290,7 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
       cfg,
       model.api,
       auth,
+      agentId,
     );
   }
 
@@ -285,6 +302,7 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
       cfg,
       model.api,
       auth,
+      agentId,
     );
   }
 
@@ -298,6 +316,7 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
         cfg,
         model.api,
         auth,
+        agentId,
       );
     }
   }
@@ -314,9 +333,10 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
         cfg,
         model.api,
         auth,
+        agentId,
       );
     }
   }
 
-  return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg, model.api, auth);
+  return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg, model.api, auth, agentId);
 }

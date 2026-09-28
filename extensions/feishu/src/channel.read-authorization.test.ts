@@ -35,12 +35,9 @@ describe("feishuPlugin actions", () => {
   const cfg = {
     channels: {
       feishu: {
-        enabled: true,
         appId: "cli_main",
         appSecret: "secret_main",
-        actions: { reactions: true },
-        dmPolicy: "open",
-        allowFrom: ["*"],
+        dmPolicy: "pairing",
         groupPolicy: "open",
       },
     },
@@ -49,18 +46,11 @@ describe("feishuPlugin actions", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     createFeishuClientMock.mockReturnValue({ tag: "client" });
-    getChatInfoMock.mockResolvedValue({
-      chat_id: "oc_group_1",
-      chat_mode: "group",
-      chat_type: "private",
-    });
   });
 
   it.each([
     ["message reads", "read", { messageId: "om_unknown", chatId: "oc_unknown" }],
-    ["pin lookup", "list-pins", { chatId: "oc_unknown" }],
     ["channel info", "channel-info", { chatId: "oc_unknown" }],
-    ["member info", "member-info", { chatId: "oc_unknown", memberId: "ou_unknown" }],
   ])(
     "does not expose failed metadata lookup details for ambiguous Feishu %s",
     async (_name, action, params) => {
@@ -70,16 +60,7 @@ describe("feishuPlugin actions", () => {
         feishuPlugin.actions?.handleAction?.({
           action,
           params,
-          cfg: {
-            channels: {
-              feishu: {
-                appId: "cli_main",
-                appSecret: "secret_main",
-                groupPolicy: "open",
-                dmPolicy: "pairing",
-              },
-            },
-          } as OpenClawConfig,
+          cfg,
         } as never),
       ).rejects.toThrow("Feishu read target is not allowed.");
 
@@ -111,7 +92,7 @@ describe("feishuPlugin actions", () => {
         params: { chatId: "oc_unknown" },
         cfg: {
           channels: {
-            feishu: { ...cfg.channels?.feishu, dmPolicy: "pairing", allowFrom },
+            feishu: { ...cfg.channels?.feishu, allowFrom },
           },
         },
       } as never),

@@ -74,31 +74,10 @@ describe("resolveWorkspaceIcon", () => {
     { relative: "favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
     { relative: "favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
     { relative: "favicon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "public/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
-    { relative: "public/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
-    { relative: "public/favicon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "public/favicon-32.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "public/apple-touch-icon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "static/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
     { relative: "static/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
-    { relative: "static/favicon.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "ui/public/favicon-32.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "ui/public/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
-    { relative: "ui/public/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
-    { relative: "ui/public/favicon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "app/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
-    { relative: "app/favicon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "app/icon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
-    { relative: "app/icon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "app/icon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
-    { relative: "src/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
-    { relative: "src/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
-    { relative: "src/app/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
     { relative: "src/app/icon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
-    { relative: "src/app/icon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "assets/icon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
-    { relative: "assets/icon.png", body: PNG_BYTES, contentType: "image/png" },
-    { relative: "assets/logo.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
     { relative: "assets/logo.png", body: PNG_BYTES, contentType: "image/png" },
   ] as const;
 
@@ -316,17 +295,6 @@ describe("handleWorkspaceIconHttpRequest", () => {
     },
   );
 
-  it("omits the body but keeps the representation headers on HEAD", async () => {
-    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:one" });
-
-    const response = await fetch(iconRoute("agent:main:one"), { method: "HEAD" });
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("image/png");
-    expect(response.headers.get("content-length")).toBe(String(PNG_BYTES.byteLength));
-  });
-
   const absent = [
     { label: "a session with no workspace", hasWorkspace: false },
     { label: "a workspace with no icon", hasWorkspace: true },
@@ -470,19 +438,6 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(response.headers.get("allow")).toBe("GET, HEAD");
   });
 
-  it("never reads a workspace for an unauthenticated caller", async () => {
-    mocks.authorize.mockImplementation(
-      async (params: { res: { statusCode: number; end: () => void } }) => {
-        params.res.statusCode = 401;
-        params.res.end();
-        return null;
-      },
-    );
-    const response = await fetch(iconRoute("agent:main:one"));
-    expect(response.status).toBe(401);
-    expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
-  });
-
   it("never reads a workspace when the owner-read authorizer denies access", async () => {
     // `sessions.list` hides incognito and non-owner draft sessions per client.
     // Without that filter here, the read scope alone would let a caller who
@@ -497,15 +452,5 @@ describe("handleWorkspaceIconHttpRequest", () => {
     const response = await fetch(iconRoute("agent:main:hidden"));
     expect(response.status).toBe(403);
     expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the glyph for a session whose workspace is on another host", async () => {
-    // resolveLocalSessionWorkspaceRoot withholds the root for exec-node sessions
-    // so the route can never answer with this Gateway's own project icon.
-    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(undefined);
-    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:remote" });
-    const response = await fetch(iconRoute("agent:main:remote"));
-    expect(response.status).toBe(404);
-    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 });

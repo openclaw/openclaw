@@ -1,6 +1,8 @@
+import type { AssistantThreadStartedEvent } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { buildSlackAssistantThreadMetadata, DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../context.js";
+import { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../../channel-meta.js";
+import { buildSlackAssistantThreadMetadata } from "../context.js";
 import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
 
 type SlackAssistantThreadPayload = {
@@ -10,11 +12,8 @@ type SlackAssistantThreadPayload = {
   thread_ts?: string;
 };
 
-type SlackAssistantThreadContextPayload = {
-  channel_id?: string;
-  team_id?: string;
-  enterprise_id?: string | null;
-};
+type SlackAssistantThreadContextPayload =
+  AssistantThreadStartedEvent["assistant_thread"]["context"];
 
 type SlackAssistantThreadEvent = {
   type: "assistant_thread_started" | "assistant_thread_context_changed";
@@ -22,11 +21,6 @@ type SlackAssistantThreadEvent = {
   context?: SlackAssistantThreadContextPayload;
   event_ts?: string;
 };
-
-type SlackAssistantEventRegistrar = (
-  name: SlackAssistantThreadEvent["type"],
-  handler: (args: { event: SlackAssistantThreadEvent; body: unknown }) => Promise<void>,
-) => void;
 
 function normalizeAssistantThread(
   event: SlackAssistantThreadEvent,
@@ -113,13 +107,12 @@ export function registerSlackAssistantEvents(params: {
   trackEvent?: () => void;
 }) {
   const { ctx, trackEvent } = params;
-  const slackApp = ctx.app as unknown as { event: SlackAssistantEventRegistrar };
 
   for (const eventName of [
     "assistant_thread_started",
     "assistant_thread_context_changed",
   ] as const) {
-    slackApp.event(eventName, async ({ event, body }) => {
+    ctx.app.event(eventName, async ({ event, body }) => {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }

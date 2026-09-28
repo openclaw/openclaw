@@ -115,31 +115,25 @@ async function handleBroadcastAction(
   if (input.broadcastAccountPlan && input.broadcastAccountPlan.accountId !== explicitAccountId) {
     throw new Error("Broadcast account plan does not match the requested account.");
   }
-  const targetChannels: Array<{ channel: ChannelId; plugin?: ChannelPlugin }> =
-    channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
-      ? [
-          await resolveMessageChannelSelection({
-            cfg: input.cfg,
-            channel: channelHint,
-            fallbackChannel: input.toolContext?.currentChannelProvider,
-            agentId: input.agentId,
-          }),
-        ]
-      : input.broadcastAccountPlan
-        ? input.broadcastAccountPlan.candidateChannels.map((channel) => ({
-            channel,
-            plugin: getRuntimeVisibleChannelPlugin(channel),
-          }))
-        : await (async () => {
-            const configured = await listConfiguredMessageChannels(input.cfg);
-            if (configured.length === 0) {
-              throw new Error("Broadcast requires at least one configured channel.");
-            }
-            return configured.map((channel) => ({
-              channel,
-              plugin: getRuntimeVisibleChannelPlugin(channel),
-            }));
-          })();
+  let targetChannels: Array<{ channel: ChannelId; plugin?: ChannelPlugin }>;
+  if (channelHint && normalizeOptionalLowercaseString(channelHint) !== "all") {
+    targetChannels = [
+      await resolveMessageChannelSelection({
+        cfg: input.cfg,
+        channel: channelHint,
+        fallbackChannel: input.toolContext?.currentChannelProvider,
+        agentId: input.agentId,
+      }),
+    ];
+  } else {
+    const channels = input.broadcastAccountPlan
+      ? input.broadcastAccountPlan.candidateChannels
+      : await listConfiguredMessageChannels(input.cfg);
+    targetChannels = channels.map((channel) => ({
+      channel,
+      plugin: getRuntimeVisibleChannelPlugin(channel),
+    }));
+  }
   if (targetChannels.length === 0) {
     throw new Error("Broadcast requires at least one configured channel.");
   }
@@ -504,6 +498,7 @@ function buildInternalSourceReplyToolResult(payload: {
     : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
       ? payload.sourceReply.text
       : undefined;
+  const { sourceReplyDeliveryMode, ...details } = payload;
   return {
     content: [
       {
@@ -512,21 +507,8 @@ function buildInternalSourceReplyToolResult(payload: {
       },
     ],
     details: {
-      status: payload.status,
-      deliveryStatus: payload.deliveryStatus,
-      channel: payload.channel,
-      target: payload.target,
-      ...(payload.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
-        : {}),
-      ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {}),
-      ...(payload.sourceReplyTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
-      ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
-      sourceReply: payload.sourceReply,
-      ...(payload.message ? { message: payload.message } : {}),
-      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
-      ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
-      dryRun: payload.dryRun,
+      ...details,
+      ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
     },
   };
 }
@@ -597,7 +579,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           });
           const structuredAttachmentMode = action === "send" ? "all" : "selected";
 
-          const resolveMediaAccess = () =>
+          const mediaAccess =
             input.mediaAccess ??
             resolveAgentScopedOutboundMediaAccess({
               cfg,
@@ -614,7 +596,6 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
               requesterSenderUsername: input.requesterSenderUsername,
               requesterSenderE164: input.requesterSenderE164,
             });
-          const mediaAccess = resolveMediaAccess();
           const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
             ? mediaAccess.readFile
             : undefined;

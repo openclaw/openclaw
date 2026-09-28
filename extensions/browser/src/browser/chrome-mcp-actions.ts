@@ -14,7 +14,6 @@ import { extractJsonMessage, extractSnapshot } from "./chrome-mcp-result.js";
 import {
   callTargetTool,
   callTool,
-  clearChromeMcpSnapshotRefsForTarget,
   getChromeMcpRoutingState,
   listChromeMcpTargetsWithLease,
   resolveChromeMcpSnapshotRef,
@@ -75,7 +74,7 @@ export async function closeChromeMcpTab(
       // Chrome reuses that numeric id.
       const routing = getChromeMcpRoutingState(target.lease.session);
       routing.targetIdByPageId.delete(target.pageId);
-      clearChromeMcpSnapshotRefsForTarget(routing, targetId);
+      routing.snapshotsByTarget.delete(targetId);
     },
   );
 }
@@ -132,10 +131,7 @@ export async function takeChromeMcpSnapshot(
   params: ChromeMcpTargetOperation,
 ): Promise<ChromeMcpSnapshotNode> {
   return await withChromeMcpTarget(params, async (target) => {
-    clearChromeMcpSnapshotRefsForTarget(
-      getChromeMcpRoutingState(target.lease.session),
-      params.targetId,
-    );
+    getChromeMcpRoutingState(target.lease.session).snapshotsByTarget.delete(params.targetId);
     const result = await callTool(
       params.profileName,
       target.profileOptions,
@@ -191,7 +187,7 @@ export async function withChromeMcpDocument<T>(
       });
     } catch (error) {
       if (error instanceof ChromeMcpDocumentUnavailableError) {
-        clearChromeMcpSnapshotRefsForTarget(routing, params.targetId);
+        routing.snapshotsByTarget.delete(params.targetId);
       }
       throw error;
     }

@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   DiscordVoiceSegmentOutcome,
   DiscordVoiceAudioReceipt,
@@ -104,8 +105,7 @@ export class DiscordRealtimeRecording {
   private unavailable = false;
   private stopped = false;
   private publishing = false;
-  private finishCompletion: Promise<void> | undefined;
-  private resolveFinish: (() => void) | undefined;
+  private finishCompletion: ReturnType<typeof createDeferred<void>> | undefined;
   private bytes = 0;
   private finals: Array<{ text: string; bytes: number; startedAt?: number }> = [];
 
@@ -180,17 +180,15 @@ export class DiscordRealtimeRecording {
 
   finish(): void | Promise<void> {
     if (this.finishCompletion) {
-      return this.finishCompletion;
+      return this.finishCompletion.promise;
     }
     // Only an active publication has passed the whole-generation recording eligibility gate.
     if (!this.publishing) {
       this.close();
       return;
     }
-    this.finishCompletion = new Promise<void>((resolve) => {
-      this.resolveFinish = resolve;
-    });
-    return this.finishCompletion;
+    this.finishCompletion = createDeferred<void>();
+    return this.finishCompletion.promise;
   }
 
   close(): void {
@@ -204,8 +202,7 @@ export class DiscordRealtimeRecording {
     }
     this.finals = [];
     if (!this.publishing) {
-      this.resolveFinish?.();
-      this.resolveFinish = undefined;
+      this.finishCompletion?.resolve();
     }
   }
 
@@ -249,7 +246,7 @@ export class DiscordRealtimeRecording {
       }
     } finally {
       this.publishing = false;
-      if (this.resolveFinish) {
+      if (this.finishCompletion) {
         this.close();
       }
     }

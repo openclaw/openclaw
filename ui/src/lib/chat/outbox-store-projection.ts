@@ -4,6 +4,7 @@ import { compareChatQueueOrder } from "./chat-queue-order.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
 import { outboxPayloadMatchesOwner } from "./outbox-payload-store.runtime.ts";
 import type { StoredComposerSession } from "./outbox-store-codec.ts";
+import type { StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
   readProjectedOutboxStore,
   parseStoredChatOutboxScope,
@@ -13,7 +14,6 @@ import {
   subscribeStoredChatOutboxChanges,
   writeStoredOutboxStore,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
 } from "./outbox-store.ts";
 
 export type StoredChatOutbox = StoredChatOutboxScope & { queue: ChatQueueItem[] };

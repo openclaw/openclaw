@@ -5,6 +5,7 @@
   },
   "include": [
     "../../ui/src/main.ts",
+    "../../ui/src/app/shell-layout-traits.test.ts",
     "../../ui/src/pages/**/*.test.ts",
     "../../ui/src/pages/**/*.test.tsx"
   ],

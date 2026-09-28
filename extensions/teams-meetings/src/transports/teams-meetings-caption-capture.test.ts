@@ -1,9 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  teamsMeetingStatusScript,
-  teamsMeetingTranscriptScript,
-} from "./teams-meetings-page-scripts.js";
+import { teamsMeetingTranscriptScript } from "./teams-meetings-page-scripts.js";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 import {
   URL,
@@ -16,31 +13,23 @@ import {
   runStatusScript,
 } from "./teams-meetings-platform-adapter.test-helpers.js";
 
+function transcriptReader(
+  window: Record<string, unknown>,
+  { currentUrl = URL, finalize = false } = {},
+) {
+  return runInNewContext(`(${teamsMeetingTranscriptScript(URL, "session-1", finalize)})`, {
+    URL: globalThis.URL,
+    clearTimeout,
+    location: new globalThis.URL(currentUrl),
+    window,
+  }) as () => string;
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("Microsoft Teams meeting captions and permissions", () => {
-  it("builds the guest join script from centralized stable selectors and text fallbacks", () => {
-    const script = teamsMeetingStatusScript({
-      allowMicrophone: true,
-      allowSessionAdoption: true,
-      autoJoin: true,
-      captureCaptions: true,
-      guestName: "OpenClaw Guest",
-      meetingSessionId: "session-1",
-      meetingUrl: URL,
-      waitForInCallMs: 60_000,
-    });
-    expect(script).toContain('data-tid=\\"prejoin-display-name-input\\"');
-    expect(script).toContain('data-tid=\\"call-hangup\\"');
-    expect(script).toContain("continue on this browser");
-    expect(script).toContain("someone will let you in shortly");
-    expect(script).toContain("setSinkId");
-    expect(script).toContain("blackhole 2ch");
-    expect(script).toContain("openclaw meeting audio");
-  });
-
   it("enables live captions and captures the validated Teams caption row DOM", async () => {
     const { result, window } = await runCaptionRows([
       captionRow("OpenClaw QA", "Copper lantern validates Teams captions seven."),
@@ -54,16 +43,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       lastCaptionText: "Copper lantern validates Teams captions seven.",
       transcriptLines: 1,
     });
-    const readTranscript = runInNewContext(
-      `(${teamsMeetingTranscriptScript(URL, "session-1", false)})`,
-      {
-        URL: globalThis.URL,
-        clearTimeout,
-        document: {},
-        location: new globalThis.URL(URL),
-        window,
-      },
-    ) as () => string;
+    const readTranscript = transcriptReader(window);
     expect(JSON.parse(readTranscript())).toMatchObject({
       droppedLines: 0,
       epoch: "teams-caption-epoch",
@@ -129,16 +109,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(state.visible).toHaveLength(505);
     expect(state.droppedLines).toBe(0);
     expect(result.transcriptLines).toBe(505);
-    const readTranscript = runInNewContext(
-      `(${teamsMeetingTranscriptScript(URL, "session-1", false)})`,
-      {
-        URL: globalThis.URL,
-        clearTimeout,
-        document: {},
-        location: new globalThis.URL(URL),
-        window,
-      },
-    ) as () => string;
+    const readTranscript = transcriptReader(window);
     const transcript = JSON.parse(readTranscript()) as { droppedLines: number; lines: unknown[] };
     expect(transcript.lines).toHaveLength(500);
     expect(transcript.droppedLines).toBe(5);
@@ -437,16 +408,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       },
     });
     const captions = window["__openclawTeamsCaptions"] as Record<string, unknown>;
-    const readTranscript = runInNewContext(
-      `(${teamsMeetingTranscriptScript(URL, "session-1", true)})`,
-      {
-        URL: globalThis.URL,
-        clearTimeout,
-        document: {},
-        location: new globalThis.URL(currentUrl),
-        window,
-      },
-    ) as () => string;
+    const readTranscript = transcriptReader(window, { currentUrl, finalize: true });
     const transcript = JSON.parse(readTranscript()) as { lines: Array<{ text: string }> };
 
     expect(disconnects).toBe(1);
@@ -496,15 +458,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
         sessionId: "session-2",
       },
     };
-    const readTranscript = runInNewContext(
-      `(${teamsMeetingTranscriptScript(URL, "session-1", true)})`,
-      {
-        URL: globalThis.URL,
-        clearTimeout,
-        location: new globalThis.URL(CONSUMER_URL),
-        window,
-      },
-    ) as () => string;
+    const readTranscript = transcriptReader(window, { currentUrl: CONSUMER_URL, finalize: true });
 
     expect(JSON.parse(readTranscript())).toMatchObject({
       urlMatched: true,
@@ -591,74 +545,43 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     expect(current.epoch).toBe("teams-caption-epoch");
   });
 
-  it("atomically refuses to replace a newer live owner during recovery", async () => {
-    let disconnects = 0;
-    const leave = control({ label: "Leave" });
-    const priorMeeting = {
-      identity: "teams-work:19:meeting_test@thread.v2",
-      inCallControl: leave,
-      inCallUrl: URL,
-      sessionId: "newer-session",
-      verifiedAt: Date.now(),
-    };
-    const priorCaptions = {
-      droppedLines: 0,
-      lines: [{ text: "Newer live caption" }],
-      observer: { disconnect: () => (disconnects += 1) },
-      observerInstalled: true,
-      sessionId: "newer-session",
-      visible: [],
-    };
+  it.each(["session-1", ""])(
+    "refuses recovery session %j against a committed owner",
+    async (meetingSessionId) => {
+      let disconnects = 0;
+      const leave = control({ label: "Leave" });
+      const priorMeeting = {
+        identity: "teams-work:19:meeting_test@thread.v2",
+        inCallControl: leave,
+        inCallUrl: URL,
+        sessionId: "active-session",
+        verifiedAt: Date.now(),
+      };
+      const priorCaptions = {
+        droppedLines: 0,
+        lines: [{ text: "Active session caption" }],
+        observer: { disconnect: () => (disconnects += 1) },
+        observerInstalled: true,
+        sessionId: "active-session",
+        visible: [],
+      };
 
-    const { result, window } = await runCaptionStatusScript({
-      allowSessionAdoption: false,
-      leave,
-      priorCaptions,
-      priorMeeting,
-    });
+      const { result, window } = await runCaptionStatusScript({
+        allowSessionAdoption: false,
+        leave,
+        meetingSessionId,
+        priorCaptions,
+        priorMeeting,
+      });
 
-    expect(result).toMatchObject({
-      manualAction: { reason: "teams-session-conflict" },
-    });
-    expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
-    expect(window["__openclawTeamsCaptions"]).toBe(priorCaptions);
-    expect(disconnects).toBe(0);
-  });
-
-  it("treats a missing recovery session ID as foreign to committed page state", async () => {
-    let disconnects = 0;
-    const leave = control({ label: "Leave" });
-    const priorMeeting = {
-      identity: "teams-work:19:meeting_test@thread.v2",
-      inCallControl: leave,
-      inCallUrl: URL,
-      sessionId: "active-session",
-      verifiedAt: Date.now(),
-    };
-    const priorCaptions = {
-      droppedLines: 0,
-      lines: [{ text: "Active session caption" }],
-      observer: { disconnect: () => (disconnects += 1) },
-      observerInstalled: true,
-      sessionId: "active-session",
-      visible: [],
-    };
-
-    const { result, window } = await runCaptionStatusScript({
-      allowSessionAdoption: false,
-      leave,
-      meetingSessionId: "",
-      priorCaptions,
-      priorMeeting,
-    });
-
-    expect(result).toMatchObject({
-      manualAction: { reason: "teams-session-conflict" },
-    });
-    expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
-    expect(window["__openclawTeamsCaptions"]).toBe(priorCaptions);
-    expect(disconnects).toBe(0);
-  });
+      expect(result).toMatchObject({
+        manualAction: { reason: "teams-session-conflict" },
+      });
+      expect(window[MEETING_STATE_KEY]).toBe(priorMeeting);
+      expect(window["__openclawTeamsCaptions"]).toBe(priorCaptions);
+      expect(disconnects).toBe(0);
+    },
+  );
 
   it("repairs a stale caption owner for the committed meeting session", async () => {
     let disconnects = 0;
@@ -691,13 +614,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
     const captions = first.window["__openclawTeamsCaptions"] as Record<string, unknown>;
     captions.observer = { disconnect: () => (disconnects += 1) };
     captions.observerInstalled = true;
-    const finalize = runInNewContext(`(${teamsMeetingTranscriptScript(URL, "session-1", true)})`, {
-      URL: globalThis.URL,
-      clearTimeout,
-      document: {},
-      location: new globalThis.URL(URL),
-      window: first.window,
-    }) as () => string;
+    const finalize = transcriptReader(first.window, { finalize: true });
     finalize();
 
     expect(disconnects).toBe(1);

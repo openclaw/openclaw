@@ -6,10 +6,21 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { resolveStateDir } from "../config/paths.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+  markGatewayRestartDraining,
+} from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentJobs from "./agent-turn/agent-job.js";
@@ -31,9 +42,13 @@ installGatewayTestHooks({ scope: "suite" });
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 
 describe("public Gateway close request lifetime", () => {
-  it.for(["connected", "disconnected"] as const)(
-    "retires agent.wait for a %s client before zero-budget close joins it",
-    async (connection, { signal }) => {
+  it.for([
+    { name: "connected client", finish: "close" },
+    { name: "disconnected client", finish: "disconnect" },
+    { name: "client across committed restart drain", finish: "drain" },
+  ] as const)(
+    "retires agent.wait for a $name before zero-budget close joins it",
+    async ({ finish }, { signal }) => {
       const runId = randomUUID();
       const entered = createDeferredCore();
       const originalWait = agentJobs.waitForAgentJob;
@@ -83,11 +98,21 @@ describe("public Gateway close request lifetime", () => {
         await gateway.server.startupSettled;
         phase = "WebSocket connection";
         ws = await gateway.openWs();
-        await connectOk(ws, { scopes: ["operator.admin"] });
-        const prematureReply = onceMessage<{ type: string; id: string; error?: { code?: string } }>(
+        // An ephemeral CLI avoids admitting history prewarming alongside the waiter.
+        await connectOk(ws, {
+          scopes: ["operator.admin"],
+          client: {
+            id: GATEWAY_CLIENT_IDS.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+            version: "1.0.0",
+            platform: "test",
+          },
+        });
+        const response = onceMessage<Pick<ResponseFrame, "type" | "id" | "ok" | "error">>(
           ws,
           (frame) => frame.type === "res" && frame.id === "wait-for-shutdown",
-        ).then((frame) => {
+        );
+        const prematureReply = response.then((frame) => {
           throw new Error(
             `agent.wait returned before waiter registration: ${frame.error?.code ?? "success"}`,
           );
@@ -97,24 +122,47 @@ describe("public Gateway close request lifetime", () => {
             type: "req",
             id: "wait-for-shutdown",
             method: "agent.wait",
-            params: { runId, timeoutMs: 600_000 },
+            params: { runId, timeoutMs: 1_500_000 },
           }),
         );
         requestSent = true;
         phase = "waiter admission";
         await Promise.race([entered.promise, prematureReply]);
-        if (connection === "disconnected") {
-          const disconnected = once(ws, "close");
-          ws.close();
-          await disconnected;
-        }
-        await nextTurn();
-        expect(settled).toBe(false);
+        expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(
+          1,
+        );
         // A failing owner is released through the real terminal registry, not an abandoned wait.
         releaseTimer = setTimeout(() => {
           emergencyRelease = true;
           releaseWait();
         }, 5_000);
+        if (finish === "disconnect") {
+          const disconnected = once(ws, "close");
+          ws.close();
+          await disconnected;
+          phase = "disconnect settlement";
+          await observed;
+        } else if (finish === "drain") {
+          phase = "restart drain";
+          markGatewayRestartDraining("stop (SIGTERM)");
+          expect(await response).toMatchObject({
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "agent.wait unavailable during gateway restart",
+              retryable: true,
+              retryAfterMs: 1_000,
+              details: { reason: "gateway-restarting" },
+            },
+          });
+          await observed;
+        }
+        await nextTurn();
+        expect(settled).toBe(finish !== "close");
+        expect(getActiveGatewayRootWorkCount()).toBe(finish === "close" ? 1 : 0);
+        if (finish === "drain") {
+          expect(await waitForGatewayActiveWork(0)).toMatchObject({ drained: true });
+        }
         phase = "zero-budget close";
         const finishedAtClose: boolean[] = [];
         const firstClose = gateway.server
@@ -143,7 +191,7 @@ describe("public Gateway close request lifetime", () => {
     },
   );
 
-  it("joins both handlers and concurrent close callers before fixture restoration", async ({
+  it("joins both handlers across restart drain and concurrent close before fixture restoration", async ({
     signal,
   }) => {
     const expectHeldWork = await observeHeldGatewayWorkDrain();
@@ -200,6 +248,7 @@ describe("public Gateway close request lifetime", () => {
         (frame) => frame.type === "event" && frame.event === "shutdown",
       );
 
+      markGatewayRestartDraining("stop (SIGTERM)");
       for (let index = 0; index < 2; index++) {
         closing.push(
           gateway.server.close({ reason: "request lifetime proof" }).then(() => {

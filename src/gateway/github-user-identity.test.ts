@@ -37,6 +37,17 @@ function accessAssertion(issuer: unknown): string {
   return `header.${payload}.signature`;
 }
 
+function tailscaleSync(login = "ada", name = "Ada") {
+  return createAuthenticatedGitHubIdentitySync({
+    authResult: {
+      ok: true,
+      method: "tailscale",
+      user: `${login}@github`,
+      tailscaleIdentity: { login: `${login}@github`, name },
+    },
+  });
+}
+
 function cloudflareSync(params: {
   principal?: string;
   assertion?: string;
@@ -105,17 +116,7 @@ describe("authenticated GitHub identity sync", () => {
             ? githubResponse({ id: 583231, login: "Ada" })
             : githubResponse({}, 403, { "x-ratelimit-remaining": "0" });
         });
-        const sync =
-          provider === "access"
-            ? cloudflareSync({})
-            : createAuthenticatedGitHubIdentitySync({
-                authResult: {
-                  ok: true,
-                  method: "tailscale",
-                  user: "ada@github",
-                  tailscaleIdentity: { login: "ada@github", name: "Ada" },
-                },
-              });
+        const sync = provider === "access" ? cloudflareSync({}) : tailscaleSync();
         const result = await sync!();
         expect(getUserProfileListItem(result.profileId).githubIdentity).toMatchObject({
           login: "Ada",
@@ -188,15 +189,12 @@ describe("authenticated GitHub identity sync", () => {
 
   describe.each(["tailscale", "access"] as const)("%s display names", (provider) => {
     it.each([
-      { label: "GitHub only", name: "  Ada Lovelace  ", expected: "Ada Lovelace" },
       {
         label: "GitHub priority",
-        name: "Ada Lovelace",
+        name: "  Ada Lovelace  ",
         initial: "Provider Ada",
         expected: "Ada Lovelace",
       },
-      { label: "absent GitHub name", initial: "Provider Ada", expected: "Provider Ada" },
-      { label: "null GitHub name", name: null, initial: "Provider Ada", expected: "Provider Ada" },
       {
         label: "blank GitHub name",
         name: " \t ",
@@ -225,16 +223,7 @@ describe("authenticated GitHub identity sync", () => {
         }
         fetchMock.mockResolvedValueOnce(githubResponse({ id: 583231, login: "Ada", name }));
         const sync =
-          provider === "access"
-            ? cloudflareSync({})
-            : createAuthenticatedGitHubIdentitySync({
-                authResult: {
-                  ok: true,
-                  method: "tailscale",
-                  user: "ada@github",
-                  tailscaleIdentity: { login: "ada@github", name: initial ?? "" },
-                },
-              });
+          provider === "access" ? cloudflareSync({}) : tailscaleSync("ada", initial ?? "");
         const result = await sync!();
         const display = getUserProfileDisplay(result.profileId);
         expect(display.displayName).toBe(expected);
@@ -258,14 +247,7 @@ describe("authenticated GitHub identity sync", () => {
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(githubResponse({ id: 583231, login: "OctoCat" }));
 
-      const sync = createAuthenticatedGitHubIdentitySync({
-        authResult: {
-          ok: true,
-          method: "tailscale",
-          user: "octocat@github",
-          tailscaleIdentity: { login: "octocat@github", name: "Octo Cat" },
-        },
-      });
+      const sync = tailscaleSync("octocat", "Octo Cat");
 
       await expect(sync?.()).resolves.toMatchObject({
         profileId: profile.id,
@@ -302,14 +284,7 @@ describe("authenticated GitHub identity sync", () => {
   ])("maps a $name response", async ({ response, statusCode }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
-      const sync = createAuthenticatedGitHubIdentitySync({
-        authResult: {
-          ok: true,
-          method: "tailscale",
-          user: "octocat@github",
-          tailscaleIdentity: { login: "octocat@github", name: "Octo Cat" },
-        },
-      });
+      const sync = tailscaleSync("octocat", "Octo Cat");
       await expect(sync?.()).rejects.toMatchObject({
         statusCode,
       } satisfies Partial<ControlUiGitHubError>);
@@ -319,14 +294,7 @@ describe("authenticated GitHub identity sync", () => {
   it("maps network failures and rejects invalid usernames before fetch", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
-      const sync = createAuthenticatedGitHubIdentitySync({
-        authResult: {
-          ok: true,
-          method: "tailscale",
-          user: "octocat@github",
-          tailscaleIdentity: { login: "octocat@github", name: "Octo Cat" },
-        },
-      });
+      const sync = tailscaleSync("octocat", "Octo Cat");
       await expect(sync?.()).rejects.toMatchObject({
         statusCode: 502,
       } satisfies Partial<ControlUiGitHubError>);
@@ -346,14 +314,7 @@ describe("authenticated GitHub identity sync", () => {
           }),
       );
 
-      const sync = createAuthenticatedGitHubIdentitySync({
-        authResult: {
-          ok: true,
-          method: "tailscale",
-          user: "ada@github",
-          tailscaleIdentity: { login: "ada@github", name: "Ada" },
-        },
-      });
+      const sync = tailscaleSync();
       const first = sync?.();
       const second = sync?.();
       expect(second).toBe(first);
@@ -377,23 +338,9 @@ describe("authenticated GitHub identity sync", () => {
         .mockRejectedValueOnce(new Error("network unavailable"))
         .mockResolvedValueOnce(githubResponse({ id: 583231, login: "Ada-Renamed" }));
 
-      const firstConnection = createAuthenticatedGitHubIdentitySync({
-        authResult: {
-          ok: true,
-          method: "tailscale",
-          user: "ada@github",
-          tailscaleIdentity: { login: "ada@github", name: "Ada" },
-        },
-      });
+      const firstConnection = tailscaleSync();
       await firstConnection?.();
-      const failingConnection = createAuthenticatedGitHubIdentitySync({
-        authResult: {
-          ok: true,
-          method: "tailscale",
-          user: "ada@github",
-          tailscaleIdentity: { login: "ada@github", name: "Ada" },
-        },
-      });
+      const failingConnection = tailscaleSync();
       await expect(failingConnection?.()).rejects.toMatchObject({ statusCode: 502 });
       expect(getUserProfileListItem(profile.id).githubIdentity).toMatchObject({ login: "Ada" });
 

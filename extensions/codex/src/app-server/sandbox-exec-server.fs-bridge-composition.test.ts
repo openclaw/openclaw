@@ -1,8 +1,4 @@
-// RPC-to-bridge composition tests drive the sandbox exec-server filesystem RPC
-// through a real bridge implementation (real shell execution, real symlinks)
-// and verify authorization decisions against observed filesystem effects:
-// protected canonical destinations are rejected before any mutation runs, and
-// allowed writes land exactly on the authorized canonical destination.
+// Exercise RPC authorization against real bridge scripts, symlinks, and filesystem effects.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -26,8 +22,6 @@ import {
 } from "./sandbox-exec-server.test-helpers.js";
 
 const SANDBOX_MOUNT = "/workspace";
-
-type RemoteShellCommand = SandboxBackendCommandParams;
 
 function rewritePortableStatScript(script: string): string {
   if (process.platform !== "darwin") {
@@ -62,9 +56,8 @@ function rewriteMountArgs(args: string[] | undefined, mountDir: string): string[
   );
 }
 
-/** Spawns the exact shell script locally with rewritten sandbox paths. */
 function runLocalShellScript(
-  command: RemoteShellCommand,
+  command: SandboxBackendCommandParams,
   mountDir: string,
 ): Promise<SandboxBackendCommandResult> {
   return new Promise((resolve, reject) => {
@@ -94,53 +87,6 @@ function runLocalShellScript(
   });
 }
 
-/**
- * Real sandbox backend for the composition harness: backend commands (such as
- * the directory listing used by recursive copies) execute for real against
- * the temp workspace with rewritten sandbox paths.
- */
-function createLocalExecBackend(mountDir: string) {
-  return {
-    id: "local-composition",
-    runtimeId: "codex-fs-composition",
-    runtimeLabel: "codex-fs-composition",
-    workdir: mountDir,
-    buildExecSpec: async ({
-      command,
-      env,
-    }: {
-      command: string;
-      env: Record<string, string | undefined>;
-    }) => ({
-      argv: ["sh", "-c", command],
-      env,
-      stdinMode: "pipe-closed" as const,
-    }),
-    runShellCommand: async (command: RemoteShellCommand) =>
-      await runLocalShellScript(command, mountDir),
-  };
-}
-
-/**
- * Executes remote shell snippets locally so the bridge scripts run for real
- * against a temp workspace. The bridge speaks container paths under
- * SANDBOX_MOUNT; the shim rewrites those argv paths onto the temp workspace.
- */
-function createLocalShellRemoteRuntime(remoteMountDir: string) {
-  const mutationCalls: RemoteShellCommand[] = [];
-  const runtime = {
-    remoteWorkspaceDir: SANDBOX_MOUNT,
-    remoteAgentWorkspaceDir: SANDBOX_MOUNT,
-    runRemoteShellScript: async (command: RemoteShellCommand) => {
-      if (command.script.includes("operation = sys.argv[1]")) {
-        mutationCalls.push(command);
-      }
-      return await runLocalShellScript(command, remoteMountDir);
-    },
-  };
-  return { mutationCalls, runtime };
-}
-
 afterEach(async () => {
   await sandboxExecServerRegistry.closeAll();
 });
@@ -157,12 +103,20 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
         const realDir = path.join(mountDir, "real");
         await fs.mkdir(gitDir);
         await fs.mkdir(realDir);
-        // A workspace alias that canonicalizes into the protected .git
-        // directory, and one that canonicalizes into a writable directory.
         await fs.symlink(gitDir, path.join(mountDir, "alias"));
         await fs.symlink(realDir, path.join(mountDir, "alias-real"));
 
-        const { mutationCalls, runtime } = createLocalShellRemoteRuntime(mountDir);
+        const mutationCalls: SandboxBackendCommandParams[] = [];
+        const runtime = {
+          remoteWorkspaceDir: SANDBOX_MOUNT,
+          remoteAgentWorkspaceDir: SANDBOX_MOUNT,
+          runRemoteShellScript: async (command: SandboxBackendCommandParams) => {
+            if (command.script.includes("operation = sys.argv[1]")) {
+              mutationCalls.push(command);
+            }
+            return await runLocalShellScript(command, mountDir);
+          },
+        };
         const realBridge = createRemoteShellSandboxFsBridge({
           sandbox: {
             workspaceDir: mountDir,
@@ -172,8 +126,9 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
           runtime: runtime as never,
         });
         const sandbox = {
-          ...createSandboxContext({}),
-          backend: createLocalExecBackend(mountDir),
+          ...createSandboxContext({
+            runShellCommand: async (command) => await runLocalShellScript(command, mountDir),
+          }),
           fsBridge: realBridge,
         };
 
@@ -193,7 +148,6 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
           ],
         });
 
-        // Protected canonical destination: denied before any filesystem effect.
         await expect(
           rpc(socket, "fs/writeFile", {
             path: "file:///workspace/alias/config",
@@ -204,10 +158,8 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
         await expect(fs.stat(path.join(gitDir, "config"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        // The real bridge never received a mutation for the denied request.
         expect(mutationCalls).toHaveLength(0);
 
-        // Allowed direct write lands on the authorized destination.
         await rpc(socket, "fs/writeFile", {
           path: "file:///workspace/real-note.txt",
           dataBase64: Buffer.from("allowed").toString("base64"),
@@ -218,8 +170,6 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
         );
         expect(mutationCalls.length).toBeGreaterThan(0);
 
-        // Allowed aliased write pins the canonical destination: the payload
-        // lands on the alias target, not on the lexical request path.
         await rpc(socket, "fs/writeFile", {
           path: "file:///workspace/alias-real/config",
           dataBase64: Buffer.from("aliased").toString("base64"),
@@ -227,11 +177,7 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
         });
         await expect(fs.readFile(path.join(realDir, "config"), "utf8")).resolves.toBe("aliased");
 
-        // Recursive directory copy into the existing mount root: directory
-        // destinations resolve with directory semantics (the root itself), so
-        // the copy reaches the existing-root path instead of being rejected
-        // by file-backed parent resolution. Directory copies place the source
-        // children inside the destination.
+        // Existing directory roots must resolve as directories, not file-backed parents.
         await fs.mkdir(path.join(mountDir, "nested", "src-dir"), { recursive: true });
         await fs.writeFile(path.join(mountDir, "nested", "src-dir", "child.txt"), "dir-copy");
         await rpc(socket, "fs/copy", {
@@ -244,8 +190,7 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
           "dir-copy",
         );
 
-        // A destination alias into the canonical source subtree is rejected
-        // before mkdirp or any child copy can mutate the destination.
+        // An alias must not hide a copy into the source subtree.
         const sourceSubdir = path.join(mountDir, "nested", "src-dir", "subdir");
         await fs.mkdir(sourceSubdir);
         await fs.symlink(sourceSubdir, path.join(mountDir, "source-subdir-alias"));
@@ -263,9 +208,7 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
           code: "ENOENT",
         });
 
-        // Recursive directory copy into an existing directory alias: the
-        // directory pin follows the canonical directory, so children land in
-        // the alias target.
+        // A directory alias must pin the target directory itself.
         const dirTarget = path.join(mountDir, "dir-target");
         await fs.mkdir(dirTarget, { recursive: true });
         await fs.symlink(dirTarget, path.join(mountDir, "alias-dir"));

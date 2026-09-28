@@ -37,7 +37,6 @@ export function registerMxcPlugin(api: OpenClawPluginApi): void {
   // directory-access ACEs, which only degrades in-sandbox directory listing.
   warnMxcHostPrepIfNeeded();
 
-  // Register the backend
   const unregister = registerSandboxBackend("mxc", {
     factory: createMxcSandboxBackendFactory(config),
     manager: mxcSandboxBackendManager,

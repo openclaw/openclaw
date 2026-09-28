@@ -50,10 +50,6 @@ export function createInMemorySessionStore(
   const onSessionRemoved = options.onSessionRemoved;
   const sessions = new Map<string, AcpSession>();
 
-  const touchSession = (session: AcpSession, nowMs: number) => {
-    session.lastTouchedAt = nowMs;
-  };
-
   const removeSession = (sessionId: string) => {
     const session = sessions.get(sessionId);
     if (!session) {
@@ -107,7 +103,7 @@ export function createInMemorySessionStore(
         existingSession.ledgerSessionId = params.ledgerSessionId;
       }
       existingSession.cwd = params.cwd;
-      touchSession(existingSession, nowMs);
+      existingSession.lastTouchedAt = nowMs;
       return existingSession;
     }
     reapIdleSessions(nowMs);
@@ -132,12 +128,10 @@ export function createInMemorySessionStore(
     return session;
   };
 
-  const hasSession: AcpSessionStore["hasSession"] = (sessionId) => sessions.has(sessionId);
-
   const getSession: AcpSessionStore["getSession"] = (sessionId) => {
     const session = sessions.get(sessionId);
     if (session) {
-      touchSession(session, now());
+      session.lastTouchedAt = now();
     }
     return session;
   };
@@ -149,13 +143,13 @@ export function createInMemorySessionStore(
     }
     session.activeRunId = runId;
     session.abortController = abortController;
-    touchSession(session, now());
+    session.lastTouchedAt = now();
   };
 
   const releaseActiveRun = (session: AcpSession) => {
     session.activeRunId = null;
     session.abortController = null;
-    touchSession(session, now());
+    session.lastTouchedAt = now();
   };
 
   const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId, expectedRunId) => {
@@ -178,8 +172,6 @@ export function createInMemorySessionStore(
     return true;
   };
 
-  const deleteSession: AcpSessionStore["deleteSession"] = (sessionId) => removeSession(sessionId);
-
   const dispose: InMemoryAcpSessionStore["dispose"] = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
@@ -193,12 +185,12 @@ export function createInMemorySessionStore(
 
   return {
     createSession,
-    hasSession,
+    hasSession: (sessionId) => sessions.has(sessionId),
     getSession,
     setActiveRun,
     clearActiveRun,
     cancelActiveRun,
-    deleteSession,
+    deleteSession: removeSession,
     dispose,
   };
 }

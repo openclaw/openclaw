@@ -25,8 +25,9 @@ export async function withStateDirEnv<T>(
   const snapshot = snapshotStateDirEnv();
   const { cleanupSessionStateForTest } = await import("../test-utils/session-state-cleanup.js");
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  const stateDir = path.join(tempRoot, "state");
-  await fs.mkdir(stateDir, { recursive: true });
+  const requestedStateDir = path.join(tempRoot, "state");
+  await fs.mkdir(requestedStateDir, { recursive: true });
+  const stateDir = await fs.realpath(requestedStateDir);
   setStateDirEnv(stateDir);
   try {
     return await fn({ tempRoot, stateDir });

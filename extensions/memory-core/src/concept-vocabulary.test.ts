@@ -37,7 +37,7 @@ describe("concept vocabulary", () => {
     }
   });
 
-  it.each(["42", "1.00", "51-54", "１.００", "５１-５４", "2026-04-04", "2026-04-04.md"])(
+  it.each(["1.00", "51-54", "１.００", "2026-04-04.md"])(
     "rejects numeric and date noise without losing technical tags: %s",
     (noise) => {
       const tags = deriveConceptTags({

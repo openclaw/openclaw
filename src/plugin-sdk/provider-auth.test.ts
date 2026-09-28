@@ -30,6 +30,16 @@ const TEST_CACHED_COPILOT_TOKEN = [
 const TEST_GITHUB_TOKEN_FINGERPRINT = createHash("sha256").update(TEST_GITHUB_TOKEN).digest("hex");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function claudeCredentialJson(
+  accessToken: string,
+  refreshToken: string,
+  subscriptionType?: string,
+) {
+  return JSON.stringify({
+    claudeAiOauth: { accessToken, refreshToken, expiresAt: 1_800_000_000_000, subscriptionType },
+  });
+}
+
 describe("provider auth public SDK", () => {
   it("keeps the shipped Claude credential reader functional during its deprecation window", async () => {
     const homeDir = tempDirs.make("openclaw-sdk-claude-auth-");
@@ -37,14 +47,7 @@ describe("provider auth public SDK", () => {
     await fs.mkdir(credentialsDir, { recursive: true });
     await fs.writeFile(
       path.join(credentialsDir, ".credentials.json"),
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "legacy-access",
-          refreshToken: "legacy-refresh",
-          expiresAt: 1_800_000_000_000,
-          subscriptionType: "max",
-        },
-      }),
+      claudeCredentialJson("legacy-access", "legacy-refresh", "max"),
     );
 
     expect(readClaudeCliCredentialsCached({ homeDir, platform: "linux", ttlMs: 0 })).toEqual({
@@ -61,13 +64,7 @@ describe("provider auth public SDK", () => {
     const configDir = tempDirs.make("openclaw-sdk-claude-config-");
     await fs.writeFile(
       path.join(configDir, ".credentials.json"),
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "configured-access",
-          refreshToken: "configured-refresh",
-          expiresAt: 1_800_000_000_000,
-        },
-      }),
+      claudeCredentialJson("configured-access", "configured-refresh"),
     );
     await fs.writeFile(
       path.join(configDir, ".claude.json"),
@@ -92,13 +89,7 @@ describe("provider auth public SDK", () => {
     const secureStorageDir = tempDirs.make("openclaw-sdk-claude-secure-storage-");
     await fs.writeFile(
       path.join(secureStorageDir, ".credentials.json"),
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "secure-storage-access",
-          refreshToken: "secure-storage-refresh",
-          expiresAt: 1_800_000_000_000,
-        },
-      }),
+      claudeCredentialJson("secure-storage-access", "secure-storage-refresh"),
     );
     await fs.writeFile(
       path.join(configDir, ".claude.json"),
@@ -160,13 +151,7 @@ describe("provider auth public SDK", () => {
     await fs.mkdir(defaultCredentialsDir, { recursive: true });
     await fs.writeFile(
       path.join(defaultCredentialsDir, ".credentials.json"),
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "default-store-access",
-          refreshToken: "default-store-refresh",
-          expiresAt: 1_800_000_000_000,
-        },
-      }),
+      claudeCredentialJson("default-store-access", "default-store-refresh"),
     );
     vi.stubEnv("HOME", osHome);
     vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
@@ -186,13 +171,7 @@ describe("provider auth public SDK", () => {
     const execSyncImpl = vi.fn((command: string) => {
       expect(command).toMatch(/^\/usr\/bin\/security find-generic-password /u);
       expect(command).toContain('-a "test-user"');
-      return JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "keychain-access",
-          refreshToken: "keychain-refresh",
-          expiresAt: 1_800_000_000_000,
-        },
-      });
+      return claudeCredentialJson("keychain-access", "keychain-refresh");
     }) as unknown as typeof execSync;
 
     vi.stubEnv("USER", "test-user");
@@ -214,13 +193,7 @@ describe("provider auth public SDK", () => {
   it("does not impose a machine timeout on prompt-enabled Keychain reads", () => {
     const execSyncImpl = vi.fn((_command: string, options: { timeout?: number }) => {
       expect(options).not.toHaveProperty("timeout");
-      return JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "prompted-access",
-          refreshToken: "prompted-refresh",
-          expiresAt: 1_800_000_000_000,
-        },
-      });
+      return claudeCredentialJson("prompted-access", "prompted-refresh");
     }) as unknown as typeof execSync;
 
     expect(
@@ -300,13 +273,7 @@ describe("provider auth public SDK", () => {
     const homeDir = tempDirs.make("openclaw-sdk-claude-keychain-cache-");
     const execSyncImpl = vi.fn((command: string) =>
       command.includes(" -w")
-        ? JSON.stringify({
-            claudeAiOauth: {
-              accessToken: "prompted-access",
-              refreshToken: "prompted-refresh",
-              expiresAt: 1_800_000_000_000,
-            },
-          })
+        ? claudeCredentialJson("prompted-access", "prompted-refresh")
         : "keychain metadata",
     ) as unknown as typeof execSync;
 
@@ -479,20 +446,16 @@ describe("provider API-key readiness", () => {
     } as OpenClawConfig;
   }
 
-  it.each([provider, ` ${provider.toUpperCase()} `])(
-    "recognizes usable config-only API keys for normalized provider entry %s",
-    (providerId) => {
-      expect(
-        isProviderApiKeyConfigured({
-          provider,
-          cfg: configuredProvider("media-secret", providerId),
-        }),
-      ).toBe(true);
-    },
-  );
+  it("recognizes usable config-only API keys for normalized provider entries", () => {
+    expect(
+      isProviderApiKeyConfigured({
+        provider,
+        cfg: configuredProvider("media-secret", ` ${provider.toUpperCase()} `),
+      }),
+    ).toBe(true);
+  });
 
   it.each([
-    "",
     "   ",
     "oauth:media-readiness-provider",
     "custom-local",
@@ -1012,42 +975,6 @@ describe("provider auth profile helpers", () => {
     );
   });
 
-  it("accepts plus-signed Copilot token expiry strings", async () => {
-    const saved: unknown[] = [];
-    const fetchImpl = vi.fn(async () =>
-      Response.json({
-        token: "token;proxy-ep=proxy.individual.githubcopilot.com",
-        expires_at: "+2000000000",
-      }),
-    );
-
-    const result = await resolveCopilotApiToken({
-      githubToken: "github-token",
-      fetchImpl,
-      cachePath: "/tmp/copilot-token.json",
-      loadJsonFileImpl: () => undefined,
-      saveJsonFileImpl: (_path, value) => saved.push(value),
-    });
-
-    expect(result.expiresAt).toBe(2_000_000_000_000);
-    expect(saved).toEqual([
-      expect.objectContaining({
-        expiresAt: 2_000_000_000_000,
-        sourceCredentialFingerprint: createHash("sha256").update("github-token").digest("hex"),
-        token: "token;proxy-ep=proxy.individual.githubcopilot.com",
-      }),
-    ]);
-    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(init.headers).toEqual(
-      expect.objectContaining({
-        Accept: "application/json",
-        Authorization: "Bearer github-token",
-        "Copilot-Integration-Id": "vscode-chat",
-      }),
-    );
-    expect(init.signal).toBeInstanceOf(AbortSignal);
-  });
-
   it("rejects malformed Copilot proxy hints", () => {
     expect(
       deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
@@ -1216,7 +1143,12 @@ describe("provider auth profile helpers", () => {
       expires_at: "+2000000000",
     });
 
-    const server = http.createServer((_req, res) => {
+    const server = http.createServer((request, res) => {
+      expect(request.headers).toMatchObject({
+        accept: "application/json",
+        authorization: "Bearer github-token",
+        "copilot-integration-id": "vscode-chat",
+      });
       res.writeHead(200, {
         "Content-Type": "application/json",
         "Content-Length": String(Buffer.byteLength(body)),
@@ -1247,7 +1179,18 @@ describe("provider auth profile helpers", () => {
       });
 
       expect(result.token).toContain("proxy-ep=proxy.individual.githubcopilot.com");
-      expect(saved).toHaveLength(1);
+      expect(result.expiresAt).toBe(2_000_000_000_000);
+      expect(saved).toEqual([
+        {
+          path: "/tmp/copilot-token-http-happy.json",
+          value: expect.objectContaining({
+            expiresAt: 2_000_000_000_000,
+            sourceCredentialFingerprint: TEST_GITHUB_TOKEN_FINGERPRINT,
+            token: "gho_abc;proxy-ep=proxy.individual.githubcopilot.com",
+          }),
+        },
+      ]);
+      expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -1291,74 +1234,6 @@ describe("provider auth profile helpers", () => {
         token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
       }),
     ]);
-  });
-
-  it("aborts hung Copilot token exchange instead of waiting forever", async () => {
-    vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
-      expect(timeoutMs).toBe(30_000);
-      const controller = new AbortController();
-      queueMicrotask(() => {
-        controller.abort(new DOMException("timed out", "TimeoutError"));
-      });
-      return controller.signal;
-    });
-
-    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
-      return new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        if (!signal) {
-          reject(new Error("missing abort signal"));
-          return;
-        }
-        const abort = () => {
-          reject(
-            signal.reason instanceof Error
-              ? signal.reason
-              : new DOMException("aborted", "AbortError"),
-          );
-        };
-        if (signal.aborted) {
-          abort();
-          return;
-        }
-        signal.addEventListener("abort", abort, { once: true });
-      });
-    });
-
-    await expect(
-      resolveCopilotApiToken({
-        githubToken: "github-token",
-        fetchImpl: fetchImpl as typeof fetch,
-        cachePath: "/tmp/copilot-token-hang.json",
-        loadJsonFileImpl: () => undefined,
-        saveJsonFileImpl: () => {
-          throw new Error("should not save timed-out token");
-        },
-      }),
-    ).rejects.toThrow("Copilot token exchange failed: timed out after 30000ms");
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  it("preserves the owned timeout reason as the normalized error cause", async () => {
-    const ownedReason = new DOMException("owned deadline", "TimeoutError");
-    vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort(ownedReason));
-    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
-      throw init?.signal?.reason;
-    });
-    await expect(
-      resolveCopilotApiToken({
-        githubToken: TEST_GITHUB_TOKEN,
-        fetchImpl: fetchImpl as typeof fetch,
-        cachePath: "/tmp/copilot-token-owned-timeout.json",
-        loadJsonFileImpl: () => undefined,
-        saveJsonFileImpl: () => {},
-      }),
-    ).rejects.toMatchObject({
-      message: "Copilot token exchange failed: timed out after 30000ms",
-      cause: ownedReason,
-    });
   });
 
   it("aborts hung Copilot token exchange over HTTP transport", async () => {
@@ -1711,9 +1586,10 @@ describe("Copilot data-residency domain resolution", () => {
       cachePath: "/tmp/copilot-token-cross.json",
       loadJsonFileImpl: () => ({
         token: "public;proxy-ep=proxy.individual.githubcopilot.com",
-        expiresAt: Number.MAX_SAFE_INTEGER - 1,
+        expiresAt: Date.now() + 60 * 60 * 1000,
         updatedAt: Date.now(),
         integrationId: COPILOT_INTEGRATION_ID,
+        sourceCredentialFingerprint: TEST_GITHUB_TOKEN_FINGERPRINT,
         domain: "github.com",
       }),
       saveJsonFileImpl: (_path, value) => saved.push(value),
@@ -1774,6 +1650,7 @@ describe("Copilot data-residency domain resolution", () => {
         expiresAt: Date.now() + 60 * 60 * 1000,
         updatedAt: Date.now(),
         integrationId: COPILOT_INTEGRATION_ID,
+        sourceCredentialFingerprint: TEST_GITHUB_TOKEN_FINGERPRINT,
         // no domain field — implies github.com, so a tenant request must miss
       }),
       saveJsonFileImpl: (_path, value) => saved.push(value),

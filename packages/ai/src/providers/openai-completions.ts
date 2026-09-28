@@ -4,6 +4,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
+import { prepareModelRequestBody } from "../transports/model-request-body.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
@@ -80,12 +81,14 @@ export const streamOpenAICompletions: StreamFunction<
         compat,
         cacheRetention,
       });
+      const encodeBody = prepareModelRequestBody(options);
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
       firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions = {
+        ...(await encodeBody(params)),
         signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
         maxRetries: 0,

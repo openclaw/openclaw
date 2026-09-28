@@ -24,6 +24,7 @@ type AutoEnableDetectionCall = {
 type MissingPluginInstallRepairCall = {
   pluginIds: string[];
   channelIds?: string[];
+  blockedPluginIds: string[];
   env?: NodeJS.ProcessEnv;
 };
 
@@ -566,6 +567,44 @@ describe("configured plugin install release step", () => {
       ).channelIds,
     ).toStrictEqual([]);
   });
+
+  it.each([
+    { touchedVersion: "2026.5.1", touchedConfig: true },
+    { touchedVersion: "2026.5.2-beta.1", touchedConfig: false },
+  ])(
+    "forwards normalized blocked plugin ids when last touched at $touchedVersion",
+    async ({ touchedVersion, touchedConfig }) => {
+      const result = await maybeRunConfiguredPluginInstallReleaseStep({
+        cfg: {
+          plugins: {
+            deny: [" z-block ", "a-block", "", " ", "z-block"],
+            entries: {
+              " mid-block ": { enabled: false },
+              "a-block": { enabled: false },
+              " ": { enabled: false },
+              kept: { enabled: true },
+              unrelated: {},
+            },
+          },
+        },
+        currentVersion: "2026.5.2-beta.1",
+        touchedVersion,
+        env: {},
+      });
+
+      const repairCall = readOnlyMissingPluginInstallRepairCall();
+      expect(repairCall.blockedPluginIds).toEqual(["a-block", "mid-block", "z-block"]);
+      expect(repairCall.pluginIds).toEqual(["kept"]);
+      expect(repairCall.channelIds).toEqual([]);
+      expect(repairCall.env).toEqual({});
+      expect(result).toEqual({
+        changes: [],
+        warnings: [],
+        completed: true,
+        touchedConfig,
+      });
+    },
+  );
 
   it.each(["standalone", "pre-plugin", "post-plugin"])(
     "completes without touching config when there is nothing to install (%s)",

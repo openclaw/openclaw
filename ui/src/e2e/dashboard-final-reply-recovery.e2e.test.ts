@@ -91,7 +91,6 @@ suite.define(() => {
         deltaText: interimText,
         message: {
           role: "assistant",
-          phase: "commentary",
           content: [{ type: "text", text: interimText }],
           timestamp: 1,
         },
@@ -103,9 +102,9 @@ suite.define(() => {
         seq: 2,
         state: "delta",
         deltaText: partialFinalText,
+        replace: true,
         message: {
           role: "assistant",
-          phase: "final_answer",
           content: [{ type: "text", text: partialFinalText }],
           timestamp: 2,
         },

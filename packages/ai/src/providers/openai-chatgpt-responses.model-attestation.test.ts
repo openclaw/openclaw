@@ -60,6 +60,13 @@ function completedSseResponse(options: {
   );
 }
 
+function installSseResponse(options: Parameters<typeof completedSseResponse>[0]): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => completedSseResponse(options)),
+  );
+}
+
 function stream(transport: "sse" | "websocket") {
   return streamOpenAICodexResponses(model, context, { apiKey, transport }).result();
 }
@@ -83,71 +90,46 @@ describe("ChatGPT response model attestations", () => {
 
   it("preserves the concrete model reported by the SSE response header", async () => {
     const responseModel = "gpt-5.5-rerouted";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        completedSseResponse({
-          responseId: "resp_model",
-          headers: { "openai-model": responseModel },
-        }),
-      ),
-    );
+    installSseResponse({
+      responseId: "resp_model",
+      headers: { "openai-model": responseModel },
+    });
 
     expect((await stream("sse")).responseModel).toBe(responseModel);
   });
 
   it("preserves the provider model reported by a Responses lifecycle event", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        completedSseResponse({ responseId: "resp_payload_model", payloadModel: model.id }),
-      ),
-    );
+    installSseResponse({ responseId: "resp_payload_model", payloadModel: model.id });
 
     expect((await stream("sse")).responseModel).toBe(model.id);
   });
 
   it("fails closed when a lifecycle model conflicts with response headers", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        completedSseResponse({
-          responseId: "resp_payload_header_conflict",
-          payloadModel: "gpt-5.6-sol",
-          headers: { "openai-model": "gpt-5.6-terra" },
-        }),
-      ),
-    );
+    installSseResponse({
+      responseId: "resp_payload_header_conflict",
+      payloadModel: "gpt-5.6-sol",
+      headers: { "openai-model": "gpt-5.6-terra" },
+    });
 
     expectConflict(await stream("sse"));
   });
 
   it("fails closed when HTTP and SSE model attestations conflict", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        completedSseResponse({
-          responseId: "resp_model_conflict",
-          headers: { "openai-model": "gpt-5.6-sol" },
-          eventHeaders: { "x-openai-model": "gpt-5.6-terra-2026-08-01" },
-        }),
-      ),
-    );
+    installSseResponse({
+      responseId: "resp_model_conflict",
+      headers: { "openai-model": "gpt-5.6-sol" },
+      eventHeaders: { "x-openai-model": "gpt-5.6-terra-2026-08-01" },
+    });
 
     expectConflict(await stream("sse"));
   });
 
   it("fails closed on conflicting model evidence from a typeless SSE event", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        completedSseResponse({
-          responseId: "resp_typeless_model_conflict",
-          eventHeaders: { "x-openai-model": "gpt-5.6-terra-2026-08-01" },
-          eventsBefore: [{ headers: { "openai-model": "gpt-5.6-sol" } }],
-        }),
-      ),
-    );
+    installSseResponse({
+      responseId: "resp_typeless_model_conflict",
+      eventHeaders: { "x-openai-model": "gpt-5.6-terra-2026-08-01" },
+      eventsBefore: [{ headers: { "openai-model": "gpt-5.6-sol" } }],
+    });
 
     expectConflict(await stream("sse"));
   });

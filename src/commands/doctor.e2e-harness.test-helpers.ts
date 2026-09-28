@@ -50,7 +50,7 @@ export function createDoctorServiceMocks() {
   return {
     findLegacyGatewayServices: defineMockFn(vi.fn().mockResolvedValue([])),
     uninstallLegacyGatewayServices: defineMockFn(vi.fn().mockResolvedValue([])),
-    findExtraGatewayServices: defineMockFn(vi.fn().mockResolvedValue([])),
+    findExtraGatewayServices: defineMockFn(vi.fn().mockResolvedValue({ services: [], errors: [] })),
     findSystemGatewayServices: defineMockFn(vi.fn().mockResolvedValue([])),
     renderGatewayServiceCleanupHints: defineMockFn(vi.fn().mockReturnValue(["cleanup"])),
     auditGatewayServiceConfig: defineMockFn(vi.fn().mockResolvedValue({ ok: true, issues: [] })),

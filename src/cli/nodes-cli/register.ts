@@ -74,8 +74,11 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
 /** Plugin node subcommands are only resolved when the invocation is not a built-in nodes command. */
 function shouldRegisterNodesPluginCommands(nodes: Command, argv: readonly string[]): boolean {
   const { commandPath } = resolveCliArgvInvocation([...argv]);
+  if (commandPath[0] === "completion") {
+    return false;
+  }
   if (commandPath[0] !== "nodes") {
-    // Eager registration (root help/completion) needs the full command tree, plugins included.
+    // Eager registration for root help needs the full command tree, plugins included.
     return true;
   }
   const requestedSubcommand = commandPath[1];
