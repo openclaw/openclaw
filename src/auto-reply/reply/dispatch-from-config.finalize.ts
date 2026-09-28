@@ -42,6 +42,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ctx,
     deferFinalTtsText,
     deliveryChannel,
+    rawLlmResponse,
     dispatcher,
     getDispatchAbortSignal,
     getObservedReplyDelivery,
@@ -526,7 +527,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,
   );
-  state.recordProcessed(dispatchOutcome, dispatchReason ? { reason: dispatchReason } : undefined);
+  // output.value is model-authored text only; delivered text is never a substitute.
+  state.recordProcessed(dispatchOutcome, {
+    reason: dispatchReason,
+    ...(rawLlmResponse !== undefined ? { finalResponse: rawLlmResponse } : {}),
+  });
   state.markIdle(
     dispatchOutcome === "error"
       ? "message_error"

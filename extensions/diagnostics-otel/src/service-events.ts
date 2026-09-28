@@ -62,7 +62,7 @@ export function createDiagnosticsEventHandler(params: {
         case "message.dispatch.completed":
           return recorders.recordMessageDispatchCompleted(evt);
         case "message.processed":
-          return recorders.recordMessageProcessed(evt, metadata);
+          return recorders.recordMessageProcessed(evt, metadata, privateData);
         case "message.delivery.started":
           return recorders.recordMessageDeliveryStarted(evt);
         case "message.delivery.completed":
@@ -105,7 +105,7 @@ export function createDiagnosticsEventHandler(params: {
         case "run.completed":
           return recorders.recordRunCompleted(evt, metadata, privateData);
         case "harness.run.started":
-          return recorders.recordHarnessRunStarted(evt, metadata);
+          return recorders.recordHarnessRunStarted(evt, metadata, privateData);
         case "agent.commentary":
           return recorders.recordAgentCommentary(evt, metadata, privateData);
         case "harness.run.completed":

@@ -1,3 +1,4 @@
+import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
@@ -440,6 +441,14 @@ export async function prepareReplyAgentPayloads(state: {
       ]
     : [];
 
+  // Dispatch installs onRawLlmResponse only when output capture is enabled.
+  if (opts?.onRawLlmResponse) {
+    const finalDiagnosticResponse = resolveDiagnosticModelResponse(runResult);
+    if (finalDiagnosticResponse !== undefined) {
+      opts.onRawLlmResponse(finalDiagnosticResponse);
+    }
+  }
+
   // Drain any late tool/block deliveries before deciding there's "nothing to send".
   // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
   // keep the typing indicator stuck.
@@ -529,9 +538,8 @@ export async function prepareReplyAgentPayloads(state: {
       (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
-  const hasDeliveredBlockStream = Boolean(blockReplyPipeline?.didStream());
   const canDeliverStandaloneFallbackNotice =
-    hasDeliveredBlockStream || successfulSideEffectDelivery;
+    Boolean(blockReplyPipeline?.didStream()) || successfulSideEffectDelivery;
   if (
     replyPayloads.length === 0 ||
     (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice)

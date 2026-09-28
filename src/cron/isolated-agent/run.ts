@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   createAgentRunRestartAbortError,
@@ -18,6 +19,7 @@ import {
   releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -184,6 +186,7 @@ export async function runCronIsolatedAgentTurn(
 
           let outcome: "completed" | "error" = "completed";
           let outcomeError: string | undefined;
+          let finalModelResponse: string | undefined;
           let cronRunSessionCleanupHandled = false;
           let completedPromptRuns: readonly CronCompletedPromptRun[] = [];
           let usage: RunCronAgentTurnResult["usage"];
@@ -264,6 +267,10 @@ export async function runCronIsolatedAgentTurn(
             // Publish the execution fact captured before bookkeeping; cron persistence
             // and delivery retain their separate workflow outcome.
             lifecycle.emit("end", execution.runResult);
+            finalModelResponse = resolveDiagnosticModelContentCapturePolicy(params.cfg)
+              .outputMessages
+              ? resolveDiagnosticModelResponse(execution.runResult)
+              : undefined;
             const finalized = await finalizeCronRun({
               prepared: prepared.context,
               execution,
@@ -356,6 +363,8 @@ export async function runCronIsolatedAgentTurn(
               messageLifecycle.markProcessed(outcome, {
                 ...finalSessionRef,
                 error: outcomeError,
+                userPrompt: prepared.context.commandBody || undefined,
+                finalResponse: finalModelResponse,
               });
             } finally {
               try {

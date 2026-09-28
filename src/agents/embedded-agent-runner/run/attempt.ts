@@ -1,8 +1,10 @@
+import { getRuntimeConfig } from "../../../config/config.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { runWithAsyncWorkResources } from "../../../shared/async-work-resources.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
@@ -19,6 +21,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
+import { resolveDiagnosticSourceReplyText } from "../../diagnostic-model-response.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import {
@@ -53,6 +56,7 @@ import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prep
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import { resolveFinalAssistantRawText } from "./helpers.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type {
@@ -468,6 +472,16 @@ async function runEmbeddedAttemptOwned(
           },
         },
       });
+      // Run-completed diagnostics carry the model's raw final-answer text for
+      // content capture; the finally-phase cleanup reads it from the shared state.
+      executionState.diagnosticFinalResponse = resolveDiagnosticModelContentCapturePolicy(
+        getRuntimeConfig(),
+      ).outputMessages
+        ? (resolveFinalAssistantRawText(
+            executionResult.currentAttemptCompletedAssistant ??
+              executionResult.currentAttemptAssistant,
+          ) ?? resolveDiagnosticSourceReplyText(executionResult))
+        : undefined;
       // Read catalog counters before the finally-phase cleanup clears the
       // run-scoped catalog session; afterwards the counts are gone.
       const catalogSession = toolSearchCatalogRef?.current;

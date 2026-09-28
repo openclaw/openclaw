@@ -216,6 +216,28 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     }
   });
 
+  it("publishes the generated response before backend cleanup can throw", async () => {
+    const context = buildPreparedContext(createContextEngine());
+    context.preparedBackend.cleanup = async () => {
+      throw new Error("backend cleanup failed");
+    };
+    const publishResultContent = vi.fn();
+    const diagnosticLifecycle = {
+      setPhase: vi.fn(),
+      setExecutionContext: vi.fn(),
+      publishCapturedContent: vi.fn(),
+      publishResultContent,
+    };
+
+    await expect(runPreparedCliAgent(context, diagnosticLifecycle)).rejects.toThrow(
+      "backend cleanup failed",
+    );
+    expect(publishResultContent).toHaveBeenCalledOnce();
+    expect(publishResultContent.mock.calls[0]?.[0]).toMatchObject({
+      meta: expect.objectContaining({ finalAssistantRawText: "final answer" }),
+    });
+  });
+
   it("runs a native control command on the existing session without turn side effects", async () => {
     const { bootstrap, afterTurn } = createLifecycle();
     const context = buildPreparedContext(createContextEngine({ bootstrap, afterTurn }));

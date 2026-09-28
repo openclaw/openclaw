@@ -161,6 +161,7 @@ export async function gatherDispatchRequest(
     initialSessionStoreEntry.sessionKey === sessionKey
       ? initialSessionStoreEntry.entry?.sessionId
       : undefined;
+  const inboundText = ctx.Body ?? ctx.RawBody ?? "";
   const messageLifecycle = createDiagnosticMessageLifecycle({
     enabled: diagnosticsEnabled,
     channel,
@@ -175,6 +176,7 @@ export async function gatherDispatchRequest(
     processingReason: "message_start",
     startedAtMs: startTime,
     trackSessionState: canTrackSession,
+    userPrompt: typeof inboundText === "string" ? inboundText : undefined,
   });
   const traceAttributes = {
     surface: channel,
@@ -194,7 +196,20 @@ export async function gatherDispatchRequest(
     );
   let agentDispatchStartedAt = 0;
 
-  const recordProcessed = (outcome: DispatchProcessedOutcome, opts?: DispatchProcessedOptions) => {
+  // The model's own response is captured once, as soon as it is known, so error and
+  // aborted terminals keep it even when later delivery or finalization throws.
+  let capturedFinalResponse: string | undefined;
+  const noteCapturedFinalResponse = (response: string) => {
+    capturedFinalResponse = response;
+  };
+  const recordProcessed = (
+    outcome: DispatchProcessedOutcome,
+    processedOpts?: DispatchProcessedOptions,
+  ) => {
+    const opts =
+      processedOpts?.finalResponse === undefined && capturedFinalResponse !== undefined
+        ? { ...processedOpts, finalResponse: capturedFinalResponse }
+        : processedOpts;
     noteDispatchProcessedOutcome({
       outcome,
       ...(opts?.reason !== undefined ? { reason: opts.reason } : {}),
@@ -548,6 +563,7 @@ export async function gatherDispatchRequest(
     sessionKey,
     traceReplyPhase,
     recordProcessed,
+    noteCapturedFinalResponse,
     recordAgentDispatchStarted,
     recordAgentDispatchCompleted,
     markProcessing: () => messageLifecycle.markProcessing(),

@@ -1,6 +1,7 @@
 // Coverage for trusted diagnostics emitted by a full embedded attempt.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -11,6 +12,7 @@ import {
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -190,6 +192,39 @@ describe("runEmbeddedAttempt diagnostics", () => {
       }
     },
   );
+
+  it("captures a confirmed tool-only source reply on the built-in run span", async () => {
+    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+    getHoisted().subscribeEmbeddedAgentSessionMock.mockImplementation(() => ({
+      ...createSubscriptionMock(),
+      getMessagingToolSourceReplyPayloads: () => [
+        { text: "sent via message tool", sourceReplyFinal: true },
+      ],
+    }));
+    const completed: DiagnosticEventPrivateData[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      if (event.type === "run.completed") {
+        completed.push(privateData);
+      }
+    });
+
+    try {
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:diagnostic-tool-only",
+        tempPaths,
+        // The answer went out through the message tool; the model wrote no final text.
+        sessionPrompt: async () => {},
+      });
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribe();
+      clearRuntimeConfigSnapshot();
+    }
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.messageContent?.finalResponse).toBe("sent via message tool");
+  });
 
   it("keeps run failure text on the trusted private channel", async () => {
     const completed: Array<{

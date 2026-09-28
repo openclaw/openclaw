@@ -3,8 +3,13 @@ import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import {
+  MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
+  normalizeOtelLogString,
+} from "./service-content-normalization.js";
 import {
   assignGenAiSpanIdentityAttrs,
   assignPositiveNumberAttr,
@@ -48,6 +53,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     setSpanAttrs,
     completeTrackedLifecycleSpan,
     addRunAttrs,
+    contentCapturePolicy,
     tracesEnabled,
   } = runtime;
 
@@ -250,6 +256,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
   const recordMessageProcessed = (
     evt: Extract<DiagnosticEventPayload, { type: "message.processed" }>,
     metadata: DiagnosticEventMetadata,
+    privateData: DiagnosticEventPrivateData,
   ) => {
     const attrs = {
       "openclaw.channel": normalizeDiagnosticValue(evt.channel),
@@ -266,6 +273,18 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     addRunAttrs(spanAttrs, evt);
     if (evt.reason) {
       spanAttrs["openclaw.reason"] = normalizeDiagnosticValue(evt.reason, "unknown");
+    }
+    if (contentCapturePolicy.inputMessages && privateData.messageContent?.userPrompt) {
+      spanAttrs["input.value"] = normalizeOtelLogString(
+        privateData.messageContent.userPrompt,
+        MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
+      );
+    }
+    if (contentCapturePolicy.outputMessages && privateData.messageContent?.finalResponse) {
+      spanAttrs["output.value"] = normalizeOtelLogString(
+        privateData.messageContent.finalResponse,
+        MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
+      );
     }
     const trackedSpan = getTrackedInternalOrTrustedSpan(evt, metadata);
     const span =

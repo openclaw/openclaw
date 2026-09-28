@@ -27,6 +27,7 @@ import {
   resetDiagnosticMemoryForTest,
   type EmitDiagnosticMemorySample,
 } from "./diagnostic-memory.js";
+import { emitMessageProcessedDiagnosticEvent } from "./diagnostic-message-content.js";
 import {
   getCurrentDiagnosticPhase,
   getRecentDiagnosticPhases,
@@ -527,7 +528,12 @@ export function logMessageDispatchCompleted(
   markActivity();
 }
 
-export function logMessageProcessed(params: DiagnosticLogParams<"message.processed">) {
+export function logMessageProcessed(
+  params: DiagnosticLogParams<"message.processed"> & {
+    userPrompt?: string;
+    finalResponse?: string;
+  },
+) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -544,19 +550,7 @@ export function logMessageProcessed(params: DiagnosticLogParams<"message.process
     }`;
     diag[level](payload);
   }
-  emitDiagnosticEvent({
-    type: "message.processed",
-    channel: params.channel,
-    chatId: params.chatId,
-    messageId: params.messageId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    durationMs: params.durationMs,
-    outcome: params.outcome,
-    reason: params.reason,
-    error: params.error,
-  });
+  emitMessageProcessedDiagnosticEvent(params);
   markActivity();
 }
 
