@@ -17,6 +17,8 @@ virtual-audio setup, transcripts, remote-node requirements, and verification.
 
 ## Requirements
 
+- OpenClaw 2026.9.8 or newer. Older hosts lack the shared meeting-runtime
+  ownership checks this plugin depends on, so install refuses them.
 - A dedicated Slack user account signed into Slack in the OpenClaw Chrome profile.
 - Membership in the channel or conversation containing the huddle.
 - An active huddle, started by a person in Slack.

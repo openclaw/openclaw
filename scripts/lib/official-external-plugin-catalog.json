@@ -752,7 +752,7 @@
           "clawhubSpec": "clawhub:@openclaw/slack-huddles",
           "npmSpec": "@openclaw/slack-huddles",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.7.2"
+          "minHostVersion": ">=2026.9.8"
         }
       }
     },
