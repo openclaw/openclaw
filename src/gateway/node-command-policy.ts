@@ -472,9 +472,10 @@ export function formatRequiredNodeCommandUnavailable(
   const { command, state } = authority;
   const prefix = `paired-device command ${command}`;
   switch (state) {
+    case "invocable":
+      return undefined;
     case "undeclared": {
-      const registry = getActivePluginGatewayNodePolicyRegistry();
-      const pluginId = registry?.nodeHostCommands.find(
+      const pluginId = getActivePluginGatewayNodePolicyRegistry()?.nodeHostCommands.find(
         (entry) => entry.command.command === command,
       )?.pluginId;
       const enable = pluginId
@@ -487,7 +488,6 @@ export function formatRequiredNodeCommandUnavailable(
     case "unauthorized":
       return `${prefix} is blocked by Gateway policy for node ${nodeId}; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry`;
   }
-  return undefined;
 }
 
 /**
