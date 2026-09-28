@@ -43,6 +43,7 @@ import { createCronServiceState } from "../src/cron/service/state.js";
 import { applyJobResult } from "../src/cron/service/timer-outcomes.js";
 import { loadCronStore, saveCronStore } from "../src/cron/store.js";
 import type { CronJob } from "../src/cron/types.js";
+import { GatewayScheduler } from "../src/infra/gateway-scheduler.js";
 
 // Isolate every durable side effect from the operator's real state directory.
 // The state database is opened lazily, so setting this before any cron call is
@@ -88,6 +89,7 @@ function offlineServiceState(storePath: string, nowMs: number) {
     cronEnabled: true,
     log: noopLog,
     nowMs: () => nowMs,
+    scheduler: new GatewayScheduler(),
     enqueueSystemEvent: () => {},
     requestHeartbeat: () => {},
     runIsolatedAgentJob: async () => ({ status: "ok" as const }),
@@ -101,6 +103,7 @@ async function restartGateway(storePath: string, nowMs: number): Promise<CronJob
     cronEnabled: true,
     log: noopLog,
     nowMs: () => nowMs,
+    scheduler: new GatewayScheduler(),
     enqueueSystemEvent: (() => {}) as never,
     requestHeartbeat: (() => {}) as never,
     runIsolatedAgentJob: (async () => ({ status: "ok" as const })) as never,
