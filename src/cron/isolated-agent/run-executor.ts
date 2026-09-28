@@ -440,6 +440,8 @@ function createCronPromptExecutor(
         const buildCommonRunParams = () =>
           ({
             preparedRunAdmission,
+            ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
+            cwd: params.executionRoot ?? params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             sessionTarget,
@@ -539,8 +541,6 @@ function createCronPromptExecutor(
                   sessionFile,
                   storePath: params.cronSession.storePath,
                   persistAssistantTranscript: true,
-                  workspaceDir: params.executionRoot ?? params.workspaceDir,
-                  bootstrapWorkspaceDir: params.workspaceDir,
                   rootedExecution,
                   modelProvider: providerOverride,
                   requesterModel: { provider: providerOverride, model: modelOverride },
@@ -632,7 +632,6 @@ function createCronPromptExecutor(
           messageThreadId: params.resolvedDelivery.threadId,
           currentChannelId,
           agentDir: params.agentDir,
-          ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
           provider: providerOverride,
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           requestedRouteResolution: "resolved",

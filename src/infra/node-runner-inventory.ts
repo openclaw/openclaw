@@ -2,6 +2,7 @@ import { z } from "zod";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { parseWorkerCapacity } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { workerProtocolObject } from "../worker/protocol-record.js";
+import { WORKER_TOOL_NAMES, type WorkerToolName } from "../worker/tool-authority.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
 export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
@@ -19,6 +20,23 @@ export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_STATUS_WAIT_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
 export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
+
+// Supervisors predating launchToolNames admit this closed vocabulary: OpenClaw 2026.9.6
+// is the only published release that passes the worker-turn launch gate. Retire with the next dialect.
+const LEGACY_NODE_WORKER_LAUNCH_TOOL_NAMES = Object.freeze([
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "browser",
+  "computer",
+  "skill_workshop",
+  "sessions_spawn",
+  "sessions_send",
+  "portal",
+] satisfies WorkerToolName[]);
 
 export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
   code: "update-required",
@@ -38,6 +56,15 @@ const CapacitySnapshot = z.transform((value, context) => {
   }
   return capacity;
 });
+// Unknown names are ignored so newer nodes can still declare to this Gateway.
+const LaunchToolNames = z
+  .array(z.string().min(1).max(64))
+  .max(64)
+  .refine((names) => new Set(names).size === names.length)
+  .transform((names): readonly WorkerToolName[] => {
+    const declared = new Set<string>(names);
+    return WORKER_TOOL_NAMES.filter((name) => declared.has(name));
+  });
 const WorkerHost = z
   .union([
     workerProtocolObject({
@@ -59,6 +86,7 @@ const WorkerHost = z
       statusWait: z.literal(NODE_WORKER_STATUS_WAIT_VERSION).optional(),
       preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
       capturedExecPolicy: z.literal(true).optional(),
+      launchToolNames: LaunchToolNames.optional(),
     }).refine((host) => host.bundleStatus === undefined || host.bundleRetention !== undefined),
   ])
   .transform((host) => {
@@ -115,4 +143,12 @@ export function resolveNodeWorkerExecutionIssue(
   return workerHost.enabled && workerHost.capturedExecPolicy !== true
     ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
     : undefined;
+}
+
+export function resolveNodeWorkerLaunchToolNames(
+  workerHost: NodeWorkerHostDeclaration | undefined,
+): readonly WorkerToolName[] {
+  return (
+    (workerHost?.enabled && workerHost.launchToolNames) || LEGACY_NODE_WORKER_LAUNCH_TOOL_NAMES
+  );
 }
