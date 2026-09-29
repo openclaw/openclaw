@@ -188,7 +188,7 @@ export async function runGitRollbackSteps({
       const git = `git -C ${quote(gitRoot)}`;
       result.advisory = {
         kind: "recoverable-maintenance",
-        message: `Restored ${quote(gitRoot)} to ${beforeSha} on a detached HEAD; branch ${quote(branch)} still points to ${source.sha} because it has no reflog to verify a rollback rewrite. Once no worktree uses it, restore it with: ${git} branch -f ${quote(branch)} ${beforeSha}, then ${git} switch ${quote(branch)}. Enable reflogs with: ${git} config core.logAllRefUpdates true`,
+        message: `Restored ${quote(gitRoot)} to ${beforeSha} on a detached HEAD; branch ${quote(branch)} still points to ${source.sha} because it has no reflog to verify a rollback rewrite. Once no worktree uses it, restore it with: ${git} update-ref ${quote(`refs/heads/${branch}`)} ${beforeSha} ${source.sha}, then ${git} switch ${quote(branch)}. Enable reflogs with: ${git} config core.logAllRefUpdates true`,
       };
     }
     stepOptions.progress?.onStepComplete?.({

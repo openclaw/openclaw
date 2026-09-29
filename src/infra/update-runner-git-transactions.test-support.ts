@@ -501,9 +501,25 @@ function registerGitRetainedTransactionTests(
     expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(targetSha);
     await expect(runFixtureGit(root, "reflog", "exists", "refs/heads/main")).rejects.toThrow();
     expect(restored?.advisory).toMatchObject({ kind: "recoverable-maintenance" });
-    for (const detail of [root, "main", beforeSha, targetSha, "branch -f"]) {
-      expect(restored?.advisory?.message).toContain(detail);
-    }
+    expect(restored.advisory?.message).toContain(root);
+    expect(restored.advisory?.message).toMatch(
+      new RegExp(`update-ref (?:refs/heads/main|'refs/heads/main') ${beforeSha} ${targetSha}`),
+    );
+    // The suggested restore is compare-and-swap: a later branch writer keeps its commit.
+    const advanced = await runFixtureGit(
+      root,
+      "commit-tree",
+      `${targetSha}^{tree}`,
+      "-p",
+      targetSha,
+      "-m",
+      "operator commit",
+    );
+    await runFixtureGit(root, "update-ref", "refs/heads/main", advanced, targetSha);
+    await expect(
+      runFixtureGit(root, "update-ref", "refs/heads/main", beforeSha, targetSha),
+    ).rejects.toThrow();
+    expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(advanced);
     await expectRuntime(root, beforeSha);
     expect(await fs.readFile(operatorFile, "utf8")).toBe("preserve this operator note\n");
     await expect(
