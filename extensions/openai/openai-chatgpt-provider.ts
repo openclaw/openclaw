@@ -40,6 +40,7 @@ import {
   OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
   OPENAI_GPT_6_ASTRA_MODEL_ID,
+  OPENAI_GPT_61_SOL_MODEL_ID,
   OPENAI_GPT_6_SOL_MODEL_ID,
   OPENAI_GPT_6_LUNA_MODEL_ID,
 } from "./model-route-contract.js";
@@ -230,6 +231,7 @@ function resolveCodexForwardCompatModel(
 
   if (
     lower === OPENAI_GPT_6_ASTRA_MODEL_ID ||
+    lower === OPENAI_GPT_61_SOL_MODEL_ID ||
     lower === OPENAI_GPT_6_SOL_MODEL_ID ||
     lower === OPENAI_GPT_6_LUNA_MODEL_ID
   ) {

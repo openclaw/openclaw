@@ -13,6 +13,7 @@ import {
   OPENAI_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_6_ASTRA_MODEL_ID,
+  OPENAI_GPT_61_SOL_MODEL_ID,
   resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -97,7 +98,7 @@ function buildOpenAIThinkingProfile(params: {
     return { levels: binaryThinking ? OPENAI_THINKING_BASE_LEVELS : [] };
   }
   const canSynthesizeUltra = params.thinkingLevelMap?.max !== null;
-  if (modelId === OPENAI_GPT_6_ASTRA_MODEL_ID) {
+  if (modelId === OPENAI_GPT_6_ASTRA_MODEL_ID || modelId === OPENAI_GPT_61_SOL_MODEL_ID) {
     const efforts =
       codexEfforts ??
       manifest.modelCatalog.providers.openai.models.find((model) => model.id === modelId)?.compat

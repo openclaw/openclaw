@@ -95,6 +95,36 @@ describe("OpenAI dynamic model capabilities", () => {
     },
   );
 
+  it.each(["openai-responses", "openai-chatgpt-responses"] as const)(
+    "resolves GPT-6.1 Sol without discovery over %s",
+    (api) => {
+      const model = buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-6.1-sol",
+        providerConfig: {
+          api,
+          baseUrl:
+            api === "openai-responses"
+              ? "https://api.openai.com/v1"
+              : "https://chatgpt.com/backend-api/codex",
+          models: [],
+        },
+        modelRegistry: modelRegistry(),
+      });
+      expect(model).toMatchObject({
+        id: "gpt-6.1-sol",
+        api,
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+        cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      });
+    },
+  );
+
   it.each(preferredModels)(
     "retains preferred capabilities for $id without discovery",
     ({ id, cost }) => {
