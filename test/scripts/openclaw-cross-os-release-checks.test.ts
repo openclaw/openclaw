@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { isRecoverableWindowsPackagedUpgradeUnsettledExit } from "../../scripts/lib/cross-os-release-checks/config.ts";
 import {
   agentOutputHasExpectedOkMarker,
   acquireManagedGatewayInstallerHostLease,
@@ -2371,6 +2372,38 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         usedWindowsPackagedUpgradeFallback: true,
       }),
     ).toBe(true);
+  });
+
+  it.each([
+    { label: "shipped baseline", recoverable: true },
+    { label: "non-Windows", platform: "linux" as const },
+    { label: "other exit", exitCode: 1 },
+    { label: "missing warning", stderr: "Updater failed" },
+    { label: "JSON result", stdout: '{"status":"error"}' },
+    { label: "partial output", stdout: '{"status":' },
+    { label: "first fixed release", baselineVersion: "2026.9.7" },
+    { label: "later release", baselineVersion: "2026.9.10" },
+    { label: "later month", baselineVersion: "2026.10.1" },
+    { label: "unknown baseline", baselineVersion: "unknown" },
+    { label: "switched install", installedVersion: "2026.9.7" },
+  ])("limits unsettled-exit recovery: $label", (testCase) => {
+    const baselineVersion = testCase.baselineVersion ?? "2026.9.6";
+    expect(
+      isRecoverableWindowsPackagedUpgradeUnsettledExit(
+        {
+          exitCode: testCase.exitCode ?? 13,
+          stdout: testCase.stdout ?? "",
+          stderr:
+            testCase.stderr ??
+            "Warning: Detected unsettled top-level await at file:///C:/prefix/node_modules/openclaw/openclaw.mjs:757",
+        },
+        {
+          platform: testCase.platform ?? "win32",
+          baselineVersion,
+          installedVersion: testCase.installedVersion ?? baselineVersion,
+        },
+      ),
+    ).toBe(testCase.recoverable ?? false);
   });
 
   it("verifies the Windows packaged-upgrade fallback installed the candidate", () => {

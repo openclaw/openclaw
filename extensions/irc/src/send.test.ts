@@ -33,11 +33,11 @@ vi.mock("./connect-options.js", () => ({
   buildIrcConnectOptions: hoisted.buildIrcConnectOptions,
 }));
 
-vi.mock("./protocol.js", async () => {
-  const actual = await vi.importActual<typeof import("./protocol.js")>("./protocol.js");
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
   return {
     ...actual,
-    makeIrcMessageId: () => "irc-msg-1",
+    randomUUID: () => "irc-msg-1",
   };
 });
 
@@ -81,7 +81,7 @@ function resetHoistedMocks() {
 afterAll(() => {
   vi.doUnmock("./client.js");
   vi.doUnmock("./connect-options.js");
-  vi.doUnmock("./protocol.js");
+  vi.doUnmock("node:crypto");
   vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
   vi.doUnmock("openclaw/plugin-sdk/text-chunking");
   vi.resetModules();

@@ -1,4 +1,5 @@
 /** One address-to-place owner shared by the HTTP and Gateway surfaces. */
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { GeolocationSettings } from "./config.js";
 import type { GeolocationCityRecord, GeolocationDatabase } from "./database-store.js";
@@ -40,9 +41,7 @@ export function createGeolocationLookup(deps: {
       try {
         database = await deps.loadDatabase();
       } catch (error) {
-        deps.logger?.warn(
-          `geolocation: lookup unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        deps.logger?.warn(`geolocation: lookup unavailable: ${coerceErrorMessage(error)}`);
       }
     }
     // A first lookup may await a database download; retain the original caller's
@@ -61,9 +60,7 @@ export function createGeolocationLookup(deps: {
         const location = projectGeolocationRecord(database.lookup(ip));
         return { ip, status: location ? "found" : "not-found", ...location, attribution };
       } catch (error) {
-        deps.logger?.warn(
-          `geolocation: lookup unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        deps.logger?.warn(`geolocation: lookup unavailable: ${coerceErrorMessage(error)}`);
         return { ip, status: "unavailable", attribution };
       }
     };

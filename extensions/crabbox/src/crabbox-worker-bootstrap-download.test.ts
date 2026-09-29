@@ -65,6 +65,7 @@ async function download(
     workerBundle,
   });
   const requests: string[] = [];
+  const ranges: Array<string | undefined> = [];
   const created: string[] = [];
   const files = new Map<string, Buffer>();
   const removed: Array<{ file: string; bytes: number }> = [];
@@ -84,13 +85,22 @@ async function download(
     }),
   );
   const transport = {
-    request: (url: URL, options: { headers: { authorization: string }; signal: AbortSignal }) => {
+    request: (
+      url: URL,
+      options: { headers: { authorization: string; range?: string }; signal: AbortSignal },
+    ) => {
       const content = url.href === nodeBootstrap.url ? runtimeArchive : archive;
       const outcome =
         typeof outcomes === "function"
           ? outcomes(Date.now())
           : outcomes[Math.min(requests.length, outcomes.length - 1)];
       requests.push(options.headers.authorization);
+      ranges.push(options.headers.range);
+      const offset =
+        options.headers.range && outcome !== "ignore-range"
+          ? Number(options.headers.range.slice(6, -1))
+          : 0;
+      const split = Math.min(offset + Math.floor(content.length * 0.4), content.length);
       const grant = grants.get(options.headers.authorization)!;
       const signal = AbortSignal.any([options.signal, grant]);
       const unavailable = grant.aborted;
@@ -121,20 +131,32 @@ async function download(
                   return;
                 }
                 signal.throwIfAborted();
-                yield content.subarray(0, 4);
+                yield content.subarray(offset, split);
                 if (outcome === "short") {
                   return;
                 }
                 if (
                   typeof outcome === "string" &&
-                  !["success", "digest", "size"].includes(outcome)
+                  ![
+                    "success",
+                    "digest",
+                    "size",
+                    "ignore-range",
+                    "range-mismatch",
+                    "late-reset",
+                  ].includes(outcome)
                 ) {
                   throw Object.assign(new Error("transport interrupted"), { code: outcome });
                 }
                 signal.throwIfAborted();
-                yield outcome === "digest" ? Buffer.alloc(content.length - 4) : content.subarray(4);
+                yield outcome === "digest"
+                  ? Buffer.alloc(content.length - split)
+                  : content.subarray(split);
                 if (outcome === "size") {
                   yield Buffer.from("excess");
+                }
+                if (outcome === "late-reset") {
+                  throw Object.assign(new Error("transport interrupted"), { code: "ECONNRESET" });
                 }
                 finished = true;
                 completedAt.push(Date.now());
@@ -147,8 +169,14 @@ async function download(
                   ? 503
                   : typeof outcome === "number"
                     ? outcome
-                    : 200,
-              headers: {},
+                    : offset
+                      ? 206
+                      : 200,
+              headers: offset
+                ? {
+                    "content-range": `bytes ${outcome === "range-mismatch" ? 0 : offset}-${content.length - 1}/${content.length}`,
+                  }
+                : {},
             },
           );
           request.emit("response", response);
@@ -202,15 +230,24 @@ async function download(
       }
     },
     promises: {
+      stat: async (file: string) => {
+        const content = files.get(file);
+        if (!content) {
+          throw Object.assign(new Error("missing archive"), { code: "ENOENT" });
+        }
+        return { size: content.length };
+      },
       open: async (file: string, flags: string | number) => {
         if (typeof flags === "number") {
           throw Object.assign(new Error("missing archive"), { code: "ENOENT" });
         }
-        if (files.has(file)) {
-          throw new Error("Attempt reused its partial archive");
+        if (files.has(file) && flags === "wx") {
+          throw Object.assign(new Error("archive already exists"), { code: "EEXIST" });
         }
         created.push(file);
-        files.set(file, Buffer.alloc(0));
+        if (flags !== "a" || !files.has(file)) {
+          files.set(file, Buffer.alloc(0));
+        }
         return {
           writeFile: async (chunk: Buffer) => {
             files.set(file, Buffer.concat([files.get(file)!, chunk]));
@@ -219,6 +256,7 @@ async function download(
         };
       },
     },
+    createReadStream: (file: string) => Readable.from([files.get(file)!]),
   };
   const processFixture = {
     platform: "linux",
@@ -286,6 +324,7 @@ async function download(
   return {
     code: processFixture.exitCode,
     requests,
+    ranges,
     created,
     removed,
     delays,
@@ -402,16 +441,48 @@ describe("bootstrap artifact download retries", () => {
     502,
     503,
     504,
-  ])("recovers from %s with the same token and a fresh partial file", async (failure) => {
+  ])("recovers from %s with the same token and retained partial bytes", async (failure) => {
     const result = await download([failure, "success"]);
     expect(result.code).toBe(0);
     expect(result.requests).toEqual(Array(2).fill("Bearer synthetic-worker-archive-token"));
     expect(result.published).toEqual([archive]);
     expect(result.delays).toEqual([250]);
     if (typeof failure === "string") {
-      expect(new Set(result.created).size).toBe(2);
-      expect(result.removed).toContainEqual({ file: result.created[0], bytes: 4 });
+      expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
+      expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
     }
+  });
+  it("restarts from the full response when the server ignores Range", async () => {
+    const result = await download(["ECONNRESET", "ignore-range"]);
+    expect(result.code, result.output).toBe(0);
+    expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
+    expect(result.published).toEqual([archive]);
+  });
+  it.each(["range-mismatch", 416])(
+    "discards range failure %s before retrying from byte zero",
+    async (failure) => {
+      const result = await download(["ECONNRESET", failure, "success"]);
+      expect(result.code, result.output).toBe(0);
+      expect(result.ranges).toEqual([
+        undefined,
+        `bytes=${Math.floor(archive.length * 0.4)}-`,
+        undefined,
+      ]);
+      expect(result.published).toEqual([archive]);
+    },
+  );
+  it("verifies all received bytes after a reset without requesting an empty range", async () => {
+    const result = await download(["late-reset"]);
+    expect(result.code, result.output).toBe(0);
+    expect(result.ranges).toEqual([undefined]);
+    expect(result.published).toEqual([archive]);
+  });
+  it("rejects corrupted resumed bytes before publishing the archive", async () => {
+    const result = await download(["ECONNRESET", "digest"]);
+    expect(result.code).toBe(1);
+    expect(result.ranges).toEqual([undefined, `bytes=${Math.floor(archive.length * 0.4)}-`]);
+    expect(result.published).toEqual([]);
+    expect(result.output).toContain("failed integrity verification (download attempt 2/3)");
   });
   it.each(["digest", "short", "size", "pin", 401, 403, 404, 409, 410])(
     "keeps %s terminal without retrying",

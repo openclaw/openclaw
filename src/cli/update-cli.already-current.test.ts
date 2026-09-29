@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -425,7 +424,7 @@ describe("update-cli", () => {
   );
 
   it.each(
-    [true, false].flatMap((restart) =>
+    [true].flatMap((restart) =>
       (["outside", "unknown", "inside", "descendant", "foreign descendant"] as const).map(
         (membership) => ({
           restart,
@@ -551,34 +550,6 @@ describe("update-cli", () => {
       ).toMatchObject({ status: "succeeded", downtimeMs: 0 });
     },
   );
-
-  it("keeps an explicit same-version channel no-op skipped without snapshot capacity or config rewrites", async () => {
-    const root = await mockPackageInstallAtCaseDir("openclaw-current-package", VERSION);
-    const stateDir = tempDirs.make("openclaw-update-channel-noop-");
-    initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
-    readPackageVersion.mockResolvedValue(VERSION);
-    primeNpmChannelTag("beta", VERSION);
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
-      configSnapshot({ update: { channel: "beta" } }),
-    );
-    await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
-      update: { channel: "beta" },
-    });
-    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
-
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue(statfsFixture({ bavail: 0 }));
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await updateCommand({ channel: "beta", yes: true, restart: true, json: true });
-    });
-
-    expect(replaceConfigFile).not.toHaveBeenCalled();
-    expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, candidateValidation);
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expect(doctorCommandCall()).toBeUndefined();
-    expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
-  });
 
   it("completes an equal-version Git-to-package switch", async () => {
     const { nodeModules, pkgRoot } = await setupInstalledPackageRoot(

@@ -168,7 +168,7 @@ export function workspaceSnapshot(
 
 export function unchangedWorkspaceUpload(
   snapshot: NodeWorkspaceTransferSnapshot,
-  stagingRoot = snapshot.root,
+  stagingRoot: string,
 ): ReturnType<NodeWorkspaceTransferService["takeUpload"]> {
   return {
     base: snapshot.manifest,

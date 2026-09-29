@@ -9,6 +9,7 @@ import {
   formatNodeRunnerUpdateRequired,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  resolveNodeWorkerLaunchToolNames,
 } from "../../infra/node-runner-inventory.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -351,6 +352,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ownerEpoch: entry.ownerEpoch,
       measureLaunchTurn: (plan, claim) =>
         measureNodeWorkerLaunchBytes(entry.deviceId, buildLaunchInput(plan, claim)),
+      readLaunchToolNames: async () => {
+        const node = await options.getTransport()?.getCurrentNode(entry.deviceId);
+        return resolveNodeWorkerLaunchToolNames(node?.workerHost);
+      },
       launchTurn: async (request) => {
         if (entry.executionMode !== "worker-turn") {
           throw new Error("remote-exec environments do not launch embedded worker turns");

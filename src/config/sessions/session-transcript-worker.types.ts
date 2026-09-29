@@ -90,11 +90,6 @@ type SessionTranscriptSearchWorkerInput = {
   params: SessionTranscriptSearchParams;
 };
 
-type SessionTranscriptSearchWorkerResult = {
-  kind: "transcript-search";
-  result: SessionTranscriptSearchResult;
-};
-
 export type PreparedSessionTranscriptHydration =
   | { kind: "full"; snapshot: ReturnType<typeof loadTranscriptReadSnapshotSync> }
   | { kind: "bounded"; snapshot: SessionTranscriptBoundedActiveContext };
@@ -189,11 +184,6 @@ export type SessionPreviewWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-type SessionPreviewWorkerResult = {
-  kind: "session-preview";
-  items: SessionPreviewItem[];
-};
-
 type SessionTitleFieldsWorkerInput = {
   kind: "session-title-fields";
   database: { agentId: string; path: string };
@@ -202,20 +192,10 @@ type SessionTitleFieldsWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-type SessionTitleFieldsWorkerResult = {
-  kind: "session-title-fields";
-  fields: SessionTitleFields;
-};
-
 type SessionRowBackfillWorkerInput = {
   kind: "session-row-backfill";
   database: { agentId: string; path: string };
   params: SessionRowTranscriptReadParams;
-};
-
-type SessionRowBackfillWorkerResult = {
-  kind: "session-row-backfill";
-  fields: SessionRowTranscriptFields;
 };
 
 type SessionTranscriptHydrationWorkerInput = {
@@ -329,11 +309,6 @@ type SessionEntryListWorkerInput = {
   scope: SessionEntryListScope;
 };
 
-type SessionEntryListWorkerResult = {
-  kind: "session-entry-list";
-  entries: SessionEntrySummary[];
-};
-
 export type SessionExactEntriesWorkerInput = {
   kind: "session-exact-entries";
   database: { agentId: string; path: string };
@@ -414,11 +389,6 @@ type SessionIdentityEvidenceWorkerInput = {
   env: NodeJS.ProcessEnv;
   identities: readonly SessionIdentityEvidenceIdentity[];
   continuation?: CanonicalSessionReaderContinuation;
-};
-
-type SessionIdentityEvidenceWorkerResult = {
-  kind: "session-identity-evidence";
-  evidence: SessionIdentityEvidenceResult[];
 };
 
 export type SessionBranchSummaryWorkerInput = {
@@ -508,7 +478,7 @@ export type SessionTranscriptWorkerValues = {
     kind: "session-archive-pruning";
     result: PublishedSessionTranscriptArchive | null;
   };
-  "transcript-search": SessionTranscriptSearchWorkerResult;
+  "transcript-search": { kind: "transcript-search"; result: SessionTranscriptSearchResult };
   "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   "cold-metadata": SessionColdMetadataWorkerResult;
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
@@ -516,9 +486,9 @@ export type SessionTranscriptWorkerValues = {
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
   "branch-summaries": SessionBranchSummaryReadResult;
   "history-page": SessionHistoryWorkerResult;
-  "session-preview": SessionPreviewWorkerResult;
-  "session-title-fields": SessionTitleFieldsWorkerResult;
-  "session-row-backfill": SessionRowBackfillWorkerResult;
+  "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
+  "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
+  "session-row-backfill": { kind: "session-row-backfill"; fields: SessionRowTranscriptFields };
   "session-row-presence": boolean;
   "projection-status": boolean;
   "session-members": SessionMember[];
@@ -528,7 +498,7 @@ export type SessionTranscriptWorkerValues = {
     kind: "session-pending-input-receipts";
     receipts: ReturnType<typeof listSessionPendingInputReceipts>;
   };
-  "session-entry-list": SessionEntryListWorkerResult;
+  "session-entry-list": { kind: "session-entry-list"; entries: SessionEntrySummary[] };
   "session-entry-read": SessionEntryReadWorkerResult;
   "session-diagnostic-text": {
     kind: "session-diagnostic-text";
@@ -544,7 +514,10 @@ export type SessionTranscriptWorkerValues = {
         readError: import("./session-transcript-worker-error.types.js").SessionTranscriptWorkerReadError;
       };
   "session-target-inventory": SessionStoreTargetInventoryResult;
-  "session-identity-evidence": SessionIdentityEvidenceWorkerResult;
+  "session-identity-evidence": {
+    kind: "session-identity-evidence";
+    evidence: SessionIdentityEvidenceResult[];
+  };
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
   "session-reset-recall": {
@@ -596,7 +569,7 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<SessionColdMetadataWorkerResult>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],
-  ) => Promise<SessionTranscriptSearchWorkerResult["result"]>;
+  ) => Promise<SessionTranscriptSearchResult>;
   generation: number;
   assertCurrent: () => void;
   run: (
@@ -605,13 +578,13 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<SessionHistoryWorkerResult>;
   readPreview: (
     input: Omit<SessionPreviewWorkerInput, "kind" | "database">,
-  ) => Promise<SessionPreviewWorkerResult["items"]>;
+  ) => Promise<SessionPreviewItem[]>;
   readTitleFields: (
     input: Omit<SessionTitleFieldsWorkerInput, "kind" | "database">,
-  ) => Promise<SessionTitleFieldsWorkerResult["fields"]>;
+  ) => Promise<SessionTitleFields>;
   readRowBackfill: (
     params: SessionRowBackfillWorkerInput["params"],
-  ) => Promise<SessionRowBackfillWorkerResult["fields"]>;
+  ) => Promise<SessionRowTranscriptFields>;
   readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
   readProjectionStatus: (
     input: Omit<SessionProjectionStatusWorkerInput, "kind" | "database">,
@@ -635,9 +608,7 @@ export type SessionHistoryWorkerDatabase = {
   readRowFacts: (
     input: Omit<SessionRowFactsWorkerInput, "kind" | "database">,
   ) => Promise<SessionRowFactsWorkerResult>;
-  readEntries: (
-    scope: SessionEntryListWorkerInput["scope"],
-  ) => Promise<SessionEntryListWorkerResult["entries"]>;
+  readEntries: (scope: SessionEntryListWorkerInput["scope"]) => Promise<SessionEntrySummary[]>;
   readEntryResult: (
     input: Omit<SessionEntryReadWorkerInput, "kind" | "database">,
   ) => Promise<

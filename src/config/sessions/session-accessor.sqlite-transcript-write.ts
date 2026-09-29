@@ -18,7 +18,6 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { assertLifecycleTargetSnapshotUnchanged } from "./session-accessor.sqlite-entry-equality.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionEntryRow,
   readSessionEntrySelectionSnapshot,
   readSessionIdentitySnapshot,
@@ -31,7 +30,6 @@ import {
   type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import {
-  cloneSessionEntry,
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -76,6 +74,7 @@ import type {
 } from "./session-accessor.types.js";
 import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "./session-entry-projection.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -163,7 +162,7 @@ export async function replaceSessionWithBranchedTranscript(
             throw new Error(`Branched session was not persisted: ${cause.code}`, { cause });
           }
           assertLockedTranscriptWriteAllowed(database, resolved, fencedScope);
-          const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
+          const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
           const previous = readSessionIdentitySnapshot(database, identityKeys);
           writeSessionEntry(database, resolved.sessionKey, {
             ...projectCanonicalSessionEntryShape({ ...fresh }),
@@ -311,10 +310,10 @@ export async function trimTranscriptForManualCompact(
           if (!freshEntry || freshEntry.sessionId !== resolved.sessionId) {
             throw new Error(`SQLite session changed before compacting ${resolved.sessionId}`);
           }
-          const identityKeys = collectSessionEntryLookupKeys(writeDatabase, resolved.sessionKey);
+          const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
           const previousIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
           replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, retainedEvents);
-          const nextEntry = cloneSessionEntry(freshEntry);
+          const nextEntry = structuredClone(freshEntry);
           delete nextEntry.contextBudgetStatus;
           Object.assign(nextEntry, COMPACTION_RUN_USAGE_CLEAR_PATCH);
           delete nextEntry.totalTokens;

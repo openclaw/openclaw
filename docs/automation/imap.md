@@ -104,6 +104,13 @@ The default minimum is `verified`. An explicit `min: "unverified"` admits
 no-evidence mail and DMARC `temperror` results. Authenticator exceptions cause
 retries unless an explicitly trusted header satisfies the floor.
 
+The trusted-authserv override applies to ordinary authentication results as well as
+authenticator errors: at an `asserted` floor, a matching header can admit mail even
+when local DMARC verification returns `none` or `fail`. The receiving boundary MTA
+must strip or overwrite untrusted inbound `Authentication-Results` values that claim
+a configured authserv id. OpenClaw cannot establish header-hop provenance from the
+message alone.
+
 ### Sender-bound tokens and freshness
 
 Configure a sender-bound token only when an allowlisted sender cannot produce useful DKIM or DMARC authentication. `addressTokens` is a per-account key; add it inside the account entry, alongside `allowedSenders` and `senderAuth`:

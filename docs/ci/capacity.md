@@ -523,7 +523,11 @@ partitioned changed-Node planner proof use 150 seconds in both initial packing
 and measured rebalancing; both reserve 60 seconds for job setup. Hosted hourly tooling retains its existing
 720-second total budget (660 seconds of tests plus setup) to keep the integration
 tier within the hourly row cap. It uses complete hosted file prices without native
-wall observations.
+wall observations. GitHub and hybrid tooling use the same file packing for
+hosted retry budgets. A companion may fill an indivisible file's spare worker
+only when it adds no predicted wall time and stays within the existing 300-second
+whole-job budget. This keeps the hourly hybrid plan within 77 Node rows plus two
+dist rows without changing coverage, workers, timing weights, or caps.
 
 The native compact allowance of 90 fits the partitioned planner proof inside the
 existing final PR limit; it does not increase the maximum Node matrix size.

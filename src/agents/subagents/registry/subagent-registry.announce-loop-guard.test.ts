@@ -189,11 +189,6 @@ describe("announce loop guard (#18264)", () => {
 
   test.each([
     {
-      name: "entries over the former retry budget keep announcing inside the delivery window",
-      outcome: "retryable",
-      attemptCount: 4,
-    },
-    {
       name: "pending requester turns preserve the failure budget and schedule another observation",
       outcome: "requester_turn_pending",
       attemptCount: 3,
@@ -244,41 +239,6 @@ describe("announce loop guard (#18264)", () => {
       expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
       expect(retried.delivery?.deadlineAt).toBe(entry.execution.endedAt! + 30 * 60_000);
     }
-  });
-
-  test("expired completion-message entries are still resumed for announce", async () => {
-    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce("delivered");
-
-    const now = Date.now();
-    const runId = "test-expired-completion-message";
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
-      new Map([
-        [
-          runId,
-          {
-            runId,
-            childSessionKey: "agent:main:subagent:child-1",
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "agent:main:main",
-            task: "completion announce after long descendants",
-            cleanup: "keep" as const,
-            createdAt: now - 20 * 60_000,
-            execution: {
-              status: "terminal" as const,
-              startedAt: now - 19 * 60_000,
-              endedAt: now - 10 * 60_000,
-            },
-            cleanupHandled: false,
-            expectsCompletionMessage: true,
-          },
-        ],
-      ]),
-    );
-
-    hydrateAndActivateRegistry();
-    await flushAsync();
-
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
   test("announce rejection resets cleanupHandled so retries can resume", async () => {

@@ -5,7 +5,6 @@ import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { writeFileWindowFully } from "./file-descriptor.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import {
-  legacyAuditRawCheckpointKey,
   legacyAuditRawCheckpointsMatch,
   legacyAuditSourceGenerationKey,
   openLegacyAuditRawCheckpointStore,
@@ -161,18 +160,11 @@ function createAuditRecoveryScrubPattern(): Buffer {
 }
 
 function buildScrubbedAuditRecoveryContent(rawBytes: Buffer, scrubPattern: Buffer): Buffer {
-  if (rawBytes.length === 0) {
-    return Buffer.alloc(0);
-  }
   // The readable sanitized sibling owns migrated history. This same-inode file
   // is only an append landing pad for predecessor writers, so blank the complete
   // fixed-size prefix and checkpoint it with zero records. Leading whitespace is
   // valid before any late JSONL row and preserves an open O_APPEND offset.
-  const scrubbed = Buffer.allocUnsafe(rawBytes.length);
-  for (let offset = 0; offset < scrubbed.length; offset += scrubPattern.length) {
-    scrubPattern.copy(scrubbed, offset, 0, Math.min(scrubPattern.length, scrubbed.length - offset));
-  }
-  return scrubbed;
+  return Buffer.alloc(rawBytes.length, scrubPattern);
 }
 
 const AUDIT_RECOVERY_WRITE_CHUNK_BYTES = 64 * 1024;
@@ -566,10 +558,7 @@ export async function recordLegacyAuditRawCheckpoint(params: {
       );
       return false;
     }
-    openLegacyAuditRawCheckpointStore(params.stateDir).upsert(
-      legacyAuditRawCheckpointKey(checkpoint),
-      checkpoint,
-    );
+    openLegacyAuditRawCheckpointStore(params.stateDir).upsert(checkpoint.generationKey, checkpoint);
     return true;
   } catch (error) {
     params.warnings.push(

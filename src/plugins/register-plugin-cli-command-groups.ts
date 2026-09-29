@@ -16,8 +16,6 @@ type PluginCliCommandGroupEntry = CommandGroupEntry & {
   placeholders: readonly OpenClawPluginCliRootCommandDescriptor[];
 };
 
-type PluginCliCommandGroupMode = "eager" | "lazy";
-
 function canRegisterPluginCliLazily(entry: PluginCliCommandGroupEntry): boolean {
   if (entry.placeholders.length === 0) {
     return false;
@@ -66,7 +64,7 @@ export async function registerPluginCliCommandGroups(
   program: Command,
   entries: readonly PluginCliCommandGroupEntry[],
   params: {
-    mode: PluginCliCommandGroupMode;
+    mode: "eager" | "lazy";
     primary?: string;
     existingCommands: Set<string>;
     logger: PluginLogger;
