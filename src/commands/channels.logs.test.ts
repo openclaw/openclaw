@@ -292,6 +292,13 @@ describe("channelsLogsCommand", () => {
     expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["warn"]);
   });
 
+  it("rejects an explicitly empty log level", async () => {
+    await expect(channelsLogsCommand({ level: "", json: true }, runtime)).rejects.toThrow(
+      "--level must be one of: fatal, error, warn, info, debug, trace.",
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("rejects unsupported log levels", async () => {
     await expect(channelsLogsCommand({ level: "verbose", json: true }, runtime)).rejects.toThrow(
       "--level must be one of: fatal, error, warn, info, debug, trace.",

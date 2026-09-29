@@ -95,7 +95,7 @@ function parseLinesOption(value: unknown): number {
 }
 
 function parseLevelOption(value: unknown): ChannelLogLevel | undefined {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
     return undefined;
   }
   const level = tryParseLogLevel(normalizeLowercaseStringOrEmpty(value));
