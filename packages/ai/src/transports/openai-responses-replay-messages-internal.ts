@@ -302,10 +302,7 @@ function convertResponsesMessagesWithStyle(
     _targetModel: Model,
     source: { provider: string; api: Api },
   ) => {
-    if (!allowedToolCallProviders.has(model.provider)) {
-      return normalizeIdPart(id);
-    }
-    if (!id.includes("|")) {
+    if (!allowedToolCallProviders.has(model.provider) || !id.includes("|")) {
       return normalizeIdPart(id);
     }
     const separatorIndex = id.indexOf("|");

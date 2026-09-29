@@ -1057,9 +1057,6 @@ export async function runAuthProbes(params: {
 }
 
 export function formatProbeLatency(latencyMs?: number | null) {
-  if (!latencyMs && latencyMs !== 0) {
-    return "-";
-  }
   return formatMs(latencyMs);
 }
 
