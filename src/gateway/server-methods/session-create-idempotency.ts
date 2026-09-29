@@ -27,7 +27,7 @@ const sessionCreatesByContext = new WeakMap<
 >();
 
 export function idempotentSessionCreate(handler: GatewayRequestHandler): GatewayRequestHandler {
-  return async (request) => {
+  const run: GatewayRequestHandler = async (request) => {
     const idempotencyKey = request.params.idempotencyKey;
     if (typeof idempotencyKey !== "string" || !idempotencyKey) {
       await handler(request);
@@ -112,6 +112,12 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       }
       const result =
         existing.state.kind === "completed" ? existing.state.result : await existing.state.work;
+      if (!result.ok) {
+        // Failures are not retained outcomes; they can be bound to the leader's
+        // connection, so this caller's own authority decides its result.
+        await run(request);
+        return;
+      }
       request.respond(result.ok, result.payload, result.error, {
         ...result.meta,
         cached: true,
@@ -179,4 +185,5 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
     const result = await work;
     request.respond(result.ok, result.payload, result.error, result.meta);
   };
+  return run;
 }

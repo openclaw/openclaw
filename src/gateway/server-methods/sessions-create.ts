@@ -53,6 +53,10 @@ import {
   isFreshChatSendStarted,
 } from "./session-create-initial-turn.js";
 import {
+  SessionCreateModelCatalogUnavailableError,
+  waitForSessionCreateModelCatalog,
+} from "./session-create-model-catalog.js";
+import {
   normalizeSessionProjectGitUrl,
   prepareSessionRepositoryWorkspace,
   resolveSessionRepositoryCreation,
@@ -559,7 +563,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: !repository,
       loadGatewayModelCatalogSnapshot: () =>
-        context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+        waitForSessionCreateModelCatalog(
+          context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+          { signal, connectionSignal: client?.connectionSignal, commitGuard },
+        ),
       commitGuard,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
@@ -618,6 +625,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const created = await createGatewaySession(createParams).catch((error: unknown) => {
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+        return undefined;
+      }
+      if (error instanceof SessionCreateModelCatalogUnavailableError) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true }),
+        );
         return undefined;
       }
       return authority.handleClosedError(error);
