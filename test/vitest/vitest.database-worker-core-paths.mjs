@@ -790,6 +790,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/session-transcript-readers.test.ts",
   "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
   "src/plugin-sdk/session-transcript-mirror-runtime.test.ts",
+  "src/plugin-sdk/session-store-runtime.test.ts",
   "src/plugin-sdk/session-transcript-runtime-visible-delta.test.ts",
 ];
 

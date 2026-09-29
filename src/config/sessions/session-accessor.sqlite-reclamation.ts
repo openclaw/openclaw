@@ -369,6 +369,7 @@ function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOp
 // The live assertion belongs to runSqliteSessionReclamation, never its cloneable plan.
 function prepareReclamationDeleteParams({
   commitGuard: _commitGuard,
+  env: _env,
   descendantRunBasis: _descendantRunBasis,
   ...params
 }: DeleteSessionEntryLifecycleParams): ReclamationDeleteParams {

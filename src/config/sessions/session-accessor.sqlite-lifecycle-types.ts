@@ -40,7 +40,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 /** Transportable planning facts; live guards and native identity remain with their owners. */
 type SessionDeletionPlanningParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "expectedDatabaseIdentity" | "descendantRunBasis"
+  "commitGuard" | "env" | "expectedDatabaseIdentity" | "descendantRunBasis"
 >;
 
 export type SessionEntryDeletionPlanInput = {
@@ -172,7 +172,7 @@ export type SqliteSessionReclamationCallbacks = {
 
 export type ReclamationDeleteParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "descendantRunBasis"
+  "commitGuard" | "env" | "descendantRunBasis"
 >;
 
 /** Internal scope: a historical request cannot authorize whole-entry reclamation. */

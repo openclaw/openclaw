@@ -72,6 +72,7 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteAgentId,
   resolveSqliteReadScope,
+  resolveSqliteScope,
   resolveSqliteStoreScope,
   resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
@@ -304,7 +305,7 @@ async function deleteSqliteSessionEntryLifecycleInternal(
 ): Promise<DeleteSessionEntryLifecycleResult> {
   const agentId = params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId;
   const resolved = captureLifecycleDatabaseScope(
-    resolveSqliteStoreScope(params.storePath, { agentId }),
+    resolveSqliteScope({ agentId, env: params.env, sessionKey: "", storePath: params.storePath }),
   );
   return await withCommittedHistoryMaintenance(
     { ...params, env: resolved.env },
@@ -375,6 +376,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       }
       const {
         commitGuard: _commitGuard,
+        env: _env,
         expectedDatabaseIdentity: _expectedDatabaseIdentity,
         descendantRunBasis: _descendantRunBasis,
         ...deleteParams
@@ -452,6 +454,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             const { sessionId } = generation;
             const {
               commitGuard: _generationGuard,
+              env: _generationEnv,
               expectedDatabaseIdentity: _generationIdentity,
               descendantRunBasis: _generationBasis,
               ...generationParams

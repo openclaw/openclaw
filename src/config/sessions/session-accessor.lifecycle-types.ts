@@ -84,6 +84,8 @@ export type DeleteSessionEntryLifecycleResult = {
 };
 
 export type DeleteSessionEntryLifecycleParams = {
+  /** Captured host state source; never part of the cloneable deletion plan. */
+  env?: NodeJS.ProcessEnv;
   /** Internal durable comparison paired with the caller's live descendant guard. */
   descendantRunBasis?: SubagentRunsDurableBasis;
   /**
