@@ -32,6 +32,7 @@ struct DeviceSettingsBridgeTests {
         ("voice.wakeTriggersTalkMode", .wakeTriggersTalkMode),
         ("voice.pushToTalkEnabled", .pushToTalkEnabled),
         ("voice.talkPhaseSoundsEnabled", .talkPhaseSoundsEnabled),
+        ("voice.talkSpokenExitAcknowledgementEnabled", .talkSpokenExitAcknowledgementEnabled),
         ("voice.talkShiftToStopEnabled", .talkShiftToStopEnabled),
         ("voice.realtimeRelayEnabled", .realtimeRelayEnabled),
         ("voice.triggerChime", .triggerChime),

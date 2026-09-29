@@ -93,6 +93,7 @@ extension DashboardWindowController {
         .pushToTalkEnabled: \.voicePushToTalkEnabled,
         .talkPhaseSoundsEnabled: \.talkPhaseSoundsEnabled,
         .talkShiftToStopEnabled: \.talkShiftToStopEnabled,
+        .talkSpokenExitAcknowledgementEnabled: \.talkSpokenExitAcknowledgementEnabled,
         .realtimeRelayEnabled: \.talkRealtimeRelayEnabled,
     ]
 

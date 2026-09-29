@@ -143,6 +143,7 @@ actor TalkModeRuntime {
 
     func setEnabled(_ enabled: Bool) async {
         guard enabled != self.isEnabled else { return }
+        self.pendingSpokenExit = nil
         self.isEnabled = enabled
         self.lifecycleGeneration &+= 1
         resetRealtimeRecoveryState()
@@ -153,7 +154,9 @@ actor TalkModeRuntime {
         }
     }
 
-    struct TranscriptOwner {
+    var pendingSpokenExit: TranscriptOwner?
+
+    struct TranscriptOwner: Equatable {
         let lifecycle: Int
         let recognition: Int
         let relay: UInt64
@@ -178,10 +181,15 @@ actor TalkModeRuntime {
     {
         let owner = self.transcriptOwner
         guard isFinal, owner.lifecycle == lifecycleGeneration, self.ownsTranscript(owner) else { return false }
-        let phrases = await MainActor.run { AppStateStore.shared.talkStopPhrases }
+        let (phrases, spokenExitAcknowledgementEnabled) = await MainActor.run {
+            (AppStateStore.shared.talkStopPhrases, AppStateStore.shared.talkSpokenExitAcknowledgementEnabled)
+        }
         // Preference delivery crosses actors; a replacement session must not
         // inherit an earlier session's completed command.
         guard self.ownsTranscript(owner) else { return false }
+        if self.pendingSpokenExit == owner {
+            return true
+        }
         let matches = TalkStopPhrase.matches(text, phrases: phrases)
         // Persist only the decision and configured count, never recognized or configured speech.
         self.logger.info(
@@ -192,6 +200,18 @@ actor TalkModeRuntime {
         guard matches else { return false }
         if self.realtimeSession == nil, self.phase == .speaking, self.isLikelyEcho(of: text) { return false }
 
+        // Claim before awaiting playback so duplicate transcripts cannot shut it down early.
+        self.pendingSpokenExit = owner
+        if spokenExitAcknowledgementEnabled, let session = realtimeSession {
+            _ = await session.finishSpokenExitAcknowledgement()
+            // An accepted exit still completes if pause or caller cancellation settles
+            // its waiter. Only an actual lifecycle/relay replacement may revoke it.
+            guard self.pendingSpokenExit == owner, self.isEnabled,
+                  self.lifecycleGeneration == owner.lifecycle,
+                  self.recognitionGeneration == owner.recognition,
+                  self.realtimeRelayGeneration == owner.relay,
+                  self.realtimeSession === session else { return true }
+        }
         let stoppedGeneration = UInt64(truncatingIfNeeded: lifecycleGeneration &+ 1)
         // Retire capture, playback, recovery and callbacks before the preference
         // owner publishes Talk off and resumes Voice Wake through its normal path.

@@ -300,6 +300,12 @@ export const TalkSessionCreateParamsSchema = closedObject({
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
   language: Type.Optional(Type.String({ pattern: "^[a-z]{2}$" })),
+  localExitCommands: Type.Optional(
+    closedObject({
+      // Semantic response guidance, independent from transcription bias.
+      phrases: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { maxItems: 8 }),
+    }),
+  ),
   transcriptionHints: Type.Optional(
     closedObject({
       version: Type.Literal(1),
@@ -411,6 +417,16 @@ const TalkCatalogProviderSchema = closedObject({
   supportsToolCalls: Type.Optional(Type.Boolean()),
   supportsVideoFrames: Type.Optional(Type.Boolean()),
   supportsSessionResumption: Type.Optional(Type.Boolean()),
+  localExitAcknowledgement: Type.Optional(
+    closedObject({
+      version: Type.Literal(1),
+      mode: Type.Literal("realtime"),
+      transport: Type.Literal("gateway-relay"),
+      maxPhrases: Type.Literal(8),
+      maxPhraseUtf16Units: Type.Literal(64),
+      maxTotalUtf16Units: Type.Literal(256),
+    }),
+  ),
   transcriptionCommandHints: Type.Optional(
     closedObject({
       version: Type.Literal(1),
@@ -454,6 +470,7 @@ const BrowserRealtimeAudioContractSchema = closedObject({
 
 /** Session creation result with transport-specific ids and credentials. */
 export const TalkSessionCreateResultSchema = closedObject({
+  localExitAcknowledgement: Type.Optional(Type.Literal(true)),
   sessionId: NonEmptyString,
   provider: Type.Optional(Type.String()),
   mode: TalkModeSchema,

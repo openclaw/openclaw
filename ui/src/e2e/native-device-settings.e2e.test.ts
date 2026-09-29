@@ -75,6 +75,72 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("opts into spoken exit acknowledgement only through the native owner", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("native-spoken-exit-acknowledgement");
+    await suite.withPage(
+      { viewport: { width: 1280, height: 1200 }, locale: "en-US", serviceWorkers: "block" },
+      async ({ page }) => {
+        const snapshot = createNativeDeviceSettingsSnapshot();
+        expect(snapshot.voice.talkSpokenExitAcknowledgementEnabled).toBe(false);
+        delete snapshot.voice.talkSpokenExitAcknowledgementEnabled;
+        await installDeviceSettingsBridge(page, snapshot);
+        const gateway = await installMockGateway(page, { operatorScopes: ["operator.read"] });
+        await page.goto(`${suite.server.baseUrl}settings/talk`);
+        await page.getByRole("textbox", { name: "Stop phrases", exact: true }).waitFor();
+        const toggle = page.getByRole("switch", {
+          name: "Spoken exit acknowledgement",
+          exact: true,
+        });
+        expect(await toggle.count()).toBe(0);
+        await page.screenshot({
+          path: path.join(artifactDir, "00-before-unsupported.png"),
+          animations: "disabled",
+        });
+        snapshot.voice.talkSpokenExitAcknowledgementEnabled = false;
+        await page.evaluate((next: NativeDeviceSettingsSnapshot) => {
+          (window as DeviceSettingsTestWindow)["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"] = next;
+          window.dispatchEvent(
+            new CustomEvent("openclaw:native-device-settings-changed", { detail: next }),
+          );
+        }, snapshot);
+        await toggle.waitFor();
+        await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
+        await toggle.scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: path.join(artifactDir, "01-after-default-off.png"),
+          animations: "disabled",
+        });
+        const messages = () =>
+          page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages);
+        for (const enabled of [true, false]) {
+          await page
+            .locator(".settings-row__title")
+            .filter({ hasText: /^Spoken exit acknowledgement$/ })
+            .click();
+          await expect.poll(messages).toContainEqual({
+            type: "set",
+            key: "voice.talkSpokenExitAcknowledgementEnabled",
+            value: enabled,
+          });
+          // The native snapshot, not a renderer preference, owns the displayed state.
+          await expect.poll(() => toggle.getAttribute("aria-checked")).toBe(String(!enabled));
+          snapshot.voice.talkSpokenExitAcknowledgementEnabled = enabled;
+          await replyToDeviceSetting(page, snapshot);
+          await expect.poll(() => toggle.getAttribute("aria-checked")).toBe(String(enabled));
+          await page.screenshot({
+            path: path.join(artifactDir, enabled ? "02-enabled.png" : "03-disabled.png"),
+            animations: "disabled",
+          });
+        }
+        expect(
+          await page.getByRole("textbox", { name: "Stop phrases", exact: true }).inputValue(),
+        ).toBe("stop talking\nend talking");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        expect(await gateway.getRequests("voicewake.set")).toHaveLength(0);
+      },
+    );
+  });
+
   it("edits and resets local Talk stop phrases without Gateway admin scope", async () => {
     const artifactDir = createControlUiE2eArtifactDir("native-talk-stop-phrases");
     await suite.withPage(

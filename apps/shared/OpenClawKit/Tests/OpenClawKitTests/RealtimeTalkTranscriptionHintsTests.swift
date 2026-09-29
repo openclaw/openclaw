@@ -70,6 +70,7 @@ struct RealtimeTalkRelaySessionHintsTests {
         supportsVoiceSelection: Bool = false,
         voiceChangeId: String? = nil,
         speechLocaleID: String? = nil,
+        spokenExitAcknowledgementEnabled: Bool = false,
         catalog: Data?) async throws -> [RealtimeRelayStartupRequest]
     {
         let requests = RealtimeRelayStartupRequestLog()
@@ -91,6 +92,7 @@ struct RealtimeTalkRelaySessionHintsTests {
                 model: model,
                 voice: nil,
                 localStopPhrases: phrases,
+                spokenExitAcknowledgementEnabled: spokenExitAcknowledgementEnabled,
                 speechLocaleID: speechLocaleID,
                 supportsVoiceSelection: supportsVoiceSelection,
                 voiceChangeId: voiceChangeId),
@@ -138,6 +140,28 @@ struct RealtimeTalkRelaySessionHintsTests {
         let actual = try #require(values)
         #expect(actual.map { Array($0.utf8) } == phrases.map { Array($0.utf8) })
         #expect(params["model"]?.stringValue == "gpt-realtime-2.1")
+    }
+
+    @Test(arguments: [false, true])
+    func `exit instructions require opt in without disabling transcription hints`(enabled: Bool) async throws {
+        var catalog = try #require(JSONSerialization.jsonObject(with: hintCatalog()) as? [String: Any])
+        var realtime = try #require(catalog["realtime"] as? [String: Any])
+        var providers = try #require(realtime["providers"] as? [[String: Any]])
+        providers[0]["localExitAcknowledgement"] = [
+            "version": 1, "mode": "realtime", "transport": "gateway-relay",
+            "maxPhrases": 8, "maxPhraseUtf16Units": 64, "maxTotalUtf16Units": 256,
+        ]
+        realtime["providers"] = providers
+        catalog["realtime"] = realtime
+        let requests = try await self.recordCreate(
+            phrases: ["end talking"],
+            spokenExitAcknowledgementEnabled: enabled,
+            catalog: JSONSerialization.data(withJSONObject: catalog))
+        let params = try #require(requests.last?.params)
+        #expect(params["localExitCommands"]?.dictionaryValue?["phrases"]?.arrayValue?
+            .compactMap(\.stringValue) == (enabled ? ["end talking"] : nil))
+        #expect(params["transcriptionHints"]?.dictionaryValue?["phrases"]?.arrayValue?
+            .compactMap(\.stringValue) == ["end talking"])
     }
 
     @Test func `transcription hints preserve voice selection capability and replacement identity`() async throws {

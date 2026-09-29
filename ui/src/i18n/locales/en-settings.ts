@@ -910,6 +910,9 @@ const enSettings = {
       talkStopPhrases: "Stop phrases",
       talkStopPhrasesHint:
         "One phrase per line. Say a whole phrase to turn off Talk Mode on this Mac. Changes save when you leave the field. Clear the list to disable spoken stop commands; Voice Wake stays available.",
+      talkSpokenExitAcknowledgementEnabled: "Spoken exit acknowledgement",
+      talkSpokenExitAcknowledgementHint:
+        "Off by default. Adds instructions to supported realtime sessions asking for a brief spoken confirmation when you say a stop phrase. The reply is best effort; the existing off sound stays the same. Changing this restarts an active realtime session.",
       resetTalkStopPhrases: "Reset stop phrases",
       talkPhaseSoundsEnabled: "Phase sounds",
       realtimeRelayEnabled: "Use realtime Gateway relay",

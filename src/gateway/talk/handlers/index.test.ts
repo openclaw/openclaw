@@ -4964,6 +4964,159 @@ describe("transcription command hints through registered Talk handlers", () => {
       voice: "cedar",
     });
   });
+  it("applies local exit guidance only with explicit semantic opt-in and acknowledges the session", async () => {
+    for (const commands of [
+      undefined,
+      { phrases: ["finish chatting"] },
+      { phrases: [] },
+      undefined,
+    ]) {
+      const respond = vi.fn();
+      await callTalkHandler("talk.session.create", {
+        params: {
+          ...createParams,
+          transcriptionHints: hints,
+          ...(commands ? { localExitCommands: commands } : {}),
+        },
+        client: mac,
+        respond,
+        context: context(),
+      });
+      expectRespondOk(respond);
+      const launch = mocks.createTalkRealtimeRelaySession.mock.calls.at(-1)?.[0];
+      const applied = Boolean(commands?.phrases.length);
+      expect(launch.instructions.includes("Local Talk exit commands")).toBe(applied);
+      expect(mockCallArg(respond, 0, 1).localExitAcknowledgement).toBe(applied ? true : undefined);
+      expect(launch.transcriptionPrompt).toContain(JSON.stringify(phrases));
+      expect(launch.transcriptionPrompt).not.toContain("finish chatting");
+      expect(launch.language).toBe("en");
+      expect(launch.model).toBe("gpt-realtime-2.1");
+      expect(JSON.stringify(mockCallArg(respond, 0, 1))).not.toContain("finish chatting");
+      if (applied) {
+        expect(launch.instructions).toContain('["finish chatting"]');
+        expect(launch.instructions).not.toContain('["stop talking","end talking"]');
+        expect(launch.instructions).toContain('exactly "Okay."');
+        expect(launch.instructions).toContain('optional English "please" before or after');
+        expect(launch.instructions).toContain(
+          "ignoring case, repeated whitespace, trailing sentence punctuation",
+        );
+        expect(launch.instructions).toContain("quoted, negated, explanatory, compound");
+        expect(launch.instructions).toContain("requests to say or discuss");
+        expect(launch.instructions).toContain("Do not call tools");
+        expect(launch.instructions).toContain("local app alone decides");
+      }
+    }
+  });
+  it("retains forced agent-consult behavior without enabling local exit acknowledgement", async () => {
+    config.talk!.realtime!.consultRouting = "force-agent-consult";
+    const catalog = vi.fn();
+    await callTalkHandler("talk.catalog", {
+      params: {},
+      client: mac,
+      respond: catalog,
+      context: context(),
+    });
+    expectRespondOk(catalog);
+    expect(mockCallArg(catalog, 0, 1).realtime.providers[0]).not.toHaveProperty(
+      "localExitAcknowledgement",
+    );
+    // ASR hints remain available; only semantic acknowledgement is incompatible with forced consults.
+    expect(mockCallArg(catalog, 0, 1).realtime.providers[0]).toHaveProperty(
+      "transcriptionCommandHints",
+    );
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: { ...createParams, localExitCommands: { phrases } },
+      client: mac,
+      respond,
+      context: context(),
+    });
+    expectRespondOk(respond);
+    expect(mockCallArg(respond, 0, 1)).not.toHaveProperty("localExitAcknowledgement");
+    expect(
+      mockCallArg(mocks.createTalkRealtimeRelaySession).forceAgentConsultOnFinalTranscript,
+    ).toBe(true);
+    expect(mockCallArg(mocks.createTalkRealtimeRelaySession).instructions).not.toContain(
+      "Local Talk exit commands",
+    );
+  });
+  it("advertises local exit guidance only to the qualified route and client", async () => {
+    for (const client of [mac, { connId: "legacy" }]) {
+      const respond = vi.fn();
+      await callTalkHandler("talk.catalog", { params: {}, client, respond, context: context() });
+      expectRespondOk(respond);
+      const capability = mockCallArg(respond, 0, 1).realtime.providers[0].localExitAcknowledgement;
+      expect(capability).toEqual(
+        client === mac
+          ? {
+              version: 1,
+              mode: "realtime",
+              transport: "gateway-relay",
+              maxPhrases: 8,
+              maxPhraseUtf16Units: 64,
+              maxTotalUtf16Units: 256,
+            }
+          : undefined,
+      );
+    }
+  });
+  it.each([
+    { phrases: ["private-fixture"], "private-extra": true },
+    { phrases: ["private-fixture\n"] },
+    { phrases: ["x".repeat(65)] },
+    { phrases: Array(9).fill("x") },
+    { phrases: Array(5).fill("x".repeat(64)) },
+    { phrases: ["\uD800"] },
+    { phrases: "private-fixture" },
+    null,
+  ])(
+    "rejects invalid local exit commands privately before provider creation (%#)",
+    async (localExitCommands) => {
+      const respond = vi.fn();
+      await callTalkHandler("talk.session.create", {
+        params: { ...createParams, localExitCommands },
+        client: mac,
+        respond,
+        context: context(),
+      });
+      expectRespondError(respond, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Invalid local Talk exit commands",
+      });
+      expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
+      expect(JSON.stringify(respond.mock.calls)).not.toContain("private-");
+    },
+  );
+  it.each([
+    { id: "other", model: "gpt-realtime-2.1" },
+    { id: "openai", model: "gpt-live-test" },
+    { id: "openai", model: "gpt-realtime-2.1", azureEndpoint: "https://synthetic.invalid" },
+  ])(
+    "does not apply local exit guidance outside the qualified provider route (%#)",
+    async ({ id, ...providerConfig }) => {
+      mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+        provider: { ...provider, id },
+        providerConfig,
+      });
+      const respond = vi.fn();
+      await callTalkHandler("talk.session.create", {
+        params: {
+          ...createParams,
+          provider: id,
+          model: providerConfig.model,
+          localExitCommands: { phrases },
+        },
+        client: mac,
+        respond,
+        context: context(),
+      });
+      expectRespondOk(respond);
+      expect(mockCallArg(respond, 0, 1)).not.toHaveProperty("localExitAcknowledgement");
+      expect(mockCallArg(mocks.createTalkRealtimeRelaySession).instructions).not.toContain(
+        "Local Talk exit commands",
+      );
+    },
+  );
   it("advertises only to existing Mac operator UI and leaves other catalogs unchanged", async () => {
     for (const client of [
       mac,

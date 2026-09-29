@@ -378,6 +378,16 @@ describe("native device settings wire contract", () => {
     ["missing voice wakeEnabled", { voice: { supported: true } }],
     ["missing voice supported", { voice: { wakeEnabled: false } }],
     ["Talk toggle", { voice: { supported: true, wakeEnabled: false, talkEnabled: "true" } }],
+    [
+      "spoken exit acknowledgement",
+      {
+        voice: {
+          supported: true,
+          wakeEnabled: false,
+          talkSpokenExitAcknowledgementEnabled: "true",
+        },
+      },
+    ],
     ...[null, "finish chat", ["finish chat", 1]].map(
       (talkStopPhrases) =>
         [
@@ -492,6 +502,8 @@ describe("native device settings wire contract", () => {
     capability?.set("voice.microphone", null);
     capability?.set("browser.cookieSync.domains", ["example.com"]);
     capability?.set("voice.locale.primary", "de-DE");
+    capability?.set("voice.talkSpokenExitAcknowledgementEnabled", true);
+    capability?.set("voice.talkSpokenExitAcknowledgementEnabled", false);
     capability?.set("voice.talkStopPhrases", []);
     capability?.set("voice.talkStopPhrases", null);
     capability?.requestPermission("microphone");
@@ -505,6 +517,8 @@ describe("native device settings wire contract", () => {
       { type: "set", key: "voice.microphone", value: null },
       { type: "set", key: "browser.cookieSync.domains", value: ["example.com"] },
       { type: "set", key: "voice.locale.primary", value: "de-DE" },
+      { type: "set", key: "voice.talkSpokenExitAcknowledgementEnabled", value: true },
+      { type: "set", key: "voice.talkSpokenExitAcknowledgementEnabled", value: false },
       { type: "set", key: "voice.talkStopPhrases", value: [] },
       { type: "set", key: "voice.talkStopPhrases", value: null },
       { type: "request-permission", id: "microphone" },

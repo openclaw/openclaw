@@ -9,6 +9,33 @@ import XCTest
 @MainActor
 struct AppStateIsolationTests {
     @Test
+    func `spoken exit acknowledgement defaults off and reloads only explicit saved opt in`() async throws {
+        try #require(AppProfile.current.isActive)
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        for saved: Bool? in [nil, false, true] {
+            var defaults: [String: Any?] = [
+                talkEnabledKey: false,
+                swabbleEnabledKey: false,
+                talkPhaseSoundsEnabledKey: false,
+            ]
+            defaults.updateValue(saved, forKey: talkSpokenExitAcknowledgementEnabledKey)
+            await TestIsolation.withIsolatedState(
+                env: ["OPENCLAW_CONFIG_PATH": configPath], defaults: defaults)
+            {
+                for _ in 0..<2 {
+                    let state = AppState(preview: true)
+                    #expect(state.talkSpokenExitAcknowledgementEnabled == (saved ?? false))
+                    #expect(AppDefaults.standard
+                        .object(forKey: talkSpokenExitAcknowledgementEnabledKey) as? Bool == saved)
+                    #expect(!state.talkPhaseSoundsEnabled)
+                    #expect(!state.talkEnabled)
+                }
+            }
+        }
+    }
+
+    @Test
     func `Talk upgrade preserves saved phrases and existing voice preferences`() async throws {
         // This suite runs only in the disposable named-profile native test owner.
         try #require(AppProfile.current.isActive)

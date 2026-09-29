@@ -1,4 +1,3 @@
-// Gateway RPC handlers for Talk voice, transcription, and speech synthesis surfaces.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -77,6 +76,11 @@ import { inferSpeechMimeType } from "../../server-methods/speech-mime.js";
 import type { GatewayClient, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
 import { formatForLog } from "../../ws-log.js";
+// Gateway RPC handlers for Talk voice, transcription, and speech synthesis surfaces.
+import {
+  supportsTalkLocalExitAcknowledgement,
+  TALK_LOCAL_EXIT_ACKNOWLEDGEMENT,
+} from "../local-exit-acknowledgement.js";
 import {
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
@@ -488,6 +492,19 @@ function buildTalkCatalog(
           })
         ) {
           entry.transcriptionCommandHints = TALK_TRANSCRIPTION_COMMAND_HINTS;
+        }
+        if (
+          entry.configured &&
+          realtimeConfig.consultRouting !== "force-agent-consult" &&
+          supportsTalkLocalExitAcknowledgement(client, {
+            mode: "realtime",
+            transport: realtimeConfig.transport ?? "webrtc",
+            providerId: provider.id,
+            providerConfig,
+            model: provider.defaultModel,
+          })
+        ) {
+          entry.localExitAcknowledgement = TALK_LOCAL_EXIT_ACKNOWLEDGEMENT;
         }
         if (capabilities?.voices) {
           entry.activeVoices = [...capabilities.voices];

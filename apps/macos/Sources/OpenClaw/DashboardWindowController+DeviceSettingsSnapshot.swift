@@ -90,6 +90,7 @@ extension DashboardWindowController {
                 talkPhaseSoundsEnabled: state.talkPhaseSoundsEnabled,
                 talkShiftToStopEnabled: state.talkShiftToStopEnabled,
                 talkStopPhrases: state.talkStopPhrases,
+                talkSpokenExitAcknowledgementEnabled: state.talkSpokenExitAcknowledgementEnabled,
                 realtimeRelayEnabled: state.talkRealtimeRelayEnabled,
                 triggerChime: state.voiceWakeTriggerChime != .none,
                 sendChime: state.voiceWakeSendChime != .none,

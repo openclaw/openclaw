@@ -123,6 +123,7 @@ actor RuntimeTestRelayRequestLog {
     private var methods: [String] = []
     private var sessionIds: [String?] = []
     private var hintPhrases: [[String]?] = []
+    private var exitPhrases: [[String]?] = []
     private var languages: [String?] = []
     private nonisolated let changed = RuntimeTestSignal<Void>()
 
@@ -131,6 +132,8 @@ actor RuntimeTestRelayRequestLog {
         self.sessionIds.append(params?["sessionId"]?.stringValue)
         if method == "talk.session.create" {
             self.languages.append(params?["language"]?.stringValue)
+            self.exitPhrases.append(params?["localExitCommands"]?.dictionaryValue?["phrases"]?
+                .arrayValue?.compactMap(\.stringValue))
             self.hintPhrases.append(params?["transcriptionHints"]?.dictionaryValue?["phrases"]?
                 .arrayValue?.compactMap(\.stringValue))
         }
@@ -143,6 +146,10 @@ actor RuntimeTestRelayRequestLog {
 
     func createdLanguages() -> [String?] {
         self.languages
+    }
+
+    func createdExitPhrases() -> [[String]?] {
+        self.exitPhrases
     }
 
     func createdHintPhrases() -> [[String]?] {
@@ -402,11 +409,13 @@ func makeRuntimeTestBootstrap(
     realtimeModel: String = "gpt-realtime-2",
     catalog: Data? = nil,
     speechLocaleID: String? = nil,
+    exitAcknowledgementSupported: Bool? = nil,
     eventChannel: (stream: AsyncStream<EventFrame>, continuation: AsyncStream<EventFrame>.Continuation)? = nil) throws
     -> GatewayConnection.RealtimeTalkBootstrap
 {
     let events = eventChannel ?? AsyncStream<EventFrame>.makeStream(bufferingPolicy: .bufferingNewest(8))
     let result = TalkSessionCreateResult(
+        localexitacknowledgement: exitAcknowledgementSupported,
         sessionid: "talk-session",
         mode: AnyCodable("realtime"),
         transport: AnyCodable("gateway-relay"),

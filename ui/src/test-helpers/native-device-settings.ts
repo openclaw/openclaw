@@ -85,6 +85,7 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
       pushToTalkEnabled: true,
       talkPhaseSoundsEnabled: true,
       talkShiftToStopEnabled: true,
+      talkSpokenExitAcknowledgementEnabled: false,
       talkStopPhrases: ["stop talking", "end talking"],
       realtimeRelayEnabled: false,
       triggerChime: true,

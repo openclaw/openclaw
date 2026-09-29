@@ -32,6 +32,12 @@ import { formatForLog } from "../../ws-log.js";
 import { resolveTalkAgentConsultAuthority } from "../client-gateway-control.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../handoff.js";
 import {
+  buildTalkLocalExitAcknowledgement,
+  INVALID_TALK_LOCAL_EXIT_COMMANDS,
+  parseTalkLocalExitCommands,
+  supportsTalkLocalExitAcknowledgement,
+} from "../local-exit-acknowledgement.js";
+import {
   cancelTalkRealtimeRelayTurn,
   createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
@@ -153,6 +159,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     sessionMutationAuthorization,
     sessionMutationCommitGuard,
   }) => {
+    let exitPhrases: string[] | undefined;
+    try {
+      exitPhrases = parseTalkLocalExitCommands(params.localExitCommands);
+    } catch {
+      respondInvalidRequest(respond, INVALID_TALK_LOCAL_EXIT_COMMANDS);
+      return;
+    }
     let hintPhrases: string[] | undefined;
     try {
       hintPhrases = parseTalkTranscriptionHintPhrases(params.transcriptionHints);
@@ -340,6 +353,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           providerConfig: relayLaunch.providerConfig,
           model: launchOptions.model ?? resolution.provider.defaultModel,
         };
+        const exitGuidance =
+          !relayLaunch.forceAgentConsultOnFinalTranscript &&
+          supportsTalkLocalExitAcknowledgement(client, hintRoute)
+            ? buildTalkLocalExitAcknowledgement(exitPhrases)
+            : "";
         const transcriptionPrompt = supportsTalkTranscriptionCommandHints(client, hintRoute)
           ? buildTalkCommandTranscriptionPrompt(hintPhrases)
           : undefined;
@@ -399,7 +417,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             (controlSource === "delegation"
               ? (providerInstructions ?? "")
               : buildRealtimeInstructions(providerInstructions)) +
-            buildTalkRealtimeHistoryInstructions(initialItems),
+            buildTalkRealtimeHistoryInstructions(initialItems) +
+            exitGuidance,
           tools:
             controlSource === "delegation"
               ? []
@@ -426,6 +445,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         });
         return respondOk(respond, {
           ...publicSession,
+          ...(exitGuidance ? { localExitAcknowledgement: true } : {}),
           sessionId: session.relaySessionId,
           voiceSessionId: session.relaySessionId,
           mode,

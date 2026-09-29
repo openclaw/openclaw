@@ -16,6 +16,20 @@ RPC method families for Talk and TTS, secrets, config, update, and wizard flows,
 - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice: canonical provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags, without returning provider secrets or mutating global config. Current gateways set `ready` after applying runtime provider selection; treat its absence as unverified on older gateways.
 - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
 - `talk.session.create` (`operator.talk`) creates a gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, non-admin callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
+  For qualified macOS operator sessions on the OpenAI `gpt-realtime-2.1` Gateway relay,
+  catalog provider entries may advertise `localExitAcknowledgement` with version and phrase
+  limits. Clients can separately opt in with `localExitCommands: { phrases: [...] }`.
+  This semantic input requests a brief “Okay.” for a standalone configured exit command;
+  case, whitespace, trailing sentence punctuation, and optional English “please” are ignored.
+  It is not inferred from `transcriptionHints`, does not disable Talk, and does not create
+  another provider response. Quoted, negated, explanatory, compound, or say-the-phrase
+  requests are excluded by the response guidance. The create result includes
+  `localExitAcknowledgement: true` only when guidance was applied; unsupported routes,
+  empty lists, and forced agent-consult mode retain existing behavior. Limits are eight
+  phrases, 64 UTF-16 units each and 256 total, with no surrounding whitespace or control,
+  format, surrogate, or line/paragraph separator characters. Acknowledgement is best effort;
+  provider timing and transcription may prevent it. Output `talkEvent.turnId` identifies
+  playback ownership, not proof that a response was caused by a particular input utterance.
 - `talk.session.appendAudio` appends base64 PCM input audio to gateway-owned realtime relay and transcription sessions.
 - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in gateway relay sessions. Send the `turnId` from the current audio event's `talkEvent`; the result is `applied`, `stale`, or `idle`.
 - `talk.session.submitToolResult` completes a provider tool call emitted by a gateway-owned realtime relay session. The request waits for any asynchronous completion signal exposed by the provider bridge; failed submissions keep the linked run active and do not emit a successful tool-result event. Pass `options: { willContinue: true }` for interim tool output or `options: { suppressResponse: true }` when the provider bridge advertises suppression support and the result should not start another response.

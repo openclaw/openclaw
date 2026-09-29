@@ -244,10 +244,17 @@ final class AppState {
         didSet { self.persistTalkRealtimeRelayPreference(previousValue: oldValue) }
     }
 
+    var talkSpokenExitAcknowledgementEnabled: Bool {
+        didSet { self.persistTalkSpokenExitAcknowledgementPreference(previousValue: oldValue) }
+    }
+
     var talkStopPhrases: [String] {
         didSet {
             self.ifNotPreview {
                 AppDefaults.standard.set(self.talkStopPhrases, forKey: talkStopPhrasesKey)
+                if self.talkStopPhrases != oldValue, self.talkEnabled {
+                    Task { await TalkModeRuntime.shared.localTalkExitPreferencesDidChange() }
+                }
             }
         }
     }
@@ -500,6 +507,8 @@ final class AppState {
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = AppDefaults.standard
             .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
+        self.talkSpokenExitAcknowledgementEnabled = AppDefaults.standard
+            .bool(forKey: talkSpokenExitAcknowledgementEnabledKey)
         self.talkStopPhrases = AppDefaults.standard
             .stringArray(forKey: talkStopPhrasesKey) ?? defaultTalkStopPhrases
         self.voiceWakeTriggerChime = Self.loadChime(

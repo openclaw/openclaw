@@ -96,6 +96,23 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.onFailure = nil
     }
 
+    func stopInputPreservingPlayback() -> Bool {
+        guard let graph else { return false }
+        // Hardware I/O remains alive for final playback; microphone delivery does not.
+        self.deliveryGate.deactivate()
+        if self.tapInstalled {
+            graph.input.removeTap(onBus: 0)
+        }
+        self.tapInstalled = false
+        graph.echoPipeline?.stop()
+        if graph.renderTapInstalled {
+            graph.engine.mainMixerNode.removeTap(onBus: 0)
+            graph.renderTapInstalled = false
+        }
+        graph.echoPipeline = nil
+        return true
+    }
+
     private func startCaptureEngine(
         targetSampleRate: Double,
         onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws

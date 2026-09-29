@@ -118,6 +118,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
     pushToTalkEnabled: z.boolean().optional(),
     talkPhaseSoundsEnabled: z.boolean().optional(),
     talkShiftToStopEnabled: z.boolean().optional(),
+    talkSpokenExitAcknowledgementEnabled: z.boolean().optional(), // absent = unsupported
     talkStopPhrases: z.array(z.string()).optional(), // absent = unsupported; [] disables spoken stop commands
     realtimeRelayEnabled: z.boolean().optional(),
     triggerChime: z.boolean().optional(),
@@ -181,6 +182,7 @@ export type SettingKey =
   | "voice.pushToTalkEnabled"
   | "voice.talkPhaseSoundsEnabled"
   | "voice.talkShiftToStopEnabled"
+  | "voice.talkSpokenExitAcknowledgementEnabled"
   | "voice.talkStopPhrases" // value: string[]; null restores native defaults
   | "voice.realtimeRelayEnabled"
   | "voice.triggerChime"

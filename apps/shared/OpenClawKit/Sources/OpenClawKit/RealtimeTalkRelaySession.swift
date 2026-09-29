@@ -4,182 +4,9 @@ import Foundation
 import OpenClawProtocol
 import OSLog
 
-public struct RealtimeTalkAudioFrame: Sendable {
-    public let data: Data
-    public let timestampMs: Double
-    public let rms: Float
-
-    public init(data: Data, timestampMs: Double, rms: Float) {
-        self.data = data
-        self.timestampMs = timestampMs
-        self.rms = rms
-    }
-}
-
-public enum RealtimeTalkPCM16Encoder {
-    public nonisolated static func encode(
-        buffer: AVAudioPCMBuffer,
-        inputSampleRate: Double,
-        targetSampleRate: Double) -> Data
-    {
-        guard let channelData = buffer.floatChannelData,
-              buffer.frameLength > 0,
-              inputSampleRate > 0,
-              targetSampleRate > 0
-        else { return Data() }
-        let frameCount = Int(buffer.frameLength)
-        let channelCount = max(1, Int(buffer.format.channelCount))
-        let outputCount = max(1, Int((Double(frameCount) * targetSampleRate / inputSampleRate).rounded(.down)))
-        var data = Data(capacity: outputCount * MemoryLayout<Int16>.size)
-        for index in 0..<outputCount {
-            let sourcePosition = Double(index) * inputSampleRate / targetSampleRate
-            let lower = min(frameCount - 1, Int(sourcePosition.rounded(.down)))
-            let upper = min(frameCount - 1, lower + 1)
-            let fraction = Float(sourcePosition - Double(lower))
-            var mixed: Float = 0
-            for channel in 0..<channelCount {
-                let samples = channelData[channel]
-                mixed += samples[lower] + ((samples[upper] - samples[lower]) * fraction)
-            }
-            let sample = max(-1, min(1, mixed / Float(channelCount)))
-            var intSample = Int16((sample * Float(Int16.max)).rounded()).littleEndian
-            withUnsafeBytes(of: &intSample) { data.append(contentsOf: $0) }
-        }
-        return data
-    }
-}
-
-@MainActor
-public protocol RealtimeTalkAudioCapturing: AnyObject {
-    var suppressesInputDuringOutput: Bool { get }
-    var usesServerVADForBargeIn: Bool { get }
-
-    func start(
-        targetSampleRate: Double,
-        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void,
-        onFailure: @escaping @MainActor (String) -> Void) throws
-
-    func stop()
-}
-
-extension RealtimeTalkAudioCapturing {
-    public var usesServerVADForBargeIn: Bool {
-        false
-    }
-}
-
-public struct RealtimeTalkRelayTransport: Sendable {
-    public let subscribeServerEvents: @Sendable (Int) async -> AsyncStream<EventFrame>
-    public let request: @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data
-    public let isCurrent: @Sendable () async -> Bool
-
-    public init(
-        subscribeServerEvents: @escaping @Sendable (Int) async -> AsyncStream<EventFrame>,
-        request: @escaping @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data,
-        isCurrent: @escaping @Sendable () async -> Bool = { true })
-    {
-        self.subscribeServerEvents = subscribeServerEvents
-        self.request = request
-        self.isCurrent = isCurrent
-    }
-}
-
-public struct RealtimeTalkRelayIssue: Equatable, Sendable {
-    public let code: String
-    public let message: String
-    public let provider: String?
-    public let model: String?
-    public let transport: String?
-    public let phase: String?
-
-    public init(
-        code: String = "realtime_unavailable",
-        message: String,
-        provider: String? = nil,
-        model: String? = nil,
-        transport: String? = nil,
-        phase: String? = nil)
-    {
-        self.code = code
-        self.message = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.provider = provider
-        self.model = model
-        self.transport = transport
-        self.phase = phase
-    }
-}
-
-public struct RealtimeTalkTranscript: Equatable, Sendable {
-    public let role: String
-    public let text: String
-    public let isFinal: Bool
-
-    public init(role: String, text: String, isFinal: Bool) {
-        self.role = role
-        self.text = text
-        self.isFinal = isFinal
-    }
-}
-
-public enum RealtimeTalkRelayTermination: Equatable, Sendable {
-    case remoteClose(reason: String?)
-    case outputCancelled(reason: String)
-    case eventStreamEnded
-    case audioInputFailed(message: String)
-    case outputCancellationFailed
-    case outputPlaybackOverflow
-}
-
 @MainActor
 public final class RealtimeTalkRelaySession {
     private static let agentControlToolName = "openclaw_agent_control"
-
-    public struct Options: Sendable {
-        public let sessionKey: String
-        public let provider: String?
-        public let model: String?
-        public let voice: String?
-        public let localStopPhrases: [String]?
-        public let speechLocaleID: String?
-        public let supportsVoiceSelection: Bool
-        public let voiceChangeId: String?
-
-        public init(
-            sessionKey: String,
-            provider: String?,
-            model: String?,
-            voice: String?,
-            localStopPhrases: [String]? = nil,
-            speechLocaleID: String? = nil,
-            supportsVoiceSelection: Bool = false,
-            voiceChangeId: String? = nil)
-        {
-            self.sessionKey = sessionKey
-            self.provider = provider
-            self.model = model
-            self.voice = voice
-            self.localStopPhrases = localStopPhrases
-            self.speechLocaleID = speechLocaleID
-            self.supportsVoiceSelection = supportsVoiceSelection
-            self.voiceChangeId = voiceChangeId
-        }
-    }
-
-    private struct ToolCallStartResponse: Decodable {
-        let runId: String?
-        let idempotencyKey: String?
-    }
-
-    private struct ChatCompletionResult {
-        let text: String?
-        let failed: Bool
-    }
-
-    private struct RelayChatEvent: Decodable {
-        let runId: String?
-        let state: String?
-        let message: AnyCodable?
-    }
 
     private enum StartupWaitResult {
         case ready
@@ -232,6 +59,17 @@ public final class RealtimeTalkRelaySession {
     private var pendingPreRelayEvents: [EventFrame] = []
     private var inputSampleRateHz = Double(RealtimeTalkRelaySession.defaultSampleRateHz)
     private var outputSampleRateHz = Double(RealtimeTalkRelaySession.defaultSampleRateHz)
+    private var supportsExitAcknowledgement = false
+    private var exitRequested = false
+    private var exitTurnID: String?
+    private var exitAudio = Data()
+    private var exitAudioDone = false
+    private var exitWaiter: CheckedContinuation<Bool, Never>?
+    private var exitDeadline: Task<Void, Never>?
+    private var assistantFinal: (turnID: String, isAcknowledgement: Bool)?
+    private var outputTurnByteCount = 0
+    private var lastDrainedTurnID: String?
+    private var lastDrainedAt: TimeInterval?
     private var supportsBargeIn: Bool? = true
     private var eventTask: Task<Void, Never>?
     private var toolCallTasks: [UUID: Task<Void, Never>] = [:]
@@ -347,6 +185,10 @@ public final class RealtimeTalkRelaySession {
                         localized: "Gateway did not return a realtime relay session"),
                 ])
             }
+            self.supportsExitAcknowledgement = self.options.spokenExitAcknowledgementEnabled &&
+                result.localexitacknowledgement == true
+            self.logger
+                .info("talk exit acknowledgement guidanceApplied=\(self.supportsExitAcknowledgement, privacy: .public)")
             self.relaySessionId = relaySessionId
             let supportsBargeIn = await self.resolveSupportsBargeIn(result)
             switch await self.lifecycleStatus(lifecycleGeneration) {
@@ -391,6 +233,112 @@ public final class RealtimeTalkRelaySession {
         }
     }
 
+    /// Best effort: finish only a short acknowledgement in this output generation.
+    /// It may precede the final user transcript; this is not a causal-response guarantee.
+    /// The caller always performs normal shutdown after this returns.
+    public func finishSpokenExitAcknowledgement() async -> Bool {
+        guard self.isReady, self.supportsExitAcknowledgement, !self.exitRequested,
+              !Task.isCancelled else { return false }
+        guard self.audioCapture.stopInputPreservingPlayback() else {
+            self.recordExitOutcome(.unsupported)
+            return false
+        }
+        self.isInputPaused = true
+        for task in self.audioSendTasks.values {
+            task.cancel()
+        }
+        self.audioSendTasks.removeAll()
+        for task in self.toolCallTasks.values {
+            task.cancel()
+        }
+        let sender = self.audioSender
+        self.audioSender = nil
+        Task { await sender?.close() }
+        self.onInputLevel(0)
+        retireOutputCancellation()
+        let currentTurnID = self.outputIdentity?.turnId
+        let suitable = currentTurnID != nil && self.assistantFinal?.turnID == currentTurnID &&
+            self.assistantFinal?.isAcknowledgement == true && self.outputTurnByteCount <= self.exitAudioByteLimit
+        if !suitable {
+            stopOutputPlayback()
+        }
+        self.exitRequested = true
+        self.exitTurnID = currentTurnID
+        if currentTurnID == nil, let lastDrainedTurnID, let lastDrainedAt,
+           ProcessInfo.processInfo.systemUptime - lastDrainedAt <= 2,
+           self.assistantFinal?.turnID == lastDrainedTurnID,
+           assistantFinal?.isAcknowledgement == true
+        {
+            self.recordExitOutcome(.alreadyDrained)
+            return true
+        }
+        if currentTurnID == nil { self.outputTurnByteCount = 0 }
+        if self.outputTurnByteCount > self.exitAudioByteLimit ||
+            (currentTurnID != nil && self.assistantFinal?.turnID == currentTurnID && !suitable)
+        {
+            self.recordExitOutcome(.notBrief)
+            return false
+        }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { waiter in
+                self.exitWaiter = waiter
+                self.exitDeadline = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                    self?.finishExitAcknowledgement(played: false, outcome: .timeout)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.finishExitAcknowledgement(played: false) }
+        }
+    }
+
+    private var exitAudioByteLimit: Int {
+        Int(self.outputSampleRateHz * 1.2) * MemoryLayout<Int16>.size
+    }
+
+    private func acceptExitTranscript(turnID: String) {
+        guard self.exitWaiter != nil,
+              self.exitTurnID == nil || self.exitTurnID == turnID else { return }
+        self.exitTurnID = turnID
+        guard self.assistantFinal?.isAcknowledgement == true else {
+            self.finishExitAcknowledgement(played: false, outcome: .notBrief)
+            return
+        }
+        if !self.exitAudio.isEmpty {
+            let data = self.exitAudio
+            self.exitAudio.removeAll()
+            self.outputIdentity = OutputIdentity(turnID: turnID)
+            markOutputAudioStarted(nowMs: ProcessInfo.processInfo.systemUptime * 1000)
+            self.onSpeakingChanged(true)
+            ensureOutputPlaybackStarted()
+            bufferOutputAudio(data)
+        }
+        if self.exitAudioDone {
+            finishOutputPlaybackStream()
+        }
+    }
+
+    private enum ExitOutcome: String {
+        case played, alreadyDrained, notBrief, timeout, cancelled, unsupported
+    }
+
+    private func recordExitOutcome(_ outcome: ExitOutcome) {
+        self.logger.info("talk exit acknowledgement outcome=\(outcome.rawValue, privacy: .public)")
+    }
+
+    private func finishExitAcknowledgement(played: Bool, outcome: ExitOutcome = .cancelled) {
+        guard let waiter = exitWaiter else { return }
+        self.exitWaiter = nil
+        self.recordExitOutcome(played ? .played : outcome)
+        self.exitDeadline?.cancel()
+        self.exitDeadline = nil
+        self.exitAudio.removeAll()
+        if !played {
+            stopOutputPlayback()
+        }
+        waiter.resume(returning: played)
+    }
+
     public func stop() {
         self.close(sendClose: true)
     }
@@ -404,6 +352,7 @@ public final class RealtimeTalkRelaySession {
     private func close(sendClose: Bool) {
         guard !self.isClosed else { return }
         self.isClosed = true
+        self.finishExitAcknowledgement(played: false)
         self.lifecycleGeneration &+= 1
         self.finishStartupWait(.cancelled)
         self.stopMicrophonePump()
@@ -421,7 +370,7 @@ public final class RealtimeTalkRelaySession {
         self.terminalOutputCancellationReason = nil
         self.isOutputPaused = false
         self.stopOutputPlayback()
-        if sendClose, let relaySessionId = self.relaySessionId {
+        if sendClose, let relaySessionId {
             self.beginServerClose(relaySessionId: relaySessionId)
         }
         self.relaySessionId = nil
@@ -459,6 +408,10 @@ public final class RealtimeTalkRelaySession {
     }
 
     public func setInputPaused(_ paused: Bool) throws {
+        if self.exitRequested {
+            self.finishExitAcknowledgement(played: false)
+            return
+        }
         guard self.isInputPaused != paused else { return }
         self.isInputPaused = paused
         if paused {
@@ -528,6 +481,11 @@ public final class RealtimeTalkRelaySession {
                 supported=\(supported, privacy: .public) \
                 sentPhraseCount=\(supported ? phrases.count : 0, privacy: .public)
                 """)
+            if self.options.spokenExitAcknowledgementEnabled,
+               let catalog, RealtimeTalkExitAcknowledgement.isSupported(catalog: catalog)
+            {
+                payload["localExitCommands"] = AnyCodable(["phrases": AnyCodable(phrases)])
+            }
             if supported {
                 payload["transcriptionHints"] = AnyCodable([
                     "version": AnyCodable(1),
@@ -636,6 +594,9 @@ extension RealtimeTalkRelaySession {
             return
         }
         guard let type = payload["type"]?.stringValue else { return }
+        if self.exitRequested, type == "toolCall" || type == "ready" {
+            return
+        }
         switch type {
         case "ready":
             self.hasReceivedReady = true
@@ -654,6 +615,7 @@ extension RealtimeTalkRelaySession {
         case "toolCall":
             self.startToolCall(payload, lifecycleGeneration: lifecycleGeneration)
         case "error":
+            self.finishExitAcknowledgement(played: false)
             let message = payload["message"]?.stringValue ?? String(localized: "Realtime failed")
             let issue = Self.issue(
                 payload: payload,
@@ -675,8 +637,8 @@ extension RealtimeTalkRelaySession {
                 let termination: RealtimeTalkRelayTermination = if talkEvent?["type"]?.stringValue == "session.closed",
                                                                    talkEvent?["payload"]?.dictionaryValue?["reason"]?
                                                                        .stringValue == "output-cancelled",
-                                                                       let cancellationReason = self
-                                                                           .terminalOutputCancellationReason
+                                                                       let cancellationReason =
+                                                                       terminalOutputCancellationReason
                 {
                     .outputCancelled(reason: cancellationReason)
                 } else {
@@ -704,6 +666,12 @@ extension RealtimeTalkRelaySession {
 
     private func handleOutputClear(_ payload: [String: AnyCodable]) {
         let clearIdentity = OutputIdentity(payload)
+        if self.exitRequested {
+            if clearIdentity.isEmpty() || clearIdentity.turnId == self.exitTurnID {
+                self.finishExitAcknowledgement(played: false)
+            }
+            return
+        }
         // Provider clears retire playback; only turn.cancelled acknowledges turn cancellation.
         let clearsSuppressed = self.awaitingOutputClear &&
             payload["talkEvent"]?.dictionaryValue?["type"]?.stringValue == "turn.cancelled" &&
@@ -833,6 +801,14 @@ extension RealtimeTalkRelaySession {
         let charCount = text.count
         self.logger.debug(
             "talk realtime transcript: role=\(role.isEmpty ? "unknown" : role) final=\(isFinal) chars=\(charCount)")
+        if role == "assistant", isFinal, let turnID = OutputIdentity(payload).turnId {
+            if self.exitRequested, let exitTurnID, exitTurnID != turnID { return }
+            self.assistantFinal = (turnID, RealtimeTalkExitAcknowledgement.isSuitable(text))
+            if self.exitRequested {
+                self.acceptExitTranscript(turnID: turnID)
+            }
+        }
+        guard !self.exitRequested else { return }
         self.onTranscript(RealtimeTalkTranscript(role: role, text: text, isFinal: isFinal))
         guard isFinal else { return }
         if role == "user" {
@@ -957,7 +933,7 @@ extension RealtimeTalkRelaySession {
         result: [String: AnyCodable],
         lifecycleGeneration: UInt64) async throws
     {
-        guard let relaySessionId else { return }
+        guard !self.exitRequested, let relaySessionId else { return }
         let payload: [String: AnyCodable] = [
             "sessionId": AnyCodable(relaySessionId),
             "callId": AnyCodable(callId),
@@ -1051,7 +1027,7 @@ extension RealtimeTalkRelaySession {
         envelope.begin(sampleRate: self.outputSampleRateHz)
         self.outputEnvelope = envelope
         let stream = AsyncThrowingStream<Data, Error>(
-            bufferingPolicy: .bufferingOldest(Self.maxBufferedOutputChunks))
+            bufferingPolicy: .bufferingOldest(exitRequested ? 64 : Self.maxBufferedOutputChunks))
         { continuation in self.outputContinuation = continuation }
         self.outputTask = Task { [weak self] in
             guard let self else { return }
@@ -1089,6 +1065,11 @@ extension RealtimeTalkRelaySession {
         // Only drained playback completes output; elapsed time cannot prove the
         // device finished queued audio. Publish the terminal transition once.
         guard self.isOutputPlaying else { return }
+        self.lastDrainedTurnID = self.outputIdentity?.turnId
+        self.lastDrainedAt = ProcessInfo.processInfo.systemUptime
+        if self.exitWaiter != nil, self.exitTurnID == self.outputIdentity?.turnId {
+            self.finishExitAcknowledgement(played: true)
+        }
         self.isOutputPlaying = false
         self.outputIdentity = nil
         self.outputStartedAtMs = nil
@@ -1107,7 +1088,7 @@ extension RealtimeTalkRelaySession {
         guard let markName = payload["markName"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
               !markName.isEmpty
         else { return }
-        if self.isOutputPlaying {
+        if self.isOutputPlaying || self.exitWaiter != nil {
             self.pendingPlaybackMarks.append(markName)
         } else {
             self.acknowledgePlaybackMarks([markName])
@@ -1116,7 +1097,7 @@ extension RealtimeTalkRelaySession {
 
     private func acknowledgePlaybackMarks(_ marks: [String]) {
         guard !marks.isEmpty,
-              let relaySessionId = self.relaySessionId
+              let relaySessionId
         else { return }
         for markName in marks {
             Task { [transport, logger] in
@@ -1136,6 +1117,7 @@ extension RealtimeTalkRelaySession {
     }
 
     private func stopOutputPlayback() {
+        self.finishExitAcknowledgement(played: false)
         self.outputSessionId += 1
         self.outputContinuation?.finish()
         self.outputContinuation = nil
@@ -1164,68 +1146,14 @@ extension RealtimeTalkRelaySession {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
     }
-
-    private nonisolated static func assistantText(from message: AnyCodable?) -> String? {
-        guard let message else { return nil }
-        if let text = message.stringValue {
-            return self.trimmed(text)
-        }
-        guard let object = message.dictionaryValue else { return nil }
-        if let role = self.trimmed(object["role"]?.stringValue), role.lowercased() != "assistant" {
-            return nil
-        }
-        guard let content = object["content"] else { return nil }
-        if let text = content.stringValue {
-            return self.trimmed(text)
-        }
-        let parts = content.arrayValue?.compactMap { part -> String? in
-            if let text = part.stringValue { return self.trimmed(text) }
-            return self.trimmed(part.dictionaryValue?["text"]?.stringValue)
-        } ?? []
-        return self.trimmed(parts.joined(separator: "\n"))
-    }
-
-    private nonisolated static func trimmed(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
 }
 
 extension RealtimeTalkRelaySession {
-    private struct OutputIdentity {
-        enum Relation {
-            case same
-            case different
-            case unknown
-        }
-
-        let turnId: String?
-        init(_ payload: [String: AnyCodable]) {
-            let turnId = payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            self.turnId = turnId?.isEmpty == false ? turnId : nil
-        }
-
-        func isEmpty() -> Bool {
-            self.turnId == nil
-        }
-
-        func relation(to other: OutputIdentity) -> Relation {
-            if self.isEmpty() || other.isEmpty() {
-                return self.isEmpty() == other.isEmpty() ? .same : .different
-            }
-            if let turnId, let otherTurnId = other.turnId {
-                return turnId == otherTurnId ? .same : .different
-            }
-            return .unknown
-        }
-    }
-
     @discardableResult
     public func cancelOutput(reason: String = "user") -> Bool {
         guard reason != "barge-in" || self.supportsBargeIn == true else { return false }
         guard let relaySessionId,
-              let outputIdentity = self.outputIdentity,
+              let outputIdentity,
               let turnId = outputIdentity.turnId
         else { return false }
         self.outputCancellationGeneration &+= 1
@@ -1298,6 +1226,9 @@ extension RealtimeTalkRelaySession {
             return
         }
         guard !self.awaitingOutputClear else { return }
+        if self.exitRequested, self.exitWaiter == nil {
+            return
+        }
         if let cancelledOutputTurnId {
             if incomingTurnId == cancelledOutputTurnId {
                 return
@@ -1307,6 +1238,27 @@ extension RealtimeTalkRelaySession {
         guard let data = Data(base64Encoded: base64) else {
             self.handleOutputPlaybackOverflow()
             return
+        }
+        if self.exitRequested, let exitTurnID, exitTurnID != incomingTurnId {
+            return
+        }
+        if self.outputIdentity?.turnId != incomingTurnId, exitTurnID != incomingTurnId {
+            self.outputTurnByteCount = 0
+        }
+        self.outputTurnByteCount += data.count
+        if self.exitRequested {
+            if exitTurnID == nil {
+                exitTurnID = incomingTurnId
+            }
+            guard exitTurnID == incomingTurnId else { return }
+            guard self.outputTurnByteCount <= self.exitAudioByteLimit else {
+                self.finishExitAcknowledgement(played: false, outcome: .notBrief)
+                return
+            }
+            if self.assistantFinal?.turnID != incomingTurnId || self.assistantFinal?.isAcknowledgement != true {
+                self.exitAudio.append(data)
+                return
+            }
         }
         self.terminalOutputCancellationReason = nil
         if let currentIdentity = self.outputIdentity,
@@ -1370,6 +1322,14 @@ extension RealtimeTalkRelaySession {
 
     private func handleOutputAudioDone(_ payload: [String: AnyCodable]) {
         let incomingIdentity = OutputIdentity(payload)
+        if self.exitRequested {
+            guard self.exitWaiter != nil, let turnID = incomingIdentity.turnId,
+                  exitTurnID == nil || exitTurnID == turnID else { return }
+            self.exitTurnID = turnID
+            self.exitAudioDone = true
+            guard self.assistantFinal?.turnID == turnID,
+                  self.assistantFinal?.isAcknowledgement == true else { return }
+        }
         if !incomingIdentity.isEmpty(),
            let outputIdentity,
            outputIdentity.relation(to: incomingIdentity) != .same
@@ -1465,7 +1425,7 @@ extension RealtimeTalkRelaySession {
         guard self.isCurrentLifecycleLocally(lifecycleGeneration),
               self.audioCaptureGeneration == audioCaptureGeneration,
               !self.isInputPaused, self.suppressedOutputIdentity == nil,
-              let audioSender = self.audioSender
+              let audioSender
         else { return nil }
         self.recordMicrophoneFrame(byteCount: encoded.count, rms: rms, timestampMs: timestampMs)
         // Continuous providers own interruptions and need input throughout playback.
@@ -1555,6 +1515,21 @@ extension RealtimeTalkRelaySession {
 
 #if DEBUG
 extension RealtimeTalkRelaySession {
+    // periphery:ignore - stale acknowledgement regression without a wall-clock sleep.
+    func _test_ageDrainedAcknowledgement() {
+        self.lastDrainedAt = ProcessInfo.processInfo.systemUptime - 3
+    }
+
+    // periphery:ignore - deterministic machine-deadline coverage without wall-clock sleeps.
+    func _test_expireExitAcknowledgement() {
+        self.finishExitAcknowledgement(played: false, outcome: .timeout)
+    }
+
+    // periphery:ignore - package tests observe pending exit without scheduling assumptions.
+    var _test_exitAcknowledgementPending: Bool {
+        self.exitWaiter != nil
+    }
+
     // periphery:ignore - package tests drive a relay session without a live gateway handshake.
     func _test_setRelaySessionId(_ relaySessionId: String) {
         self.relaySessionId = relaySessionId

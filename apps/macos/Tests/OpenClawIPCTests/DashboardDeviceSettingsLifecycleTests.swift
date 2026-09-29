@@ -5,6 +5,51 @@ import WebKit
 
 @MainActor
 extension DashboardWindowOwnershipTests {
+    @Test func `device bridge applies spoken acknowledgement toggle and returns current setting`() async throws {
+        _ = AppKitTestSupport.application
+        let state = AppStateStore.shared
+        let previous = (state.connectionMode, state.talkSpokenExitAcknowledgementEnabled, state.talkPhaseSoundsEnabled)
+        state.connectionMode = .unconfigured
+        state.talkSpokenExitAcknowledgementEnabled = false
+        state.talkPhaseSoundsEnabled = false
+        defer {
+            state.connectionMode = previous.0
+            state.talkSpokenExitAcknowledgementEnabled = previous.1
+            state.talkPhaseSoundsEnabled = previous.2
+        }
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let autosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
+        defer { NSWindow.removeFrame(usingName: autosaveName) }
+        let auth = DashboardWindowAuth(gatewayUrl: server.websocketURL().absoluteString, token: nil, password: nil)
+        let controller = DashboardWindowController(
+            url: server.url(),
+            auth: auth,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: autosaveName,
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show(url: server.url(), auth: auth)
+        try #require(await Self.waitForDashboardDocument(controller))
+        for enabled in [true, false] {
+            let reply = try await controller.webView.callAsyncJavaScript(
+                """
+                return await window.webkit.messageHandlers.openclawDeviceSettings.postMessage({
+                  type: 'set', key: 'voice.talkSpokenExitAcknowledgementEnabled', value: enabled
+                });
+                """,
+                arguments: ["enabled": enabled],
+                in: nil,
+                contentWorld: .page)
+            let snapshot = try #require(reply as? [String: Any])
+            let voice = try #require(snapshot["voice"] as? [String: Any])
+            #expect(voice["talkSpokenExitAcknowledgementEnabled"] as? Bool == enabled)
+            #expect(state.talkSpokenExitAcknowledgementEnabled == enabled)
+            #expect(!state.talkPhaseSoundsEnabled)
+            #expect(controller.window?.attachedSheet == nil)
+        }
+    }
+
     @Test(arguments: [
         "replacement", "committed", "provisional", "close", "cancel-domains", "cancel-profile", "normalize-profile",
         "revoke-domains", "revoke-session",

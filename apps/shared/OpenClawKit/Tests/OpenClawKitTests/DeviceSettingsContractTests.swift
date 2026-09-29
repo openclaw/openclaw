@@ -31,6 +31,20 @@ struct DeviceSettingsContractTests {
         ])
     }
 
+    @Test(arguments: [false, true])
+    func `spoken exit acknowledgement is an optional strict boolean setting`(enabled: Bool) throws {
+        let key = "voice.talkSpokenExitAcknowledgementEnabled"
+        #expect(DeviceSettingsRequest(body: ["type": "set", "key": key, "value": enabled]) ==
+            .set(.talkSpokenExitAcknowledgementEnabled, .boolean(enabled)))
+        for value: Any in [enabled ? 1 : 0, "true", NSNull()] {
+            #expect(DeviceSettingsRequest(body: ["type": "set", "key": key, "value": value]) == nil)
+        }
+        let voice = DeviceSettingsSnapshot.Voice(
+            supported: true, wakeEnabled: false, talkSpokenExitAcknowledgementEnabled: enabled)
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(voice)) as? [String: Any])
+        #expect(encoded["talkSpokenExitAcknowledgementEnabled"] as? Bool == enabled)
+    }
+
     @Test func `spoken stop settings distinguish unsupported disabled custom and reset`() throws {
         for phrases in [[String](), ["finish chat", "終了"]] {
             let request = DeviceSettingsRequest(body: ["type": "set", "key": "voice.talkStopPhrases", "value": phrases])

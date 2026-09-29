@@ -1,6 +1,14 @@
 import Foundation
 
 extension AppState {
+    func persistTalkSpokenExitAcknowledgementPreference(previousValue: Bool) {
+        guard !self.isPreview else { return }
+        AppDefaults.standard.set(
+            self.talkSpokenExitAcknowledgementEnabled, forKey: talkSpokenExitAcknowledgementEnabledKey)
+        guard self.talkEnabled, self.talkSpokenExitAcknowledgementEnabled != previousValue else { return }
+        Task { await TalkModeRuntime.shared.localTalkExitPreferencesDidChange() }
+    }
+
     func persistTalkRealtimeRelayPreference(previousValue: Bool) {
         guard !self.isPreview else { return }
         AppDefaults.standard.set(self.talkRealtimeRelayEnabled, forKey: talkRealtimeRelayEnabledKey)

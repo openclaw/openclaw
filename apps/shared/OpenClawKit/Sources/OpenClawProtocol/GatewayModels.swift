@@ -21216,6 +21216,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
     public let model: String?
     public let voice: String?
     public let language: String?
+    public let localexitcommands: [String: AnyCodable]?
     public let transcriptionhints: [String: AnyCodable]?
     public let vadthreshold: Double?
     public let silencedurationms: Int?
@@ -21235,6 +21236,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         model: String? = nil,
         voice: String? = nil,
         language: String? = nil,
+        localexitcommands: [String: AnyCodable]? = nil,
         transcriptionhints: [String: AnyCodable]? = nil,
         vadthreshold: Double? = nil,
         silencedurationms: Int? = nil,
@@ -21253,6 +21255,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         self.model = model
         self.voice = voice
         self.language = language
+        self.localexitcommands = localexitcommands
         self.transcriptionhints = transcriptionhints
         self.vadthreshold = vadthreshold
         self.silencedurationms = silencedurationms
@@ -21273,6 +21276,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         case model
         case voice
         case language
+        case localexitcommands = "localExitCommands"
         case transcriptionhints = "transcriptionHints"
         case vadthreshold = "vadThreshold"
         case silencedurationms = "silenceDurationMs"
@@ -21286,6 +21290,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
 }
 
 public struct TalkSessionCreateResult: Codable, Sendable {
+    public let localexitacknowledgement: Bool?
     public let sessionid: String
     public let provider: String?
     public let mode: AnyCodable
@@ -21303,6 +21308,7 @@ public struct TalkSessionCreateResult: Codable, Sendable {
     public let expiresat: Double?
 
     public init(
+        localexitacknowledgement: Bool? = nil,
         sessionid: String,
         provider: String? = nil,
         mode: AnyCodable,
@@ -21319,6 +21325,7 @@ public struct TalkSessionCreateResult: Codable, Sendable {
         voice: String? = nil,
         expiresat: Double? = nil)
     {
+        self.localexitacknowledgement = localexitacknowledgement
         self.sessionid = sessionid
         self.provider = provider
         self.mode = mode
@@ -21337,6 +21344,7 @@ public struct TalkSessionCreateResult: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case localexitacknowledgement = "localExitAcknowledgement"
         case sessionid = "sessionId"
         case provider
         case mode

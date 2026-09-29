@@ -43,6 +43,7 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case talkPhaseSoundsEnabled = "voice.talkPhaseSoundsEnabled"
     case talkShiftToStopEnabled = "voice.talkShiftToStopEnabled"
     case talkStopPhrases = "voice.talkStopPhrases"
+    case talkSpokenExitAcknowledgementEnabled = "voice.talkSpokenExitAcknowledgementEnabled"
     case realtimeRelayEnabled = "voice.realtimeRelayEnabled"
     case triggerChime = "voice.triggerChime"
     case sendChime = "voice.sendChime"
@@ -479,6 +480,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let talkPhaseSoundsEnabled: Bool?
         public let talkShiftToStopEnabled: Bool?
         public let talkStopPhrases: [String]?
+        public let talkSpokenExitAcknowledgementEnabled: Bool?
         public let realtimeRelayEnabled: Bool?
         public let triggerChime: Bool?
         public let sendChime: Bool?
@@ -497,6 +499,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             talkPhaseSoundsEnabled: Bool? = nil,
             talkShiftToStopEnabled: Bool? = nil,
             talkStopPhrases: [String]? = nil,
+            talkSpokenExitAcknowledgementEnabled: Bool? = nil,
             realtimeRelayEnabled: Bool? = nil,
             triggerChime: Bool? = nil,
             sendChime: Bool? = nil,
@@ -514,6 +517,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.talkPhaseSoundsEnabled = talkPhaseSoundsEnabled
             self.talkShiftToStopEnabled = talkShiftToStopEnabled
             self.talkStopPhrases = talkStopPhrases
+            self.talkSpokenExitAcknowledgementEnabled = talkSpokenExitAcknowledgementEnabled
             self.realtimeRelayEnabled = realtimeRelayEnabled
             self.triggerChime = triggerChime
             self.sendChime = sendChime

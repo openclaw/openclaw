@@ -34,6 +34,7 @@ let voicePushToTalkEnabledKey = "openclaw.voicePushToTalkEnabled"
 let voiceWakeTriggersTalkModeKey = "openclaw.voiceWakeTriggersTalkMode"
 let talkEnabledKey = "openclaw.talkEnabled"
 let talkStopPhrasesKey = "openclaw.talkStopPhrases"
+let talkSpokenExitAcknowledgementEnabledKey = "openclaw.talkSpokenExitAcknowledgementEnabled"
 let defaultTalkStopPhrases = ["stop talking", "end talking"]
 let talkRealtimeRelayEnabledKey = "openclaw.talkRealtimeRelayEnabled"
 let talkPhaseSoundsEnabledKey = "openclaw.talkPhaseSoundsEnabled"

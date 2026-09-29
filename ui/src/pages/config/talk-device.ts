@@ -250,6 +250,14 @@ export function renderDeviceTalk(capability: NativeDeviceSettingsCapability | nu
     voice.talkStopPhrases === undefined
       ? nothing
       : renderStopPhrases(capability, voice.talkStopPhrases),
+    voice.talkSpokenExitAcknowledgementEnabled === undefined
+      ? nothing
+      : renderSettingsToggleRow({
+          title: t("configPage.deviceTalk.talkSpokenExitAcknowledgementEnabled"),
+          description: t("configPage.deviceTalk.talkSpokenExitAcknowledgementHint"),
+          checked: voice.talkSpokenExitAcknowledgementEnabled,
+          onChange: (value) => capability.set("voice.talkSpokenExitAcknowledgementEnabled", value),
+        }),
     microphone
       ? renderSettingsSelectRow({
           title: t("configPage.deviceTalk.microphone"),
