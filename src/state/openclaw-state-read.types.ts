@@ -6,8 +6,14 @@ import type {
   SandboxBrowserRegistryEntry,
   SandboxRegistryEntry,
 } from "../agents/sandbox/registry.types.js";
-import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import type {
+  SubagentRunReadRecord,
+  SubagentRunsDurableBasis,
+} from "../agents/subagents/registry/subagent-registry-read.types.js";
+import type {
+  SubagentRunMaintenanceRecord,
+  SubagentRunRecord,
+} from "../agents/subagents/registry/subagent-registry.types.js";
 import type { WorkspaceStateSnapshot } from "../agents/workspace-state-store.kernel.js";
 import type { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
@@ -142,7 +148,15 @@ export type OpenClawStateReadCommand =
   | { type: "subagents.sessionList" }
   | {
       type: "subagents.runs";
-      scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] };
+      scope:
+        | { kind: "maintenance" }
+        | { kind: "session"; sessionKey: string }
+        | { kind: "ids"; runIds: readonly string[] }
+        | {
+            kind: "descendants";
+            sessionKeys: readonly string[];
+            liveTopology: SubagentRunsDurableBasis["liveTopology"];
+          };
     }
   | CronRunRecoveryReadCommand
   | { type: "cron.activeReceiptOwners"; agentId: string }
@@ -331,7 +345,18 @@ export type OpenClawStateReadResult =
       type: "subagents.sessionList";
       unavailable: { message: string; error: OpenClawStateWorkerErrorPayload | undefined };
     }
-  | { type: "subagents.runs"; runs: Map<string, SubagentRunRecord> }
+  | {
+      type: "subagents.runs";
+      projection?: never;
+      runs: Map<string, SubagentRunRecord>;
+      descendantBasis?: { digest: string; sessionKeys: Set<string>; runIds: readonly string[] };
+    }
+  | {
+      type: "subagents.runs";
+      projection: "maintenance";
+      runs: Map<string, SubagentRunMaintenanceRecord>;
+      maintenanceDigest: string;
+    }
   | {
       type: "agentDatabaseDeletion.snapshot";
       snapshot: AgentDatabaseDeletionSnapshot;

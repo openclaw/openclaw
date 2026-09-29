@@ -55,7 +55,6 @@ export {
   isPreparedSessionSharingChange,
   publishSessionEntryPlaceholderInsertion,
   publishSessionSharingMemberChange,
-  readCommittedIncognitoSessionSharing,
   readSessionEntryCreationTransition,
   retainPreparedSessionGenerationFacts,
   retainPreparedSessionSharingFacts,
@@ -64,6 +63,7 @@ export {
   runWithSessionEntryCreationPublication,
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
+export { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-entry-cache-state.js";
 export {
   projectSessionSharingEntry,
   type SessionEntryPlaceholder,

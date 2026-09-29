@@ -15,11 +15,9 @@ import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
-import {
-  createSessionMaintenancePlanningOperation,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { createSessionMaintenancePlanningOperation } from "./session-accessor.sqlite-reclamation.js";
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,

@@ -25,12 +25,11 @@ import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
-import {
-  createSessionEntryReclamationPlan,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { createSessionEntryReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 test("retains one Worker across twenty admission refusals and interleaved reclamation operations", async () => {
@@ -414,8 +413,8 @@ test("commits maintenance despite an unrelated write during Worker planning", as
       const plans = vi.spyOn(reclamation, "createSessionMaintenancePlanningOperation");
       const runs: Promise<unknown>[] = [];
       const firstRun = createDeferredCore();
-      const run = reclamation.runSqliteSessionReclamation;
-      vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation((params) => {
+      const run = reclamationRun.runSqliteSessionReclamation;
+      vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) => {
         const operation = run(params);
         runs.push(operation);
         firstRun.resolve();

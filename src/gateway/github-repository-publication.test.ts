@@ -962,7 +962,7 @@ describe("repository checkpoint GitHub publication", () => {
         assertCustody: () => {},
         assertCurrent: () => {},
       });
-      deletePersonalGitHubSessionReceipts({ agentId: "main", sessionKeys: [SESSION_KEY] });
+      await deletePersonalGitHubSessionReceipts({ agentId: "main", sessionKeys: [SESSION_KEY] });
       expect(execution.ownsExecution()).toBe(false);
       expect(() => execution.recordEffect("push")).toThrow();
       expect(() => execution.recordEffect("push", { headCommit: "e".repeat(40) })).toThrow();

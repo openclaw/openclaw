@@ -66,6 +66,7 @@ import {
 } from "./session-accessor.sqlite-worker-transport.js";
 
 type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
+export type SqliteReclamationClaim = Pick<OpenClawAgentDatabaseClaim, "identity" | "assertCurrent">;
 export type SqliteReclamationWorkerRequest = {
   type: "reclaim";
   operationId: number;
@@ -92,7 +93,7 @@ type SqliteMutationWorkerRequest =
   | SqliteReclamationWorkerRequest
   | SqliteCanonicalValidationWorkerRequest;
 type MutationRunParams<Result> = {
-  claim: OpenClawAgentDatabaseClaim;
+  claim: SqliteReclamationClaim;
   validationOwner?: SqliteMutationWorkerValidationOwner;
   diagnostics?: SqliteSessionReclamationDiagnostics;
   commitGate: SharedArrayBuffer;
@@ -121,7 +122,7 @@ const retained = resolveGlobalSingleton(
 /** The global archive FIFO bounds ordinary reclamation's whole-buffer heaps. */
 export function withSqliteReclamationWorker<T>(
   options: DatabaseOptions,
-  claim: OpenClawAgentDatabaseClaim,
+  claim: SqliteReclamationClaim,
   run: (worker: SqliteReclamationWorker) => Promise<T>,
   assertRequestCurrent: () => void,
   signal?: AbortSignal,
@@ -173,7 +174,7 @@ export async function withSqliteCanonicalValidationWorker<T>(
 async function useReclamationWorker<T>(
   slot: ReclamationWorkerSlot,
   options: DatabaseOptions,
-  claim: OpenClawAgentDatabaseClaim,
+  claim: SqliteReclamationClaim,
   run: (worker: SqliteReclamationWorker) => Promise<T>,
   assertRequestCurrent: () => void,
 ): Promise<T> {
@@ -287,7 +288,7 @@ export class SqliteReclamationWorker {
     process.once("beforeExit", this.beforeExit);
   }
 
-  matches(options: DatabaseOptions, claim: OpenClawAgentDatabaseClaim): boolean {
+  matches(options: DatabaseOptions, claim: SqliteReclamationClaim): boolean {
     return (
       !this.revoked &&
       !this.failure &&
@@ -297,7 +298,7 @@ export class SqliteReclamationWorker {
     );
   }
 
-  assertCurrent(options: DatabaseOptions, claim: OpenClawAgentDatabaseClaim): void {
+  assertCurrent(options: DatabaseOptions, claim: SqliteReclamationClaim): void {
     claim.assertCurrent();
     this.stateContext.admission.assertCurrent();
     if (this.failure) {

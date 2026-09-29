@@ -1,3 +1,7 @@
+import type {
+  SubagentMaintenanceDurableBasis,
+  SubagentRunsDurableBasis,
+} from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type {
   OpenClawAgentDatabase,
@@ -21,8 +25,17 @@ import type {
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
 } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionDeletionPlanningOperation,
+  SessionDeletionPlanningResult,
+} from "./session-accessor.sqlite-deletion-plan.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type { LifecycleRemovalProjectionInput } from "./session-accessor.sqlite-lifecycle-state.js";
 import type { SessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
+import type {
+  ProjectedLifecycleCommitResult,
+  ProjectedLifecycleRemovalCommitInput,
+} from "./session-accessor.sqlite-projection-state.js";
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
@@ -34,6 +47,8 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 // Shared plan shapes only. Runtime ownership stays in maintenance and lifecycle-state.
 
 export type SessionEntryLifecycleMutationParams = {
+  /** Internal durable comparison paired with the caller's live descendant guard. */
+  descendantRunBasis?: SubagentRunsDurableBasis;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   storePath: string;
@@ -53,6 +68,11 @@ export type SessionEntryLifecycleMutationParams = {
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
   /** Fresh-row sidecar writes that must not retry unrelated pending archives. */
   afterFreshUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
+  /**
+   * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
+   * Must not write the deleting agent database: its Worker may hold the transaction lock.
+   */
+  commitGuard?: () => void;
   /** Synchronous caller-authority guard checked immediately before lifecycle writes. */
   beforeCommitInTransaction?: () => void;
   /** Retain source authority around the final writer, after projection and native preparation. */
@@ -73,7 +93,10 @@ export type SqliteSessionReclamationCallbacks = {
   afterCommit?: () => void;
 };
 
-export type ReclamationDeleteParams = Omit<DeleteSessionEntryLifecycleParams, "commitGuard">;
+export type ReclamationDeleteParams = Omit<
+  DeleteSessionEntryLifecycleParams,
+  "commitGuard" | "descendantRunBasis"
+>;
 
 /** Internal scope: a historical request cannot authorize whole-entry reclamation. */
 export type SqliteSessionDeletionScope =
@@ -91,11 +114,27 @@ export type SessionEntryMaintenanceInput = {
 };
 
 type SessionReclamationPlanBase = {
+  descendantRunBasis?: SubagentRunsDurableBasis;
+  maintenanceRunBasis?: SubagentMaintenanceDurableBasis;
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
 
 export type SqliteSessionReclamationPlan =
+  | (SessionReclamationPlanBase & {
+      kind: "lifecycle-projection-plan";
+      input: LifecycleRemovalProjectionInput;
+    })
+  | (SessionReclamationPlanBase & {
+      agentId: string;
+      kind: "lifecycle-projection-commit";
+      input: ProjectedLifecycleRemovalCommitInput;
+    })
+  | (SessionReclamationPlanBase & { kind: "lifecycle-projection-count" })
+  | (SessionReclamationPlanBase & {
+      kind: "deletion-plan";
+      planning: SessionDeletionPlanningOperation;
+    })
   | (SessionReclamationPlanBase & {
       kind: "archive-publish-prepare";
       archiveDirectory: string;
@@ -142,6 +181,10 @@ export type SqliteSessionReclamationPlan =
     });
 
 export type SqliteSessionReclamationResult =
+  | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
+  | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
+  | { kind: "lifecycle-projection-count"; value: number }
+  | { kind: "deletion-plan"; value: SessionDeletionPlanningResult }
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }
   | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }

@@ -124,9 +124,15 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
     return {
       ...command,
       scope:
-        command.scope.kind === "ids"
-          ? { kind: "ids", runIds: [...command.scope.runIds] }
-          : { ...command.scope },
+        command.scope.kind === "descendants"
+          ? {
+              kind: "descendants",
+              sessionKeys: [...command.scope.sessionKeys],
+              liveTopology: command.scope.liveTopology.map((link) => ({ ...link })),
+            }
+          : command.scope.kind === "ids"
+            ? { kind: "ids", runIds: [...command.scope.runIds] }
+            : { ...command.scope },
     };
   }
   if (command.type === "mcpOAuth.statuses") {
@@ -271,12 +277,26 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "subagents.runs") {
     return (
       bytes +
-      (command.scope.kind === "session"
-        ? Buffer.byteLength(command.scope.sessionKey, "utf8")
-        : command.scope.runIds.reduce(
-            (total, runId) => total + Buffer.byteLength(runId, "utf8"),
+      (command.scope.kind === "descendants"
+        ? command.scope.sessionKeys.reduce(
+            (total, key) => total + Buffer.byteLength(key, "utf8"),
             0,
-          ))
+          ) +
+          command.scope.liveTopology.reduce(
+            (total, link) =>
+              total +
+              Buffer.byteLength(link.childSessionKey, "utf8") +
+              Buffer.byteLength(link.requesterSessionKey, "utf8"),
+            0,
+          )
+        : command.scope.kind === "session"
+          ? Buffer.byteLength(command.scope.sessionKey, "utf8")
+          : command.scope.kind === "ids"
+            ? command.scope.runIds.reduce(
+                (total, runId) => total + Buffer.byteLength(runId, "utf8"),
+                0,
+              )
+            : 0)
     );
   }
   if (command.type === "mcpOAuth.statuses") {

@@ -77,44 +77,51 @@ export async function runPreparedSqliteSessionWrite<T>(
   operation: SqliteSessionWriteOperation,
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"],
   prepareScope?: () => Promise<ResolvedSqliteReadScope>,
+  scheduling: "foreground" | "worker" = "foreground",
 ): Promise<{ deletedEntries: number; result: Awaited<T>; scope: ResolvedSqliteReadScope }> {
   let scope = initialScope;
-  const prepared = await runExclusiveSqliteSessionWrite(
-    scope,
-    async () => {
-      if (prepareScope) {
-        const preparedScope = await prepareScope();
-        if (preparedScope.path !== scope.path) {
-          throw new Error("Session write preparation changed its reserved database path");
-        }
-        scope = preparedScope;
+  const prepareWrite = async () => {
+    if (prepareScope) {
+      const preparedScope = await prepareScope();
+      if (preparedScope.path !== scope.path) {
+        throw new Error("Session write preparation changed its reserved database path");
       }
-      const write = await prepare(scope);
-      return write.deletedEntries.length || write.beforeCommit || withCommit
-        ? { write }
-        : { result: await write.commit() };
-    },
-    operation,
-  );
+      scope = preparedScope;
+    }
+    const write = await prepare(scope);
+    return scheduling === "worker" ||
+      write.deletedEntries.length ||
+      write.beforeCommit ||
+      withCommit
+      ? { write }
+      : { result: await write.commit() };
+  };
+  // Worker phases acquire this same queue themselves; an outer foreground permit
+  // would make their read admission wait behind its own preparation.
+  const prepared =
+    scheduling === "worker"
+      ? await prepareWrite()
+      : await runExclusiveSqliteSessionWrite(scope, prepareWrite, operation);
   if (!prepared.write) {
     return { deletedEntries: 0, result: prepared.result, scope };
   }
   const write = prepared.write;
   const commit = async (assertCurrent?: () => void) => {
     await write.beforeCommit?.();
-    const runCommit = async (assertSourceCurrent?: () => void) =>
-      await runExclusiveSqliteSessionWrite(
-        scope,
-        async () => {
-          const assertHeld = () => {
-            assertCurrent?.();
-            assertSourceCurrent?.();
-          };
-          assertHeld();
-          return await write.commit(assertHeld);
-        },
-        operation,
-      );
+    const runCommit = async (assertSourceCurrent?: () => void) => {
+      const commitHeld = async () => {
+        const assertHeld = () => {
+          assertCurrent?.();
+          assertSourceCurrent?.();
+        };
+        assertHeld();
+        return await write.commit(assertHeld);
+      };
+      // Opaque native mutations stay on their original writer and ALS owner.
+      return scheduling === "worker" && !hasPreparedNativeSessionDeletion()
+        ? await commitHeld()
+        : await runExclusiveSqliteSessionWrite(scope, commitHeld, operation);
+    };
     return withCommit ? await withCommit(runCommit) : await runCommit();
   };
   const result =
@@ -238,18 +245,20 @@ async function withSqliteSessionMutations<T>(
             if (currentEntry()) {
               continue;
             }
-            deletePersonalGitHubSessionReceipts({
+            const assertSessionAbsent = () => {
+              if (currentEntry()) {
+                throw new Error("Repository workspace session changed before deletion");
+              }
+            };
+            await deletePersonalGitHubSessionReceipts({
               agentId: workspace.agentId,
               env: scope.env,
               sessionKeys: [workspace.sessionKey],
+              assertCurrent: assertSessionAbsent,
             });
             await repositories?.delete({
               workspaceId: workspace.workspaceId,
-              assertCurrent: () => {
-                if (currentEntry()) {
-                  throw new Error("Repository workspace session changed before deletion");
-                }
-              },
+              assertCurrent: assertSessionAbsent,
             });
           }
         }

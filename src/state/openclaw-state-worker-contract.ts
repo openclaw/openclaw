@@ -167,6 +167,10 @@ export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
       input: InterruptedUpdateSettlement;
       output: InterruptedUpdateSettlementResult;
     };
+    "githubPublication.deleteSessionReceipts": {
+      input: { agentId: string; sessionKeys: readonly string[] };
+      output: void;
+    };
     "githubRepository.personalPending": {
       input: RepositoryGitHubPublicationPendingQuery;
       output: RepositoryGitHubPublicationStatusRow | undefined;

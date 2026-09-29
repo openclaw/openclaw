@@ -143,7 +143,7 @@ export function retainUnpublishedSubagentChanges<T>(
 }
 
 /** Selecting a read must not consume another database owner's publication. */
-function selectSubagentCacheStateForRead<T extends SubagentRunReadRecord>(
+export function selectSubagentCacheStateForRead<T extends SubagentRunReadRecord>(
   state: SubagentRunsCacheState<T>,
   context?: OpenClawStateReadContext,
 ): SubagentRunsCacheState<T> {
@@ -439,7 +439,7 @@ export async function readFullSubagentRuns(
   if (!reply) {
     return new Map<string, SubagentRunRecord>();
   }
-  if (!reply.ok || reply.type !== "subagents.runs") {
+  if (!reply.ok || reply.type !== "subagents.runs" || reply.projection === "maintenance") {
     throw new Error("Unexpected subagent registry read result");
   }
   return reply.runs;
@@ -594,9 +594,20 @@ export function mergeSelectedFullRuns(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   persisted: Map<string, SubagentRunRecord>,
   matches: (entry: SubagentRunReadRecord) => boolean,
-  { context, runIds }: { context?: OpenClawStateWorkerContext; runIds?: ReadonlySet<string> } = {},
+  {
+    context,
+    runIds,
+    freshPersisted = false,
+  }: {
+    context?: OpenClawStateWorkerContext;
+    runIds?: ReadonlySet<string>;
+    freshPersisted?: boolean;
+  } = {},
 ): Map<string, SubagentRunRecord> {
-  const current = context ? acceptedFullSnapshot(cache, context) : undefined;
+  const current =
+    context && (!freshPersisted || cache.state.replacementPending)
+      ? acceptedFullSnapshot(cache, context)
+      : undefined;
   const merged = new Map<string, SubagentRunRecord>();
   for (const [runId, entry] of selectedEntries(current ?? persisted, runIds)) {
     if (matches(entry)) {
@@ -613,7 +624,12 @@ export function mergeSelectedFullRuns(
     state.sourceIdentity === context.admission.identity.key &&
     matchesSubagentCacheAdmission(state.admission, context.admission)
   ) {
-    for (const [runId, { entry }] of state.changes ? selectedEntries(state.changes, runIds) : []) {
+    for (const [runId, { entry, committed }] of state.changes
+      ? selectedEntries(state.changes, runIds)
+      : []) {
+      if (freshPersisted && committed) {
+        continue;
+      }
       if (entry && matches(entry)) {
         merged.set(runId, structuredClone(entry));
       } else {

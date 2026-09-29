@@ -557,7 +557,7 @@ describe("SQLite historical session disk budget", () => {
           archiveReason: "active-session-cap",
         },
       );
-      const reclamation = await import("./session-accessor.sqlite-reclamation.js");
+      const reclamation = await import("./session-accessor.sqlite-reclamation-run.js");
       const reclaim = reclamation.runSqliteSessionReclamation;
       const historyRequests: string[] = [];
       let protectionChanged = false;

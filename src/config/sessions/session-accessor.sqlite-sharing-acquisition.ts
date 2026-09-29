@@ -115,3 +115,23 @@ export function updateSessionSharingField(
   }
   return { ...facts, membership };
 }
+
+export function publishRetainedSessionGeneration(
+  read: PreparedSessionSharingRead,
+  entry: SessionSharingEntry | undefined,
+  known: boolean,
+) {
+  const generation = read.generation;
+  if (!generation?.current) {
+    return;
+  }
+  if (!known) {
+    generation.current = undefined;
+  } else if (
+    !entry ||
+    generation.current.sessionId !== entry.sessionId ||
+    generation.current.lifecycleRevision !== entry.lifecycleRevision
+  ) {
+    generation.current = null;
+  }
+}
