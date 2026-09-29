@@ -311,6 +311,7 @@ export function clearToolSearchCatalog(params: {
       );
     }
     params.catalogRef.current = undefined;
+    delete params.catalogRef.directOnlyToolNames;
     disposeCodeModeResults(params.catalogRef);
     disposeToolSearchSchedule(params.catalogRef);
     params.catalogRef.disposeObserver?.();
@@ -496,6 +497,9 @@ export function applyToolCatalogCompaction(
       toolExecutionAllow: params.toolExecutionAllow,
     });
   }
+  catalogRef.directOnlyToolNames = new Set(
+    visible.filter((tool) => tool.catalogMode === "direct-only").map((tool) => tool.name),
+  );
   return {
     tools: visible,
     compacted: catalog.length > 0,
