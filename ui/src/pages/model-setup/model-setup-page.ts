@@ -182,6 +182,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
+    gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
   });
 
   private readonly detectTask = createModelSetupDetectTask(this, {
@@ -271,7 +272,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       if (!this.wizard.hasAdmittedSession) {
         this.pageState = { phase: "loading" };
       }
-      this.wizard.suspend();
+      this.wizard.suspend(t("modelSetup.wizard.gatewayReconnecting"));
       return;
     }
     const authenticatedOwnerLost =
@@ -301,7 +302,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (sameWizardOwner && this.wizard.hasAdmittedSession) {
       this.wizardMutationGeneration += 1;
       this.wizardMutationActive = false;
-      this.wizard.suspend();
+      this.wizard.suspend(t("modelSetup.wizard.gatewayReconnecting"));
       if (this.canUseSetup(connection.client)) {
         this.firstRun.reconnectActivation(connection);
         void this.runWizardMutation(() => this.wizard.resume());

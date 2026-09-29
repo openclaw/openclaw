@@ -43,6 +43,8 @@ export type ModelSetupWizardCompletion = {
 
 type WizardTerminalObserver = (result: ModelSetupWizardResult) => (() => boolean) | void;
 
+class WizardStartTimeoutError extends Error {}
+
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
@@ -55,6 +57,7 @@ type WizardRunnerOptions = {
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
+  gatewayNotRespondingMessage: () => string;
 };
 
 type WizardSession = {
@@ -110,14 +113,18 @@ export class ModelSetupWizardRunner {
     return this.session?.admitted === true;
   }
 
-  suspend(): void {
+  suspend(notice: string): void {
     const session = this.session;
     if (!session) {
       return;
     }
     session.suspended = true;
     session.abortController.abort();
-    this.setState({ phase: "starting", authChoice: session.authChoice });
+    // No sign-in URL can arrive while the Gateway is away; a resumed step
+    // still offers its URL as an explicit link.
+    session.reservedWindow?.close();
+    session.reservedWindow = null;
+    this.setState({ phase: "starting", authChoice: session.authChoice, notice });
   }
 
   restore(recovery: ModelSetupWizardRecovery, onTerminalResult: WizardTerminalObserver): void {
@@ -436,7 +443,7 @@ export class ModelSetupWizardRunner {
           timer = setTimeout(() => {
             timedOut = true;
             reject(
-              new Error(
+              new WizardStartTimeoutError(
                 `gateway request timed out after ${MODEL_SETUP_AUTH_START_TIMEOUT_MS}ms: ${session.startMethod}`,
               ),
             );
@@ -658,7 +665,9 @@ export class ModelSetupWizardRunner {
     }
     const message = sessionExpired
       ? this.options.sessionExpiredMessage()
-      : formatUiError(error, this.options.requestFailedMessage());
+      : error instanceof WizardStartTimeoutError
+        ? this.options.gatewayNotRespondingMessage()
+        : formatUiError(error, this.options.requestFailedMessage());
     this.setState({ phase: "error", message: [message, ...session.notes].join("\n\n") });
   }
 
