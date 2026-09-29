@@ -38,7 +38,10 @@ import {
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
 } from "./manager-provider-state.js";
-import type { MemoryEmbeddingProbeCacheEntry } from "./manager-registry.js";
+import type {
+  MemoryEmbeddingProbeCacheEntry,
+  MemoryIndexManagerPurpose,
+} from "./manager-registry.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 
@@ -103,7 +106,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract canPublishEmbeddingProbe(): boolean;
   protected abstract readonly embeddingProbeCache: Map<string, MemoryEmbeddingProbeCacheEntry>;
   protected abstract readonly cacheKey: string;
-  protected abstract readonly purpose: "default" | "status" | "cli" | "maintenance";
+  protected abstract readonly purpose: MemoryIndexManagerPurpose;
   protected abstract readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   protected providerInitPromise: Promise<void> | null = null;
   protected providerInitialized = false;
@@ -322,7 +325,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         !this.provider &&
         this.getCachedEmbeddingAvailability() === null;
       if (!bootstrapRetryDue) {
-        await this.getPendingFallbackProviderInitialization()?.catch(() => undefined);
+        await this.fallbackProviderInitPromise?.catch(() => undefined);
         return;
       }
       this.resetProviderInitializationForRetry();
@@ -337,7 +340,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
     if (!this.providerInitPromise) {
       this.providerInitPromise = (async () => {
-        await this.getPendingFallbackProviderInitialization()?.catch(() => undefined);
+        await this.fallbackProviderInitPromise?.catch(() => undefined);
         await this.retireCurrentProvider();
         if (this.closed) {
           return;
@@ -506,13 +509,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         ? { meta: params.indexState.meta, hasIndexedChunks: params.indexState.hasIndexedChunks }
         : {}),
     });
-    this.indexIdentityState = state;
-    this.indexIdentityDirty =
-      state.status === "mismatched" ||
-      (state.status === "missing" &&
-        (this.sources.has("memory") ||
-          (params?.indexState?.hasIndexedChunks ?? this.hasIndexedChunks())));
-    return state;
+    return this.updateIndexIdentityState(state, params?.indexState);
   }
 
   protected refreshKeywordFallbackIndexIdentity(indexState?: MemoryRetrievalIndexState) {
@@ -524,6 +521,13 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       vectorReady: false,
       ...(indexState ? { hasIndexedChunks: indexState.hasIndexedChunks } : {}),
     });
+    return this.updateIndexIdentityState(state, indexState);
+  }
+
+  private updateIndexIdentityState(
+    state: MemoryIndexIdentityState,
+    indexState?: MemoryRetrievalIndexState,
+  ): MemoryIndexIdentityState {
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||

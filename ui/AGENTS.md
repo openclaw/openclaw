@@ -24,10 +24,11 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 - Session rosters apply nested Gateway row snapshots through the shared reconciler.
   `lib/sessions/session-list-query.ts` owns whether a snapshot preserves a held
-  window: lifecycle, placement, patch/send/steer, run-start/settlement/capacity, and title
+  window: lifecycle, participants, placement, patch/send/steer, run-start/settlement/capacity, and title
   updates can avoid list reads when membership, lineage, and pin/owner/archive
   facts stay unchanged and recency does not move backwards. Tree events require
-  the Gateway's complete, access-scoped `ancestorSessions` snapshots; each row
+  the Gateway's complete, access-scoped `ancestorSessions` snapshots plus any
+  `ancestorSessionRefs`; references require the held row's admitted content revision. Each row
   retains its own generation and field receipts. Certified nested rows own their
   facts; only explicit null clearing receipts may fill omissions from the event
   envelope. Unknown rows, incomplete ancestor coverage, broad changes, catalog
@@ -75,6 +76,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Stylesheet Policy
 
+- No universal targets or pseudo-elements after a `:has()` compound, no `:has()` with `::placeholder` (measured ~9/~8 ms subtree restyles per insertion with 534 messages), and no descendant after a sibling-relative `:has(+ …)` on repeated items (it restyled every position-rail tick per transcript row); use owner-set classes, named children, or a custom property on the `:has()` subject. Stylelint enforces these. No `:has()` on `.shell`, `.content`, `.chat-thread`, `.chat-split-view`, `:root`, `html`, or `body` compounds, including modifiers, `:is()`/`:where()` list subjects, and nested `&` forms: every insertion below a `:has()` subject schedules a global `:has` restyle of that subtree (stylelint cannot resolve nesting). Third-party global CSS goes through the Vite PostCSS pipeline; `ui/config/control-ui-web-awesome-page-rule.ts` drops Web Awesome's never-matching `:is(html, body):has(wa-page)` rule.
 - Cursors: links and controls that open a new tab use the pointer; state-changing controls keep the default arrow.
 - Colors: stylesheet colors flow through custom-property tokens defined in `ui/src/styles/base.css`; `color-no-hex` enforces this. Exempt surfaces (token definitions, `lobster-pet.css` sprite artwork, `--theme-chip-*` preview swatches) each carry a stated contract. Lit `css\`\`` templates are not yet gated — prefer tokens there too.
 - Breakpoints: `max-width` media conditions use the canonical ladder 400/560/640/768/900/1100/1320px (plus the 932×500 landscape-phone compound); stylelint's allowed-list enforces it. New thresholds round up to the next rung. Don't add rungs without updating the config comment and this note.

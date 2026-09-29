@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeArrayBackedTrimmedStringList,
@@ -13,6 +13,7 @@ import type {
   WorkerOperatingSystem,
   WorkerSlotSummary,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.ts";
 
 export type DraftBranches = {
   repoRoot: string;
@@ -81,11 +82,24 @@ function readRuntimeTargetIssues(value: unknown): RuntimeTargetIssue[] | undefin
     if (!isRecord(raw)) {
       return [];
     }
+    if (raw.code === "worker-host-unavailable") {
+      const message = normalizeOptionalString(raw.message);
+      return message && message.length <= 1_024
+        ? [{ code: "worker-host-unavailable", message }]
+        : [];
+    }
     return raw.code === "update-required" &&
       raw.action === "update-and-reconnect" &&
       raw.updateCommand === "openclaw update" &&
       raw.headlessReconnectCommand === "openclaw node restart"
-      ? [raw as RuntimeTargetIssue]
+      ? [
+          {
+            code: raw.code,
+            action: raw.action,
+            updateCommand: raw.updateCommand,
+            headlessReconnectCommand: raw.headlessReconnectCommand,
+          },
+        ]
       : [];
   });
   return issues.length > 0 ? issues : undefined;
@@ -113,18 +127,10 @@ export function draftCloudProfileSupportsExecutionMode(
 export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
   return (Array.isArray(value) ? value : [])
     .flatMap<DraftCloudProfile>((raw) => {
-      if (!raw || typeof raw !== "object") {
+      const profile = asOptionalObjectRecord(raw);
+      if (!profile) {
         return [];
       }
-      const profile = raw as {
-        id?: unknown;
-        providerId?: unknown;
-        providerDisplayId?: unknown;
-        trust?: unknown;
-        executionModes?: unknown;
-        machines?: unknown;
-        operatingSystems?: unknown;
-      };
       const id = normalizeOptionalString(profile.id);
       const providerId = normalizeOptionalString(profile.providerId);
       if (!id || !providerId) {
@@ -247,66 +253,33 @@ function isEnvironmentStatus(value: unknown): value is EnvironmentStatus {
   return typeof value === "string" && ENVIRONMENT_STATUSES.has(value);
 }
 
-function isSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value);
-}
-
-function readWorkerSlots(value: unknown): WorkerSlotSummary | undefined {
+function readRequiredNodeCommand(value: unknown): RequiredNodeCommand | undefined {
   if (
     !isRecord(value) ||
-    Object.keys(value).some((key) => key !== "total" && key !== "available") ||
-    !isSafeInteger(value.total) ||
-    !isSafeInteger(value.available)
+    Object.keys(value).some((key) => key !== "command" && key !== "state" && key !== "message")
   ) {
-    return undefined;
-  }
-  const total = value.total;
-  const available = value.available;
-  return total >= 1 && total <= 1_024 && available >= 0 && available <= total
-    ? { total, available }
-    : undefined;
-}
-
-function readRequiredNodeCommand(value: unknown): RequiredNodeCommand | undefined {
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "command" && key !== "state")) {
     return undefined;
   }
   const command = normalizeOptionalString(value.command);
   const state = value.state;
+  const message = normalizeOptionalString(value.message);
   return command &&
     command.length <= 128 &&
     (state === "invocable" ||
       state === "pending-approval" ||
       state === "undeclared" ||
       state === "unauthorized")
-    ? { command, state }
+    ? { command, state, ...(message ? { message } : {}) }
     : undefined;
 }
 
 export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
   return (Array.isArray(value) ? value : [])
     .flatMap<DraftEnvironment>((raw) => {
-      if (!raw || typeof raw !== "object") {
+      const environment = asOptionalObjectRecord(raw);
+      if (!environment) {
         return [];
       }
-      const environment = raw as {
-        id?: unknown;
-        type?: unknown;
-        label?: unknown;
-        status?: unknown;
-        platform?: unknown;
-        sessionHost?: unknown;
-        workerSlots?: unknown;
-        lastConnectedAtMs?: unknown;
-        lastDisconnectedAtMs?: unknown;
-        lastSeenAtMs?: unknown;
-        lastSeenReason?: unknown;
-        trust?: unknown;
-        capabilities?: unknown;
-        invocableCommands?: unknown;
-        requiredNodeCommand?: unknown;
-        issues?: unknown;
-      };
       const id = normalizeOptionalString(environment.id);
       const type = normalizeOptionalString(environment.type);
       if (
@@ -335,7 +308,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
       const lastSeenReason = normalizeOptionalString(environment.lastSeenReason);
       const issues = readRuntimeTargetIssues(environment.issues);
-      const workerSlots = readWorkerSlots(environment.workerSlots);
+      const workerSlots = parseWorkerCapacity(environment.workerSlots);
       return [
         {
           id,

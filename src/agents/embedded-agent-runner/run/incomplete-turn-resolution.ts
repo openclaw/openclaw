@@ -1,4 +1,3 @@
-/** Resolves incomplete-turn payloads, continuation evidence, and run liveness. */
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -190,44 +189,24 @@ export function shouldRetryMissingAssistantTurn(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  if (
+  return !(
     params.payloadCount !== 0 ||
     params.aborted ||
-    Boolean(params.promptError) ||
+    params.promptError ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
     resolveCurrentAttemptAssistant(params.attempt) ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError
-  ) {
-    return false;
-  }
-
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
-    return false;
-  }
-
-  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
-    return false;
-  }
-
-  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
-    return false;
-  }
-
-  if (hasAsyncActivity(params.attempt.toolMetas)) {
-    return false;
-  }
-
-  if (
+    params.attempt.lastToolError ||
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 ||
+    hasCommittedMessagingToolDeliveryEvidence(params.attempt) ||
+    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    hasAsyncActivity(params.attempt.toolMetas) ||
     (params.attempt.itemLifecycle?.startedCount ?? 0) > 0 ||
-    (params.attempt.itemLifecycle?.activeCount ?? 0) > 0
-  ) {
-    return false;
-  }
-
-  return !params.attempt.replayMetadata.hadPotentialSideEffects;
+    (params.attempt.itemLifecycle?.activeCount ?? 0) > 0 ||
+    params.attempt.replayMetadata.hadPotentialSideEffects
+  );
 }
 
 /** Fields needed to determine whether a yielded turn already delivered or can continue. */
@@ -250,11 +229,7 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
   return (
     (attempt.clientToolCalls?.length ?? 0) > 0 ||
     attempt.didSendDeterministicApprovalPrompt === true ||
-    hasCommittedMessagingToolDeliveryEvidence({
-      messagingToolSentTexts: attempt.messagingToolSentTexts ?? [],
-      messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls ?? [],
-      messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
-    }) ||
+    hasCommittedMessagingToolDeliveryEvidence(attempt) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.runtimeContinuationStarted === true ||
     hasAsyncActivity(attempt.toolMetas) ||
@@ -267,10 +242,6 @@ export const YIELD_DIAGNOSTIC_TEXT =
 
 export const TRUNCATED_REPLY_NOTICE_TEXT =
   "⚠️ Reply truncated at the model's output token limit. The text above is partial — ask to continue it.";
-
-function isToolResultRole(role: string): boolean {
-  return role === "toolresult" || role === "tool_result" || role === "tool";
-}
 
 function readMessageTextContent(message: AgentMessage): string | undefined {
   const content = (message as { content?: unknown }).content;
@@ -301,7 +272,7 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
       continue;
     }
     const role = normalizeLowercaseStringOrEmpty(message?.role);
-    if (isToolResultRole(role)) {
+    if (role === "toolresult" || role === "tool_result" || role === "tool") {
       if ((message as { isError?: boolean }).isError === true) {
         return false;
       }

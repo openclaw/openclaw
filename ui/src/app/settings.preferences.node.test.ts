@@ -28,6 +28,34 @@ import {
 describe("settings preference persistence", () => {
   installSettingsStorageLifecycle();
 
+  it("preserves an older browser-panel preference through external opt-in, reload, and opt-out", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const gatewayUrl = "wss://gateway.example";
+    const storageKey = "openclaw.control.settings.v1:" + gatewayUrl;
+    // Pre-change browser settings have no external-link field.
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        gatewayUrl,
+        openLinksInControlUiBrowser: true,
+        navWidth: 312,
+      }),
+    );
+    expect(loadSettings().openLinksExternally).not.toBe(true);
+    for (const enabled of [true, false]) {
+      patchSettings({ openLinksExternally: enabled });
+      const reloaded = loadUiPreferences(gatewayUrl);
+      expect(reloaded.openLinksExternally === true).toBe(enabled);
+      expect(reloaded.openLinksInControlUiBrowser).toBe(true);
+      expect(reloaded.navWidth).toBe(312);
+      expect(JSON.parse(localStorage.getItem(storageKey)!)).toMatchObject({
+        openLinksInControlUiBrowser: true,
+        navWidth: 312,
+      });
+    }
+    expect(loadUiPreferences("wss://other.example").openLinksExternally).not.toBe(true);
+  });
+
   it.each([false, true])(
     "keeps the live connection URL when a same-scope spelling was persisted (private storage: %s)",
     (privateStorage) => {

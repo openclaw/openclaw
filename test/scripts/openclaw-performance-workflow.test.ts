@@ -325,9 +325,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "14d7413dfc0f2b79c771dad83aca6d99413182bd";
-    const legacyKovaRef = "14d7413dfc0f2b79c771dad83aca6d99413182bd";
-    const trustedLiveKovaRef = "14d7413dfc0f2b79c771dad83aca6d99413182bd";
+    const canonicalKovaRef = "4b8b1681446b868a44193ed6e97253a6c8bcbbbf";
+    const legacyKovaRef = "d69b2209905195bea06980721a92ad8b70808c5d";
+    const trustedLiveKovaRef = "4b8b1681446b868a44193ed6e97253a6c8bcbbbf";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -514,8 +514,11 @@ describe("OpenClaw performance workflow", () => {
         return;
       }
       expect(result.status, result.stderr + result.stdout).toBe(0);
-      const expectedRef =
-        fixture.expectedRef ?? fixture.kovaRef ?? readWorkflow().env?.KOVA_CANONICAL_CONFIG_REF;
+      const defaultRef =
+        fixture.expectedContract === "legacy-list"
+          ? readWorkflow().env?.KOVA_LEGACY_LIST_CONFIG_REF
+          : readWorkflow().env?.KOVA_CANONICAL_CONFIG_REF;
+      const expectedRef = fixture.expectedRef ?? fixture.kovaRef ?? defaultRef;
       expect(outputs).toEqual({
         checkout_ref: sha,
         tested_ref: "fixture-target",
@@ -537,7 +540,7 @@ describe("OpenClaw performance workflow", () => {
       expect(outputs).toMatchObject({
         checkout_ref: sha,
         tested_sha: sha,
-        kova_ref: "14d7413dfc0f2b79c771dad83aca6d99413182bd",
+        kova_ref: "4b8b1681446b868a44193ed6e97253a6c8bcbbbf",
         kova_config_contract: "canonical",
       });
     });
@@ -1374,30 +1377,35 @@ printf '%s\\n' \
     const managedServiceLanes = workflow.jobs?.kova?.strategy?.matrix?.include?.map(
       (lane) => lane.managed_service,
     );
-    const prepare = findStep("Prepare systemd user session");
+    const prepare = findStep("Set up Node environment");
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const provisionEntry = action.runs.steps.find((step: WorkflowStep) =>
+      step.run?.includes("loginctl enable-linger"),
+    )?.run;
+    const provision = readFileSync(".github/actions/setup-node-env/semantic-memory.sh", "utf8");
     const stepNames = steps.map((step) => step.name);
 
     expect(managedServiceLanes).toEqual(["true", "true", "false"]);
-    expect(prepare.if).toBe(
-      "${{ steps.lane.outputs.run == 'true' && matrix.managed_service == 'true' }}",
-    );
-    expect(prepare.run).toContain("set -euo pipefail");
-    expect(prepare.run).toContain('test "$(ps -p 1 -o comm= | xargs)" = systemd');
-    expect(prepare.run).toContain("sudo systemctl is-active --quiet systemd-logind.service");
-    expect(prepare.run).toContain('sudo loginctl enable-linger "$user"');
-    expect(prepare.run).toContain('sudo systemctl start "user@${uid}.service"');
-    expect(prepare.run).toContain(
+    expect(prepare.if).toBe("steps.lane.outputs.run == 'true'");
+    expect(prepare.with?.["semantic-checks"]).toBe("${{ matrix.managed_service }}");
+    expect(provisionEntry).toBe(provision.split("\n").slice(1).join("\n"));
+    expect(provision).toContain("set -euo pipefail");
+    expect(provision).toContain('test "$(ps -p 1 -o comm= | xargs)" = systemd');
+    expect(provision).toContain("sudo -n systemctl is-active --quiet systemd-logind.service");
+    expect(provision).toContain('sudo -n loginctl enable-linger "$user"');
+    expect(provision).toContain('sudo -n systemctl start "user@${uid}.service"');
+    expect(provision).toContain(
       'runtime_dir="$(loginctl show-user "$user" --property=RuntimePath --value)"',
     );
-    expect(prepare.run).toContain('test -S "$XDG_RUNTIME_DIR/systemd/private"');
-    expect(prepare.run).toContain('echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"');
-    expect(prepare.run).toContain('if [[ -S "$runtime_dir/bus" ]]; then');
-    expect(prepare.run).toContain(
+    expect(provision).toContain('test -S "$XDG_RUNTIME_DIR/systemd/private"');
+    expect(provision).toContain('echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"');
+    expect(provision).toContain('if [[ -S "$runtime_dir/bus" ]]; then');
+    expect(provision).toContain(
       'echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"',
     );
-    expect(prepare.run).toContain("systemctl --user show-environment >/dev/null");
-    expect(prepare.run).not.toContain("|| true");
-    expect(stepNames.indexOf("Prepare systemd user session")).toBeLessThan(
+    expect(provision).toContain("systemctl --user show-environment >/dev/null");
+    expect(provision).not.toContain("|| true");
+    expect(stepNames.indexOf("Set up Node environment")).toBeLessThan(
       stepNames.indexOf("Install OCM and Kova"),
     );
   });

@@ -34,6 +34,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -48,7 +49,7 @@ import {
 } from "./session-activity-summaries.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { listSessionFixture } from "./session-list.test-support.js";
-import type { defaultCompleteModel } from "./session-observer-model.js";
+import type { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
@@ -131,6 +132,15 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   const changed = vi.fn();
   const read = () => loadSessionEntryReadOnly(scope);
   const view = () => projectSessionActivitySummary({ ...target, cfg, entry: read() });
+  const createService = (prepareModel: typeof defaultPrepareModel = prepare) =>
+    createSessionActivitySummaries({
+      scheduler: createTestGatewayScheduler(),
+      getConfig: () => cfg,
+      getSessionRowProjection: () => residentProjection,
+      onChanged: changed,
+      prepareModel,
+      completeModel: complete,
+    });
 
   beforeEach(async () => {
     testState = await createOpenClawTestState({ scenario: "minimal" });
@@ -143,13 +153,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       lifecycleRevision: "lifecycle-1",
       updatedAt: 1,
     });
-    service = createSessionActivitySummaries({
-      getConfig: () => cfg,
-      getSessionRowProjection: () => residentProjection,
-      onChanged: changed,
-      prepareModel: prepare,
-      completeModel: complete,
-    });
+    service = createService();
   });
   afterEach(async () => {
     archiveMaterializationHook.beforeMaterialize = undefined;
@@ -258,12 +262,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     });
     expect(read()?.updatedAt).toBe(originalActivity);
     await service.dispose();
-    service = createSessionActivitySummaries({
-      getConfig: () => cfg,
-      onChanged: changed,
-      prepareModel: prepare,
-      completeModel: complete,
-    });
+    service = createService();
     service.ensure(target);
     await vi.waitFor(() => expect(view()?.state).toBe("current"));
     expect(complete).toHaveBeenCalledTimes(3);
@@ -493,10 +492,16 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     },
   );
 
-  it.each(["initialization", "lifecycle", "utility-model"] as const)(
+  it.each(["initialization", "lifecycle", "utility-model", "visibility"] as const)(
     "rejects a recap when %s changes while its write is queued",
     async (change) => {
       await messages(2);
+      if (change === "visibility") {
+        await patchSessionEntryCore(scope, () => ({
+          spawnedBy: "agent:main:main",
+          category: "Work",
+        }));
+      }
       const completion = createDeferred<ReturnType<typeof result>>();
       complete.mockImplementationOnce(() => completion.promise);
       service.ensure(target);
@@ -518,7 +523,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
                 ...before,
                 ...(change === "initialization"
                   ? { initializationPending: true }
-                  : { lifecycleRevision: "lifecycle-2" }),
+                  : change === "visibility"
+                    ? { category: undefined }
+                    : { lifecycleRevision: "lifecycle-2" }),
               });
             }, writerScope);
           }
@@ -620,12 +627,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(view()?.state).toBe("stale");
     // Offline edits rebuild asynchronously; finish the fixture before restarting its observer.
     await waitForSessionTranscriptProjection(scope);
-    service = createSessionActivitySummaries({
-      getConfig: () => cfg,
-      onChanged: changed,
-      prepareModel: prepare,
-      completeModel: complete,
-    });
+    service = createService();
     service.ensure(target);
     await vi.waitFor(() => expect(view()?.state).toBe("current"));
     expect(complete).toHaveBeenCalledTimes(2);
@@ -711,12 +713,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     service.ensure(target);
     await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
     const oldService = service;
-    service = createSessionActivitySummaries({
-      getConfig: () => cfg,
-      onChanged: changed,
-      prepareModel: async () => prepared,
-      completeModel: complete,
-    });
+    service = createService(async () => prepared);
     service.ensure(target);
     const oldDisposal = oldService.dispose();
     expect(view()?.state).toBe("updating");
@@ -726,8 +723,46 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
-  it("enqueues through the registered RPC handler and rejects an invalid batch before model work", async () => {
-    await messages(1);
+  it("enqueues visible conversations through the registered RPC handler and rejects an invalid batch before model work", async () => {
+    const conversations = [
+      { key: target.key, sessionId: scope.sessionId, entry: {} },
+      {
+        key: "agent:main:dashboard:spawned",
+        sessionId: "spawned-dashboard",
+        entry: { spawnedBy: "agent:main:main" },
+      },
+      {
+        key: "agent:main:grouped-child",
+        sessionId: "spawned-grouped",
+        entry: { spawnedBy: "agent:main:main", category: "Work" },
+      },
+    ].map(({ key, sessionId, entry }) => ({
+      target: { key, agentId: "main" },
+      scope: { sessionKey: key, agentId: "main", sessionId },
+      entry,
+    }));
+    for (const conversation of conversations) {
+      await upsertSessionEntryCore(conversation.scope, {
+        sessionId: conversation.scope.sessionId,
+        updatedAt: 1,
+        ...conversation.entry,
+      });
+      await persistSessionTranscriptTurn(conversation.scope, {
+        messages: [{ eventId: "request", message: { role: "user", content: "Check the build." } }],
+        touchSessionEntry: false,
+      });
+    }
+    const published = createDeferred();
+    changed.mockImplementation(() => {
+      if (
+        conversations.every(({ target: row, scope: session }) => {
+          const entry = loadSessionEntryReadOnly(session);
+          return projectSessionActivitySummary({ ...row, cfg, entry })?.state === "current";
+        })
+      ) {
+        published.resolve();
+      }
+    });
     cfg.gateway = { controlUi: { sessionObserver: false } };
     const context = createDirectChatContext({
       getRuntimeConfig: () => cfg,
@@ -744,19 +779,30 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         respond,
         isWebchatConnect: () => false,
       });
-    await invoke({ sessions: [target, { key: "agent:main:missing", agentId: "main" }] });
+    await invoke({
+      sessions: [conversations[1]!.target, { key: "agent:main:missing", agentId: "main" }],
+    });
     expect(respond).toHaveBeenLastCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
     expect(prepare).not.toHaveBeenCalled();
-    await invoke({ sessions: [target] });
+    await invoke({ sessions: conversations.map((conversation) => conversation.target) });
     expect(respond).toHaveBeenLastCalledWith(true, {
-      sessions: [{ ...target, activitySummary: { state: "updating", canEnsure: true } }],
+      sessions: conversations.map((conversation) => ({
+        ...conversation.target,
+        activitySummary: { state: "updating", canEnsure: true },
+      })),
     });
-    await vi.waitFor(() => expect(view()?.state).toBe("current"));
-    expect(complete).toHaveBeenCalledTimes(1);
+    await published.promise;
+    for (const conversation of conversations) {
+      expect(loadSessionEntryReadOnly(conversation.scope)).toMatchObject({
+        ...conversation.entry,
+        activitySummary: { text: "Completed the requested work.", coveredMessages: 1 },
+      });
+    }
+    expect(complete).toHaveBeenCalledTimes(conversations.length);
   });
 
   it("backfills a cold archived transcript through its restoration owner", async () => {
@@ -948,23 +994,30 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     );
   });
 
-  it("honors disabled utility routing and excludes child and incognito sessions", async () => {
+  it("honors disabled utility routing and excludes hidden child and incognito sessions", async () => {
     await messages(1);
     cfg = { agents: { defaults: { utilityModel: "" } } };
     expect(service.ensure(target).state).toBe("unavailable");
     cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
-    for (const key of ["agent:main:subagent:child", "agent:main:incognito:private"]) {
-      const childScope = { agentId: "main", sessionKey: key, sessionId: key };
-      await upsertSessionEntryCore(childScope, { sessionId: key, updatedAt: 1 });
+    for (const { key, ...entry } of [
+      { key: "agent:main:subagent:child", category: "Work" },
+      { key: "agent:main:legacy-child", spawnedBy: "agent:main:main" },
+      { key: "agent:main:dashboard:incognito-private" },
+    ]) {
+      const childScope = { agentId: "main", sessionKey: key, sessionId: key.replaceAll(":", "-") };
+      await upsertSessionEntryCore(childScope, {
+        sessionId: childScope.sessionId,
+        updatedAt: 1,
+        ...entry,
+      });
       await persistSessionTranscriptTurn(childScope, {
         messages: [
           { eventId: `event-${key}`, message: { role: "user", content: "Private child work" } },
         ],
         touchSessionEntry: false,
       });
+      expect(service.ensure({ key, agentId: "main" }).state).toBe("unavailable");
     }
-    service.ensure({ key: "agent:main:subagent:child", agentId: "main" });
-    service.ensure({ key: "agent:main:incognito:private", agentId: "main" });
     expect(prepare).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
   });

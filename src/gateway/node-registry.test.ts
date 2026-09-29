@@ -12,7 +12,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
+import {
+  getCurrentActiveNodeContext,
+  setActiveNodeContexts,
+} from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
@@ -20,7 +23,10 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import {
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeWorkerHostDeclaration,
+} from "../infra/node-runner-inventory.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -72,7 +78,7 @@ afterEach(() => {
   }
   activeTestRegistries.clear();
   testNodeHostCommands = [];
-  setActiveNodeContext(null);
+  setActiveNodeContexts([]);
 });
 
 function registerTestNodeSocket(
@@ -577,12 +583,7 @@ describe("gateway/node-registry", () => {
       }),
       { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
     );
-    const publish = (workerHost: {
-      enabled: true;
-      capacity: { total: number; available: number };
-      bundleRetention?: 1;
-      bundleStatus?: 1;
-    }) =>
+    const publish = (workerHost: NodeWorkerHostDeclaration) =>
       updateNodeRunnerInventory({
         registry: nodeRegistry,
         nodeId: "node-1",
@@ -616,10 +617,40 @@ describe("gateway/node-registry", () => {
     });
     expect(runnerStateChanged).not.toHaveBeenCalled();
 
+    expect(publish({ ...retained, capacity: { total: 2, available: 0 }, statusWait: 1 })).toEqual({
+      changed: true,
+    });
+    expect(publish({ ...retained, statusWait: 1, capacity: { available: 0, total: 2 } })).toEqual({
+      changed: false,
+    });
+    expect(runnerStateChanged).toHaveBeenCalledExactlyOnceWith("node-1", {
+      inventoryChanged: true,
+      availabilityChanged: false,
+    });
+    runnerStateChanged.mockClear();
+
     const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
     if (!proof) {
       throw new Error("expected current runner proof");
     }
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(false);
+    const idleHost = {
+      ...retained,
+      idleRetention: true as const,
+      capacity: { total: 2, available: 0, reclaimableIdle: 1 },
+    };
+    expect(publish(idleHost)).toEqual({ changed: true });
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(true);
+    expect(
+      collectNodeCatalogRuntimeState(nodeRegistry, [
+        { nodeId: "node-1", connId: "conn-1", pairingGeneration: "generation-a" },
+      ]).workerSlotsByNodeId.get("node-1"),
+    ).toEqual(idleHost.capacity);
+    expect(
+      publish({ ...idleHost, capacity: { ...idleHost.capacity, reclaimableIdle: 0 } }),
+    ).toEqual({ changed: true });
+    expect(nodeWorkerSupervisorTransport.isCurrent(proof, true)).toBe(false);
+    runnerStateChanged.mockClear();
     expect(
       nodeWorkerSupervisorTransport.acceptBundleStatus?.(proof, {
         bundleHash: "a".repeat(64),
@@ -1446,177 +1477,6 @@ describe("gateway/node-registry", () => {
     );
     controller.abort();
     await invoke;
-  });
-
-  it("ranks connected nodes by gateway-derived input activity", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        displayName: "Desk Mac",
-        permissions: { accessibility: true },
-      }),
-      {},
-    );
-    registerNodeSession(
-      registry,
-      makeClient("conn-2", "node-2", [], {
-        displayName: "Laptop",
-        permissions: { accessibility: true },
-      }),
-      {},
-    );
-
-    expect(
-      registry.updatePresenceActivity({
-        nodeId: "node-1",
-        connId: "conn-1",
-        idleSeconds: 10,
-        observedAtMs: 100_000,
-      }),
-    ).toMatchObject({ lastActiveAtMs: 90_000, presenceUpdatedAtMs: 100_000 });
-    registry.updatePresenceActivity({
-      nodeId: "node-2",
-      connId: "conn-2",
-      idleSeconds: 2,
-      observedAtMs: 105_000,
-    });
-
-    expect(registry.getActiveNode()?.nodeId).toBe("node-2");
-    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-2" });
-    expect(registry.unregister("conn-2")).toBe("node-2");
-    expect(registry.getActiveNode()?.nodeId).toBe("node-1");
-    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
-  });
-
-  it("recomputes active context when a same-id connection replaces reported presence", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-old", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-old",
-      idleSeconds: 0,
-      observedAtMs: 100_000,
-    });
-
-    registerNodeSession(
-      registry,
-      makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-
-    expect(registry.getActiveNode()).toBeUndefined();
-    expect(getCurrentActiveNodeContext()).toBeNull();
-    expect(registry.unregister("conn-old")).toBeNull();
-    expect(getCurrentActiveNodeContext()).toBeNull();
-  });
-
-  it("rejects presence updates from stale node connections", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-
-    expect(
-      registry.updatePresenceActivity({
-        nodeId: "node-1",
-        connId: "conn-old",
-        idleSeconds: 0,
-        observedAtMs: 100_000,
-      }),
-    ).toBeNull();
-    expect(registry.getActiveNode()).toBeUndefined();
-  });
-
-  it("does not advance a bounded estimate on saturated idle keepalives", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    const first = registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 2_592_000,
-      saturated: true,
-      observedAtMs: 3_000_000_000,
-    });
-    const keepalive = registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 2_592_000,
-      saturated: true,
-      observedAtMs: 3_000_180_000,
-    });
-
-    expect(first?.lastActiveAtMs).toBe(408_000_000);
-    expect(keepalive?.lastActiveAtMs).toBe(408_000_000);
-    expect(keepalive?.presenceUpdatedAtMs).toBe(3_000_180_000);
-  });
-
-  it("clears reported presence when Accessibility permission is removed", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        permissions: { accessibility: true },
-        declaredPermissions: { accessibility: true },
-      }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 0,
-      observedAtMs: 100_000,
-    });
-
-    registry.updateSurface("node-1", { commands: [], permissions: { accessibility: false } });
-
-    expect(registry.get("node-1")?.lastActiveAtMs).toBeUndefined();
-    expect(registry.get("node-1")?.presenceUpdatedAtMs).toBeUndefined();
-    expect(registry.getActiveNode()).toBeUndefined();
-    expect(getCurrentActiveNodeContext()).toBeNull();
-  });
-
-  it("clears presence only for the current connection and selects the next active Mac", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registerNodeSession(
-      registry,
-      makeClient("conn-2", "node-2", [], { permissions: { accessibility: true } }),
-      {},
-    );
-    registry.updatePresenceActivity({
-      nodeId: "node-1",
-      connId: "conn-1",
-      idleSeconds: 10,
-      observedAtMs: 100_000,
-    });
-    registry.updatePresenceActivity({
-      nodeId: "node-2",
-      connId: "conn-2",
-      idleSeconds: 0,
-      observedAtMs: 105_000,
-    });
-
-    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-old" })).toBeNull();
-    expect(registry.getActiveNode()?.nodeId).toBe("node-2");
-    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(true);
-    expect(registry.getActiveNode()?.nodeId).toBe("node-1");
-    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
-    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(false);
   });
 
   it("checks node websocket connectivity with ping/pong", async () => {

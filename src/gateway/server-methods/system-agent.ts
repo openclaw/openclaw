@@ -37,6 +37,7 @@ import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
@@ -191,7 +192,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     });
   },
   /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */
-  "openclaw.setup.auth.start": async ({ params, respond, context, client }) => {
+  "openclaw.setup.auth.start": async (options) => {
+    const { params, respond, context, client } = options;
     if (
       !assertValidParams(
         params,
@@ -205,6 +207,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     const { sessionId, ...activation } = params;
     await startSetupActivationWizard({
       sessionId,
+      ownerKey: resolveSystemAgentSessionOwnerKey({ client }),
+      assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
       activation: { ...activation, kind: "provider-auth" },
       timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
       context,

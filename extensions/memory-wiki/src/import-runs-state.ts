@@ -234,6 +234,28 @@ function normalizePathRecord(raw: unknown): MemoryWikiImportRunPathStateRecord |
   };
 }
 
+function importRunMetadata(
+  record: Omit<ChatGptImportRunRecord, "createdPaths" | "updatedPaths">,
+): Omit<ChatGptImportRunRecord, "createdPaths" | "updatedPaths"> {
+  return {
+    version: 1,
+    runId: record.runId,
+    importType: "chatgpt",
+    exportPath: record.exportPath,
+    sourcePath: record.sourcePath,
+    appliedAt: record.appliedAt,
+    conversationCount: record.conversationCount,
+    createdCount: record.createdCount,
+    updatedCount: record.updatedCount,
+    skippedCount: record.skippedCount,
+    ...(record.rollbackStartedAt ? { rollbackStartedAt: record.rollbackStartedAt } : {}),
+    ...(record.rollbackTargetsFinalizedAt
+      ? { rollbackTargetsFinalizedAt: record.rollbackTargetsFinalizedAt }
+      : {}),
+    ...(record.rolledBackAt ? { rolledBackAt: record.rolledBackAt } : {}),
+  };
+}
+
 function composeImportRunRecord(
   meta: MemoryWikiImportRunMetaStateRecord,
   pathRows: MemoryWikiImportRunPathStateRecord[],
@@ -252,50 +274,15 @@ function composeImportRunRecord(
     .filter((row) => row.kind === "updated-path")
     .toSorted((left, right) => left.index - right.index)
     .map(toEntry);
-  return {
-    version: 1,
-    runId: meta.runId,
-    importType: "chatgpt",
-    exportPath: meta.exportPath,
-    sourcePath: meta.sourcePath,
-    appliedAt: meta.appliedAt,
-    conversationCount: meta.conversationCount,
-    createdCount: meta.createdCount,
-    updatedCount: meta.updatedCount,
-    skippedCount: meta.skippedCount,
-    createdPaths,
-    updatedPaths,
-    ...(meta.rollbackStartedAt ? { rollbackStartedAt: meta.rollbackStartedAt } : {}),
-    ...(meta.rollbackTargetsFinalizedAt
-      ? { rollbackTargetsFinalizedAt: meta.rollbackTargetsFinalizedAt }
-      : {}),
-    ...(meta.rolledBackAt ? { rolledBackAt: meta.rolledBackAt } : {}),
-  };
+  return { ...importRunMetadata(meta), createdPaths, updatedPaths };
 }
 
 function toMetaRecord(
   vaultRootKey: string,
   record: ChatGptImportRunRecord,
 ): MemoryWikiImportRunMetaStateRecord {
-  return {
-    version: 1,
-    kind: "meta",
-    vaultRootKey,
-    runId: record.runId,
-    importType: "chatgpt",
-    exportPath: record.exportPath,
-    sourcePath: record.sourcePath,
-    appliedAt: record.appliedAt,
-    conversationCount: record.conversationCount,
-    createdCount: record.createdCount,
-    updatedCount: record.updatedCount,
-    skippedCount: record.skippedCount,
-    ...(record.rollbackStartedAt ? { rollbackStartedAt: record.rollbackStartedAt } : {}),
-    ...(record.rollbackTargetsFinalizedAt
-      ? { rollbackTargetsFinalizedAt: record.rollbackTargetsFinalizedAt }
-      : {}),
-    ...(record.rolledBackAt ? { rolledBackAt: record.rolledBackAt } : {}),
-  };
+  const { version, ...metadata } = importRunMetadata(record);
+  return { version, kind: "meta", vaultRootKey, ...metadata };
 }
 
 function toPathRecords(

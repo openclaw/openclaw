@@ -9,6 +9,7 @@ import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle
 import * as walCheckpoint from "../../infra/sqlite-wal-checkpoint.js";
 import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -19,7 +20,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import * as executionCleanup from "../../state/openclaw-agent-execution-cleanup.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
@@ -27,10 +27,8 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
-import {
-  createLifecycleArtifactReclamationPlan,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import { createLifecycleArtifactReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import {
   deferPhysicalBudgetForCheckpoint,
@@ -163,6 +161,29 @@ test.each([
           },
         });
       });
+    const nativeStopped = createDeferredCore();
+    const releaseReceipt = createDeferredCore();
+    const openStore = workerStore.openAgentDatabaseSqliteWorkerStore;
+    const delayReceipt = staleReceipt
+      ? vi
+          .spyOn(workerStore, "openAgentDatabaseSqliteWorkerStore")
+          .mockImplementation((options, custody) =>
+            openStore(options, {
+              ...custody,
+              onNativeStopped(stopped, readReceipt) {
+                custody.onNativeStopped?.(
+                  sqliteReaderDatabasePathKey(options.databasePath) === databasePathKey
+                    ? stopped.then(async () => {
+                        nativeStopped.resolve();
+                        await releaseReceipt.promise;
+                      })
+                    : stopped,
+                  readReceipt,
+                );
+              },
+            }),
+          )
+      : undefined;
     let following: Promise<void> | undefined;
     try {
       reader.exec("BEGIN");
@@ -228,20 +249,6 @@ test.each([
             observed.push(health.state);
           }
         });
-        const cleanupFinished = createDeferredCore();
-        const releaseReceipt = createDeferredCore();
-        const cleanup = executionCleanup.cleanupRetiredAgentDatabaseLease;
-        const delayReceipt = staleReceipt
-          ? vi
-              .spyOn(executionCleanup, "cleanupRetiredAgentDatabaseLease")
-              .mockImplementation(async (cleanupParams) => {
-                await cleanup(cleanupParams);
-                if (sqliteReaderDatabasePathKey(cleanupParams.lease.path) === databasePathKey) {
-                  cleanupFinished.resolve();
-                  await releaseReceipt.promise;
-                }
-              })
-          : undefined;
         let closing: Promise<void> | undefined;
         let closeSettled = false;
         try {
@@ -265,12 +272,12 @@ test.each([
             closeSettled = true;
           });
           if (staleReceipt) {
-            await Promise.race([cleanupFinished.promise, closing]);
+            await Promise.race([nativeStopped.promise, closing]);
             expect(closeSettled).toBe(false);
             expect(database.db.isOpen).toBe(false);
             expect(reader.isOpen).toBe(false);
             expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
-            // The real cleanup has closed native handles and released the exact lease.
+            // Native close has released the handles and lease; receipt publication is still gated.
             const retiredPath = `${database.path}.retired`;
             fs.renameSync(database.path, retiredPath);
             if (recovery === "resource-close-replaced") {
@@ -292,7 +299,6 @@ test.each([
         } finally {
           releaseReceipt.resolve();
           await Promise.allSettled([closing]);
-          delayReceipt?.mockRestore();
           unsubscribe();
         }
       }
@@ -301,6 +307,8 @@ test.each([
         expect(budget.checkpointBlocked).toBeUndefined();
       }
     } finally {
+      releaseReceipt.resolve();
+      delayReceipt?.mockRestore();
       if (reader.isOpen) {
         if (reader.isTransaction) {
           reader.exec("ROLLBACK");

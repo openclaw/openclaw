@@ -1,6 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  iMessageApprovalPollTargets,
+  maybeResolveIMessageApprovalPollVote,
+} from "./approval-polls.js";
 import { listPendingIMessageApprovalReactionPollTargets } from "./approval-reaction-poll-targets.js";
 import {
   clearIMessageApprovalReactionTargetsForTest,
@@ -11,12 +15,26 @@ import {
 import { getOptionalIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
+const gatewayMocks = vi.hoisted(() => ({
+  resolveApprovalOverGateway: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: gatewayMocks.resolveApprovalOverGateway,
+}));
+
 describe("iMessage approval reaction persistence", () => {
   beforeEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
+    iMessageApprovalPollTargets.clearForTest();
+    gatewayMocks.resolveApprovalOverGateway.mockReset().mockResolvedValue({
+      applied: true,
+      approval: { status: "allowed", decision: "allow-once", reason: "user" },
+    });
   });
 
-  it("joins both persistent target indexes before completion and restores them after reset", async () => {
+  it("joins both system-agent target indexes before completion and restores them after reset", async () => {
+    const approvalKind = "system-agent";
     installIMessageStateRuntimeForTest();
     clearIMessageApprovalReactionTargetsForTest();
     const state = getOptionalIMessageRuntime()?.state;
@@ -64,26 +82,25 @@ describe("iMessage approval reaction persistence", () => {
       conversation: { chatId: 42, chatGuid: "iMessage;+;restart" },
       messageId: "restart-message",
     };
+    const resolveTarget = () =>
+      resolveIMessageApprovalReactionTargetWithPersistence({ ...identity, reactionKey: "👍" });
+    const listTargets = () =>
+      listPendingIMessageApprovalReactionPollTargets({ accountId: identity.accountId });
     let registered = false;
     const registration = Promise.resolve(
       registerIMessageApprovalReactionTarget({
         ...identity,
         approvalId: "exec-restart",
-        approvalKind: "exec",
+        approvalKind,
         allowedDecisions: ["allow-once", "deny"],
       }),
     ).then(() => {
       registered = true;
     });
     try {
-      expect(
-        await resolveIMessageApprovalReactionTargetWithPersistence({
-          ...identity,
-          reactionKey: "👍",
-        }),
-      ).toEqual({
+      expect(await resolveTarget()).toEqual({
         approvalId: "exec-restart",
-        approvalKind: "exec",
+        approvalKind,
         decision: "allow-once",
       });
       expect(registered).toBe(false);
@@ -96,21 +113,19 @@ describe("iMessage approval reaction persistence", () => {
 
       clearIMessageApprovalReactionTargetsForTest();
 
-      expect(
-        await listPendingIMessageApprovalReactionPollTargets({ accountId: "restart-account" }),
-      ).toEqual([
+      expect(await listTargets()).toEqual([
         expect.objectContaining({
           approvalId: "exec-restart",
+          approvalKind,
           messageId: "restart-message",
           conversation: expect.objectContaining({ chatId: 42, chatGuid: "iMessage;+;restart" }),
         }),
       ]);
-      expect(
-        await resolveIMessageApprovalReactionTargetWithPersistence({
-          ...identity,
-          reactionKey: "👍",
-        }),
-      ).not.toBeNull();
+      expect(await resolveTarget()).toEqual({
+        approvalId: "exec-restart",
+        approvalKind,
+        decision: "allow-once",
+      });
 
       let deleted = false;
       const deletion = Promise.resolve(unregisterIMessageApprovalReactionTarget(identity)).then(
@@ -118,19 +133,12 @@ describe("iMessage approval reaction persistence", () => {
           deleted = true;
         },
       );
-      expect(
-        await listPendingIMessageApprovalReactionPollTargets({ accountId: "restart-account" }),
-      ).toEqual([]);
+      expect(await listTargets()).toEqual([]);
       expect(deleted).toBe(false);
       deletionGate.resolve();
       await deletion;
       clearIMessageApprovalReactionTargetsForTest();
-      expect(
-        await resolveIMessageApprovalReactionTargetWithPersistence({
-          ...identity,
-          reactionKey: "👍",
-        }),
-      ).toBeNull();
+      expect(await resolveTarget()).toBeNull();
     } finally {
       pollGate.resolve();
       reactionGate.resolve();
@@ -141,7 +149,64 @@ describe("iMessage approval reaction persistence", () => {
     }
   });
 
-  it("rejects persisted targets containing an invalid approval decision", async () => {
+  it("resolves a persisted system-agent poll after memory reset without resolving late votes again", async () => {
+    installIMessageStateRuntimeForTest();
+    const accountId = "poll-restart";
+    const approver = "+15551230000";
+    const chatGuid = "iMessage;+;system-agent-poll-restart";
+    const pollGuid = "system-agent-poll-restart-guid";
+    const approvalId = "system-agent:poll-restart";
+    const optionId = "system-agent-poll-allow-once";
+    const cfg = { channels: { imessage: { allowFrom: [approver] } } };
+    await expect(
+      iMessageApprovalPollTargets.register({
+        accountId,
+        conversation: { chatGuid },
+        pollGuid,
+        approvalId,
+        approvalKind: "system-agent",
+        optionDecisions: [[optionId, "allow-once"]],
+        expiresAtMs: Date.now() + 60_000,
+      }),
+    ).resolves.toBe(true);
+    iMessageApprovalPollTargets.clearForTest();
+
+    const vote = () =>
+      maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId,
+        message: {
+          sender: approver,
+          chat_guid: chatGuid,
+          is_group: true,
+          poll: {
+            kind: "vote",
+            original_guid: pollGuid,
+            votes: [{ option_id: optionId, participant: approver, event_type: "selected" }],
+          },
+        },
+      });
+    await expect(vote()).resolves.toBe(true);
+    expect(gatewayMocks.resolveApprovalOverGateway).toHaveBeenCalledExactlyOnceWith({
+      cfg,
+      approvalId,
+      approvalKind: "system-agent",
+      decision: "allow-once",
+      channel: "imessage",
+      accountId,
+      senderId: approver,
+      gatewayUrl: undefined,
+    });
+
+    iMessageApprovalPollTargets.clearForTest();
+    await expect(vote()).resolves.toBe(true);
+    expect(gatewayMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "decision", approvalKind: "exec", allowedDecisions: ["allow-once", "invalid"] },
+    { name: "kind", approvalKind: "unknown", allowedDecisions: ["allow-once"] },
+  ])("rejects persisted targets containing an invalid approval $name", async (invalid) => {
     installIMessageStateRuntimeForTest();
     clearIMessageApprovalReactionTargetsForTest();
     const store = getOptionalIMessageRuntime()?.state.openKeyedStore({
@@ -158,8 +223,8 @@ describe("iMessage approval reaction persistence", () => {
         version: 1,
         target: {
           approvalId: "exec-corrupt",
-          approvalKind: "exec",
-          allowedDecisions: ["allow-once", "invalid"],
+          approvalKind: invalid.approvalKind,
+          allowedDecisions: invalid.allowedDecisions,
         },
       },
       { ttlMs: 60_000 },

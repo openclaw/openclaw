@@ -43,6 +43,8 @@ export type PreManagedServiceStop = {
   /** Verified native service process, used only to correlate legacy Gateway locks. */
   servicePid?: number;
   serviceControlGroup?: string;
+  /** Reporting fact only; membership is rechecked before the native stop. */
+  serviceMembershipSourceAbsent?: boolean;
   offline?: boolean;
   serviceMutationAllowed?: boolean;
   serviceMutationSkipMessage?: string;
@@ -98,4 +100,22 @@ export type OriginalManagedServiceRuntime = {
     targetFingerprint: PackageLauncherFingerprint;
   };
   nodeIdentity: string;
+};
+
+export type PackageRuntimePreflight = {
+  nodeRunner?: string;
+  replacedNodeRunner?: string;
+  targetVersion?: string;
+};
+
+export type ManagedServiceRootRedirect = {
+  root: string;
+  previousRoot: string;
+};
+
+export type ManagedServicePackageUpdatePlan = {
+  rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
+  nodeRunner?: string;
+  serviceUnitTarget?: string;
 };

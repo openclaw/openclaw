@@ -24,6 +24,10 @@ extension OpenClawChatViewModel {
 
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
         guard !self.isTransportDetached else { return }
+        if self.usesWebConversation {
+            self.handleWebConversationEvent(evt)
+            return
+        }
         switch evt {
         case let .health(ok):
             let reconnected = ok && !self.healthOK
@@ -70,8 +74,6 @@ extension OpenClawChatViewModel {
             self.handleAgentEvent(agent)
         case let .progressCardChanged(event):
             self.handleProgressCardChanged(event)
-        case let .task(task):
-            self.handleTaskEvent(task)
         case let .questionRequested(question):
             self.upsertQuestion(question)
             self.reconcileQuestionsAfterEvent()
@@ -111,7 +113,6 @@ extension OpenClawChatViewModel {
             // Question refresh is best-effort and must not delay transcript
             // recovery behind a slow gateway round trip.
             Task { await self.refreshQuestions() }
-            Task { await self.refreshSubagentActivities(sessionSnapshot: context.session) }
             Task {
                 await self.refreshHistoryAfterRun(historyRequest: context)
                 await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
@@ -119,7 +120,7 @@ extension OpenClawChatViewModel {
         }
     }
 
-    private func applySessionChangeProjection(
+    func applySessionChangeProjection(
         _ change: OpenClawChatSessionsChangedEvent,
         ownedSwarmActivityNote: Bool)
     {
@@ -178,6 +179,7 @@ extension OpenClawChatViewModel {
                       current: self.sessionKey)
             else { return }
             self.replyTarget = nil
+            self.narration = ChatNarration()
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             let context = self.beginHistoryRequest()
@@ -242,7 +244,7 @@ extension OpenClawChatViewModel {
                 sessionKey: eventSessionKey,
                 agentID: change.agentId,
                 includeAdvertisedRuns: true)
-            : Self.normalizedRunID(change.runId)
+            : ChatPayloadDecoding.trimmedNonEmptyString(change.runId)
         let ownsCurrentRun = changesCurrentSession && runID.map {
             self.pendingRuns.contains($0) || self.ownsLiveTelemetryRun($0)
         } == true
@@ -365,7 +367,7 @@ extension OpenClawChatViewModel {
         }
 
         guard phase == "end" || phase == "error", let runID else { return nil }
-        let activeRunIDs = existing.activeRunIds?.compactMap { Self.normalizedRunID($0) } ?? []
+        let activeRunIDs = existing.activeRunIds?.compactMap { ChatPayloadDecoding.trimmedNonEmptyString($0) } ?? []
         if !activeRunIDs.isEmpty {
             return activeRunIDs == [runID] ? nil : .rejected
         }
@@ -417,7 +419,7 @@ extension OpenClawChatViewModel {
         agentID: String?,
         includeAdvertisedRuns: Bool) -> String?
     {
-        if let explicitRunID = Self.normalizedRunID(explicitRunID) {
+        if let explicitRunID = ChatPayloadDecoding.trimmedNonEmptyString(explicitRunID) {
             return explicitRunID
         }
         if sessionKey == nil {
@@ -501,7 +503,7 @@ extension OpenClawChatViewModel {
     }
 
     private func handleChatEvent(_ chat: OpenClawChatEventPayload) {
-        let explicitRunID = Self.normalizedRunID(chat.runId)
+        let explicitRunID = ChatPayloadDecoding.trimmedNonEmptyString(chat.runId)
         let isOurRun = explicitRunID.map { self.pendingRuns.contains($0) } ?? false
         if let runID = explicitRunID {
             self.logDiagnostic(
@@ -608,20 +610,15 @@ extension OpenClawChatViewModel {
                     OpenClawChatMessageContent(
                         type: "text",
                         text: text,
-                        thinking: nil,
-                        thinkingSignature: nil,
                         mimeType: nil,
                         fileName: nil,
-                        content: nil,
-                        id: nil,
-                        name: nil,
-                        arguments: nil),
+                        content: nil),
                 ],
                 timestamp: Date().timeIntervalSince1970 * 1000,
                 stopReason: "stop")
         }
 
-        let runId = Self.normalizedRunID(chat.runId)
+        let runId = ChatPayloadDecoding.trimmedNonEmptyString(chat.runId)
         let scope = runMessageScope(for: runId)
         guard self.isCurrentSession(scope.session) else { return }
         guard let reconciliationKey = Self.finalMessageReconciliationKey(for: message) else { return }
@@ -680,6 +677,10 @@ extension OpenClawChatViewModel {
         }
 
         let isSelectedPendingRun = isPendingRun && self.liveUsageRunID == evt.runId
+        if evt.stream == "item", evt.data["kind"]?.value as? String == "preamble" {
+            self.handleAgentNarration(evt)
+            return
+        }
         guard isSelectedPendingRun || isLegacySessionStream else { return }
         self.invalidateRunSnapshots()
         self.logDiagnostic(
@@ -718,47 +719,53 @@ extension OpenClawChatViewModel {
         case "item":
             self.handleAgentActivityItem(evt)
         case "tool":
-            guard let phase = evt.data["phase"]?.value as? String else { return }
-            guard let name = evt.data["name"]?.value as? String else { return }
-            guard let toolCallId = evt.data["toolCallId"]?.value as? String else { return }
-            if phase == "start" {
-                self.updateActiveSessionRunWithoutChatSnapshot(false)
-                let args = evt.data["args"]
-                self.turnToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
-                    toolCallId: toolCallId,
-                    name: name,
-                    args: args,
-                    startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
-                    isError: nil,
-                    diffStat: nil,
-                    activity: self.turnToolCallsById[toolCallId]?.activity)
-            } else if phase == "input_delta",
-                      let pending = self.turnToolCallsById[toolCallId],
-                      let diff = evt.data["diff"]?.dictionaryValue,
-                      let added = diff["added"]?.intValue,
-                      let removed = diff["removed"]?.intValue,
-                      added >= 0,
-                      removed >= 0
-            {
-                self.turnToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
-                    toolCallId: pending.toolCallId,
-                    name: pending.name,
-                    args: pending.args,
-                    startedAt: pending.startedAt,
-                    isError: pending.isError,
-                    diffStat: ChatToolDiffStat(added: added, removed: removed),
-                    activity: pending.activity,
-                    isComplete: pending.isComplete)
-            } else if phase == "result" {
-                if var pending = self.turnToolCallsById[toolCallId], pending.activity != nil {
-                    pending.isComplete = true
-                    self.turnToolCallsById[toolCallId] = pending
-                } else {
-                    self.turnToolCallsById[toolCallId] = nil
-                }
-            }
+            self.handleAgentToolEvent(evt)
         default:
             break
+        }
+    }
+
+    private func handleAgentToolEvent(_ evt: OpenClawAgentEventPayload) {
+        guard let phase = evt.data["phase"]?.value as? String else { return }
+        guard let name = evt.data["name"]?.value as? String else { return }
+        guard let toolCallId = evt.data["toolCallId"]?.value as? String else { return }
+        if phase == "start" {
+            self.updateActiveSessionRunWithoutChatSnapshot(false)
+            let args = evt.data["args"]
+            self.turnToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
+                toolCallId: toolCallId,
+                name: name,
+                args: args,
+                startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
+                isError: nil,
+                diffStat: nil,
+                activity: self.turnToolCallsById[toolCallId]?.activity,
+                runID: evt.runId)
+        } else if phase == "input_delta",
+                  let pending = self.turnToolCallsById[toolCallId],
+                  let diff = evt.data["diff"]?.dictionaryValue,
+                  let added = diff["added"]?.intValue,
+                  let removed = diff["removed"]?.intValue,
+                  added >= 0,
+                  removed >= 0
+        {
+            self.turnToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
+                toolCallId: pending.toolCallId,
+                name: pending.name,
+                args: pending.args,
+                startedAt: pending.startedAt,
+                isError: pending.isError,
+                diffStat: ChatToolDiffStat(added: added, removed: removed),
+                activity: pending.activity,
+                isComplete: pending.isComplete,
+                runID: pending.runID)
+        } else if phase == "result" {
+            if var pending = self.turnToolCallsById[toolCallId], pending.activity != nil {
+                pending.isComplete = true
+                self.turnToolCallsById[toolCallId] = pending
+            } else {
+                self.turnToolCallsById[toolCallId] = nil
+            }
         }
     }
 
@@ -1024,7 +1031,7 @@ extension OpenClawChatViewModel {
         }
         guard let refreshKey = userRefreshIdentityKey(for: messages[userIndex]) else {
             return LatestUserTurn(
-                idempotencyKey: normalizedIdempotencyKey(messages[userIndex].idempotencyKey),
+                idempotencyKey: ChatPayloadDecoding.trimmedNonEmptyString(messages[userIndex].idempotencyKey),
                 refreshKey: nil,
                 occurrence: 0,
                 timestamp: messages[userIndex].timestamp)
@@ -1034,7 +1041,7 @@ extension OpenClawChatViewModel {
             count += 1
         }
         return LatestUserTurn(
-            idempotencyKey: Self.normalizedIdempotencyKey(messages[userIndex].idempotencyKey),
+            idempotencyKey: ChatPayloadDecoding.trimmedNonEmptyString(messages[userIndex].idempotencyKey),
             refreshKey: refreshKey,
             occurrence: occurrence,
             timestamp: messages[userIndex].timestamp)
@@ -1050,7 +1057,7 @@ extension OpenClawChatViewModel {
         if let idempotencyKey = user.idempotencyKey {
             guard let userIndex = messages.lastIndex(where: { message in
                 message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" &&
-                    self.normalizedIdempotencyKey(message.idempotencyKey) == idempotencyKey
+                    ChatPayloadDecoding.trimmedNonEmptyString(message.idempotencyKey) == idempotencyKey
             }) else {
                 return false
             }
@@ -1144,7 +1151,7 @@ extension OpenClawChatViewModel {
             return (lhs.agentID ?? "") < (rhs.agentID ?? "")
         }
         for target in sortedTargets {
-            let visibleRequest = matchesCurrentSessionKey(
+            let visibleRequest = !self.usesWebConversation && matchesCurrentSessionKey(
                 incoming: target.presentationSessionKey,
                 agentId: target.agentID,
                 current: self.sessionKey)
@@ -1181,6 +1188,7 @@ extension OpenClawChatViewModel {
         requireCurrentInvalidation: Bool = false) async
         -> RunHistoryRefreshResult
     {
+        guard !self.usesWebConversation else { return .failed }
         let request = request ?? self.beginHistoryRequest()
         do {
             let payload = try await transport.requestHistory(sessionKey: request.session.key)
@@ -1191,7 +1199,7 @@ extension OpenClawChatViewModel {
                 payload,
                 for: request,
                 preservingOptimisticLocalMessages: true)
-            let hasInFlightRun = Self.normalizedRunID(payload.inFlightRun?.runId) != nil
+            let hasInFlightRun = ChatPayloadDecoding.trimmedNonEmptyString(payload.inFlightRun?.runId) != nil
             let sessionHasActiveRun = payload.sessionInfo?.hasActiveRun == true
             // `hasActiveRun` is session-wide and can be true for an embedded agent run.
             // Its presence capability-gates an authoritative missing chat snapshot, but
@@ -1385,36 +1393,28 @@ extension OpenClawChatViewModel {
                   sessionSnapshot: sessionSnapshot,
                   armID: armID)
         else { return nil }
+        let terminalState: OpenClawChatRunTerminalState?
         switch observation {
-        case let .terminal(terminalState):
-            let terminalAgeMs = completedObservedAtMs.map {
-                (Date().timeIntervalSince1970 * 1000) - $0
-            }
-            let allowNoOutputCompletion = terminalAgeMs.map {
-                $0 >= Double(model.pendingRunTerminalHistoryGraceMs)
-            } ?? false
-            let shouldContinue = await model.refreshIfPending(
-                runId: runId,
-                sessionSnapshot: sessionSnapshot,
-                armID: armID,
-                after: userMessageTimestamp,
-                terminalState: terminalState,
-                allowNoOutputCompletion: allowNoOutputCompletion,
-                diagnostic: "chat.ui run observation sessionKey=\(sessionSnapshot.key) "
-                    + "runId=\(runId) observation=\(observation)")
-            return shouldContinue ? model.pendingRunTerminalRetryMs : nil
+        case let .terminal(state):
+            terminalState = state
         case .checkAgain:
-            let shouldContinue = await model.refreshIfPending(
-                runId: runId,
-                sessionSnapshot: sessionSnapshot,
-                armID: armID,
-                after: userMessageTimestamp,
-                diagnostic: "chat.ui run observation sessionKey=\(sessionSnapshot.key) "
-                    + "runId=\(runId) observation=\(observation)")
-            return shouldContinue ? model.pendingRunTerminalRetryMs : nil
+            terminalState = nil
         case .unavailable:
             return model.pendingRunUnavailableRetryMs
         }
+        let allowNoOutputCompletion = terminalState != nil && completedObservedAtMs.map {
+            (Date().timeIntervalSince1970 * 1000) - $0 >= Double(model.pendingRunTerminalHistoryGraceMs)
+        } == true
+        let shouldContinue = await model.refreshIfPending(
+            runId: runId,
+            sessionSnapshot: sessionSnapshot,
+            armID: armID,
+            after: userMessageTimestamp,
+            terminalState: terminalState,
+            allowNoOutputCompletion: allowNoOutputCompletion,
+            diagnostic: "chat.ui run observation sessionKey=\(sessionSnapshot.key) "
+                + "runId=\(runId) observation=\(observation)")
+        return shouldContinue ? model.pendingRunTerminalRetryMs : nil
     }
 
     private nonisolated static func pollPendingRunHistory(

@@ -26,6 +26,12 @@ The shared catalog and tool bridge retain policy ownership. Executors
 own JavaScript execution and continuation state. Node's `node:vm` is trusted
 execution, not a sandbox security boundary.
 
+Rebuilding `before_tool_call` hooks must retain the surrounding execution
+wrappers in their original order. Caller authority, cancellation, activity, and
+run-lifetime checks enclose preparation and result finalization as well as the
+tool body. Execution wrappers register their rebuild function when copying tool
+metadata; schema-only copies preserve that registration.
+
 ## Validation checklist
 
 Code mode coverage should prove:

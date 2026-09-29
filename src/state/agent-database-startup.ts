@@ -163,6 +163,7 @@ class AgentDatabaseStartupAdmission {
         agentId: target.agentId,
         paths: [target.path],
         reason: formatErrorMessage(error),
+        cause: error,
       }),
     );
     return true;
@@ -302,7 +303,7 @@ class AgentDatabaseStartupAdmission {
           } catch (error) {
             if (!this.stopped) {
               const reason = formatErrorMessage(error);
-              failPendingAgentDatabase(refusal, reason, { env });
+              failPendingAgentDatabase(refusal, error, { env });
               log.warn("agent database remains degraded", { agentId, paths, reason });
             }
           } finally {

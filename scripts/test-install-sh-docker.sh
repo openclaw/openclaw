@@ -58,16 +58,6 @@ resolve_default_smoke_platform() {
     return
   fi
   host_arch="$(uname -m)"
-  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
-    case "$host_arch" in
-      arm64 | aarch64)
-        printf "linux/arm64"
-        return
-        ;;
-    esac
-    printf "linux/amd64"
-    return
-  fi
   case "$host_arch" in
     arm64 | aarch64)
       printf "linux/arm64"
@@ -406,11 +396,13 @@ process.stdout.write(packageJson.version);
 prepare_update_tarball() {
   local pack_json_file
   local baseline_pack_json_file
+  local baseline_pack_dir
   local -a package_args
   local package_tgz
   local packed_update_version
   pack_json_file="${UPDATE_DIR}/pack.json"
   baseline_pack_json_file="${UPDATE_DIR}/baseline-pack.json"
+  baseline_pack_dir="${UPDATE_DIR}/baseline"
   if [[ -n "$FROZEN_PAYLOAD_DIR" ]]; then
     # The producer already built and normalized candidate bytes inside an isolated pinned image.
     # Privileged consumers only copy the verified artifact; they never build or import candidate code.
@@ -479,9 +471,11 @@ process.stdout.write(last.version);
 
   echo "==> Pack baseline tgz: ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
   # The repo .npmrc dependency cooldown must not hide a days-old published baseline.
-  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --min-release-age=0 --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
+  mkdir -p "$baseline_pack_dir"
+  quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --min-release-age=0 --pack-destination "$baseline_pack_dir" >"$baseline_pack_json_file"
   normalize_npm_pack_json_file "$baseline_pack_json_file"
   BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"
+  BASELINE_TGZ_FILE="baseline/$BASELINE_TGZ_FILE"
   UPDATE_BASELINE_VERSION="$(
     node -e '
 const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";

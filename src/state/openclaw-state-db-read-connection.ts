@@ -1,12 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import {
   createSqliteLifecycleAggregateError,
   SqliteCoordinatorError,
   throwSqliteLifecycleErrors,
-} from "../infra/sqlite-coordinator.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+} from "../infra/sqlite-lifecycle-errors.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
@@ -58,7 +58,8 @@ function retireReader(reader: RetainedReader): void {
 }
 
 function scheduleReaderRetirement(reader: RetainedReader): void {
-  if (retainedReaders.get(reader.identity.key) !== reader) {
+  // Bun delegates the same TTL to pool idle retirement, after task custody is released.
+  if (process.versions.bun || retainedReaders.get(reader.identity.key) !== reader) {
     return;
   }
   clearTimeout(reader.idleTimer);
@@ -207,7 +208,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
   retainConnection = false,
 ): OpenClawStateSettledRead<T> {
   const opening =
-    retainConnection && source === pathname && !snapshotRoot && !process.versions.bun
+    retainConnection && source === pathname && !snapshotRoot
       ? borrowStateReadConnection(pathname, expectedIdentity)
       : openStateReadConnectionResult(pathname, source, expectedIdentity, snapshotRoot, true);
   if (opening.status === "unavailable") {
@@ -415,16 +416,7 @@ function openStateReadConnectionResult(
       if (errors.length === 1 && errors[0] instanceof SnapshotCleanupIncompleteError) {
         return false;
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "Shared-state reader cleanup failed.",
-          errors[0],
-        );
-      }
+      throwSqliteLifecycleErrors(errors, "Shared-state reader cleanup failed.");
       closed = true;
       return true;
     },

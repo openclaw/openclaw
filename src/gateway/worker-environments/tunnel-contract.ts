@@ -3,9 +3,11 @@ import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type {
   NodeWorkerWorkspaceSeedInput,
+  NodeWorkerWorkspaceQuiescenceInput,
   NodeWorkerWorkspaceProcessInput,
 } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
+import type { WorkerToolName } from "../../worker/tool-authority.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
@@ -63,6 +65,8 @@ export class WorkerRunnerCapacityError extends Error {
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;
+  /** Initiating-operation authority; established tunnel custody is independent. */
+  authorize?: () => void;
 };
 
 /** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
@@ -80,6 +84,9 @@ export type WorkerWorkspaceCommand = {
   transfer?: NodeWorkerWorkspaceTransferInput;
   seed?: NodeWorkerWorkspaceSeedInput;
   process?: NodeWorkerWorkspaceProcessInput;
+  quiescence?: NodeWorkerWorkspaceQuiescenceInput;
+  /** Legacy scripts own their detached lease helper, not the foreground command scope. */
+  legacyQuiescence?: true;
 };
 
 export type WorkerLocalWorkspaceSyncRequest = {
@@ -89,6 +96,8 @@ export type WorkerLocalWorkspaceSyncRequest = {
   gitAuthor?: { name?: string; email?: string };
   /** Immutable project identity from the owning environment's provisioning snapshot. */
   projectKey?: string;
+  /** Initiating-operation authority, never retained by the connected tunnel. */
+  authorize?: () => void;
 };
 
 type WorkerRepositoryCheckpointPayload = {
@@ -136,6 +145,8 @@ type WorkerRepositoryWorkspaceSource = {
 };
 
 export type WorkerWorkspaceSyncRequest = {
+  /** Live initiating operation; retained workspace custody uses its independent owner. */
+  authorize?: () => void;
   sessionId: string;
   sessionKey?: string;
   generation: number;
@@ -163,7 +174,7 @@ export type WorkerLocalWorkspaceReconcileRequest = {
   baseManifestRef: string;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
-  stagedResult?: {
+  stagedResult: {
     ref: string;
     record(ref: string): void;
   };
@@ -178,10 +189,11 @@ export type WorkerWorkspaceReconcileRequest = {
         path: string;
         journal: WorkerWorkspaceReconciliationJournalAdapter;
         assertCurrent?: () => void;
-        stagedResult?: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
+        stagedResult: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
       }
     | {
         kind: "repository";
+        authorize?: () => void;
         referenceManifestRef: string;
         prepareCheckpoint(
           payload: WorkerRepositoryCheckpointPayload,
@@ -198,11 +210,13 @@ export type WorkerWorkspaceReconcileResult = {
   verifyLocalStable(): Promise<void>;
   /** Apply the prepared candidate locally without making it restart-authoritative. */
   applyPreparedStagedResult?(): Promise<void>;
+  /** Reverify and accept an exact local/base match without mutating either workspace. */
+  acceptUnchangedStagedResult?: () => Promise<void>;
   /** Return the accepted local manifest and any keep-local conflicts after apply. */
   getAppliedWorkspaceResult?(): WorkerWorkspaceApplyResult | undefined;
   /** Publish the verified candidate for restart recovery. */
-  publishStagedResult?(): Promise<void>;
-  discardPreparedStagedResult?(): Promise<void>;
+  publishStagedResult(): Promise<void>;
+  discardPreparedStagedResult(): Promise<void>;
 };
 
 export type WorkerWorkspaceQuiescence = {
@@ -228,6 +242,7 @@ export type WorkerWorkspaceTunnelHandle = {
   ownerEpoch: number;
   launchTurn?: never;
   measureLaunchTurn?: never;
+  readLaunchToolNames?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
   stageAttachments?(request: {
     localPath: string;
@@ -244,9 +259,11 @@ export type WorkerWorkspaceTunnelHandle = {
 
 export type WorkerTurnTunnelHandle = Omit<
   WorkerWorkspaceTunnelHandle,
-  "launchTurn" | "measureLaunchTurn"
+  "launchTurn" | "measureLaunchTurn" | "readLaunchToolNames"
 > & {
   measureLaunchTurn(plan: WorkerLaunchPlan, claim: WorkerSessionTurnClaim): number;
+  /** Worker tool names the destination's installed supervisor admits in launch descriptors. */
+  readLaunchToolNames(): Promise<readonly WorkerToolName[]>;
   launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
 };
 

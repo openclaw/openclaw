@@ -1,6 +1,3 @@
-/**
- * Sanitizes reasoning/thinking blocks for replay and recovery.
- */
 import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
@@ -37,18 +34,6 @@ function isToolCallBlock(block: AssistantContentBlock): boolean {
   return type === "toolCall" || type === "tool_use" || type === "function_call";
 }
 
-function hasAssistantToolCall(message: AssistantMessage): boolean {
-  return message.content.some((block) => isToolCallBlock(block));
-}
-
-function isToolResultMessage(message: AgentMessage): boolean {
-  return (
-    Boolean(message) &&
-    typeof message === "object" &&
-    (message as { role?: unknown }).role === "toolResult"
-  );
-}
-
 function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
   if (!isThinkingBlock(block)) {
     return false;
@@ -65,20 +50,6 @@ function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
     record.thinkingSignature != null ||
     record.thought_signature != null
   );
-}
-
-function hasMeaningfulText(block: AssistantContentBlock): boolean {
-  if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") {
-    return false;
-  }
-  return typeof (block as { text?: unknown }).text === "string"
-    ? (block as { text: string }).text.trim().length > 0
-    : false;
-}
-
-function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
-  // Provider converters drop blank text blocks; keep this neutral text non-empty so the assistant turn survives replay.
-  return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
 }
 
 function mapAssistantMessages(
@@ -104,7 +75,9 @@ function filterAssistantContent(
     ? message
     : {
         ...message,
-        content: content.length > 0 ? content : buildOmittedAssistantReasoningContent(),
+        // Provider converters drop blank blocks; preserve the assistant turn with nonempty text.
+        content:
+          content.length > 0 ? content : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
       };
 }
 
@@ -122,23 +95,14 @@ function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
     (block as { type?: unknown }).type === "redacted_thinking"
       ? [record.data, record.signature, record.thinkingSignature, record.thought_signature]
       : [record.signature, record.thinkingSignature, record.thought_signature];
-  return candidates.some((signature) => {
-    return typeof signature === "string" && signature.trim().length > 0;
-  });
+  return candidates.some(
+    (signature) => typeof signature === "string" && signature.trim().length > 0,
+  );
 }
 
 /**
- * Strip thinking blocks with clearly invalid replay signatures.
- *
- * Anthropic and Bedrock reject persisted thinking blocks when the signature is
- * absent, empty, or blank. They are also the authority for opaque signature
- * validity, so this intentionally avoids local length or shape heuristics.
- *
- * By default, the latest assistant turn is exempt: providers reject modified
- * latest thinking blocks, so corrupted latest turns must flow through recovery
- * rather than being rewritten before the request. Callers that append a new
- * user turn before provider replay can disable that exemption because the
- * stored assistant turn is no longer latest in the outbound request.
+ * Providers decide opaque signature validity; only missing or blank signatures are stripped.
+ * Preserve the latest assistant turn for provider recovery unless the caller appends a user turn.
  */
 export function stripInvalidThinkingSignatures(
   messages: AgentMessage[],
@@ -159,18 +123,8 @@ export function stripInvalidThinkingSignatures(
 }
 
 /**
- * Strip `type: "thinking"` and `type: "redacted_thinking"` content blocks from
- * all assistant messages except the latest one.
- *
- * Thinking blocks in the latest assistant turn are preserved verbatim so
- * providers that require replay signatures can continue the conversation.
- *
- * If a non-latest assistant message becomes empty after stripping, it is
- * replaced with a synthetic non-empty text block to preserve turn structure
- * through provider adapters that filter blank text blocks.
- *
- * Returns the original array reference when nothing was changed (callers can
- * use reference equality to skip downstream work).
+ * Keep the latest turn's replay signatures and preserve empty turns with placeholder text.
+ * Unchanged history retains its original array identity.
  */
 export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   const latestAssistantIndex = messages.findLastIndex(isAssistantMessageWithContent);
@@ -189,7 +143,7 @@ function shouldPreserveCurrentToolTurnReasoning(
     !message ||
     index < latestUserIndex ||
     !isAssistantMessageWithContent(message) ||
-    !hasAssistantToolCall(message)
+    !message.content.some(isToolCallBlock)
   ) {
     return false;
   }
@@ -207,7 +161,7 @@ function shouldPreserveCurrentToolTurnReasoning(
   for (let i = index + 1; i < messages.length; i += 1) {
     const next = messages.at(i);
     const role = next?.role;
-    if (next && isToolResultMessage(next)) {
+    if (next && typeof next === "object" && role === "toolResult") {
       return true;
     }
     if (role === "user") {
@@ -277,7 +231,7 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
       continue;
     }
     hasNonThinkingContent = true;
-    if ((block as { type?: unknown }).type === "text" && !hasMeaningfulText(block)) {
+    if (block.type === "text" && (typeof block.text !== "string" || !block.text.trim())) {
       hasEmptyTextBlock = true;
     }
   }
@@ -285,10 +239,7 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
   if (hasUnsignedThinking) {
     return "incomplete-thinking";
   }
-  if (hasSignedThinking && !hasNonThinkingContent) {
-    return "incomplete-text";
-  }
-  if (hasSignedThinking && hasEmptyTextBlock) {
+  if (hasSignedThinking && (!hasNonThinkingContent || hasEmptyTextBlock)) {
     return "incomplete-text";
   }
   return "valid";
@@ -308,15 +259,11 @@ function shouldRecoverAnthropicThinkingError(
     current.errorBody,
     current.message,
   ]);
-  for (const candidate of candidates) {
-    if (
+  return candidates.some(
+    (candidate) =>
       typeof candidate === "string" &&
-      shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)
-    ) {
-      return true;
-    }
-  }
-  return false;
+      shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta),
+  );
 }
 
 function shouldRecoverAnthropicThinkingErrorMessage(

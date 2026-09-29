@@ -7,6 +7,7 @@ export function createAutoReplyCoreVitestConfig(env?: Record<string, string | un
   return createScopedVitestConfig([...autoReplyCoreTestInclude], {
     dir: "src/auto-reply",
     env,
+    intersectIncludeFile: true,
     exclude: [...autoReplyCoreTestExclude, ...databaseWorkerCoreTestFiles],
     name: "auto-reply-core",
   });

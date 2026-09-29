@@ -33,6 +33,12 @@ backends retain and revalidate each item's assertion, including before retries;
 omit revoked items without cancelling independently accepted work or poisoning
 later authorized controls.
 
+When supplied, call `options.onQueueSettled()` once after that input commits,
+is canceled, or is terminally rejected. `onQueueAccepted(true)` only reports
+admission. A backend that returns early for `waitForTranscriptCommit: false`
+retains the settlement callback until its exact input finishes; core uses it
+to release the selected sender's retained source authority.
+
 Optional V2 `claimPendingUserInputAnswer(text, options, assertCurrent, authorityKind)`
 and `cancelPendingUserInput(resolvedBy, assertCurrent, authorityKind)` methods
 require the same assertion and authority kind. Carry it through question registration and persistence to the final
@@ -143,9 +149,33 @@ receives its own `options.currentInboundContext`; do not reuse the initial
 turn's context. Keep context out of the original user transcript and pending
 question answer text. Conversation fields are model context, not tool authority.
 
+`resolveAgentHarnessBeforePromptBuildResult` from
+`openclaw/plugin-sdk/agent-harness-runtime` runs prompt hooks with prepared history
+and tool authority. Pass the admitted message as `currentUserMessage`; the helper
+extracts its text parts and `idempotencyKey` for ordinary and authorized hooks.
+String input and a separate `currentUserMessageId` remain supported. The harness
+owns the fallback when no admitted message exists.
+
+Supply `messages` as an array or an async loader, which runs only when a `before_prompt_build`
+hook needs history. Heartbeat-only contributions do not read conversation history.
+The production-private `resolveAgentHarnessHistoryLimits` helper applies the shared
+Codex and Agents API transcript read budget.
+
+The `developerInstructions.build` callback receives `toolsAllow` and
+`hasToolRestrictions`. Omitted policy or a trimmed `*` entry is unrestricted;
+an empty list or a list without `*` is restrictive. Backends enforcing per-turn
+restrictions apply or reject them inside that callback, before authorized recall
+runs. Agents API continues with hook context but does not enforce hook tool lists.
+
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-attempt-runtime` for deadlines, cancellation,
 and lifecycle/event publication; it is not a third-party Plugin SDK contract.
+Codex and AgentsAPI also use `shouldIncludeAgentHarnessRuntimeContext` to exclude
+runtime prompt additions from lightweight cron inputs, and
+`resolveAgentWorkspaceMemoryRouting` to select admitted memory tools and check
+that they reach the prompt workspace. Backends retain workspace selection, tool
+name normalization, and native prompt rendering.
+
 `createAgentHarnessAttemptDeadlineController` takes the original `startedAtMs`,
 execution `timeoutMs`, backend `settlementTimeoutMs`, abort `signal`, and timeout
 callback. The first `beginSettlement(receivedAtMs)` starts an absolute settlement

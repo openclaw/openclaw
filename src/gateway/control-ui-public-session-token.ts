@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { CONTROL_UI_PUBLIC_SESSION_SHARE_TOKEN_MAX_LENGTH } from "@openclaw/session-url-contract/public-share";
 import { resolveDeviceIdentityStore } from "../infra/device-identity-store.js";
 import {
@@ -48,16 +49,6 @@ function hasExactKeys(value: object, keys: readonly string[]): boolean {
   return Object.keys(value).toSorted().join("\0") === keys.join("\0");
 }
 
-function hasInvalidSessionKeyCharacter(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    if (codePoint <= 0x1f || codePoint === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function hasInvalidSessionIdCharacter(value: string): boolean {
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
@@ -84,7 +75,7 @@ function isValidLocator(value: unknown): value is PublicSessionShareLocator {
     typeof value.sessionKey === "string" &&
     value.sessionKey.length > 0 &&
     value.sessionKey.length <= 4_096 &&
-    !hasInvalidSessionKeyCharacter(value.sessionKey) &&
+    !containsAsciiControlCharacter(value.sessionKey) &&
     typeof value.sessionId === "string" &&
     value.sessionId.length > 0 &&
     value.sessionId.length <= 512 &&

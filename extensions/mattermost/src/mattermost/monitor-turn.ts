@@ -22,7 +22,6 @@ import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import {
   formatMattermostFinalDeliveryOutcomeLog,
   resolveMattermostReplyRootId,
-  shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
 } from "./monitor-context.js";
 import {
@@ -112,8 +111,6 @@ export async function dispatchMattermostInboundTurn(
   const draftProgressEnabled =
     draftPreviewEnabled &&
     (account.streamingMode === "progress" || shouldUpdateMattermostDraftToolProgress(account));
-  const suppressDefaultToolProgressMessages =
-    draftPreviewEnabled && shouldSuppressMattermostDefaultToolProgressMessages(account);
   const draftStream = draftPreviewEnabled
     ? createMattermostDraftStream({
         client,
@@ -132,9 +129,7 @@ export async function dispatchMattermostInboundTurn(
     : createDisabledMattermostDraftStream();
   const previewBoundaryController = createMattermostDraftPreviewBoundaryController({
     enabled: draftPreviewEnabled && account.streamingMode === "block",
-    forceNewMessage: async () => {
-      await draftStream.forceNewMessage();
-    },
+    forceNewMessage: draftStream.forceNewMessage,
   });
   let lastPartialText = "";
   let firstAssistantPreviewPrefix: string | undefined;
@@ -464,9 +459,7 @@ export async function dispatchMattermostInboundTurn(
               ? () => previewLifecycle.observeDelivery({ visibleReplySent: true })
               : undefined,
             disableBlockStreaming: draftPreviewEnabled ? true : replyOptions.disableBlockStreaming,
-            ...(suppressDefaultToolProgressMessages
-              ? { suppressDefaultToolProgressMessages: true }
-              : {}),
+            ...(draftPreviewEnabled ? { suppressDefaultToolProgressMessages: true } : {}),
             onModelSelected,
             onPartialReply: (payloadResult) =>
               account.streamingMode === "progress"

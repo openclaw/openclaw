@@ -86,9 +86,7 @@ internal class ChatMediaPlaybackClaims<T>(
 
   fun claim(value: T) {
     if (active === value) return
-    val previous = active
-    active = null
-    previous?.let(release)
+    releaseActive()
     active = value
   }
 
@@ -338,17 +336,6 @@ internal fun ChatMediaPlayerCard(
       onReleased = { clearPlayerState(requested, requestedFile) },
     )
 
-  fun registerPrepared(
-    prepared: ExoPlayer,
-    preparedFile: File?,
-    intentGeneration: Long,
-  ): Boolean =
-    ChatMediaPlaybackArbiter.registerPrepared(
-      player = prepared,
-      intentGeneration = intentGeneration,
-      onReleased = { clearPlayerState(prepared, preparedFile) },
-    )
-
   fun pause() {
     player?.let(ChatMediaPlaybackArbiter::pause)
   }
@@ -440,7 +427,13 @@ internal fun ChatMediaPlayerCard(
       )
       player = created
       if (content.playback != "transcode") loading = false
-      if (!registerPrepared(created, prepared.tempFile, intentGeneration)) {
+      if (
+        !ChatMediaPlaybackArbiter.registerPrepared(
+          player = created,
+          intentGeneration = intentGeneration,
+          onReleased = { clearPlayerState(created, prepared.tempFile) },
+        )
+      ) {
         disposeUnclaimedPlayer(created, prepared.tempFile)
         return@launch
       }
@@ -573,14 +566,7 @@ private fun AudioPlayerSurface(
             style = ClawTheme.type.body,
             color = ClawTheme.colors.text,
           )
-          val status =
-            when {
-              error != null -> error
-              preparingPlayback -> nativeString("Preparing playback…")
-              playbackBlocked -> nativeString("Paused for voice playback")
-              else -> null
-            }
-          status?.let { Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted) }
+          MediaPlaybackStatus(error, preparingPlayback, playbackBlocked)
         }
       }
       Slider(
@@ -657,17 +643,24 @@ private fun VideoPlayerSurface(
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
-    val status =
-      when {
-        error != null -> error
-        preparingPlayback -> nativeString("Preparing playback…")
-        playbackBlocked -> nativeString("Paused for voice playback")
-        else -> null
-      }
-    status?.let {
-      Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-    }
+    MediaPlaybackStatus(error, preparingPlayback, playbackBlocked)
   }
+}
+
+@Composable
+private fun MediaPlaybackStatus(
+  error: String?,
+  preparingPlayback: Boolean,
+  playbackBlocked: Boolean,
+) {
+  val status =
+    when {
+      error != null -> error
+      preparingPlayback -> nativeString("Preparing playback…")
+      playbackBlocked -> nativeString("Paused for voice playback")
+      else -> null
+    }
+  status?.let { Text(it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted) }
 }
 
 @OptIn(UnstableApi::class)

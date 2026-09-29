@@ -102,9 +102,7 @@ function resolveImportedReference(
   }
   const namespaceName = ts.isPropertyAccessExpression(target)
     ? target.name.text
-    : ts.isElementAccessExpression(target) &&
-        target.argumentExpression &&
-        ts.isStringLiteral(target.argumentExpression)
+    : ts.isStringLiteral(target.argumentExpression)
       ? target.argumentExpression.text
       : null;
   if (!namespaceName || !ts.isIdentifier(target.expression)) {
@@ -184,13 +182,25 @@ function parametersAreForwarded(
   });
 }
 
-function isAwaitedZeroArgumentCall(expression: ts.Expression) {
+function isAwaitedModuleLoad(expression: ts.Expression) {
   const unwrapped = unwrapExpression(expression);
   if (!ts.isAwaitExpression(unwrapped)) {
     return false;
   }
   const awaited = unwrapExpression(unwrapped.expression);
-  return ts.isCallExpression(awaited) && awaited.arguments.length === 0;
+  if (!ts.isCallExpression(awaited)) {
+    return false;
+  }
+  // Literal imports and zero-argument loaders acquire the same lazy boundary;
+  // forwarding its unchanged arguments does not define a second behavior.
+  const [specifier] = awaited.arguments;
+  return (
+    awaited.arguments.length === 0 ||
+    (awaited.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      awaited.arguments.length === 1 &&
+      specifier !== undefined &&
+      ts.isStringLiteral(specifier))
+  );
 }
 
 function returnCall(statement: ts.Statement | undefined) {
@@ -227,7 +237,7 @@ function isLazyModuleForwarderCall(
   if (moduleObjectName) {
     return ts.isIdentifier(target) && target.text === moduleObjectName;
   }
-  return isAwaitedZeroArgumentCall(target);
+  return isAwaitedModuleLoad(target);
 }
 
 function isForwardingOnlyFunction(
@@ -258,7 +268,7 @@ function isForwardingOnlyFunction(
         !loaded ||
         !ts.isIdentifier(loaded.name) ||
         !loaded.initializer ||
-        !isAwaitedZeroArgumentCall(loaded.initializer)
+        !isAwaitedModuleLoad(loaded.initializer)
       ) {
         return false;
       }
@@ -782,40 +792,33 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
 
 async function collectRepositoryModules(repoRoot: string) {
   const ignoredDirNames = new Set(["node_modules", "test", "__fixtures__"]);
-  const [collectedFiles, collectedSupportFiles] = await Promise.all([
-    collectSourceFileContents({
-      repoRoot,
+  const scans = [
+    {
       scanRoots: ["src"],
       scanExtensions: new Set([".ts", ".mts", ".js", ".mjs"]),
-      ignoredDirNames,
-    }),
+      includeDefinitions: true,
+    },
     // Package modules are resolution-only: Plugin SDK barrels can export their
     // names, but the collision rule itself remains scoped to src/ definitions.
-    collectSourceFileContents({
-      repoRoot,
+    {
       scanRoots: ["packages"],
       scanExtensions: new Set([".ts", ".mts"]),
-      ignoredDirNames,
-    }),
-  ]);
-  const files = collectedFiles.filter(
-    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
-  );
-  const supportFiles = collectedSupportFiles.filter(
-    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
-  );
-  return [
-    ...files.map(({ content, relativeFile }) => ({
-      content,
-      includeDefinitions: true,
-      path: relativeFile,
-    })),
-    ...supportFiles.map(({ content, relativeFile }) => ({
-      content,
       includeDefinitions: false,
-      path: relativeFile,
-    })),
+    },
   ];
+  return (
+    await Promise.all(
+      scans.map(async ({ includeDefinitions, ...scan }) =>
+        (await collectSourceFileContents({ repoRoot, ignoredDirNames, ...scan }))
+          .filter(({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile))
+          .map(({ content, relativeFile }) => ({
+            content,
+            includeDefinitions,
+            path: relativeFile,
+          })),
+      ),
+    )
+  ).flat();
 }
 
 async function collectRepositoryExportAnalysis(repoRoot: string) {

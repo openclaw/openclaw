@@ -13,6 +13,7 @@ import type { DashboardMessageReadAdmission } from "../../gateway/message-action
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -41,8 +42,6 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
-  /** One accepted request owns this monotonic custody budget across dispatch attempts. */
-  stateAcquisitionDeadline?: () => number;
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
   extractedFileImages?: ExtractedFileImage[];
@@ -104,11 +103,13 @@ export type InternalGetReplyOptions = GetReplyOptions &
 /** Pin the host-issued source before public options cross asynchronous preparation. */
 export function prepareInternalGetReplyOptions(
   opts: GetReplyOptions | undefined,
+  context?: MsgContext,
 ): InternalGetReplyOptions | undefined {
-  if (!opts) {
+  const channelAuthority = context && getCommandOwnerAuthority(context)?.operatorAuthority;
+  if (!opts && !channelAuthority) {
     return undefined;
   }
-  const { operatorAuthority, ...options }: InternalGetReplyOptions = opts;
+  const { operatorAuthority = channelAuthority, ...options }: InternalGetReplyOptions = opts ?? {};
   if (operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
     operatorAuthority.assertCurrent();

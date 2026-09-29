@@ -24,7 +24,6 @@ import {
   buildTargetResolverSignature,
   looksLikeTargetId,
   maybeResolvePluginMessagingTarget,
-  normalizeChannelTargetInput,
   normalizeTargetForProvider,
   resolveNormalizedTargetInput,
   resolveReservedTargetLiteral,
@@ -372,7 +371,7 @@ export async function resolveChannelTarget(params: {
   unknownTargetMode?: "error" | "normalized";
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
-  const raw = normalizeChannelTargetInput(params.input);
+  const raw = params.input.trim();
   if (!raw) {
     const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
     return {

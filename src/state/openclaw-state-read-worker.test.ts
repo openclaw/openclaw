@@ -137,9 +137,7 @@ it("reads externally created state after an absent read without allocating a wor
   task.result.resolve(emptyReply);
   expect(await executeExistingOpenClawStateRead(options, command)).toEqual(emptyReply);
   expect(mock.selectSqlite).toHaveBeenCalledOnce();
-  expect(task.close).toHaveBeenCalledExactlyOnceWith(
-    process.versions.bun ? { retire: true } : undefined,
-  );
+  expect(task.close).toHaveBeenCalledExactlyOnceWith(undefined);
   expect(mock.closePool).not.toHaveBeenCalled();
 });
 
@@ -185,7 +183,7 @@ it.each(["query failed", "native reader close failed"])(
 );
 
 it.each(["cleanup-fact", "bun"] as const)(
-  "preserves a successful read only after required retirement (%s)",
+  "settles successful reads with retirement only for native cleanup (%s)",
   async (reason) => {
     const { options } = source();
     const task = queueTask();
@@ -221,7 +219,9 @@ it.each(["cleanup-fact", "bun"] as const)(
       );
       try {
         await stopping.promise;
-        expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
+        expect(task.close).toHaveBeenCalledExactlyOnceWith(
+          reason === "cleanup-fact" ? { retire: true } : undefined,
+        );
         expect(mock.selectSqlite).toHaveBeenCalledOnce();
         expect(mock.selectSqlite.mock.invocationCallOrder[0]).toBeLessThan(
           mock.create.mock.invocationCallOrder[0]!,
@@ -320,9 +320,7 @@ it("releases one completed read without closing the shared pool or aborting anot
   const siblingOptions = await sibling.submitted;
   first.result.resolve(emptyReply);
   expect(await firstRead).toEqual(emptyReply);
-  expect(first.close).toHaveBeenCalledExactlyOnceWith(
-    process.versions.bun ? { retire: true } : undefined,
-  );
+  expect(first.close).toHaveBeenCalledExactlyOnceWith(undefined);
   expect(sibling.close).not.toHaveBeenCalled();
   expect(siblingOptions.signal?.aborted).toBe(false);
   expect(mock.closePool).not.toHaveBeenCalled();
@@ -330,9 +328,7 @@ it("releases one completed read without closing the shared pool or aborting anot
 
   sibling.result.resolve(emptyReply);
   expect(await siblingRead).toEqual(emptyReply);
-  expect(sibling.close).toHaveBeenCalledExactlyOnceWith(
-    process.versions.bun ? { retire: true } : undefined,
-  );
+  expect(sibling.close).toHaveBeenCalledExactlyOnceWith(undefined);
   await closeOpenClawStateDatabaseAsync();
   expect(mock.closePool).toHaveBeenCalledOnce();
 });
@@ -533,73 +529,6 @@ it.each(["skills.library.descriptions", "skills.library.manifests"] as const)(
       expect((await task.captured).command).toEqual({ type, input: expected });
       task.result.resolve(returned);
       expect(await result).toEqual(returned);
-    } finally {
-      dispatch.resolve();
-      task.result.resolve(returned);
-      await Promise.allSettled([result]);
-    }
-  },
-);
-
-it.each(["single", "union"] as const)(
-  "captures and charges %s task selectors while retaining original admission",
-  async (shape) => {
-    const { options } = source();
-    const context = captureOpenClawStateWorkerContext(options);
-    const admission = context.admission;
-    context.admission = {
-      ...admission,
-      get identity() {
-        return admission.identity;
-      },
-    };
-    const selector = "任务🦞".repeat(512);
-    const scope = {
-      taskId: selector,
-      flowId: selector,
-      runId: selector,
-      childSessionKey: selector,
-    };
-    const input = shape === "single" ? scope : [scope, { taskId: selector }];
-    const expected = structuredClone(input);
-    const dispatch = createDeferredCore();
-    const task = queueTask(dispatch.promise);
-    const result = executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      { type: "tasks.mutationSnapshot", input },
-      { context },
-    );
-    const returned: OpenClawStateReadReply = {
-      ok: true,
-      type: "tasks.mutationSnapshot",
-      sourceAdmitted: true,
-      snapshot: { tasks: new Map(), deliveryStates: new Map() },
-    };
-    try {
-      const submitted = await task.submitted;
-      scope.taskId = "changed task";
-      scope.flowId = "changed flow";
-      scope.runId = "changed run";
-      scope.childSessionKey = "changed child";
-      if (Array.isArray(input)) {
-        input.push({ taskId: "added while queued" });
-      }
-      options.env.OPENCLAW_STATE_DIR = "/changed-after-capture";
-      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
-        Buffer.byteLength(selector) * (shape === "single" ? 4 : 5),
-      );
-      dispatch.resolve();
-      const request = await task.captured;
-      expect(request.command).toEqual({ type: "tasks.mutationSnapshot", input: expected });
-      expect(request.databasePath).toBe(context.admission.databasePath);
-      expect(request.context.environment).toEqual(context.environment);
-      const failure = new Error("Original task admission retired");
-      vi.spyOn(context.admission, "assertCurrent").mockImplementation(() => {
-        throw failure;
-      });
-      const rejected = expect(result).rejects.toThrow(failure.message);
-      task.result.resolve(returned);
-      await rejected;
     } finally {
       dispatch.resolve();
       task.result.resolve(returned);

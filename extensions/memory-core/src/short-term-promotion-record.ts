@@ -444,10 +444,7 @@ export async function readShortTermRecallEntries(params: {
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readStore(workspaceDir, nowIso);
-  return Object.values(store.entries).filter(
-    (entry): entry is ShortTermRecallEntry =>
-      Boolean(entry) && entry.source === "memory" && isShortTermMemoryPath(entry.path),
-  );
+  return Object.values(store.entries).filter((entry) => isShortTermMemoryPath(entry.path));
 }
 
 export function resolveShortTermSourcePathCandidates(

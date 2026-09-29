@@ -42,7 +42,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
-import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
 import {
   refreshSessionWorkspace,
   retireSessionWorkspaceCheckout,
@@ -369,6 +368,9 @@ function handleSessionsChangedEvent(
     matchesChat && typeof source?.reason === "string" && BRANCH_TOPOLOGY_REASONS.has(source.reason);
   if (resetsSelectedSession || changesBranchTopology) {
     retirePullRequestRefreshes(state);
+  }
+  if (matchesChat && source?.reason === "project") {
+    retireSessionWorkspaceCheckout(state);
   }
   if (resetsSelectedSession) {
     const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
@@ -711,9 +713,5 @@ export function handlePageGatewayEvent(
     if (scopedChange) {
       requestChatPageUpdate(state, "animation-frame");
     }
-    return;
-  }
-  if (event.event === "task") {
-    handleBackgroundTasksEvent(state, event.payload, isPresented());
   }
 }

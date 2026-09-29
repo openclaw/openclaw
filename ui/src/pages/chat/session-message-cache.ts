@@ -193,8 +193,9 @@ export function clearChatMessagesFromCache(
   cache: ChatMessageCache,
   host: ChatMessageCacheHost,
   target: ChatMessageCacheTarget,
+  reason?: SessionSnapshotInvalidationReason,
 ): void {
-  deleteChatSnapshot(cache, resolveChatSnapshotKey(host, target));
+  deleteChatSnapshot(cache, resolveChatSnapshotKey(host, target), reason);
 }
 
 export function cacheChatSessionSnapshot(

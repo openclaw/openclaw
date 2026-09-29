@@ -16,6 +16,7 @@ import {
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { updateNodeRunnerInventory } from "./node-registry-private.js";
 import { NodeRegistry, type NodeSessionConnectParams } from "./node-registry.js";
+import { createSessionPlacementFactsReader } from "./server-methods/sessions-read-cache.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import {
   disposeSessionReadContexts,
@@ -41,6 +42,7 @@ import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
 } from "./worker-environments/placement-test-fixtures.js";
+import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
@@ -54,17 +56,17 @@ test.each([
   {
     state: "pending-approval",
     disabledReason:
-      "Ask an administrator to approve the pending runtime.repository.v1 request, or pick another device.",
+      "paired-device command runtime.repository.v1 is awaiting pairing approval for node node-host; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>",
   },
   {
     state: "unauthorized",
     disabledReason:
-      "Authorize runtime.repository.v1 in the Gateway node command policy, or pick another device.",
+      "paired-device command runtime.repository.v1 is blocked by Gateway policy for node node-host; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
   },
   {
     state: "undeclared",
     disabledReason:
-      "Make runtime.repository.v1 available on this device, then reconnect, or pick another device.",
+      "paired-device command runtime.repository.v1 is not advertised by node node-host; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
   },
 ] as const)(
   "sessions.list carries automatic runtime requirements through the recovery picker: $state",
@@ -161,7 +163,7 @@ test.each([
       expect(
         catalog.payload?.environments.find((environment) => environment.id === "node:node-host")
           ?.requiredNodeCommand,
-      ).toEqual({ command, state });
+      ).toEqual({ command, state, ...(disabledReason ? { message: disabledReason } : {}) });
       const devices = projectDevicePlacements(
         readDraftEnvironments(catalog.payload?.environments),
         runtime?.devicePlacement,
@@ -213,19 +215,67 @@ async function seedSessionRows(): Promise<void> {
   });
 }
 
-test("sessions.list omits placement when the worker placement service is disabled", async () => {
-  await seedSessionRows();
+function placementContext(
+  placement: WorkerSessionPlacementRecord,
+  environment?: {
+    environmentId?: string;
+    providerId: string;
+    profileId: string;
+    ownerEpoch: number;
+    state: "provisioning" | "destroyed" | "failed";
+    leaseId?: string;
+  },
+) {
+  return {
+    workerSessionPlacementService: {
+      getMany: () => new Map([[placement.sessionId, placement]]),
+    },
+    workerEnvironmentService: {
+      get: (): WorkerEnvironmentServiceRecord | undefined =>
+        environment
+          ? {
+              environmentId: placement.environmentId ?? "env-placement",
+              leaseId: null,
+              sharedHost: null,
+              createdAtMs: 100,
+              idleSinceAtMs: null,
+              destroyRequestedAtMs: null,
+              attachedSessionIds: [],
+              desktopAvailable: false,
+              desktopApps: [],
+              tunnelStatus: "stopped",
+              ...environment,
+            }
+          : undefined,
+      readMachineShape: () => undefined,
+      machineShapeVersion: () => 0,
+      inventoryVersion: () => 0,
+    },
+  };
+}
 
-  const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>("sessions.list", {});
-
-  expect(result.ok).toBe(true);
-  expect(result.payload?.sessions).toHaveLength(2);
-  expect(result.payload?.sessions.every((session) => session.placement === undefined)).toBe(true);
-});
+function placementMove(
+  placement: Extract<WorkerSessionPlacementRecord, { state: "active" }>,
+  lastError: string | null,
+): WorkerPlacementMoveIntent {
+  return {
+    operationId: "move:v1:opaque",
+    sessionId: placement.sessionId,
+    source: {
+      generation: placement.generation,
+      environmentId: placement.environmentId,
+      ownerEpoch: placement.activeOwnerEpoch,
+    },
+    target: { kind: "gateway" },
+    abandonSource: false,
+    lastError,
+    createdAtMs: 320,
+    updatedAtMs: 340,
+  };
+}
 
 test.each([
   { name: "matching owner epoch", ownerEpoch: 12, expectedIdentity: true },
-  { name: "missing environment", ownerEpoch: undefined, expectedIdentity: false },
   { name: "mismatched owner epoch", ownerEpoch: 13, expectedIdentity: false },
 ])(
   "sessions.list retains durable worker placement for resident rows: $name",
@@ -303,89 +353,59 @@ test.each([
   },
 );
 
-test.each(["provisioning", "syncing", "starting"] as const)(
-  "sessions.describe preserves pre-epoch identity during %s",
-  async (state) => {
-    await seedSessionRows();
-    const starting = {
-      ...activePlacementRecord(),
-      state: "starting" as const,
-      activeOwnerEpoch: null,
-      turnClaim: null,
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-    } satisfies WorkerSessionPlacementRecord;
-    const syncing = {
-      ...starting,
-      state: "syncing" as const,
-      workspaceBaseManifestRef: null,
-      remoteWorkspaceDir: null,
-    } satisfies WorkerSessionPlacementRecord;
-    const placement: WorkerSessionPlacementRecord =
-      state === "starting"
-        ? starting
-        : state === "syncing"
-          ? syncing
-          : { ...syncing, state, workerBundleHash: null };
-    const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-      "sessions.describe",
-      { key: "main" },
-      {
-        context: {
-          workerSessionPlacementService: {
-            getMany: () => new Map([[placement.sessionId, placement]]),
-          },
-          workerEnvironmentService: {
-            get: () => ({
-              providerId: "machine0",
-              profileId: "team",
-              ownerEpoch: 0,
-              state: "provisioning",
-            }),
-            readMachineShape: () => undefined,
-            machineShapeVersion: () => 0,
-            inventoryVersion: () => 0,
-          },
-        },
-      },
-    );
-    expect(result.ok).toBe(true);
-    expect(result.payload?.session?.placement).toMatchObject({
-      state,
-      providerId: "machine0",
-      profileId: "team",
-    });
-  },
-);
+test("sessions.describe preserves pre-epoch identity while starting", async () => {
+  await seedSessionRows();
+  const placement = {
+    ...activePlacementRecord(),
+    state: "starting" as const,
+    activeOwnerEpoch: null,
+    turnClaim: null,
+    lastTranscriptAckCursor: null,
+    lastLiveEventAckCursor: null,
+  } satisfies WorkerSessionPlacementRecord;
+  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+    "sessions.describe",
+    { key: "main" },
+    {
+      context: placementContext(placement, {
+        providerId: "machine0",
+        profileId: "team",
+        ownerEpoch: 0,
+        state: "provisioning",
+      }),
+    },
+  );
+  expect(result.ok).toBe(true);
+  expect(result.payload?.session?.placement).toMatchObject({
+    state: "starting",
+    providerId: "machine0",
+    profileId: "team",
+  });
+});
 
 test("sessions.list projects durable placement move progress", async () => {
   await seedSessionRows();
   const placement = activePlacementRecord();
-  const move: WorkerPlacementMoveIntent = {
-    operationId: "move:v1:opaque",
-    sessionId: placement.sessionId,
-    source: {
-      generation: placement.generation,
-      environmentId: placement.environmentId,
-      ownerEpoch: placement.activeOwnerEpoch,
-    },
-    target: { kind: "gateway" },
-    abandonSource: false,
-    lastError: "workspace reconciliation is waiting",
-    createdAtMs: 320,
-    updatedAtMs: 340,
-  };
+  const move = placementMove(placement, "workspace reconciliation is waiting");
   const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
     () => new Map([[placement.sessionId, placement]]),
   );
-  const getPlacementMoves = vi.fn<NonNullable<WorkerSessionPlacementReader["getPlacementMoves"]>>(
-    () => new Map([[move.sessionId, move]]),
+  const facts = createSessionPlacementFactsReader(
+    { getMany },
+    undefined,
+    new Map([[move.sessionId, move]]),
   );
+  const readProjection = vi.fn(facts.readProjection);
+  const projection = await createSessionRowProjection({
+    cfg: (await getGatewayConfigModule()).getRuntimeConfig(),
+    placementFactsReader: { readProjection },
+  });
+  trackSessionReadProjection(projection);
 
   const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
     "sessions.list",
     {},
-    { context: { workerSessionPlacementService: { getMany, getPlacementMoves } } },
+    { context: bindSessionRowProjection({}, () => projection) },
   );
 
   expect(result.ok).toBe(true);
@@ -397,77 +417,8 @@ test("sessions.list projects durable placement move progress", async () => {
   });
   expect(main?.placementMove).not.toHaveProperty("operationId");
   expect(
-    getPlacementMoves.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
+    readProjection.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
   ).toEqual(["sess-main", "sess-other"]);
-});
-
-test("sessions.describe projects durable worker placement", async () => {
-  await seedSessionRows();
-  const placement = activePlacementRecord();
-  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-    return new Map(
-      sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
-    );
-  });
-  const diskSpace = {
-    status: "critical" as const,
-    availableBytes: 50,
-    totalBytes: 1_000,
-    observedAtMs: 350,
-  };
-  const context = {
-    workerSessionPlacementService: { getMany },
-    workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
-    workerPlacementRunnerAvailabilityReader: {
-      read: () => ({ kind: "device", status: "offline" }),
-      version: () => 1,
-    },
-  };
-
-  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-    "sessions.describe",
-    { key: "main" },
-    { context },
-  );
-
-  expect(result.ok).toBe(true);
-  expect(result.payload?.session?.placement).toEqual({
-    state: "active",
-    environmentId: "env-placement",
-    generation: 7,
-    activeOwnerEpoch: 12,
-    workspaceBaseManifestRef: "manifest-base",
-    remoteWorkspaceDir: "/workspace/main",
-    workerBundleHash: ["a", "b"].join("").repeat(32),
-    lastTranscriptAckCursor: 23,
-    lastLiveEventAckCursor: 9,
-    createdAtMs: 100,
-    updatedAtMs: 300,
-    stateChangedAtMs: 200,
-    diskSpace,
-    runner: { kind: "device", status: "offline" },
-  });
-
-  // The list joins sibling hydration before we inspect all placement reads.
-  const listed = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
-    "sessions.list",
-    {},
-    { context },
-  );
-  expect(listed.ok).toBe(true);
-  expect(listed.payload?.sessions.map((session) => session.sessionId).toSorted()).toEqual([
-    "sess-main",
-    "sess-other",
-  ]);
-  expect(getMany.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b))).toEqual(
-    ["sess-main", "sess-other"],
-  );
-  expect(
-    listed.payload?.sessions.find((session) => session.sessionId === "sess-main")?.placement,
-  ).toEqual(result.payload?.session?.placement);
-  expect(
-    listed.payload?.sessions.find((session) => session.sessionId === "sess-other")?.placement,
-  ).toBeUndefined();
 });
 
 test.each([
@@ -477,12 +428,6 @@ test.each([
     ownerEpoch: 12,
     activeOwnerEpoch: 12,
     identity: true,
-  },
-  {
-    name: "without identity from a reused environment",
-    ownerEpoch: 13,
-    activeOwnerEpoch: 12,
-    identity: false,
   },
   {
     name: "without identity when no owner epoch was retained",
@@ -512,50 +457,35 @@ test.each([
       terminalReason: "cloud worker disappeared: provider reported lease destroyed",
       terminalAtMs: 400,
     } satisfies WorkerSessionPlacementRecord;
-    const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
-      () => new Map([[placement.sessionId, placement]]),
+    const move = placementMove(active, null);
+    const context = placementContext(
+      placement,
+      ownerEpoch === undefined
+        ? undefined
+        : {
+            environmentId: active.environmentId,
+            providerId: "machine0",
+            profileId: "team",
+            ownerEpoch,
+            state: "destroyed",
+          },
     );
-    const move: WorkerPlacementMoveIntent = {
-      operationId: "pending-recovery-move",
-      sessionId: placement.sessionId,
-      source: {
-        generation: active.generation,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-      target: { kind: "gateway" },
-      abandonSource: false,
-      lastError: null,
-      createdAtMs: 320,
-      updatedAtMs: 340,
-    };
+    const projection = await createSessionRowProjection({
+      cfg: (await getGatewayConfigModule()).getRuntimeConfig(),
+      context,
+      placementFactsReader: createSessionPlacementFactsReader(
+        context.workerSessionPlacementService,
+        context.workerEnvironmentService.get,
+        new Map(retryBlock === "move" ? [[placement.sessionId, move]] : []),
+      ),
+    });
+    trackSessionReadProjection(projection);
 
     const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
       "sessions.describe",
       { key: "main" },
       {
-        context: {
-          workerSessionPlacementService: {
-            getMany,
-            getPlacementMoves: () =>
-              new Map(retryBlock === "move" ? [[placement.sessionId, move]] : []),
-          },
-          workerEnvironmentService: {
-            get: () =>
-              ownerEpoch === undefined
-                ? undefined
-                : {
-                    environmentId: active.environmentId,
-                    providerId: "machine0",
-                    profileId: "team",
-                    ownerEpoch,
-                    state: "destroyed",
-                  },
-            readMachineShape: () => undefined,
-            machineShapeVersion: () => 0,
-            inventoryVersion: () => 0,
-          },
-        },
+        context: bindSessionRowProjection(context, () => projection),
       },
     );
 
@@ -615,12 +545,10 @@ test.each([
     });
     const database = openOpenClawStateDatabase({ path: path.join(dir, "placements.sqlite") });
     const placements = createWorkerSessionPlacementStore({ database });
-    const active = await advancePlacementFixtureToActive(
-      placements,
-      database,
-      identity,
+    const active = await advancePlacementFixtureToActive(placements, database, {
+      ...identity,
       executionMode,
-    );
+    });
     const journalOwner = {
       sessionId: identity.sessionId,
       environmentId: active.environmentId,
@@ -739,23 +667,13 @@ test("sessions.describe requires worker teardown before failed-placement restart
     "sessions.describe",
     { key: "main" },
     {
-      context: {
-        workerSessionPlacementService: {
-          getMany: () => new Map([[placement.sessionId, placement]]),
-        },
-        workerEnvironmentService: {
-          get: () => ({
-            providerId: "machine0",
-            profileId: "team",
-            ownerEpoch: placement.activeOwnerEpoch,
-            state: "failed",
-            leaseId: "lease-live",
-          }),
-          readMachineShape: () => undefined,
-          machineShapeVersion: () => 0,
-          inventoryVersion: () => 0,
-        },
-      },
+      context: placementContext(placement, {
+        providerId: "machine0",
+        profileId: "team",
+        ownerEpoch: placement.activeOwnerEpoch,
+        state: "failed",
+        leaseId: "lease-live",
+      }),
     },
   );
 

@@ -1762,40 +1762,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         },
       },
       directory: createChannelDirectoryAdapter({
-        listPeers: async ({ cfg, query, limit, accountId }) =>
-          listFeishuDirectoryPeers({
-            cfg,
-            query: query ?? undefined,
-            limit: limit ?? undefined,
-            accountId: accountId ?? undefined,
-          }),
-        listGroups: async ({ cfg, query, limit, accountId }) =>
-          listFeishuDirectoryGroups({
-            cfg,
-            query: query ?? undefined,
-            limit: limit ?? undefined,
-            accountId: accountId ?? undefined,
-          }),
+        listPeers: listFeishuDirectoryPeers,
+        listGroups: listFeishuDirectoryGroups,
         ...createRuntimeDirectoryLiveAdapter({
           getRuntime: loadFeishuChannelRuntime,
-          listPeersLive:
-            (runtime) =>
-            async ({ cfg, query, limit, accountId }) =>
-              await runtime.listFeishuDirectoryPeersLive({
-                cfg,
-                query: query ?? undefined,
-                limit: limit ?? undefined,
-                accountId: accountId ?? undefined,
-              }),
-          listGroupsLive:
-            (runtime) =>
-            async ({ cfg, query, limit, accountId }) =>
-              await runtime.listFeishuDirectoryGroupsLive({
-                cfg,
-                query: query ?? undefined,
-                limit: limit ?? undefined,
-                accountId: accountId ?? undefined,
-              }),
+          listPeersLive: (runtime) => runtime.listFeishuDirectoryPeersLive,
+          listGroupsLive: (runtime) => runtime.listFeishuDirectoryGroupsLive,
         }),
       }),
       status: createComputedAccountStatusAdapter<ResolvedFeishuAccount, FeishuProbeResult>({

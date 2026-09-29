@@ -7,12 +7,10 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals-core.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
-
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+import type {
+  ApprovalRequestInput as ApprovalRequest,
+  ChannelApprovalKind,
+} from "./approval-types.js";
 
 /** One native approval delivery target selected by the channel adapter plan. */
 export type ChannelApprovalNativePlannedTarget = {

@@ -116,23 +116,24 @@ async function resolveCloudflareAccessIdentity(
     throw new Error("Cloudflare Access identity provider is invalid");
   }
   if (payload.idp.type === "oidc") {
+    const fields = Object.hasOwn(payload, "oidc_fields") ? payload.oidc_fields : payload.custom;
     // A claim name is not an authority: Access must identify the selected issuer and IdP.
     if (
       !oidcConfig ||
       issuer.origin !== oidcConfig.issuer ||
       payload.idp.id !== oidcConfig.providerId ||
-      !isRecord(payload.oidc_fields) ||
-      !Object.hasOwn(payload.oidc_fields, oidcConfig.githubAccountIdClaim)
+      !isRecord(fields) ||
+      !Object.hasOwn(fields, oidcConfig.githubAccountIdClaim)
     ) {
       return { provider: "oidc" };
     }
-    const claim = payload.oidc_fields[oidcConfig.githubAccountIdClaim];
+    const claim = fields[oidcConfig.githubAccountIdClaim];
     if (
       typeof claim !== "string" ||
       !/^[1-9][0-9]*$/u.test(claim) ||
       !Number.isSafeInteger(Number(claim))
     ) {
-      throw new Error("Cloudflare Access OIDC GitHub account id is invalid");
+      return { provider: "oidc" };
     }
     return { provider: "oidc", accountId: Number(claim) };
   }
@@ -352,6 +353,15 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         if (cached) {
           return cached;
         }
+      }
+      if (accessIdentity.provider === "oidc") {
+        params.assertCurrent?.();
+        const profile = await ensureCanonicalUserProfileForEmail(access.principal, {
+          ...options,
+          expectedGitHubAccountId: accountId,
+        });
+        params.assertCurrent?.();
+        return { profileId: profile.id, updatedAt: profile.updatedAt };
       }
       throw error instanceof gitHubPublicApi.ControlUiGitHubError
         ? error

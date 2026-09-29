@@ -51,11 +51,6 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network", "realtime"]
     },
-    "@grammyjs/runner": {
-      "owner": "plugin:telegram",
-      "class": "plugin-runtime",
-      "risk": ["telegram-bot-api", "polling"]
-    },
     "@grammyjs/transformer-throttler": {
       "owner": "plugin:telegram",
       "class": "plugin-runtime",
@@ -113,11 +108,6 @@
       "owner": "core:cli",
       "class": "core-runtime",
       "risk": ["formatting"]
-    },
-    "chokidar": {
-      "owner": "core:watch-mode",
-      "class": "core-runtime",
-      "risk": ["filesystem-watch"]
     },
     "chrome-devtools-mcp": {
       "owner": "plugin:browser",
@@ -240,15 +230,15 @@
       "class": "core-runtime",
       "risk": ["pattern-matching"]
     },
-    "ms": {
-      "owner": "core:duration-parsing",
-      "class": "core-runtime",
-      "risk": ["duration-parser"]
-    },
     "node-edge-tts": {
       "owner": "plugin:microsoft",
       "class": "plugin-runtime",
       "risk": ["tts", "network"]
+    },
+    "npm": {
+      "owner": "core:plugin-install",
+      "class": "core-runtime",
+      "risk": ["package-manager", "network", "filesystem"]
     },
     "openai": {
       "owner": "provider:openai",
@@ -274,11 +264,6 @@
       "owner": "core:browser",
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
-    },
-    "pretty-ms": {
-      "owner": "core:duration-formatting",
-      "class": "core-runtime",
-      "risk": ["formatting"]
     },
     "quickjs-wasi": {
       "owner": "plugin:code-mode-quickjs",

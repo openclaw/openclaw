@@ -84,6 +84,79 @@ function fixture(customPaths = true, registry?: string) {
 }
 
 describe.skipIf(process.platform === "win32")("survivor manager fixture", () => {
+  it("unloads the deleted service when resetting a first-hop lane", async () => {
+    const { home, env, unit, shell, systemctl } = fixture();
+    const firstHop = readFileSync(
+      resolve("scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh"),
+      "utf8",
+    );
+    const firstHopTiming = firstHop.slice(
+      firstHop.indexOf("first_hop_timing() {"),
+      firstHop.indexOf("run_update() {"),
+    );
+    const resetLane = firstHop.slice(
+      firstHop.indexOf("reset_lane() {"),
+      firstHop.indexOf("run_negative_control() {"),
+    );
+    writeFileSync(unit, buildSystemdUnit({ programArguments: ["/usr/bin/fixture", "gateway"] }));
+    expect(systemctl("daemon-reload").status).toBe(0);
+    rmSync(unit);
+    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({ status: "stopped" });
+    const reset = shell(`
+ARTIFACT_DIR="$HOME"
+openclaw() { return 1; }
+${firstHopTiming}
+${resetLane}
+reset_lane negative
+`);
+    expect(reset.status, reset.stderr).toBe(0);
+    expect(reset.stdout).toMatch(/^first-hop timing: negative reset \d+s$/m);
+    expect(existsSync(`${unit}.loaded-unit`)).toBe(false);
+    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({ status: "unknown" });
+    expect(await readSystemdServiceRuntime(env)).toMatchObject({
+      status: "stopped",
+      missingUnit: true,
+    });
+    expect(existsSync(join(home, "negative-service-uninstall.json"))).toBe(true);
+  });
+
+  it("keeps native placement by default and runs the no-identity recovery fixture outside it", () => {
+    const { home, env, unit, shell, manager, execute } = fixture();
+    const preload = join(home, "available-cgroup.cjs");
+    writeFileSync(
+      preload,
+      `const fs = require("node:fs");
+const exists = fs.existsSync;
+fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgroup.procs" || exists(file);
+`,
+    );
+    env.NODE_OPTIONS = `--require ${JSON.stringify(preload)}`;
+    writeFileSync(
+      unit,
+      buildSystemdUnit({ programArguments: [process.execPath, "-p", "'fixture-started'"] }),
+    );
+    for (const containment of ["native", "absent"]) {
+      const installed = shell(
+        `install_update_restart_systemctl_shim${containment === "absent" ? " absent" : ""}`,
+      );
+      expect(installed.status, installed.stderr).toBe(0);
+      const runtime = JSON.parse(
+        readFileSync(join(home, "bin/systemd-fixture-runtime.json"), "utf8"),
+      );
+      const command = manager("command");
+      expect(command.status, command.stderr).toBe(0);
+      if (containment === "native") {
+        expect(runtime.controlGroup).toBe("/openclaw-gateway.service");
+        expect(command.stdout).toContain("/sys/fs/cgroup/openclaw-gateway.service/cgroup.procs");
+      } else {
+        expect(runtime).not.toHaveProperty("controlGroup");
+        const child = execute();
+        expect(child.status, child.stderr).toBe(0);
+        expect(child.stdout.trim()).toBe("fixture-started");
+      }
+    }
+  });
+
   it("publishes its manager route for a root session without bus variables", async () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const uid = vi.spyOn(process, "geteuid").mockReturnValue(0);
@@ -253,6 +326,7 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
     );
     expect(await readSystemdServiceRuntime(env)).toMatchObject({ status: "unknown" });
     rmSync(unit);
+    expect(systemctl("daemon-reload").status).toBe(0);
     expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toBeNull();
     expect(await readSystemdServiceRuntime(env)).toMatchObject({
       status: "stopped",
@@ -458,7 +532,10 @@ setInterval(() => {}, 1000);
     };
     try {
       expect(systemctl("enable", "openclaw-gateway.service").status).toBe(0);
-      expect(systemctl("is-enabled", "openclaw-gateway.service").status).toBe(0);
+      expect(systemctl("is-enabled", "openclaw-gateway.service")).toMatchObject({
+        status: 0,
+        stdout: "enabled\n",
+      });
       const restarted = spawnSync(
         "python3",
         [

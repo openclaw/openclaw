@@ -4,7 +4,10 @@ import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import {
+  WebSocket,
+  WebSocketServer,
+} from "../../packages/gateway-client/src/websocket.test-support.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -195,6 +198,48 @@ async function createAdmissionWriteFixture(onAdmissionRequestSent: () => void) {
 }
 
 describe("worker admission write completion", () => {
+  it("keeps a presence read pending through both cold geolocation download windows", async () => {
+    const f = await createAdmissionWriteFixture(() => {});
+    try {
+      const attempt = await f.first;
+      attempt.completeWrite();
+      sendWorkerHello(attempt.peer, attempt.id, FRAME_CONNECT_PARAMS.admission);
+      await f.starting;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const received = once(attempt.peer, "message");
+      const pending = f.connection.requestPresence({
+        toolCallId: "cold-presence",
+        action: "list",
+        include: ["location"],
+      });
+      let settled = false;
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      const [data] = await received;
+      const frame = JSON.parse(rawDataToString(data));
+      await vi.advanceTimersByTimeAsync(240_001);
+      expect(settled).toBe(false);
+      attempt.peer.send(
+        JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: true,
+          payload: { resultJson: JSON.stringify({ content: [], details: { status: "ok" } }) },
+        }),
+      );
+      await expect(pending).resolves.toMatchObject({ ok: true });
+    } finally {
+      vi.useRealTimers();
+      await f.close();
+    }
+  });
+
   it.each([false, true])(
     "notifies only after the request write completes, isolating observer failure: %s",
     async (throws) => {

@@ -7,6 +7,7 @@ import type {
   WorkerDesktopEndpoint,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createDesktopSessionRegistry,
   DesktopSessionStaleOwnerError,
@@ -278,10 +279,7 @@ export function createWorkerDesktopTunnels(deps: {
       }
     };
     const startedAtMs = Date.now();
-    let startExecution!: () => void;
-    const startGate = new Promise<void>((resolve) => {
-      startExecution = resolve;
-    });
+    const { promise: startGate, resolve: startExecution } = createDeferredCore();
     const execution = (async () => {
       await startGate;
       assertCurrent();

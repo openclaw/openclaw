@@ -12,7 +12,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 import { shellQuote } from "./shell-quote.js";
 
 const MULTIPASS_MOUNTED_REPO_PATH = "/workspace/openclaw-host";
@@ -46,11 +46,6 @@ const qaMultipassDefaultResources = {
   disk: "24G",
 } as const;
 
-type ExecResult = {
-  stdout: string;
-  stderr: string;
-};
-
 type ExecFileError = Error & {
   code?: string;
 };
@@ -59,54 +54,7 @@ type ExecFileOptions = {
   timeoutMs?: number;
 };
 
-type QaMultipassPlan = {
-  repoRoot: string;
-  outputDir: string;
-  reportPath: string;
-  summaryPath: string;
-  hostLogPath: string;
-  hostBootstrapLogPath: string;
-  hostGuestScriptPath: string;
-  vmName: string;
-  image: string;
-  cpus: number;
-  memory: string;
-  disk: string;
-  pnpmVersion: string;
-  transportId: string;
-  providerMode: QaProviderMode;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  thinkingDefault?: string;
-  runtimePair?: [RuntimeId, RuntimeId];
-  channelDriver?: string;
-  channelId?: string;
-  enabledPluginIds?: string[];
-  scenarioIds: string[];
-  forwardedEnv: Record<string, string>;
-  hostCodexHomePath?: string;
-  guestCodexHomePath?: string;
-  hostLiveProviderConfigPath?: string;
-  guestLiveProviderConfigPath?: string;
-  guestMountedRepoPath: string;
-  guestRepoPath: string;
-  guestOutputDir: string;
-  guestScriptPath: string;
-  guestBootstrapLogPath: string;
-  qaCommand: string[];
-};
-
-type QaMultipassRunResult = {
-  outputDir: string;
-  reportPath: string;
-  summaryPath: string;
-  hostLogPath: string;
-  bootstrapLogPath: string;
-  guestScriptPath: string;
-  vmName: string;
-  scenarioIds: string[];
-};
+type QaMultipassPlan = ReturnType<typeof createQaMultipassPlan>;
 
 type RenderGuestScriptOptions = {
   redactSecrets?: boolean;
@@ -120,11 +68,7 @@ function createVmSuffix() {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
-async function execFileAsync(
-  file: string,
-  args: string[],
-  options: ExecFileOptions = {},
-): Promise<ExecResult> {
+async function execFileAsync(file: string, args: string[], options: ExecFileOptions = {}) {
   try {
     return await runExec(file, args, {
       logOutput: false,
@@ -142,10 +86,6 @@ async function execFileAsync(
     wrappedError.code = output.code;
     throw wrappedError;
   }
-}
-
-function resolveRealPath(value: string) {
-  return fs.realpathSync.native?.(value) ?? fs.realpathSync(value);
 }
 
 function resolveExistingPath(value: string) {
@@ -175,9 +115,9 @@ function resolveMountedOutputPath(repoRoot: string, hostPath: string) {
     );
   }
 
-  const realRepoRoot = resolveRealPath(repoRoot);
+  const realRepoRoot = fs.realpathSync.native(repoRoot);
   const existingHostPath = resolveExistingPath(hostPath);
-  const realExistingHostPath = resolveRealPath(existingHostPath);
+  const realExistingHostPath = fs.realpathSync.native(existingHostPath);
   if (!isPathInside(realRepoRoot, realExistingHostPath)) {
     throw new Error(
       `qa suite --runner multipass requires --output-dir to stay under the repo root (${repoRoot}), got ${hostPath}.`,
@@ -298,16 +238,6 @@ function createQaMultipassPlan(params: {
     memory: params.memory ?? qaMultipassDefaultResources.memory,
     disk: params.disk ?? qaMultipassDefaultResources.disk,
     pnpmVersion: validatePnpmVersion(resolvePnpmVersion(params.repoRoot)),
-    transportId,
-    providerMode,
-    primaryModel: params.primaryModel,
-    alternateModel: params.alternateModel,
-    fastMode: params.fastMode,
-    thinkingDefault: params.thinkingDefault,
-    runtimePair: params.runtimePair,
-    channelDriver: params.channelDriver,
-    channelId: params.channelId,
-    enabledPluginIds,
     scenarioIds,
     forwardedEnv,
     hostCodexHomePath,
@@ -322,7 +252,7 @@ function createQaMultipassPlan(params: {
     guestScriptPath: `/tmp/${vmName}-qa-suite.sh`,
     guestBootstrapLogPath: `/tmp/${vmName}-bootstrap.log`,
     qaCommand,
-  } satisfies QaMultipassPlan;
+  };
 }
 
 function renderQaMultipassGuestScript(
@@ -635,5 +565,5 @@ export async function runQaMultipass(
     guestScriptPath: plan.hostGuestScriptPath,
     vmName: plan.vmName,
     scenarioIds: plan.scenarioIds,
-  } satisfies QaMultipassRunResult;
+  };
 }

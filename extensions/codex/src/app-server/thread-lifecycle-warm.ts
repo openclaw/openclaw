@@ -31,6 +31,7 @@ import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
+import { prepareCodexThreadFinalConfigPatch } from "./thread-lifecycle-preflight.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
@@ -284,16 +285,11 @@ export async function tryReuseCodexLiveThread(
     // Engine identity, projection epoch, and policy were checked by the owner
     // before this call; compatible bootstrap threads must keep their session.
 
-    const prebuiltFinalConfigPatch = (await params.buildFinalConfigPatch?.({
-      action: "resume",
+    const prebuiltFinalConfigPatch = await prepareCodexThreadFinalConfigPatch(
+      params,
+      options.nativeModelInputTools,
       binding,
-      ...(options.nativeModelInputTools
-        ? { nativeModelInputTools: options.nativeModelInputTools }
-        : {}),
-    })) ?? {
-      configPatch: params.finalConfigPatch,
-      nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-    };
+    );
     const pluginAppsConfigPatch =
       pluginThreadConfig?.configPatch ??
       (params.pluginThreadConfig?.enabled && binding.pluginAppPolicyContext
@@ -311,26 +307,15 @@ export async function tryReuseCodexLiveThread(
     );
     const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
       buildThreadResumeParams(params.params, {
+        ...params,
         threadId: binding.threadId,
-        cwd: params.cwd,
         authProfileId: resumeAuthProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
         preserveNativeModel: binding.preserveNativeModel === true,
-        appServer: params.appServer,
-        dynamicTools: params.dynamicTools,
-        developerInstructions: params.developerInstructions,
-        skillsInstructions: params.skillsInstructions,
         config: applyCodexNativeSkillIsolation(resumeConfig, nativeSkillIsolation),
-        nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-        nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-        nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-        webSearchAllowed: params.webSearchAllowed,
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
-        shellEnvironment: params.shellEnvironment,
-        shellPathPrepend: params.shellPathPrepend,
-        disableLoginShell: params.disableLoginShell,
       }),
     );
     assertCodexInferenceRouteConfig(
@@ -423,6 +408,13 @@ export async function tryReuseCodexLiveThread(
     const modelProvider = binding.preserveNativeModel
       ? nativeThread?.modelProvider?.trim() || binding.modelProvider
       : binding.modelProvider;
+    const bindingPatch = {
+      cwd: params.cwd,
+      model,
+      modelProvider,
+      nativeHookRelayGeneration,
+      environmentSelectionFingerprint,
+    };
     // Validate ownership even when relay generation is unchanged; reset may
     // have replaced the persisted binding since it was first read. Model and
     // cwd are sticky turn settings, so future turns and /btw need current facts.
@@ -436,13 +428,7 @@ export async function tryReuseCodexLiveThread(
             threadId: binding.threadId,
             // Environment selection is sticky turn/start state, like cwd/model;
             // recording its new value must not recreate the approval-bearing thread.
-            patch: {
-              cwd: params.cwd,
-              model,
-              modelProvider,
-              nativeHookRelayGeneration,
-              environmentSelectionFingerprint,
-            },
+            patch: bindingPatch,
           },
           assertWarmOwner,
         ),
@@ -464,15 +450,7 @@ export async function tryReuseCodexLiveThread(
       kind: "ready",
       binding: {
         ...binding,
-        ...(!incognito
-          ? {
-              cwd: params.cwd,
-              model,
-              modelProvider,
-              nativeHookRelayGeneration,
-              environmentSelectionFingerprint,
-            }
-          : {}),
+        ...(!incognito ? bindingPatch : {}),
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy: ephemeralPolicy && {
           ...ephemeralPolicy,

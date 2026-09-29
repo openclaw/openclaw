@@ -143,7 +143,7 @@ describe("Codex native hook relay managed policy", () => {
       } finally {
         await original.unregister();
         await next.unregister();
-        monitor.dispose();
+        await monitor.dispose();
       }
     },
   );
@@ -218,7 +218,7 @@ describe("Codex native hook relay managed policy", () => {
         );
         expect(nativeWrite).not.toHaveBeenCalled();
       } finally {
-        monitor.dispose();
+        await monitor.dispose();
         await parent.unregister();
       }
     },
@@ -365,7 +365,7 @@ describe("Codex native hook relay managed policy", () => {
     nextTurn.release();
     await waiting.unregister();
     await unknown.unregister();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it.each(["receipt first", "notification first", "active predecessor"] as const)(
@@ -553,7 +553,7 @@ describe("Codex native hook relay managed policy", () => {
         original.release();
         await first.unregister();
         await second.unregister();
-        monitor.dispose();
+        await monitor.dispose();
       }
       expect(b.release).toHaveBeenCalledOnce();
     },

@@ -1,8 +1,8 @@
 // Cron ops regression tests cover service operation regressions.
 import { describe, expect, it, vi } from "vitest";
 import {
-  createCronRegressionState,
   createAbortAwareIsolatedRunner,
+  createCronRegressionState,
   createDueIsolatedJob,
   createIsolatedRegressionJob,
   setupCronRegressionFixtures,
@@ -177,7 +177,7 @@ describe("cron service ops regressions", () => {
       markGatewayRestartDraining();
       await expect(
         completion.run(() => enqueueRun(state, job.id, "force", { commitGuard })),
-      ).rejects.toThrow("gateway is draining for restart");
+      ).rejects.toThrow("Gateway is restarting. Please try again shortly.");
       expect(completion.isCommitted()).toBe(false);
       expect(getTotalQueueSize()).toBe(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -220,7 +220,7 @@ describe("cron service ops regressions", () => {
     await expect(start(state)).resolves.toBeUndefined();
     expect(state.store.jobs[0]?.state.nextRunAtMs).toBe(scheduledAt);
     if (state.timer) {
-      clearTimeout(state.timer);
+      state.timer.cancel();
       state.timer = null;
     }
   });
@@ -796,7 +796,11 @@ describe("cron service ops regressions", () => {
       mutation: "removed",
       reason: "Cron job removed by operator.",
       mutate: async (state: ReturnType<typeof createCronRegressionState>, jobId: string) => {
-        await expect(remove(state, jobId)).resolves.toEqual({ ok: true, removed: true });
+        await expect(remove(state, jobId)).resolves.toEqual({
+          ok: true,
+          removed: true,
+          activeRunCancellationRequested: true,
+        });
       },
       expectRemoved: true,
     },

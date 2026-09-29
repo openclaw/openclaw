@@ -108,7 +108,7 @@ describe("mobile release CI tools", () => {
   describe.each([
     {
       platform: "ios",
-      workflow: ".github/workflows/ios-release.yml",
+      workflow: ".github/workflows/ios-store-release.yml",
       buildDirectory: "app-store",
       binaries: ["OpenClaw.ipa", "OpenClaw.ipa.sha256"],
     },
@@ -220,7 +220,7 @@ describe("mobile release CI tools", () => {
       }
       expect(
         releaseArtifactFiles(
-          ".github/workflows/ios-release.yml",
+          ".github/workflows/ios-store-release.yml",
           "ios-release-screenshot-diagnostics-",
           runnerTemp,
         ),
@@ -1463,7 +1463,7 @@ fi
   });
 
   it("runs the iOS signing proof through the prepared Fastlane environment", () => {
-    const source = fs.readFileSync(".github/workflows/ios-release.yml", "utf8");
+    const source = fs.readFileSync(".github/workflows/ios-store-release.yml", "utf8");
     const workflow = parse(source) as {
       jobs: {
         release: {
@@ -2068,7 +2068,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
   });
 
   it("installs the pinned Watch Rust toolchain before iOS store access", () => {
-    const source = fs.readFileSync(".github/workflows/ios-release.yml", "utf8");
+    const source = fs.readFileSync(".github/workflows/ios-store-release.yml", "utf8");
     const workflow = parse(source) as {
       jobs: {
         release: {

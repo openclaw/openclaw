@@ -7,7 +7,8 @@ import {
   buildStatusUpdateRows,
   formatUpdateRestartStatusValue,
 } from "../../commands/status-update-restart.js";
-import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import * as sqliteWorkerStore from "../../infra/sqlite-worker-store.js";
+import { inspectUpdateRunDriver, readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   acknowledgeAbandonedUpdateRun,
   createUpdateRun,
@@ -22,7 +23,11 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { updateRepairCommand } from "./update-repair-command.js";
@@ -130,7 +135,8 @@ beforeEach(() => {
   mocks.readiness.mockResolvedValue({ healthz: 200, readyz: 200 });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -167,7 +173,7 @@ describe("update repair ledger recovery", () => {
       expect(mocks.finalize).not.toHaveBeenCalled();
       expect(mocks.reachable).not.toHaveBeenCalled();
       expect(mocks.readiness).not.toHaveBeenCalled();
-      const runStatus = readUpdateRunStatus();
+      const runStatus = await readUpdateRunStatus();
       if (runStatus.runStatusError !== undefined) {
         throw new Error(runStatus.runStatusError);
       }
@@ -367,7 +373,7 @@ describe("update repair ledger recovery", () => {
       );
       expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
       const repaired = getUpdateRun(run.runId)!;
-      expect(buildStatusUpdateRows(null)).toEqual([
+      expect(await buildStatusUpdateRows(null)).toEqual([
         { Item: "Update run", Value: "ℹ️ OpenClaw abandoned update reconciled." },
       ]);
       expect(renderUpdateRunReport(repaired).markdown).not.toContain("openclaw triage");
@@ -431,7 +437,7 @@ describe("update repair ledger recovery", () => {
       expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({ message: expect.stringContaining("already reconciled") }),
       );
-      expect(buildStatusUpdateRows(null)).toEqual([
+      expect(await buildStatusUpdateRows(null)).toEqual([
         { Item: "Update run", Value: "ℹ️ OpenClaw abandoned update reconciled." },
       ]);
     },
@@ -610,6 +616,110 @@ describe("update repair ledger recovery", () => {
     expect(getUpdateRun(old.runId)).toEqual(old);
     expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Reconciled"));
   });
+
+  it.each([
+    "newer post-core failure",
+    "selected post-core marker",
+    "newer preflight failure",
+  ] as const)(
+    "revalidates lightweight repair when %s appears before worker admission",
+    async (change) => {
+      vi.mocked(Date.now).mockRestore();
+      const ownDriver = readUpdateRunDriver();
+      if (!ownDriver) {
+        throw new Error("The repair fixture requires its native process identity");
+      }
+      const driver = { ...ownDriver, startIdentity: String(Number(ownDriver.startIdentity) + 1) };
+      expect(inspectUpdateRunDriver(driver)).toBe("dead");
+      const created = createUpdateRun({ trigger: "control-ui", origin: { driver } });
+      const createdAtMs = Date.now() - ABANDONED_UPDATE_RUN_MS * 2;
+      openOpenClawStateDatabase()
+        .db.prepare(
+          "UPDATE update_runs SET created_at_ms = ?, updated_at_ms = ?, steps_json = ? WHERE run_id = ?",
+        )
+        .run(
+          createdAtMs,
+          createdAtMs,
+          JSON.stringify([{ step: "requested", status: "in_progress", startedAtMs: createdAtMs }]),
+          created.runId,
+        );
+      const before = getUpdateRun(created.runId)!;
+      const createAdmission = sqliteWorkerStore.createSqliteWorkerWriteAdmission;
+      let injected = false;
+      let selectedAfterInjection: UpdateRunRecord | undefined;
+      let added: UpdateRunRecord | undefined;
+      const admission = vi
+        .spyOn(sqliteWorkerStore, "createSqliteWorkerWriteAdmission")
+        .mockImplementationOnce((assertCurrent, nativeLocations) => {
+          const factory = createAdmission(assertCurrent, nativeLocations);
+          return (operation) => {
+            admission.mockRestore();
+            expect(mocks.readiness).toHaveBeenCalledOnce();
+            expect(getUpdateRun(created.runId)).toEqual(before);
+            // The real broker enters this factory after candidate selection but before
+            // dispatching the writer, so another commit can still change repair eligibility.
+            if (change === "selected post-core marker") {
+              recordUpdateRunStep(created.runId, {
+                step: "finalize:plugins",
+                status: "failed",
+                detail: "Synthetic interrupted plugin convergence",
+              });
+            } else {
+              const newer = createUpdateRun({ trigger: "cli" });
+              const postCore = change === "newer post-core failure";
+              recordUpdateRunStep(newer.runId, {
+                step: postCore ? "finalize:doctor" : "preflight",
+                status: "failed",
+              });
+              added = finishUpdateRun(newer.runId, {
+                status: "failed",
+                reason: postCore ? "doctor-failed" : "preflight-failed",
+              });
+            }
+            selectedAfterInjection = getUpdateRun(created.runId);
+            injected = true;
+            return factory(operation);
+          };
+        });
+      try {
+        await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair"] });
+        expect(injected).toBe(true);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        if (added) {
+          expect(getUpdateRun(added.runId)).toEqual(added);
+        }
+        expect(listUpdateRuns()).toHaveLength(added ? 2 : 1);
+        if (change === "newer preflight failure") {
+          expect(mocks.runtime.error).not.toHaveBeenCalled();
+          expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
+          expect(getUpdateRun(created.runId)).toMatchObject({
+            status: "failed",
+            reason: "abandoned",
+            steps: expect.arrayContaining([
+              expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+            ]),
+          });
+          expect(listUpdateRuns({ active: true })).toEqual([]);
+          expect(mocks.runtime.log).toHaveBeenCalledWith(
+            "Gateway is healthy. Reconciled 1 abandoned update run. No maintenance or service restart was needed.",
+          );
+        } else {
+          expect(mocks.runtime.error).toHaveBeenCalledWith(
+            expect.stringContaining("needs post-core maintenance"),
+          );
+          expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+          expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Reconciled"));
+          expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+          expect(getUpdateRun(created.runId)).toEqual(selectedAfterInjection);
+          expect(getUpdateRun(created.runId)?.steps).not.toContainEqual(
+            expect.objectContaining({ step: "reconcile:acknowledged" }),
+          );
+        }
+      } finally {
+        admission.mockRestore();
+      }
+    },
+  );
 
   it("retains full repair after a failed finalization step", async () => {
     const run = seedRun();

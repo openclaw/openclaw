@@ -1,10 +1,4 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
-/**
- * Browser agent action hook routes.
- *
- * Handles file chooser and dialog interception for both Playwright-backed
- * OpenClaw profiles and Chrome MCP existing-session profiles.
- */
 import {
   normalizeOptionalString,
   readStringValue,
@@ -19,7 +13,6 @@ import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toStringArray, toStringOrEmpty } from "./utils.js";
 
-/** Register file chooser and dialog hook endpoints on the browser control server. */
 export function registerBrowserAgentActHookRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,

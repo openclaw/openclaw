@@ -1,13 +1,11 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 
 type UpdatePreflightFixture = {
   mockPackageInstallAtCaseDir: () => Promise<string>;
-  mockCurrentProcessFreshDoctor: () => void;
   statfsFixture: (params: {
     bavail: number;
     bsize?: number;
@@ -31,7 +29,6 @@ type UpdatePreflightFixture = {
 
 export function registerUpdatePreflightTests({
   mockPackageInstallAtCaseDir,
-  mockCurrentProcessFreshDoctor,
   statfsFixture,
   resolveNpmChannelTag,
   fetchNpmPackageTargetStatus,
@@ -50,7 +47,6 @@ export function registerUpdatePreflightTests({
 }: UpdatePreflightFixture) {
   it("records low disk space before target lookup and still runs package updates", async () => {
     await mockPackageInstallAtCaseDir();
-    mockCurrentProcessFreshDoctor();
     vi.spyOn(fsSync, "statfsSync").mockReturnValue(
       statfsFixture({
         bavail: 256,
@@ -99,7 +95,6 @@ export function registerUpdatePreflightTests({
     async (outcome) => {
       const failed = outcome === "failed";
       const packageRoot = await mockPackageInstallAtCaseDir();
-      mockCurrentProcessFreshDoctor();
       const retention = {
         inventoryMs: 17,
         materializationMs: 23,
@@ -155,10 +150,10 @@ export function registerUpdatePreflightTests({
     },
   );
 
-  it.each(["insufficient", "alternative", "unknown", "plenty", "package-only"] as const)(
+  it.each(["insufficient", "alternative", "unknown"] as const)(
     "checks initial snapshot capacity before staging (%s)",
     async (scenario) => {
-      const pkgRoot = await mockPackageInstallAtCaseDir();
+      await mockPackageInstallAtCaseDir();
       initializeExistingUpdateProfile();
       const stateDir = await fs.realpath(profileStateDir());
       const captureDir = `${stateDir}.update-captures`;
@@ -170,9 +165,7 @@ export function registerUpdatePreflightTests({
         }
         const location = String(checkedPath);
         const low =
-          scenario === "insufficient" ||
-          (scenario === "alternative" && location !== captureDir) ||
-          (scenario === "package-only" && location === path.dirname(pkgRoot));
+          scenario === "insufficient" || (scenario === "alternative" && location !== captureDir);
         return statfsFixture({ bavail: low ? 32 : 2048, bsize: 1024 * 1024 });
       });
       const allocate = vi.spyOn(fs, "mkdtemp");

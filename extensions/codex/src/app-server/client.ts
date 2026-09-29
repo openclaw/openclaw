@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { parse as parseSemver } from "semver";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
@@ -72,6 +73,13 @@ type RequestOptions = {
   catalogRows?: number;
   attemptWaiterFinished?: CodexRequestWaiterFinished;
 };
+
+type ThreadSessionRequestGuard = (options: {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  timeoutMessage: string;
+  abortMessage: string;
+}) => Promise<() => void>;
 
 /** Process-local generation fence for bindings tied to one app-server client instance. */
 export function getCodexAppServerClientInstanceId(client: object): string {
@@ -205,13 +213,7 @@ type CodexServerNotificationHandler = (
 ) => Promise<void> | void;
 
 /** Runtime identity returned by the Codex app-server initialize handshake. */
-export type CodexAppServerRuntimeIdentity = {
-  serverVersion: string;
-  userAgent?: string;
-  codexHome?: string;
-  platformFamily?: string;
-  platformOs?: string;
-};
+export type CodexAppServerRuntimeIdentity = ReturnType<typeof buildCodexAppServerRuntimeIdentity>;
 
 export class CodexAppServerClient {
   private readonly instanceId = randomUUID();
@@ -239,16 +241,8 @@ export class CodexAppServerClient {
   private transportExited = false;
   private nativeExecutionObserved = false;
   private closeError: Error | undefined;
-  private serverVersion: string | undefined;
   private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
-  private threadSessionRequestGuard:
-    | ((options: {
-        signal?: AbortSignal;
-        timeoutMs?: number;
-        timeoutMessage: string;
-        abortMessage: string;
-      }) => Promise<() => void>)
-    | undefined;
+  private threadSessionRequestGuard: ThreadSessionRequestGuard | undefined;
   private retireAfterIndeterminateThreadRequest: (() => boolean) | undefined;
   private stderrTail = "";
   private readonly privateTransportSecrets = new Set<string>();
@@ -348,14 +342,14 @@ export class CodexAppServerClient {
     // which matters when callers override the binary or app-server args.
     const response = await this.request("initialize", buildCodexAppServerInitializeParams());
     this.child.startupFailure?.complete();
-    this.serverVersion = assertSupportedCodexAppServerVersion(response);
-    this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, this.serverVersion);
+    const serverVersion = assertSupportedCodexAppServerVersion(response);
+    this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, serverVersion);
     this.notify("initialized");
     this.initialized = true;
   }
 
   getServerVersion(): string | undefined {
-    return this.serverVersion;
+    return this.runtimeIdentity?.serverVersion;
   }
 
   getRuntimeIdentity(): CodexAppServerRuntimeIdentity | undefined {
@@ -384,14 +378,7 @@ export class CodexAppServerClient {
 
   /** Installs the spawn-owner guard and retirement for config-loading thread requests. */
   setThreadSessionRequestGuard(
-    guard:
-      | ((options: {
-          signal?: AbortSignal;
-          timeoutMs?: number;
-          timeoutMessage: string;
-          abortMessage: string;
-        }) => Promise<() => void>)
-      | undefined,
+    guard: ThreadSessionRequestGuard | undefined,
     retireAfterIndeterminateRequest?: () => boolean,
   ): void {
     this.threadSessionRequestGuard = guard;
@@ -618,27 +605,19 @@ export class CodexAppServerClient {
       throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
     }
     const delayMs = remainingMs === undefined ? backoffMs : Math.min(backoffMs, remainingMs);
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        cleanup();
-        resolve();
-      }, delayMs);
-      timer.unref?.();
-      const abortListener = () => {
-        cleanup();
-        reject(
-          new CodexAppServerLocalRequestCancellationError(method, "aborted", false, signal?.reason),
-        );
-      };
-      const cleanup = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abortListener);
-      };
-      signal?.addEventListener("abort", abortListener, { once: true });
+    try {
+      await sleepWithAbort(delayMs, signal, { ref: false });
+    } catch (error) {
       if (signal?.aborted) {
-        abortListener();
+        throw new CodexAppServerLocalRequestCancellationError(
+          method,
+          "aborted",
+          false,
+          signal.reason,
+        );
       }
-    });
+      throw error;
+    }
   }
 
   private requestOnce<T>(
@@ -652,16 +631,6 @@ export class CodexAppServerClient {
   ): Promise<T> {
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
-    }
-    if (options.signal?.aborted) {
-      return Promise.reject(
-        new CodexAppServerLocalRequestCancellationError(
-          method,
-          "aborted",
-          false,
-          options.signal?.reason,
-        ),
-      );
     }
     const id = codexCatalogRequestId(method, params, this.nextId++, options.catalogPreview);
     if (
@@ -711,8 +680,6 @@ export class CodexAppServerClient {
     const result = attempt.wait<T>(
       {
         ...options,
-        assertCurrent: undefined,
-        disposition: "new",
         overloadAttemptOrdinal,
       },
       deadline,
@@ -774,10 +741,7 @@ export class CodexAppServerClient {
   }
 
   close(): void {
-    if (!this.markClosed(new Error("codex app-server client is closed"))) {
-      return;
-    }
-    closeCodexAppServerTransport(this.child);
+    this.closeWithError(new Error("codex app-server client is closed"));
   }
 
   async closeAndWait(options?: {
@@ -803,19 +767,10 @@ export class CodexAppServerClient {
 
   /** Closes this transport and runs cleanup only after physical process exit. */
   async closeAndRunAfterExit(onExit: () => void, operation: string): Promise<void> {
-    let settled = false;
-    const runOnExit = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      onExit();
-    };
+    this.addTransportExitHandler(onExit);
     if (this.transportExited) {
-      runOnExit();
       return;
     }
-    this.child.once("exit", runOnExit);
     try {
       await this.closeAndWait();
     } catch (closeError) {
@@ -1011,7 +966,6 @@ export class CodexAppServerClient {
 
   private rejectPendingRequests(error: Error): void {
     for (const pending of this.pending.values()) {
-      pending.cleanup();
       pending.close(error);
     }
     this.pending.clear();

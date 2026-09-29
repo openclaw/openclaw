@@ -116,11 +116,6 @@ internal fun WorkspaceFilesScreen(
   }
 }
 
-internal fun isWorkspaceDirectoryRequestInFlight(
-  loading: Boolean,
-  loadingMore: Boolean,
-): Boolean = loading || loadingMore
-
 @Composable
 private fun WorkspaceDirectoryScreen(
   viewModel: MainViewModel,
@@ -137,7 +132,7 @@ private fun WorkspaceDirectoryScreen(
   var loadingMore by remember(path) { mutableStateOf(false) }
   var errorText by remember(path) { mutableStateOf<String?>(null) }
   var refreshNonce by remember(path) { mutableIntStateOf(0) }
-  val requestInFlight = isWorkspaceDirectoryRequestInFlight(loading, loadingMore)
+  val requestInFlight = loading || loadingMore
 
   LaunchedEffect(path, isConnected, refreshNonce) {
     if (!isConnected) {
@@ -176,7 +171,7 @@ private fun WorkspaceDirectoryScreen(
           Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
               text = if (path.isEmpty()) nativeString("Files") else path.substringAfterLast('/'),
-              style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp),
+              style = ClawTheme.type.display,
               color = ClawTheme.colors.text,
             )
             if (path.isNotEmpty()) {
@@ -198,7 +193,7 @@ private fun WorkspaceDirectoryScreen(
               icon = Icons.Outlined.Refresh,
               contentDescription = nativeString("Refresh"),
               onClick = {
-                if (!isWorkspaceDirectoryRequestInFlight(loading, loadingMore)) {
+                if (!(loading || loadingMore)) {
                   loading = true
                   refreshNonce += 1
                 }
@@ -238,7 +233,7 @@ private fun WorkspaceDirectoryScreen(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(ClawTheme.radii.row))
                 .clickable(enabled = !requestInFlight) {
-                  if (isWorkspaceDirectoryRequestInFlight(loading, loadingMore)) return@clickable
+                  if (loading || loadingMore) return@clickable
                   loadingMore = true
                   scope.launch {
                     try {
@@ -354,7 +349,7 @@ private fun WorkspaceFilePreview(
         ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), onClick = onBack)
         Text(
           text = path.substringAfterLast('/'),
-          style = ClawTheme.type.display.copy(fontSize = 20.sp, lineHeight = 24.sp, lineBreak = androidx.compose.ui.text.style.LineBreak.Heading),
+          style = ClawTheme.type.display.copy(lineHeight = 24.sp, lineBreak = androidx.compose.ui.text.style.LineBreak.Heading),
           color = ClawTheme.colors.text,
           softWrap = true,
           modifier = Modifier.weight(1f),

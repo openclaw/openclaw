@@ -12,7 +12,6 @@ import ai.openclaw.app.SessionCatalogHost
 import ai.openclaw.app.SessionCatalogState
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.closeNodeRuntimeTestFixture
-import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.provider.Settings
@@ -252,9 +251,9 @@ class SidebarCatalogGroupingTest {
     assertFalse(sections.any { it.catalog.id == "archived" })
     assertEquals(
       setOf("codex", "claude"),
-      toggleSidebarCatalogExpansion(listOf("claude"), "codex").toSet(),
+      toggleSidebarExpansion(listOf("claude"), "codex").toSet(),
     )
-    assertEquals(emptyList<String>(), toggleSidebarCatalogExpansion(listOf("claude"), "claude"))
+    assertEquals(emptyList<String>(), toggleSidebarExpansion(listOf("claude"), "claude"))
   }
 
   @Test
@@ -329,8 +328,8 @@ class SidebarCatalogGroupingTest {
 
     try {
       Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
-      prefs.setSidebarPageOrder(defaultSidebarPageOrder)
-      prefs.setSidebarVisiblePages(listOf("settings", "home", "skills", "threads"))
+      prefs.setSidebarPageOrder(listOf("agents", "work", "home", "skills", "threads"))
+      prefs.setSidebarVisiblePages(listOf("agents", "home", "skills", "threads"))
       ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
       composeRule.setContent {
         ClawDesignTheme {
@@ -357,31 +356,41 @@ class SidebarCatalogGroupingTest {
       }
       composeRule.onNodeWithText("Overview").assertDoesNotExist()
       composeRule.onNodeWithText("Home").assertIsDisplayed()
-      composeRule.onNodeWithText("Settings").assertIsDisplayed().performTouchInput(dragOnePageDown)
+      composeRule.onNodeWithText("Agents").assertIsDisplayed().performTouchInput(dragOnePageDown)
 
       composeRule.runOnIdle {
         assertEquals(listOf(true, false), dragStates)
-        assertEquals(listOf("home", "work", "settings", "skills", "threads"), prefs.sidebarPageOrder.value)
+        assertEquals(
+          listOf("home", "work", "agents", "skills", "threads", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop"),
+          prefs.sidebarPageOrder.value,
+        )
       }
       val homeTop =
         composeRule
           .onNodeWithText("Home")
           .fetchSemanticsNode()
           .boundsInRoot.top
-      val settingsTop =
+      val agentsTop =
         composeRule
-          .onNodeWithText("Settings")
+          .onNodeWithText("Agents")
           .fetchSemanticsNode()
           .boundsInRoot.top
-      assertTrue("One drag must move Settings below the next visible page", homeTop < settingsTop)
+      assertTrue("One drag must move Agents below the next visible page", homeTop < agentsTop)
 
       composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
-      composeRule.onNodeWithText("Edit pinned items").performClick()
-      composeRule.onNodeWithText("EDIT PINNED ITEMS").assertIsDisplayed()
-      composeRule.onNodeWithText("Overview").assertIsDisplayed().performTouchInput(dragOnePageDown)
+      composeRule.onNodeWithText("Edit pinned items").performScrollTo().performClick()
+      composeRule.onNodeWithText("EDIT PINNED ITEMS").performScrollTo().assertIsDisplayed()
+      composeRule
+        .onNodeWithText("Overview")
+        .performScrollTo()
+        .assertIsDisplayed()
+        .performTouchInput(dragOnePageDown)
       composeRule.runOnIdle {
-        assertEquals(listOf("home", "settings", "work", "skills", "threads"), prefs.sidebarPageOrder.value)
-        assertEquals(listOf("settings", "home", "skills", "threads"), prefs.sidebarVisiblePages.value)
+        assertEquals(
+          listOf("home", "agents", "work", "skills", "threads", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop"),
+          prefs.sidebarPageOrder.value,
+        )
+        assertEquals(listOf("agents", "home", "skills", "threads"), prefs.sidebarVisiblePages.value)
       }
     } finally {
       viewModels.clear()

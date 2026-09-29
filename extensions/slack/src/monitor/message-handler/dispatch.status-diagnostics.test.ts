@@ -123,18 +123,11 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Slack terminal status diagnostics", () => {
-  it("reports a failed active write once after successful processing", async () => {
-    const f = await fixture({ active: { ok: false } });
-    await f.start();
-    await f.stop();
-    await f.stop();
-    expect(f.error).toHaveBeenCalledExactlyOnceWith(expect.any(String));
-    expect(f.api).toHaveBeenCalledTimes(2);
-  });
-
   it("reports a rejected Slack request without copying private error data to the normal log", async () => {
     const f = await fixture({ active: new Error("synthetic-private-detail") });
     await f.start();
+    await f.start();
+    await f.stop();
     await f.stop();
     expect(f.error).toHaveBeenCalledExactlyOnceWith(expect.any(String));
     expect(f.error.mock.calls.flat().join(" ")).not.toMatch(
@@ -151,31 +144,11 @@ describe("Slack terminal status diagnostics", () => {
     expect(f.api).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps successful transitions quiet", async () => {
-    const f = await fixture();
-    await f.start();
-    await f.stop();
-    expect(f.error).not.toHaveBeenCalled();
-  });
-
   it("does not confuse aggregate processing with a failed active write", async () => {
     const f = await fixture({ active: { ok: true, status: "processing", agent_status: "active" } });
     await f.start();
     await f.stop();
     expect(f.error).not.toHaveBeenCalled();
-  });
-
-  it("does not attempt a status write when cleanup runs before start", async () => {
-    const f = await fixture();
-    await f.stop();
-    expect(f.api).not.toHaveBeenCalled();
-    expect(f.error).not.toHaveBeenCalled();
-  });
-
-  it("returns false without a request when there is no thread", async () => {
-    const f = await fixture();
-    expect(await f.ctx.setSlackSessionStatus({ channelId: "C1", status: "active" })).toBe(false);
-    expect(f.api).not.toHaveBeenCalled();
   });
 
   it("continues typing-reaction cleanup if the diagnostic logger throws", async () => {

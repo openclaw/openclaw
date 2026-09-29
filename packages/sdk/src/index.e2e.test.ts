@@ -97,9 +97,6 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
               "sessions.patch",
               "sessions.resolve",
               "sessions.send",
-              "tasks.cancel",
-              "tasks.get",
-              "tasks.list",
               "tools.catalog",
               "tools.effective",
               "tools.invoke",
@@ -233,44 +230,6 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
 
       if (frame.method === "sessions.patch" || frame.method === "sessions.compact") {
         reply({ ok: true, method: frame.method, params: frame.params as JsonObject | undefined });
-        return;
-      }
-
-      if (frame.method === "tasks.list") {
-        reply({
-          tasks: [
-            {
-              id: "task-sdk-e2e",
-              status: "running",
-              title: "SDK task",
-              runId: "run-sdk-e2e",
-              sessionKey: "sdk-session",
-            },
-          ],
-        });
-        return;
-      }
-
-      if (frame.method === "tasks.get") {
-        reply({
-          task: {
-            id: (frame.params as { taskId?: string } | undefined)?.taskId ?? "task-sdk-e2e",
-            status: "running",
-            title: "SDK task",
-          },
-        });
-        return;
-      }
-
-      if (frame.method === "tasks.cancel") {
-        reply({
-          found: true,
-          cancelled: true,
-          task: {
-            id: (frame.params as { taskId?: string } | undefined)?.taskId ?? "task-sdk-e2e",
-            status: "cancelled",
-          },
-        });
         return;
       }
 
@@ -451,25 +410,6 @@ describe("OpenClaw SDK websocket e2e", () => {
       const compactSession = expectJsonObject(await session.compact({ maxLines: 200 }));
       expect(compactSession.method).toBe("sessions.compact");
 
-      const tasks = await oc.tasks.list({ status: "running" });
-      expect(tasks.tasks).toEqual([
-        {
-          id: "task-sdk-e2e",
-          status: "running",
-          title: "SDK task",
-          runId: "run-sdk-e2e",
-          sessionKey: "sdk-session",
-        },
-      ]);
-      const task = await oc.tasks.get("task-sdk-e2e");
-      expect(task.task).toEqual({
-        id: "task-sdk-e2e",
-        status: "running",
-        title: "SDK task",
-      });
-      const cancelledTask = await oc.tasks.cancel("task-sdk-e2e");
-      expect(cancelledTask.cancelled).toBe(true);
-
       const models = expectJsonObject(await oc.models.list());
       expect(models.models).toEqual([{ id: "gpt-5.4" }]);
       const modelStatus = expectJsonObject(await oc.models.status({ probe: false }));
@@ -509,9 +449,6 @@ describe("OpenClaw SDK websocket e2e", () => {
         "sessions.abort",
         "sessions.patch",
         "sessions.compact",
-        "tasks.list",
-        "tasks.get",
-        "tasks.cancel",
         "models.list",
         "models.authStatus",
         "tools.catalog",

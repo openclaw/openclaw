@@ -7,11 +7,9 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import {
   appendReplyMediaFailures,
   getReplyPayloadMetadata,
-  type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -457,36 +455,6 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
-  return withSendNormalization(
-    {
-      kind: "send",
-      channel: INTERNAL_MESSAGE_CHANNEL,
-      action: "send",
-      to: "current-run",
-      handledBy: "internal-source",
-      payload,
-      toolResult: buildInternalSourceReplyToolResult(payload),
-      dryRun,
-    },
-    sourceReply.normalization,
-  );
-}
-
-function buildInternalSourceReplyToolResult(payload: {
-  status: string;
-  deliveryStatus: string;
-  channel: ChannelId;
-  target: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  idempotencyKey?: string;
-  sourceReplyTranscriptOwner?: true;
-  sourceReplySink?: "internal-ui";
-  sourceReply: ReplyPayload;
-  message?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  dryRun: boolean;
-}): AgentToolResult<typeof payload> {
   const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
@@ -498,7 +466,8 @@ function buildInternalSourceReplyToolResult(payload: {
     : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
       ? payload.sourceReply.text
       : undefined;
-  return {
+  const { sourceReplyDeliveryMode, ...details } = payload;
+  const toolResult = {
     content: [
       {
         type: "text",
@@ -506,23 +475,23 @@ function buildInternalSourceReplyToolResult(payload: {
       },
     ],
     details: {
-      status: payload.status,
-      deliveryStatus: payload.deliveryStatus,
-      channel: payload.channel,
-      target: payload.target,
-      ...(payload.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
-        : {}),
-      ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {}),
-      ...(payload.sourceReplyTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
-      ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
-      sourceReply: payload.sourceReply,
-      ...(payload.message ? { message: payload.message } : {}),
-      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
-      ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
-      dryRun: payload.dryRun,
+      ...details,
+      ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
     },
-  };
+  } satisfies AgentToolResult<unknown>;
+  return withSendNormalization(
+    {
+      kind: "send",
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      action: "send",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload,
+      toolResult,
+      dryRun,
+    },
+    sourceReply.normalization,
+  );
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {

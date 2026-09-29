@@ -27,10 +27,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   }),
 }));
 
-import {
-  maybeWakeRequesterAfterAllChildrenSettled,
-  type RequesterSettleWakeBatchState,
-} from "./subagent-announce.requester-settle-wake.js";
+import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-state.js";
+import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
 const REQUESTER = "agent:main:main";
 
@@ -83,7 +81,13 @@ function wakeParams() {
   if (!settledEntry) {
     throw new Error("The control requires its registered run-b fixture.");
   }
-  return { requesterSessionKey: REQUESTER, settledEntry, transitionBatch, completeBatch };
+  return {
+    requesterSessionKey: REQUESTER,
+    settledEntry,
+    transitionBatch,
+    completeBatch,
+    isSourceCurrent: () => true,
+  };
 }
 
 beforeEach(() => {

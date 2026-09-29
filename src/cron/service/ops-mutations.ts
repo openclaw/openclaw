@@ -13,12 +13,14 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { withCronMutationCommitHook } from "../mutation-completion.js";
 import { normalizeCronRunJobId } from "../run-history.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import {
   isSystemMonitorDeclaration,
   systemOwnedDeclarationKeyNamespace,
@@ -47,18 +49,21 @@ import {
   cronPatchTouchesDeliveryResolution,
   resolveConfiguredChannelsForValidation,
 } from "./jobs-validation.js";
-import { applyJobPatch, applyDeclarativeJobSpec, createJob } from "./jobs.js";
+import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./jobs.js";
 import {
   getPendingCronSessionCleanup,
   locked,
   registerPendingCronSessionCleanup,
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
-import { cronRunReceiptMutationHooks } from "./run-receipts.js";
+import { resolveCurrentDefaultAgentId } from "./ops-shared.js";
+import {
+  cronRunReceiptMutationHooks,
+  prepareCronRunReceiptOwnerMutationHooks,
+} from "./run-receipts.js";
 import type {
-  CronAddResult,
   CronAddOptions,
+  CronAddResult,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
@@ -66,15 +71,15 @@ import type {
 } from "./state.js";
 import { emit } from "./state.js";
 import {
+  type CronRollbackSnapshot,
   ensureLoaded,
   ensureLoadedForOperation,
   persist,
-  persistOrRestore,
   persistNativeOrRestore,
+  persistOrRestore,
   pruneCronJobScratchAfterCommit,
   runPostPersistCronNotifications,
   snapshotStoreForRollback,
-  type CronRollbackSnapshot,
   warnIfDisabled,
 } from "./store.js";
 import { armTimer } from "./timer.js";
@@ -109,6 +114,7 @@ async function persistUpdatedJob(params: {
   nextJob: CronJob;
   persistStore: typeof persistOrRestore;
   mutationMethod: "cron.add" | "cron.update";
+  ownerHooks?: CronStoreTransactionHooks;
 }) {
   const { state, snapshot, previousJob, nextJob, persistStore } = params;
   const reservation = state.queuedRunReservationsByJobId.get(nextJob.id);
@@ -137,10 +143,6 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  const defaultAgentId = resolveCurrentDefaultAgentId(state);
-  const ownerChanged =
-    resolveEffectiveJobAgentId(previousJob, defaultAgentId) !==
-    resolveEffectiveJobAgentId(nextJob, defaultAgentId);
   const triggerStateChanged =
     !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
     !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
@@ -166,7 +168,7 @@ async function persistUpdatedJob(params: {
       cronRunReceiptMutationHooks({
         state,
         jobId: nextJob.id,
-        ownerChanged,
+        ownerHooks: params.ownerHooks,
         triggerStateChanged,
         messageActionAuthorityChanged,
         messageSourceAuthorityChanged,
@@ -211,7 +213,7 @@ export async function add(
       );
     }
     await ensureLoadedForOperation(state);
-    const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
+    const agentId = resolveCronJobEffectiveAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(describeUnavailableCronAgent(agentId));
     }
@@ -422,7 +424,7 @@ async function updateLoadedJob(params: {
     configuredChannels,
   });
   if (patch.agentId !== undefined) {
-    const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
+    const agentId = resolveCronJobEffectiveAgentId(nextJob, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(describeUnavailableCronAgent(agentId));
     }
@@ -445,6 +447,12 @@ async function updateLoadedJob(params: {
     opts?.captureRuntimeAuthority !== undefined
       ? persistNativeOrRestore
       : persistOrRestore;
+  const ownerPreparation = prepareCronRunReceiptOwnerMutationHooks({
+    state,
+    previousJob: job,
+    nextJob,
+  });
+  const ownerHooks = ownerPreparation ? await ownerPreparation : undefined;
   const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
   reconcileRuntimeAuthority({
     job: nextJob,
@@ -468,6 +476,7 @@ async function updateLoadedJob(params: {
     nextJob,
     persistStore,
     mutationMethod: "cron.update",
+    ownerHooks,
   });
   return nextJob;
 }
@@ -548,7 +557,8 @@ export async function remove(
       transactionHooks: withCronMutationCommitHook("cron.remove"),
     });
     const activeMarker = noteActiveCronJobRemoval(id, opts?.commitGuard);
-    const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
+    const activeRunCancellationRequested = activeMarker?.cancellation?.kind === "requested";
+    const agentId = resolveCronJobEffectiveAgentId(removedJob, resolveCurrentDefaultAgentId(state));
     const sessionStorePath =
       state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
     if (
@@ -572,7 +582,11 @@ export async function remove(
     pruneCronJobScratchAfterCommit(state, [id]);
     armTimer(state);
     emit(state, { jobId: id, action: "removed", job: removedJob });
-    return { ok: true, removed: true } as const;
+    return {
+      ok: true,
+      removed: true,
+      ...(activeRunCancellationRequested ? { activeRunCancellationRequested: true as const } : {}),
+    } as const;
   });
   if (!sessionCleanup) {
     return result;
@@ -627,14 +641,14 @@ export async function removeAgentJobsTransactional<T>(
     }
     const defaultAgentId = resolveCurrentDefaultAgentId(state);
     const removedJobs = state.store.jobs.filter(
-      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) === id,
+      (job) => resolveCronJobEffectiveAgentId(job, defaultAgentId) === id,
     );
     if (removedJobs.length === 0) {
       return await commit();
     }
     const snapshot = snapshotStoreForRollback(state);
     state.store.jobs = state.store.jobs.filter(
-      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
+      (job) => resolveCronJobEffectiveAgentId(job, defaultAgentId) !== id,
     );
     const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });

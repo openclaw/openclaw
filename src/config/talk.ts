@@ -1,4 +1,3 @@
-// Normalizes talk-mode config for voice and channel interactions.
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumberInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -18,25 +17,8 @@ import type {
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { coerceSecretRef } from "./types.secrets.js";
 
-function normalizeTalkSecretInput(value: unknown): TalkProviderConfig["apiKey"] | undefined {
-  if (typeof value === "string") {
-    return normalizeOptionalString(value);
-  }
-  return coerceSecretRef(value) ?? undefined;
-}
-
-function normalizePositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    return undefined;
-  }
-  return value;
-}
-
-function normalizeNonNegativeInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    return undefined;
-  }
-  return value;
+function normalizeInteger(value: unknown, min: number): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= min ? value : undefined;
 }
 
 function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undefined {
@@ -46,17 +28,11 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
 
   const provider: TalkProviderConfig = {};
   for (const [key, raw] of Object.entries(value)) {
-    if (raw === undefined) {
-      continue;
+    const normalized =
+      key === "apiKey" ? (normalizeOptionalString(raw) ?? coerceSecretRef(raw) ?? undefined) : raw;
+    if (normalized !== undefined) {
+      provider[key] = normalized;
     }
-    if (key === "apiKey") {
-      const normalized = normalizeTalkSecretInput(raw);
-      if (normalized !== undefined) {
-        provider.apiKey = normalized;
-      }
-      continue;
-    }
-    provider[key] = raw;
   }
 
   return provider;
@@ -120,11 +96,11 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   if (vadThreshold !== undefined) {
     normalized.vadThreshold = vadThreshold;
   }
-  const silenceDurationMs = normalizePositiveInteger(source.silenceDurationMs);
+  const silenceDurationMs = normalizeInteger(source.silenceDurationMs, 1);
   if (silenceDurationMs !== undefined) {
     normalized.silenceDurationMs = silenceDurationMs;
   }
-  const prefixPaddingMs = normalizeNonNegativeInteger(source.prefixPaddingMs);
+  const prefixPaddingMs = normalizeInteger(source.prefixPaddingMs, 0);
   if (prefixPaddingMs !== undefined) {
     normalized.prefixPaddingMs = prefixPaddingMs;
   }
@@ -203,7 +179,7 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (typeof consultFastMode === "boolean") {
     normalized.consultFastMode = consultFastMode;
   }
-  const silenceTimeoutMs = normalizePositiveInteger(source.silenceTimeoutMs);
+  const silenceTimeoutMs = normalizeInteger(source.silenceTimeoutMs, 1);
   if (silenceTimeoutMs !== undefined) {
     normalized.silenceTimeoutMs = silenceTimeoutMs;
   }

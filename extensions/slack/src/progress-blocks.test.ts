@@ -333,13 +333,15 @@ describe("native Slack progress stream chunks", () => {
   );
 
   it.each([
-    [false, "complete"],
-    [true, "error"],
+    [false, "complete", "Checking the workspace", "Checking the workspace"],
+    [true, "error", "Checking the workspace", "Run checks"],
+    [false, "complete", undefined, "Completed"],
+    [false, "error", undefined, "Failed"],
   ] as const)(
-    "keeps command failures out of quiet work rows through completion (plan=%s, final=%s)",
-    (withPlan, finalInProgressStatus) => {
+    "settles quiet work rows without command failures (plan=%s, final=%s, title=%s)",
+    (withPlan, finalInProgressStatus, title, terminalTitle) => {
       const params = {
-        title: "Checking the workspace",
+        title,
         summaryRow: true,
         plan: withPlan ? [{ step: "Run checks", status: "in_progress" as const }] : undefined,
         lines: [
@@ -357,10 +359,10 @@ describe("native Slack progress stream chunks", () => {
         chunks: buildSlackProgressStreamChunks(params),
       });
       expect(first.chunks).toEqual([
-        planUpdate("Checking the workspace"),
+        planUpdate(title ?? "Working"),
         withPlan
           ? taskUpdate("plan_step_1", "Run checks", "in_progress")
-          : taskUpdate("openclaw_summary", "Checking the workspace", "in_progress"),
+          : taskUpdate("openclaw_summary", title ?? "Working", "in_progress"),
       ]);
       const final = reconcileSlackNativeTaskChunks({
         previous: first.snapshot,
@@ -368,7 +370,7 @@ describe("native Slack progress stream chunks", () => {
       });
       expect([...final.snapshot.tasks.values()]).toEqual([
         {
-          title: withPlan ? "Run checks" : "Checking the workspace",
+          title: terminalTitle,
           status: finalInProgressStatus,
         },
       ]);
@@ -861,7 +863,9 @@ describe("native Slack progress stream chunks", () => {
         finalInProgressStatus: "complete",
         lines: [toolLine("src/native-card.ts", "Write")],
         diffStat: { files: 1, added: 3, removed: 1 },
-        sessionUrl: "https://team.openclaw.ai/openclaw/chat/main",
+        sessionLinks: [
+          { url: "https://team.openclaw.ai/openclaw/chat/main", text: "Open in OpenClaw" },
+        ],
       }),
     ).toEqual([
       planUpdate("Write — src/native-card.ts"),

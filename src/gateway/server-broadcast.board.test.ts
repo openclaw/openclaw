@@ -142,7 +142,7 @@ describe("board and progress event session ownership", () => {
           bootId: "board-owner-events",
           cfg,
         });
-        connection.attachSessionRowProjection(projection);
+        const detach = connection.attachSessionRowProjection(projection);
         for (const { client } of peers) {
           connection.clients.add(client);
         }
@@ -286,6 +286,7 @@ describe("board and progress event session ownership", () => {
           });
         } finally {
           await flushPendingSessionsChangedEvents(context);
+          detach();
           projection.dispose();
           connection.mentionInbox.dispose();
         }
@@ -503,11 +504,11 @@ describe("collaboration event scope guards", () => {
         for (const peer of unrelated) {
           expect(frames(peer)).toEqual([]);
         }
-        expect(getSubscribers).toHaveBeenCalledExactlyOnceWith(sessionKey);
         expect(filter).toHaveBeenCalledTimes(2);
 
         await upsertSessionEntryCore(target, { ...entry, ...hidden, updatedAt: 2 });
         invalidateSessionSharingSnapshot(sessionKey);
+        getSubscribers.mockClear();
         filter.mockClear();
         broadcast("chat", payload);
         broadcast("tick", {});
@@ -524,6 +525,8 @@ describe("collaboration event scope guards", () => {
             },
           ]);
         }
+        // Hidden recipients skip narration's intent lookups, isolating admission's shared lookup.
+        expect(getSubscribers).toHaveBeenCalledExactlyOnceWith(sessionKey);
         expect(filter).toHaveBeenCalledTimes(2);
       });
     },
@@ -819,7 +822,7 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
       bootId: "collector-events",
       cfg,
     });
-    connection.attachSessionRowProjection(rowProjection);
+    const detach = connection.attachSessionRowProjection(rowProjection);
     peers.forEach(({ client }) => connection.clients.add(client));
     const { broadcastToConnIds } = connection;
     const publications: Promise<void>[] = [];
@@ -897,6 +900,7 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
     } finally {
       unsubscribe();
       await Promise.allSettled(publications);
+      detach();
       rowProjection.dispose();
       connection.mentionInbox.dispose();
       clearSubagentRunsReadCacheForTest();

@@ -63,14 +63,24 @@ describe("parseOffsetlessIsoDateTimeInTimeZone", () => {
     ["2026-04-05T01:45:00", "Australia/Lord_Howe", "2026-04-04T14:45:00.000Z"],
     ["2026-10-04T02:15:00", "Australia/Lord_Howe", null],
     ["2026-03-23T23:00:00+02:00", "Europe/Oslo", null],
-    ["2026-03-23T23:00:00", "Invalid/Timezone", null],
     // Sub-second precision is accepted by the regex and must round-trip rather
     // than being silently rejected (the offset must be computed at ms resolution).
     ["2026-03-23T23:00:00.999", "UTC", "2026-03-23T23:00:00.999Z"],
     ["2026-03-23T23:00:00.123", "Europe/Oslo", "2026-03-23T22:00:00.123Z"],
     ["2026-10-25T02:30:00.250", "Europe/Oslo", "2026-10-25T00:30:00.250Z"],
   ])("parses zoned datetime %s in %s", (input, timezone, expected) => {
-    expect(parseOffsetlessIsoDateTimeInTimeZone(input, timezone)).toBe(expected);
+    expect(parseOffsetlessIsoDateTimeInTimeZone(input, timezone)).toEqual(
+      expected === null ? { ok: false, reason: "invalid-datetime" } : { ok: true, iso: expected },
+    );
+  });
+
+  it("distinguishes an invalid timezone from an invalid datetime", () => {
+    expect(parseOffsetlessIsoDateTimeInTimeZone("2030-01-01T09:00:00", "Invalid/Timezone")).toEqual(
+      {
+        ok: false,
+        reason: "invalid-timezone",
+      },
+    );
   });
 
   it.each([
@@ -90,7 +100,10 @@ describe("parseOffsetlessIsoDateTimeInTimeZone", () => {
   ])(
     "rolls valid end-of-day datetime %s into the next local day in %s",
     (input, timezone, expected) => {
-      expect(parseOffsetlessIsoDateTimeInTimeZone(input, timezone)).toBe(expected);
+      expect(parseOffsetlessIsoDateTimeInTimeZone(input, timezone)).toEqual({
+        ok: true,
+        iso: expected,
+      });
     },
   );
 
@@ -102,6 +115,9 @@ describe("parseOffsetlessIsoDateTimeInTimeZone", () => {
     ["2027-02-29T24:00:00", "UTC"],
     ["2027-09-04T24:00:00", "America/Santiago"],
   ])("rejects invalid or nonexistent end-of-day datetime %s in %s", (input, timezone) => {
-    expect(parseOffsetlessIsoDateTimeInTimeZone(input, timezone)).toBeNull();
+    expect(parseOffsetlessIsoDateTimeInTimeZone(input, timezone)).toEqual({
+      ok: false,
+      reason: "invalid-datetime",
+    });
   });
 });

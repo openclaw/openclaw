@@ -1,7 +1,3 @@
-/**
- * Reads Codex plugin marketplace state and app inventory to decide which
- * plugin-owned apps can be exposed to a native Codex thread.
- */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { findCodexAppById } from "./app-identity.js";
 import type {
@@ -31,19 +27,16 @@ const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}
 // from it and marketplace refs normalize back to CODEX_PLUGINS_MARKETPLACE_NAME.
 const CODEX_PLUGINS_API_MARKETPLACE_NAME = "openai-api-curated";
 
-/** Request callback used to call Codex app-server plugin/app methods. */
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
 type CodexPluginMarketplaceResponse = v2.PluginInstalledResponse | v2.PluginListResponse;
 
-/** Stable reference to a supported Codex plugin marketplace. */
 export type CodexPluginMarketplaceRef = {
   name: CodexPluginMarketplaceName;
   path?: string;
   remoteMarketplaceName?: string;
 };
 
-/** Machine-readable inventory diagnostic code used by thread config builders. */
 type CodexPluginInventoryDiagnosticCode =
   | "disabled"
   | "marketplace_missing"
@@ -54,14 +47,12 @@ type CodexPluginInventoryDiagnosticCode =
   | "app_inventory_stale"
   | "app_ownership_ambiguous";
 
-/** Diagnostic explaining why a configured plugin or app cannot be exposed. */
 export type CodexPluginInventoryDiagnostic = {
   code: CodexPluginInventoryDiagnosticCode;
   plugin?: ResolvedCodexPluginPolicy;
   message: string;
 };
 
-/** App owned by a Codex plugin with current accessibility/auth state. */
 export type CodexPluginOwnedApp = {
   id: string;
   name: string;
@@ -72,7 +63,6 @@ export type CodexPluginOwnedApp = {
   approvalOverrideToolConfigKeys?: readonly string[];
 };
 
-/** Inventory record for one configured Codex plugin policy. */
 type CodexPluginInventoryRecord = {
   policy: ResolvedCodexPluginPolicy;
   summary: v2.PluginSummary;
@@ -84,7 +74,6 @@ type CodexPluginInventoryRecord = {
   apps: CodexPluginOwnedApp[];
 };
 
-/** Complete inventory result for configured Codex plugins and owned apps. */
 export type CodexPluginInventory = {
   policy: ResolvedCodexPluginsPolicy;
   records: CodexPluginInventoryRecord[];
@@ -92,7 +81,6 @@ export type CodexPluginInventory = {
   appInventory?: CodexAppInventoryCacheRead;
 };
 
-/** Inputs for reading plugin marketplace/detail state and cached app inventory. */
 type ReadCodexPluginInventoryParams = {
   pluginConfig?: unknown;
   policy?: ResolvedCodexPluginsPolicy;
@@ -107,7 +95,6 @@ type ReadCodexPluginInventoryParams = {
   suppressAppInventoryRefresh?: boolean;
 };
 
-/** Reads configured Codex plugin state and maps owned apps to readiness diagnostics. */
 export async function readCodexPluginInventory(
   params: ReadCodexPluginInventoryParams,
 ): Promise<CodexPluginInventory> {
@@ -218,11 +205,11 @@ export async function readCodexPluginInventory(
         .map((app) => app.id)
         .filter(Boolean)
         .toSorted() ?? [];
-    const appOwnership = resolveAppOwnership({
-      detail,
-      appInventory,
-      summary,
-    });
+    const appOwnership = detail?.apps.length
+      ? "proven"
+      : appInventory?.snapshot?.apps.some((app) => app.pluginDisplayNames.includes(summary.name))
+        ? "ambiguous"
+        : "none";
     if (appOwnership === "ambiguous") {
       diagnostics.push({
         code: "app_ownership_ambiguous",
@@ -267,7 +254,7 @@ export async function readCodexPluginInventory(
       embeddedAgentLog.error(diagnostic.message, { code: diagnostic.code });
     }
   }
-  const inventory = {
+  return {
     policy: {
       ...policy,
       pluginPolicies: policy.pluginPolicies.filter((plugin) => !missingKeys.has(plugin.configKey)),
@@ -276,7 +263,6 @@ export async function readCodexPluginInventory(
     diagnostics,
     ...(appInventory ? { appInventory } : {}),
   };
-  return inventory;
 }
 
 /** Finds a configured plugin only in its authorized marketplace identity. */
@@ -308,7 +294,6 @@ export function pluginReadParams(
   };
 }
 
-/** Returns configured plugin keys whose current metadata may still recover. */
 export function resolveRecoverableCodexPluginConfigKeys(params: {
   policy: ResolvedCodexPluginsPolicy;
   metadataCache: CodexPluginMetadataCache;
@@ -499,21 +484,6 @@ async function readPluginDetail(
   }
 }
 
-function resolveAppOwnership(params: {
-  detail?: v2.PluginDetail;
-  appInventory?: CodexAppInventoryCacheRead;
-  summary: v2.PluginSummary;
-}): "proven" | "ambiguous" | "none" {
-  if (params.detail && params.detail.apps.length > 0) {
-    return "proven";
-  }
-  const apps = params.appInventory?.snapshot?.apps ?? [];
-  const displayMatches = apps.filter((app) =>
-    app.pluginDisplayNames.some((displayName) => displayName === params.summary.name),
-  );
-  return displayMatches.length > 0 ? "ambiguous" : "none";
-}
-
 function resolveOwnedApps(params: {
   pluginPolicy: ResolvedCodexPluginPolicy;
   detail?: v2.PluginDetail;
@@ -577,32 +547,24 @@ function resolveOwnedAppApprovalOverrideKeys(
     return {};
   }
   const appName = app.name.trim();
-  const appNameLower = appName.toLowerCase();
+  const prefixes = [...new Set([appName, appName.toLowerCase()])].filter(Boolean);
   // Agents: app/read includes disabled tools. Keep every non-read-only alias,
   // including collisions with read-only titles; retired names cannot authorize
   // a current tool and must not prevent the entire app from being admitted.
-  const keys = app.toolSummaries
-    .filter((tool) => !tool.isReadOnly)
-    .flatMap((tool) => resolveAppToolConfigKeys({ appName, appNameLower, tool }));
-  return { approvalOverrideToolConfigKeys: Array.from(new Set(keys)).toSorted() };
-}
-
-function resolveAppToolConfigKeys(params: {
-  appName: string;
-  appNameLower: string;
-  tool: { name: string; title?: string | null };
-}): string[] {
-  const keys = [params.tool.name];
-  if (params.tool.title) {
-    keys.push(params.tool.title);
+  const keys = new Set<string>();
+  for (const tool of app.toolSummaries) {
+    if (tool.isReadOnly) {
+      continue;
+    }
+    keys.add(tool.name);
+    if (tool.title) {
+      keys.add(tool.title);
+    }
+    for (const prefix of prefixes) {
+      keys.add(`${prefix}_${tool.name}`);
+    }
   }
-  if (params.appName) {
-    keys.push(`${params.appName}_${params.tool.name}`);
-  }
-  if (params.appNameLower && params.appNameLower !== params.appName) {
-    keys.push(`${params.appNameLower}_${params.tool.name}`);
-  }
-  return keys;
+  return { approvalOverrideToolConfigKeys: Array.from(keys).toSorted() };
 }
 
 function findPluginSummary(
@@ -692,7 +654,6 @@ export function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntr
   return isOpenAiCuratedMarketplaceName(marketplace.name);
 }
 
-/** True for all Codex wire aliases of the same OpenAI-curated catalog. */
 export function isOpenAiCuratedMarketplaceName(marketplaceName: string): boolean {
   return (
     marketplaceName === CODEX_PLUGINS_MARKETPLACE_NAME ||

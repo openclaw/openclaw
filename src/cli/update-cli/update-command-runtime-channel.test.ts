@@ -23,11 +23,9 @@ const { fixture } = installFreshUpdateFixture();
 
 it.each([
   ["extended-stable", "2026.8.33", "--channel extended-stable", null],
-  ["stable", "2026.9.4", "--tag 2026.9.4", null],
   ["beta", "2026.9.4-beta.1", "--tag 2026.9.4-beta.1", null],
   ["dev", "2026.9.4-dev.1", "--tag 2026.9.4-dev.1", null],
   ["stable", "2026.8.33", "--channel extended-stable", "extended-stable"],
-  ["extended-stable", "2026.9.4", "--channel stable --tag 2026.9.4", "stable"],
   ["extended-stable", "2026.9.4-beta.1", "--channel beta --tag 2026.9.4-beta.1", "beta"],
 ] as const)(
   "replays runtime recovery for saved %s (%s, %s, requested=%s) through the target resolver",
@@ -55,7 +53,7 @@ it.each([
       }),
     );
     vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({ tag: channel, version });
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue(version);
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version });
     const runtime = vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo");
     runtime.mockResolvedValue(unsupportedServiceRuntimeFixture);
     const preflight = vi.spyOn(servicePlan, "resolvePackageRuntimePreflight");

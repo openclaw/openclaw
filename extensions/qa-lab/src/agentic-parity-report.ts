@@ -6,17 +6,17 @@ import type {
   QaRuntimeParityReport,
   QaRuntimeParityScenarioReport,
 } from "./agentic-parity-runtime-report-contract.js";
-// Qa Lab plugin module implements agentic parity report behavior.
 import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
-import type { QaReportScenario as QaParityReportScenario } from "./report.js";
+import type { QaReportScenario } from "./report.js";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   compareRuntimeWallClockMs,
   summarizeRuntimeParityTiming,
 } from "./runtime-parity-timing.js";
-import type { RuntimeId, RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
 import {
   isRuntimeParityResultPass,
   normalizeRuntimePair,
@@ -37,7 +37,7 @@ type QaParityRunBlock = {
 };
 
 export type QaParitySuiteSummary = {
-  scenarios: QaParityReportScenario[];
+  scenarios: QaRuntimeParitySuiteScenario[];
   counts?: {
     total?: number;
     passed?: number;
@@ -46,12 +46,8 @@ export type QaParitySuiteSummary = {
   run?: QaParityRunBlock;
 };
 
-type QaRuntimeParitySuiteScenario = QaParityReportScenario & {
+type QaRuntimeParitySuiteScenario = QaReportScenario & {
   runtimeParity?: RuntimeParityResult;
-};
-
-export type QaRuntimeParitySuiteSummary = Omit<QaParitySuiteSummary, "scenarios"> & {
-  scenarios: QaRuntimeParitySuiteScenario[];
 };
 
 type QaAgenticParityMetrics = {
@@ -113,28 +109,18 @@ function normalizeScenarioStatus(status: string | undefined): "pass" | "fail" | 
   return status === "pass" || status === "fail" || status === "skip" ? status : "fail";
 }
 
-function scenarioText(scenario: QaParityReportScenario) {
-  const parts = [scenario.details ?? ""];
-  for (const step of scenario.steps ?? []) {
-    parts.push(step.details ?? "");
-  }
-  return parts.filter(Boolean).join("\n");
-}
-
 function scenarioHasPattern(
-  scenario: QaParityReportScenario,
+  scenario: QaRuntimeParitySuiteScenario,
   patterns: readonly RegExp[],
 ): boolean {
-  const text = scenarioText(scenario);
+  const text = [scenario.details, ...(scenario.steps ?? []).map((step) => step.details)]
+    .filter(Boolean)
+    .join("\n");
   return text.length > 0 && patterns.some((pattern) => pattern.test(text));
 }
 
-function scenarioRuntimeParity(scenario: QaParityReportScenario): RuntimeParityResult | undefined {
-  return (scenario as QaRuntimeParitySuiteScenario).runtimeParity;
-}
-
-function scenarioHasRuntimeToolCallEvidence(scenario: QaParityReportScenario): boolean {
-  const parity = scenarioRuntimeParity(scenario);
+function scenarioHasRuntimeToolCallEvidence(scenario: QaRuntimeParitySuiteScenario): boolean {
+  const parity = scenario.runtimeParity;
   if (!parity) {
     return scenario.status === "pass";
   }
@@ -198,17 +184,6 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function buildRuntimeParityDriftCounts(): Record<RuntimeParityDrift, number> {
-  return {
-    none: 0,
-    "text-only": 0,
-    "tool-call-shape": 0,
-    "tool-result-shape": 0,
-    structural: 0,
-    "failure-mode": 0,
-  };
-}
-
 function isLiveProviderMode(providerMode: string | undefined) {
   return providerMode?.startsWith("live-") === true;
 }
@@ -229,7 +204,7 @@ function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParit
 }
 
 function requiredCoverageStatus(
-  scenario: QaParityReportScenario | undefined,
+  scenario: QaRuntimeParitySuiteScenario | undefined,
 ): "pass" | "fail" | "skip" | "missing" {
   return scenario ? normalizeScenarioStatus(scenario.status) : "missing";
 }
@@ -513,13 +488,20 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
 }
 
 export function buildQaRuntimeParityReport(params: {
-  summary: QaRuntimeParitySuiteSummary;
+  summary: QaParitySuiteSummary;
   comparedAt?: string;
 }): QaRuntimeParityReport {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const providerMode = params.summary.run?.providerMode;
   const requiresLiveUsage = isLiveProviderMode(providerMode);
-  const driftCounts = buildRuntimeParityDriftCounts();
+  const driftCounts: Record<RuntimeParityDrift, number> = {
+    none: 0,
+    "text-only": 0,
+    "tool-call-shape": 0,
+    "tool-result-shape": 0,
+    structural: 0,
+    "failure-mode": 0,
+  };
   const failures: string[] = [];
   const scenarios: QaRuntimeParityScenarioReport[] = params.summary.scenarios.map((scenario) => {
     const parity = scenario.runtimeParity;

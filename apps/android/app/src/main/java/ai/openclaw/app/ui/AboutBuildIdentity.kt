@@ -226,7 +226,7 @@ private fun AboutBuildIdentityCell(
   ) {
     Text(
       text = cell.title,
-      style = ClawTheme.type.caption.copy(fontSize = 11.sp, lineHeight = 14.sp),
+      style = ClawTheme.type.caption.copy(fontSize = ClawTheme.type.captionSmall.fontSize, lineHeight = 14.sp),
       color = ClawTheme.colors.textSubtle,
       textAlign = TextAlign.Center,
     )
@@ -235,7 +235,6 @@ private fun AboutBuildIdentityCell(
       style =
         ClawTheme.type.caption.copy(
           fontFamily = if (cell.monospace) FontFamily.Monospace else ClawTheme.type.caption.fontFamily,
-          fontSize = 12.5.sp,
           lineHeight = 17.sp,
           textDirection = if (cell.forceLeftToRight) TextDirection.Ltr else ClawTheme.type.caption.textDirection,
         ),

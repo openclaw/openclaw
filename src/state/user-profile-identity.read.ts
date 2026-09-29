@@ -2,7 +2,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -16,10 +16,11 @@ import {
   projectUserProfileDisplay,
   selectProfileDisplayEntries,
   selectResolvedUserProfile,
+  selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   userProfilesDb,
   userProfileDisplaySelection,
-  normalizeUserProfileAvatarMime,
+  toUserProfile,
 } from "./user-profiles-internal.js";
 import {
   ensureUserProfilesSchema,
@@ -69,13 +70,7 @@ export function readUserProfileIdForEmail(db: DatabaseSync, email: string): stri
   if (!tableExists(db, "user_profile_emails") || !tableExists(db, "user_profiles")) {
     return undefined;
   }
-  const alias = executeSqliteQueryTakeFirstSync(
-    db,
-    userProfilesDb(db)
-      .selectFrom("user_profile_emails")
-      .select("profile_id")
-      .where("email", "=", email),
-  );
+  const alias = selectUserProfileEmailAlias(db, email);
   return alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id)?.id : undefined;
 }
 
@@ -115,20 +110,11 @@ export function listUserProfilesSync(options: OpenClawStateDatabaseOptions = {})
         emailsByProfile.get(profile_id)?.push(email);
       }
       return profiles.map((profile) =>
-        Object.assign(
-          {
-            id: profile.id,
-            displayName: profile.display_name,
-            avatarMime: normalizeUserProfileAvatarMime(profile.avatar_mime),
-            mergedInto: profile.merged_into,
-            createdAt: profile.created_at,
-            updatedAt: profile.updated_at,
-            emails: emailsByProfile.get(profile.id) ?? [],
-            githubIdentity: githubIdentities.get(profile.id) ?? null,
-            hasAvatar: profile.has_avatar === 1,
-          },
-          profile.role ? { role: profile.role } : {},
-        ),
+        Object.assign(toUserProfile(profile), {
+          emails: emailsByProfile.get(profile.id) ?? [],
+          githubIdentity: githubIdentities.get(profile.id) ?? null,
+          hasAvatar: profile.has_avatar === 1,
+        }),
       );
     },
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },

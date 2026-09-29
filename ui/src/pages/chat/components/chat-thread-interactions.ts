@@ -18,29 +18,28 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type {
+  ChatAttachment,
   ChatGuardianNotice,
   ChatQueueItem,
   ChatSelectionSource,
   ChatStreamSegment,
 } from "../../../lib/chat/chat-types.ts";
-import { buildCompanionQuestionPrefill } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
-import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import { isConfirmedActionPopoverFocused } from "./chat-message-confirmation.ts";
@@ -79,6 +78,11 @@ export type ChatThreadState = {
   searchReturnFocusOwner: HTMLElement | null;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
+    onRequestUpdate?: () => void;
+    turnVideoMessages?: ReadonlyMap<
+      string,
+      readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
+    >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
     onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
@@ -171,7 +175,8 @@ export type ChatThreadProps = ChatSendStatusActions & {
   githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  typingActors?: readonly { id: string; label: string; preview?: string; paused?: boolean }[];
+  typingActors?: readonly ChatTypingActorView[];
+  typingOverflow?: ChatTypingOverflow;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
@@ -188,13 +193,13 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
-  commentAttachments?: ChatAttachmentControlsProps;
+  commentAttachments?: readonly ChatAttachment[];
+  commentsDisabled?: boolean;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onCompanionPrefill?: (question: string) => void;
+  onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
-  backgroundTasks?: BackgroundTasksProps;
 };
 
 type TranscriptInteractionProps = Pick<
@@ -207,7 +212,7 @@ type TranscriptInteractionProps = Pick<
   | "onForkMessage"
   | "onFocusComposer"
   | "onAddToChat"
-  | "onCompanionPrefill"
+  | "onCompanionSelection"
 >;
 
 function createTranscriptState(): ChatThreadState {
@@ -460,18 +465,13 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
 
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
-  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionPrefill !== "function") {
+  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionSelection !== "function") {
     return;
   }
   handleChatSelectionPointerUp(event, {
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
-    onAskSideChat: (selection) => {
-      const question = buildCompanionQuestionPrefill(selection);
-      if (question) {
-        props.onCompanionPrefill?.(question);
-      }
-    },
+    onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
   });
 }
 

@@ -3,8 +3,11 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
-import { releaseSqliteWorkerActorCoordinators } from "./sqlite-worker-broker-admission.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "./sqlite-lifecycle-errors.js";
 import {
   receiveSqliteWorkerReply,
   type SqliteWorkerReplyOwner,
@@ -51,9 +54,7 @@ export function createSqliteWorkerLifecycle({
       createCpuTrackedWorker(options.carrierUrl, {
         resourceLimits: { maxOldGenerationSizeMb: 512 },
         env: resolveNodeCompileCacheEnv(),
-        execArgv: options.carrierUrl.pathname.endsWith(".ts")
-          ? ["--import", import.meta.resolve("tsx/esm")]
-          : [],
+        execArgv: resolveRuntimeWorkerThreadExecArgv(options.carrierUrl),
       }),
     );
     const exited = createDeferredCore();
@@ -61,7 +62,7 @@ export function createSqliteWorkerLifecycle({
       runtimeGeneration: options.runtimeGeneration,
       ...(borrowedGenerationSlot ? { borrowedGenerationSlot: true as const } : {}),
       worker,
-      receiveReply: (reply, pumping) => receiveSqliteWorkerReply(slot, reply, replyOwner, pumping),
+      receiveReply: (reply) => receiveSqliteWorkerReply(slot, reply, replyOwner),
       actors: new Set(),
       queue: [],
       exit: exited.promise,
@@ -200,22 +201,13 @@ export function createSqliteWorkerLifecycle({
         ) {
           // Bun retains native statements after close; keep pathname ownership until VM exit.
           await retire(actor.slot);
-        } else {
-          releaseSqliteWorkerActorCoordinators(actor);
         }
       } catch (error) {
         errors.push(error);
       } finally {
         forget(actor);
       }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "SQLite worker actor cleanup failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "SQLite worker actor cleanup failed");
     })().finally(() => {
       actor.closing = undefined;
     });
@@ -223,10 +215,6 @@ export function createSqliteWorkerLifecycle({
   }
 
   function forget(actor: Actor): void {
-    if (actor.gatewaySchemaFence || actor.pendingStateLifecycles.size) {
-      actor.cleanupState = "pending";
-      return;
-    }
     if (actors.get(actor.key) === actor) {
       actors.delete(actor.key);
     }
@@ -251,21 +239,7 @@ export function createSqliteWorkerLifecycle({
         }
       }
       await slot.exit;
-      for (const actor of slot.actors) {
-        try {
-          releaseSqliteWorkerActorCoordinators(actor);
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "SQLite worker retirement cleanup failed", {
-          cause: errors[0],
-        });
-      }
+      throwSqliteLifecycleErrors(errors, "SQLite worker retirement cleanup failed");
     })().finally(() => {
       slot.retiring = undefined;
     });

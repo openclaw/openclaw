@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements qa driver behavior.
 import type { ConnectionState, proto, WAMessage } from "baileys";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -80,22 +79,15 @@ type WhatsAppQaDriverSendReactionOptions = {
 
 type WhatsAppQaDriverSendResult = Promise<{ messageId?: string }>;
 
+type WebSendApi = ReturnType<typeof createWebSendApi>;
+
 export type WhatsAppQaDriverSession = {
+  sendContact(...args: Parameters<WebSendApi["sendContact"]>): WhatsAppQaDriverSendResult;
+  sendLocation(...args: Parameters<WebSendApi["sendLocation"]>): WhatsAppQaDriverSendResult;
+  sendPoll(...args: Parameters<WebSendApi["sendPoll"]>): WhatsAppQaDriverSendResult;
+  sendSticker(...args: Parameters<WebSendApi["sendSticker"]>): WhatsAppQaDriverSendResult;
   close(): Promise<void>;
   getObservedMessages(): WhatsAppQaDriverObservedMessage[];
-  sendContact(
-    to: string,
-    contact: { displayName: string; vcard: string },
-  ): WhatsAppQaDriverSendResult;
-  sendLocation(
-    to: string,
-    location: {
-      address?: string;
-      degreesLatitude: number;
-      degreesLongitude: number;
-      name?: string;
-    },
-  ): WhatsAppQaDriverSendResult;
   sendMedia(
     to: string,
     text: string,
@@ -103,20 +95,11 @@ export type WhatsAppQaDriverSession = {
     mediaType: string,
     options?: WhatsAppQaDriverSendMediaOptions,
   ): WhatsAppQaDriverSendResult;
-  sendPoll(
-    to: string,
-    poll: { maxSelections?: number; options: string[]; question: string },
-  ): WhatsAppQaDriverSendResult;
   sendReaction(
     chatJid: string,
     messageId: string,
     emoji: string,
     options: WhatsAppQaDriverSendReactionOptions,
-  ): WhatsAppQaDriverSendResult;
-  sendSticker(
-    to: string,
-    stickerBuffer: Buffer,
-    options?: { mimetype?: string },
   ): WhatsAppQaDriverSendResult;
   sendText(
     to: string,

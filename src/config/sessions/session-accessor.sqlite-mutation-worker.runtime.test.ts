@@ -9,7 +9,7 @@ import { runReclamationWorkerPort } from "./session-accessor.sqlite-mutation-wor
 import type {
   SqliteReclamationWorkerCloseRequest,
   SqliteReclamationWorkerRequest,
-} from "./session-accessor.sqlite-reclamation-worker.js";
+} from "./session-accessor.sqlite-reclamation-worker.types.js";
 
 const gc = vi.hoisted(() => ({
   pending: undefined as (() => void) | undefined,
@@ -82,7 +82,6 @@ it("keeps idle collection after buffered admission replies and cancels it for th
     databasePath: "/fixture/state.sqlite",
     stateContext: {
       environment: { OPENCLAW_STATE_DIR: "/fixture" },
-      coordinatorRuntime: { directory: "/fixture/runtime", keepAlive: false },
     },
   };
   const running = runReclamationWorkerPort(worker, databaseOptions);

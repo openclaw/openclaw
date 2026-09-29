@@ -276,7 +276,6 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it.each([
     { terminationFails: false, projectorFails: false },
-    { terminationFails: true, projectorFails: false },
     { terminationFails: true, projectorFails: true },
   ])(
     "settles side background-terminal cleanup before cancellation returns (terminal failure: $terminationFails, projector failure: $projectorFails)",

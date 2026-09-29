@@ -1,4 +1,5 @@
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
+import { isRuntimeTestFileIncluded, type RuntimeTestSelection } from "./ci-node-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 
 export type WindowsTestShard = {
@@ -108,7 +109,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/shared/pid-alive.env.test.ts": 1.4,
   "src/shared/runtime-import.test.ts": 1.4,
   "src/shared/worker-bundle-archive.test.ts": 4,
-  "src/skills/runtime/refresh-watch-close.test.ts": 0.1,
   "src/skills/runtime/refresh-watch-path.test.ts": 0.2,
   "src/skills/runtime/refresh.missing-root.integration.test.ts": 5.4,
   "src/skills/runtime/refresh.windows.test.ts": 0.3,
@@ -171,11 +171,14 @@ function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>
 
 export function createWindowsTestShards(
   scripts: Readonly<Record<string, string | undefined>>,
+  options: RuntimeTestSelection = {},
 ): WindowsTestShard[] {
   const envelopes: { targets: string[]; seconds: number }[] = [];
   const projects = new Map<string, { targets: string[]; seconds: number }>();
   const runtime = { targets: [] as string[], seconds: runtimeBuildSeconds };
-  for (const file of readWindowsTargets(scripts).toSorted()) {
+  for (const file of readWindowsTargets(scripts)
+    .filter((target) => isRuntimeTestFileIncluded(target, options))
+    .toSorted()) {
     const seconds = fileSeconds[file] ?? fallbackFileSeconds;
     if (resolveVitestPretestBuildMode([{ includePatterns: [file] }]) !== undefined) {
       // test-projects prepares one runtime before all serial project borrowers.

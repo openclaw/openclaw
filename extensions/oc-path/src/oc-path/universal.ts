@@ -107,26 +107,13 @@ interface InsertionInfo {
 }
 
 function detectInsertion(path: OcPath): InsertionInfo | null {
-  const segments: Array<{ slot: "section" | "item" | "field"; value: string }> = [];
-  if (path.section !== undefined) {
-    segments.push({ slot: "section", value: path.section });
-  }
-  if (path.item !== undefined) {
-    segments.push({ slot: "item", value: path.item });
-  }
-  if (path.field !== undefined) {
-    segments.push({ slot: "field", value: path.field });
-  }
-  if (segments.length === 0) {
+  const slot = path.field !== undefined ? "field" : path.item !== undefined ? "item" : "section";
+  const value = path[slot];
+  if (!value?.startsWith("+")) {
     return null;
   }
 
-  const last = expectDefined(segments.at(-1), "non-empty insertion path segments");
-  if (!last.value.startsWith("+")) {
-    return null;
-  }
-
-  const rest = last.value.slice(1);
+  const rest = value.slice(1);
   const marker: InsertionInfo["marker"] =
     rest.length === 0
       ? "+"
@@ -136,9 +123,9 @@ function detectInsertion(path: OcPath): InsertionInfo | null {
 
   const parentPath: OcPath = {
     file: path.file,
-    ...(last.slot !== "section" && path.section !== undefined ? { section: path.section } : {}),
-    ...(last.slot !== "item" && path.item !== undefined ? { item: path.item } : {}),
-    ...(last.slot !== "field" && path.field !== undefined ? { field: path.field } : {}),
+    ...(slot !== "section" && path.section !== undefined ? { section: path.section } : {}),
+    ...(slot !== "item" && path.item !== undefined ? { item: path.item } : {}),
+    ...(slot !== "field" && path.field !== undefined ? { field: path.field } : {}),
     ...(path.session !== undefined ? { session: path.session } : {}),
   };
   return { parentPath, marker };
@@ -600,21 +587,20 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
       kvMatch === null ? undefined : expectDefined(kvMatch[1], "Markdown item key capture");
     const kvValue =
       kvMatch === null ? undefined : expectDefined(kvMatch[2], "Markdown item value capture");
+    const bodyPrefix = block.bodyText.length === 0 ? "" : block.bodyText.replace(/\n*$/, "\n");
     const newItem = {
       text: value,
       slug: slugify(kvKey ?? value),
-      line: 0,
+      line: block.line + bodyPrefix.split("\n").length,
       ...(kvKey !== undefined && kvValue !== undefined
         ? { kv: { key: kvKey.trim(), value: kvValue.trim() } }
         : {}),
     };
-    const newBodyText =
-      block.bodyText.length === 0 ? itemLine : block.bodyText.replace(/\n*$/, "\n") + itemLine;
     const newBlocks = ast.blocks.slice();
     newBlocks[blockIdx] = {
       ...block,
       items: [...block.items, newItem],
-      bodyText: newBodyText,
+      bodyText: bodyPrefix + itemLine,
     };
     return { ok: true, ast: rebuildMdRaw({ ...ast, blocks: newBlocks }) };
   }

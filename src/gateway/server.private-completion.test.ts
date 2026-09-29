@@ -12,7 +12,7 @@ import {
   settleSubagentRegistryPersistenceWork,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRunsForControllerFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
@@ -29,6 +29,10 @@ import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
 } from "../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { setAbortedAgentDedupeEntries } from "./agent-turn/agent-dedupe.js";
 import * as agentJobs from "./agent-turn/agent-job.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
@@ -95,7 +99,7 @@ describe("private subagent completion processing receipts", () => {
     database()
       .db.prepare("SELECT * FROM session_pending_inputs WHERE session_id = ?")
       .all(sessionId);
-  const transcript = () => loadTranscriptEventsSync(scope());
+  const transcript = () => sessionAccessor.loadTranscriptEventsSync(scope());
   const request = (message = "Synthetic private child marker") => ({
     sessionKey,
     expectedExistingSessionId: sessionId,
@@ -135,6 +139,66 @@ describe("private subagent completion processing receipts", () => {
       "Expected real private input recorder",
     );
   }
+
+  it("binds a settle handoff to the source accepted by pending-input replay", async () => {
+    const sourceSessionKeys = ["agent:main:subagent:first", "agent:main:subagent:second"] as const;
+    const stage = sessionAccessor.stageSessionPendingInput;
+    const seed = vi
+      .spyOn(sessionAccessor, "stageSessionPendingInput")
+      .mockImplementationOnce(async (target, options) => {
+        const previous = expectDefined(
+          await stage(target, {
+            ...options,
+            message: {
+              ...options.message,
+              provenance: {
+                ...options.message.provenance,
+                kind: "inter_session",
+                sourceSessionKey: sourceSessionKeys[1],
+              },
+            },
+          }),
+          "Expected the interrupted scheduling sibling's input",
+        );
+        previous.finish("interrupted");
+        return await stage(target, options);
+      });
+    agentCommandMock.mockImplementationOnce(async (input) => {
+      const command = input as AgentCommandOpts;
+      expect(command.inputProvenance?.sourceSessionKey).toBe(sourceSessionKeys[1]);
+      expect(command.trustedInternalHandoff?.sourceSessionKey).toBe(sourceSessionKeys[1]);
+      await recorder(input).persistApproved();
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    try {
+      const result = await runAnnounceAgentCall({
+        agentParams: {
+          ...request(),
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_settle",
+            sourceSessionKey: sourceSessionKeys[0],
+          },
+        },
+        privateCompletion: true,
+        expectFinal: true,
+        settleWakeSourceSessionKeys: sourceSessionKeys,
+        delegatedToolPolicyHandoff: {
+          sourceSessionKey: sourceSessionKeys[0],
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionId,
+          idempotencyKey: runId,
+          settleBatch: { sourceSessionKeys, isCurrent: () => true },
+        },
+        isExecutionAllowed: () => true,
+        resolveGatewayContext: () => kernel.gatewayRequestContext,
+      });
+      expect(result).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+    } finally {
+      seed.mockRestore();
+    }
+  });
 
   it.each(["rpc", "stop", "timeout", "restart", "foreign-session"])(
     "preserves only a matching intentional pre-admission stop: %s",
@@ -241,6 +305,7 @@ describe("private subagent completion processing receipts", () => {
         agentParams: request(),
         privateCompletion: true,
         expectFinal: true,
+        signal,
         isExecutionAllowed: () => allowed,
         resolveGatewayContext: () => kernel.gatewayRequestContext,
       });
@@ -597,7 +662,6 @@ describe("private subagent completion processing receipts", () => {
         task: "synthetic continuation child",
         cleanup: "keep",
         expectsCompletionMessage: false,
-        taskRowOwnership: "required",
       });
       // Keep both producers live until the child's registration and wait request
       // are admitted; a slow socket handshake must not hide the outstanding wait.
@@ -726,17 +790,19 @@ describe("private subagent completion processing receipts", () => {
       const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
       const { createGatewayMaintenanceStateForTest } =
         await import("./test-helpers.maintenance-state.js");
-      vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+      const clock = createGatewaySchedulerClock(Date.now());
+      const now = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
       const timers = startGatewayMaintenanceTimers({
         ...createGatewayMaintenanceStateForTest(),
         ...kernel.gatewayRequestContext,
+        scheduler: createTestGatewayScheduler(clock.clock),
         logHealth: { info: vi.fn(), error: vi.fn() },
         runWorktreeGc: async () => undefined,
         runDeliveryQueueMediaGc: async () => undefined,
         runManagedOutgoingMediaGc: async () => undefined,
       });
       try {
-        await vi.advanceTimersByTimeAsync(60_000);
+        await clock.advanceBy(60_000);
         expect(active.controller.signal.aborted).toBe(true);
         expect(active.abortStopReason).toBe("timeout");
         expect(kernel.gatewayRequestContext.chatAbortControllers.get(runId)).toBe(active);
@@ -744,7 +810,7 @@ describe("private subagent completion processing receipts", () => {
         if (kind === "abandoned") {
           // Keep the real terminal write pending through maintenance retirement.
           expect(terminalWrite).toBeInstanceOf(Promise);
-          await vi.advanceTimersByTimeAsync(60_000);
+          await clock.advanceBy(60_000);
           expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
           expect(active.projectSessionTerminalPending).toBe(true);
           expect(active.projectSessionTerminalPersistence).toBe(terminalWrite);
@@ -757,7 +823,7 @@ describe("private subagent completion processing receipts", () => {
       } finally {
         await timers.stopPeriodicTasks();
         await timers.skillUsageCleanup();
-        vi.useRealTimers();
+        now.mockRestore();
         releaseTerminalWrite.resolve();
         release.resolve();
         try {

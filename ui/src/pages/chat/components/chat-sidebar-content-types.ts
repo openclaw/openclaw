@@ -2,7 +2,11 @@ import type { TemplateResult } from "lit";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
-import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
+import type {
+  SessionDiffFileTextLoader,
+  SessionDiffLoader,
+  SessionDiffOwner,
+} from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 type DetailFullMessageResult = {
@@ -73,7 +77,7 @@ export type AttachmentSidebarRuntime = {
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 
-type AttachmentSidebarContent = {
+type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   kind: "attachment";
   attachmentKind?: "audio" | "video" | "document" | "image";
   title: string;
@@ -81,12 +85,6 @@ type AttachmentSidebarContent = {
   src?: string;
   mimeType?: string | null;
   sourceIdentity?: string;
-  playback?: ChatMediaPlaybackMode;
-  authToken?: string | null;
-  sizeBytes?: number;
-  durationMs?: number;
-  width?: number;
-  height?: number;
   voiceNote?: boolean;
   plainText?: boolean;
   renderActions?: () => TemplateResult;
@@ -101,7 +99,7 @@ type AttachmentSidebarContent = {
 
 type SessionDiffSidebarContent = {
   kind: "session-diff";
-  /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
+  owner: SessionDiffOwner;
   load: SessionDiffLoader;
   loadFileText?: SessionDiffFileTextLoader;
   openFile?: (path: string) => void;
@@ -129,6 +127,8 @@ export type FileSidebarContent = {
   content: string;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
+  /** Captured display context; the draft key is opaque and never a UI label. */
+  draftContext?: { sessionKey: string; sessionTitle: string; paneLabel?: string };
   root?: string | null;
   mimeType?: string;
   language?: string;

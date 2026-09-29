@@ -115,10 +115,6 @@ vi.mock("openclaw/plugin-sdk/reply-history", () => ({
     },
   }),
 }));
-vi.mock("openclaw/plugin-sdk/routing", () => ({
-  resolveAgentRoute: () => ({ agentId: "default" }),
-}));
-
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
@@ -181,17 +177,7 @@ vi.mock("./bot-message-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bot-message-context.js")>()),
   buildLineMessageContext: buildLineMessageContextMock,
   buildLinePostbackContext: buildLinePostbackContextMock,
-  getLineSourceInfo: (source: {
-    type?: string;
-    userId?: string;
-    groupId?: string;
-    roomId?: string;
-  }) => ({
-    userId: source.userId,
-    groupId: source.type === "group" ? source.groupId : undefined,
-    roomId: source.type === "room" ? source.roomId : undefined,
-    isGroup: source.type === "group" || source.type === "room",
-  }),
+  prepareLineInboundRoute: async () => ({ mentionAgentId: "default" }),
 }));
 
 // Cold module transforms belong to collection, not a timed lifecycle hook.
@@ -325,7 +311,6 @@ describe("handleLineWebhookEvents", () => {
     vi.doUnmock("openclaw/plugin-sdk/runtime-group-policy");
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/reply-history");
-    vi.doUnmock("openclaw/plugin-sdk/routing");
     vi.doUnmock("openclaw/plugin-sdk/conversation-runtime");
     vi.doUnmock("./download.js");
     vi.doUnmock("./send.js");

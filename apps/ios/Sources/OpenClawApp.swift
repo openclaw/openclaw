@@ -88,8 +88,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var backgroundWakeAttempt: BackgroundWakeRefreshAttempt?
     private var pendingAPNsDeviceToken: Data?
     private var pendingExecApprovalPrompts: [ApprovalNotificationPrompt] = []
-    private var pendingExecApprovalRequestedPushes: [ExecApprovalNotificationPrompt] = []
-    private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
+    private var pendingExecApprovalRequestedPushes: [ApprovalNotificationPrompt] = []
+    private var pendingExecApprovalResolvedPushes: [ApprovalNotificationPrompt] = []
     private var pendingOpenURLs: [URL] = []
 
     weak var appModel: NodeAppModel? {
@@ -417,8 +417,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     {
         let userInfo = notification.request.content.userInfo
         if Self.isWatchPromptNotification(userInfo)
-            || ExecApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
-            || PluginApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
+            || ApprovalNotificationBridge.parseRequestedPush(userInfo: userInfo) != nil
         {
             completionHandler([.banner, .list, .sound])
             return
@@ -522,17 +521,9 @@ enum WatchPromptNotificationBridge {
         var userInfo: [AnyHashable: Any] = [
             typeKey: typeValue,
         ]
-        if let promptId = params.promptId?.trimmingCharacters(in: .whitespacesAndNewlines), !promptId.isEmpty {
-            userInfo[self.promptIDKey] = promptId
-        }
-        if let sessionKey = params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines), !sessionKey.isEmpty {
-            userInfo[self.sessionKeyKey] = sessionKey
-        }
-        if let gatewayStableID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !gatewayStableID.isEmpty
-        {
-            userInfo[self.gatewayStableIDKey] = gatewayStableID
-        }
+        userInfo[self.promptIDKey] = WatchMessagingPayloadCodec.nonEmpty(params.promptId)
+        userInfo[self.sessionKeyKey] = WatchMessagingPayloadCodec.nonEmpty(params.sessionKey)
+        userInfo[self.gatewayStableIDKey] = WatchMessagingPayloadCodec.nonEmpty(gatewayStableID)
         if let context = chatDeliveryContext,
            let encoded = try? OpenClawWatchChatDeliveryCodec.encode(context)
         {
@@ -626,15 +617,9 @@ enum WatchPromptNotificationBridge {
     }
 
     private static func notificationActionOptions(style: String?) -> UNNotificationActionOptions {
-        switch style?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "destructive":
-            [.destructive]
-        case "foreground":
-            // For mirrored watch actions, keep handling in background when possible.
-            []
-        default:
-            []
-        }
+        style?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "destructive"
+            ? [.destructive]
+            : []
     }
 
     private static func isNotificationAuthorizationAllowed(

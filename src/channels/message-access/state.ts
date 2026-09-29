@@ -111,14 +111,6 @@ async function normalizeAndMatch(params: {
   };
 }
 
-function directAllowlistEntries(entries: readonly string[]): string[] {
-  return entries.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null);
-}
-
-function eventSubjectMatchContext(input: NormalizedStateInput): "dm" | "group" {
-  return input.conversation.kind === "direct" ? "dm" : "group";
-}
-
 async function normalizeSubjectIdentifiersForMatch(params: {
   input: NormalizedStateInput;
   subject: NormalizedIngressSubject;
@@ -222,7 +214,7 @@ async function originSubjectAuthentication(
     }
   }
 
-  const context = eventSubjectMatchContext(input);
+  const context = input.conversation.kind === "direct" ? "dm" : "group";
   const originEntries = await normalizeSubjectIdentifiersForMatch({
     input,
     subject: origin,
@@ -359,7 +351,7 @@ async function resolveIngressAllowlist(params: {
 }): Promise<NormalizedIngressAllowlist> {
   const entries = normalizeStringEntries(params.rawEntries ?? []);
   const referenced = allReferencedAccessGroupNames([entries]);
-  const directEntries = directAllowlistEntries(entries);
+  const directEntries = entries.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null);
   const direct = await normalizeAndMatch({
     adapter: params.input.adapter,
     subject: params.input.subject,

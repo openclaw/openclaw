@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stripVTControlCharacters } from "node:util";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
@@ -76,9 +76,10 @@ function readDatabase<T>(pathname: string, read: (database: DatabaseSync) => T):
   }
 }
 
-it.each(["current", "historical-v1", "lost-journal"] as const)(
+it.concurrent.for(["current", "historical-v1", "lost-journal"] as const)(
   "settles historical agent migration before auth and session repair with %s shared state",
-  async (sharedState) => {
+  { timeout: getCliProcessTestTimeout(CHILD_TIMEOUT_MS, CHILD_TIMEOUT_MS) },
+  async (sharedState, { expect, onTestFinished }) => {
     const root = fs.realpathSync(fixtures.createTempDir("doctor-agent-database-order-"));
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -188,7 +189,9 @@ it.each(["current", "historical-v1", "lost-journal"] as const)(
       );
       const agentDatabaseBytes = databasePaths.map((pathname) => fs.readFileSync(pathname));
       const args = ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"];
-      const first = await fixtures.track(runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS));
+      const first = await fixtures.track(
+        runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS, { onTestFinished }),
+      );
       const output = stripVTControlCharacters(`${first.stdout}\n${first.stderr}`);
       if (sharedState === "lost-journal") {
         expect(first.code, output).toBe(1);
@@ -283,7 +286,7 @@ it.each(["current", "historical-v1", "lost-journal"] as const)(
       );
 
       const second = await fixtures.track(
-        runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS),
+        runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS, { onTestFinished }),
       );
       const repeatedOutput = `${second.stdout}\n${second.stderr}`;
       expect(second.code, repeatedOutput).toBe(0);
@@ -295,5 +298,4 @@ it.each(["current", "historical-v1", "lost-journal"] as const)(
       await port.release();
     }
   },
-  getCliProcessTestTimeout(CHILD_TIMEOUT_MS, CHILD_TIMEOUT_MS),
 );

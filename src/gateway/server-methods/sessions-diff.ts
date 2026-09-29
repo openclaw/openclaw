@@ -1,6 +1,5 @@
 // Session checkout diff for operator clients, filtered against the exact
 // working-tree state captured when the logical session started.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -8,11 +7,11 @@ import {
   type SessionsDiffParams,
   type SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -61,14 +60,9 @@ export async function loadSessionDiff(
     delete result.root;
     return result;
   }
-  // spawnedCwd first, matching pushed Control UI session PR state: the diff must
-  // describe the same checkout whose branch the PR chips report.
-  const cwd =
-    normalizeOptionalString(entry.spawnedCwd) ??
-    normalizeOptionalString(entry.spawnedWorkspaceDir) ??
-    normalizeOptionalString(resolveAgentWorkspaceDir(cfg, agentId));
+  const { diffCwd: cwd, checkoutPending } = resolveSessionWorkspaceRoots(cfg, agentId, entry);
   if (!cwd) {
-    return empty("unknown_session");
+    return empty(checkoutPending ? undefined : "unknown_session");
   }
   if (params.scope === "commit") {
     if (!params.commit) {

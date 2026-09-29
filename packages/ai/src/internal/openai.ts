@@ -24,3 +24,9 @@ export { responsesPromptObserver } from "../transports/openai-responses-contract
 export type { ResponsesPromptObservation } from "../transports/openai-responses-contracts.js";
 
 export { responsesRequestLifecycle } from "../transports/openai-responses-request-lifecycle.js";
+export { bindResponsesInputMessage } from "../transports/openai-responses-replay-messages-internal.js";
+export {
+  encodedModelRequestBodyStream,
+  modelRequestBodyState,
+  serializeModelRequestBody,
+} from "../transports/model-request-body.js";

@@ -11,6 +11,7 @@ import {
   type MemoryDB,
 } from "./lancedb-store.js";
 import { normalizeRecallQuery } from "./memory-policy.js";
+import type { MemoryStatsSource } from "./memory-stats.js";
 
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
@@ -110,6 +111,7 @@ export function registerMemoryCli(
   embeddings: Embeddings,
   resolveCliAgentId: (rawAgentId: unknown) => string,
   resolveConfig: () => MemoryConfig,
+  statsSource: MemoryStatsSource,
 ): void {
   api.registerCli(
     ({ program }) => {
@@ -218,8 +220,9 @@ export function registerMemoryCli(
         .description("Show memory statistics")
         .option("--agent <id>", "Agent id (default: configured default agent)")
         .action(async (opts) => {
+          const { readMemoryStats } = await import("./memory-stats.js");
           const agentId = resolveCliAgentId(opts.agent);
-          const count = await db.count(agentId);
+          const count = await readMemoryStats(statsSource, agentId);
           console.log(`Total memories: ${count}`);
         });
     },

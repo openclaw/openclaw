@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SourceRuntime } from "../../types.js";
+import type { GithubItem, GithubSource, SourceRuntime } from "../../types.js";
 import { createGithubSource } from "./index.js";
 import {
   advisory,
@@ -26,7 +26,42 @@ function source(
   const fetchImpl = vi.fn<NonNullable<SourceRuntime["fetchImpl"]>>((input, init) =>
     Promise.resolve(route(new URL(input), init)),
   );
-  return { api: createGithubSource({ logger: logs, fetchImpl, signal }), fetchImpl, logs };
+  const streaming = createGithubSource({ logger: logs, fetchImpl, signal });
+  return {
+    streaming,
+    api: {
+      ...streaming,
+      async collect(
+        sourceConfig: Parameters<GithubSource["collect"]>[0],
+        activityWindow: Parameters<GithubSource["collect"]>[1],
+        sourceRoster: Parameters<GithubSource["collect"]>[2],
+      ) {
+        const items = new Map<string, GithubItem>();
+        const status = await streaming.collect(
+          sourceConfig,
+          activityWindow,
+          sourceRoster,
+          async (entries) => {
+            for (const { key, value } of entries) {
+              items.set(key, value);
+            }
+          },
+        );
+        return {
+          items: [...items.values()].toSorted(
+            (a, b) =>
+              a.atMs - b.atMs ||
+              a.url.localeCompare(b.url, "en") ||
+              a.kind.localeCompare(b.kind, "en") ||
+              a.actor.localeCompare(b.actor, "en"),
+          ),
+          status,
+        };
+      },
+    },
+    fetchImpl,
+    logs,
+  };
 }
 
 afterEach(() => {
@@ -35,6 +70,44 @@ afterEach(() => {
 });
 
 describe("GitHub reports source", () => {
+  it("awaits bounded activity writes before fetching the next page", async () => {
+    const firstWrite = Promise.withResolvers<void>();
+    const releaseWrite = Promise.withResolvers<void>();
+    const batchSizes: number[] = [];
+    let pages = 0;
+    const { streaming } = source((url) => {
+      if (url.pathname === "/repos/example/app/commits") {
+        pages++;
+        return pages === 1
+          ? json(
+              Array.from({ length: 100 }, (_, index) => commit(String(index))),
+              {
+                Link: `<${url}&page=2>; rel="next"`,
+              },
+            )
+          : json([commit("last")]);
+      }
+      return emptyRoute(url);
+    });
+    const pending = streaming.collect(config, window, roster, async (entries) => {
+      batchSizes.push(entries.length);
+      if (batchSizes.length === 1) {
+        firstWrite.resolve();
+        await releaseWrite.promise;
+      }
+    });
+    try {
+      await Promise.race([firstWrite.promise, pending]);
+      expect(batchSizes).toEqual([100]);
+      expect(pages).toBe(1);
+    } finally {
+      releaseWrite.resolve();
+    }
+    expect((await pending).ok).toBe(true);
+    expect(batchSizes).toEqual([100, 1]);
+    expect(pages).toBe(2);
+  });
+
   it.each([
     ["/commits", 409, "Git Repository is empty.", true],
     ["/commits", 409, "Conflict", false],

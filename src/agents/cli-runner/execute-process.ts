@@ -114,6 +114,14 @@ export async function executeCliProcess(params: {
         onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
         onUsage: params.diagnostics?.observeUsage,
+        onAttributedSubagentProgress: (parentToolUseId) => {
+          if (!params.events.isActiveForegroundAgentTool(parentToolUseId)) {
+            return;
+          }
+          // Raw stdout stays transport-only while a tool is active. Only a
+          // semantic record for this Agent call may move the recovery clock.
+          backendActivity?.observeAttributedAgentProgress(parentToolUseId);
+        },
       })
     : null;
   let stdoutTail = "";
@@ -225,6 +233,8 @@ export async function executeCliProcess(params: {
         consumeStdout,
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
+        compactionActive: params.events.hasActiveCompaction,
+        onCompactionActiveChange: params.events.onCompactionActiveChange,
         getActiveLoopbackAskUserDeadline: params.toolTracking.getActiveLoopbackAskUserDeadline,
         onActiveLoopbackAskUserDeadlineChange:
           params.toolTracking.onActiveLoopbackAskUserDeadlineChange,
@@ -442,6 +452,7 @@ export async function executeCliProcess(params: {
               observedActivity,
               activeToolCount: params.events.activeParsedToolCount(),
               backgroundTaskCount: 0,
+              compactionActive: params.events.hasActiveCompaction(),
             },
             hasOutputText: Boolean(stdoutDiagnostic || stderrDiagnostic),
             useResume: params.useResume,

@@ -88,6 +88,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       generation: params.generation,
       gitAuthor: params.gitAuthor,
       source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
+      authorize: params.assertCurrent,
     });
   };
   const synced = repository.checkpointRef
@@ -137,6 +138,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       baseManifestRef: synced.baseManifestRef,
       source: {
         kind: "repository",
+        authorize: params.assertCurrent,
         referenceManifestRef: synced.manifestRef,
         prepareCheckpoint: (payload) =>
           stageSessionRepositoryCheckpoint({
@@ -151,15 +153,12 @@ export async function syncSessionRepositoryWorkspace(params: {
     await reconciliation.verifyStable();
     await reconciliation.verifyLocalStable();
     params.assertCurrent();
-    if (!reconciliation.publishStagedResult) {
-      throw new Error("Repository preparation did not stage a durable checkpoint");
-    }
     await reconciliation.publishStagedResult();
     params.assertCurrent();
     return { ...synced, manifestRef: reconciliation.manifestRef };
   } finally {
     try {
-      await reconciliation?.discardPreparedStagedResult?.();
+      await reconciliation?.discardPreparedStagedResult();
     } finally {
       await quiescence.resume();
     }

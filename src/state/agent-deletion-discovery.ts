@@ -18,7 +18,25 @@ import {
   isPersistentOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+/** Read completed retained identities through the shared-state worker. */
+export async function listRetainedDeletedAgentIdsForCleanup(
+  env: NodeJS.ProcessEnv,
+): Promise<ReadonlySet<string>> {
+  const reply = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "agentDatabaseDeletion.snapshot", purpose: "runtime" },
+  );
+  if (reply && (!reply.ok || reply.type !== "agentDatabaseDeletion.snapshot")) {
+    throw new Error("Retained agent deletion read failed during plugin cleanup.");
+  }
+  const retained = reply?.snapshot.retainedDeletions;
+  return new Set(
+    retained?.status === "present" ? retained.entries.map((entry) => entry.agentId) : [],
+  );
+}
 
 type Target = { agentId: string; path: string };
 type RetainedAgentDatabaseNamespace =
@@ -28,7 +46,7 @@ type RetainedAgentDatabaseNamespace =
       readDatabasePaths: () => readonly string[];
     };
 
-function hasSqliteFileFamily(pathname: string): boolean {
+export function hasSqliteFileFamily(pathname: string): boolean {
   return resolveSqliteDatabaseFilePaths(pathname).some(
     (file) => fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined,
   );

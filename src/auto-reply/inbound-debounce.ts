@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 /** Resolve effective inbound debounce milliseconds from explicit, channel, and global config. */
 export function resolveInboundDebounceMs(params: {
@@ -72,11 +73,8 @@ function createInboundDebounceFlush(params: {
   lifecycle?: InboundDebounceAdmissionLifecycleInput;
   dispatch: (lifecycle: InboundDebounceAdmissionLifecycle) => Promise<void>;
 }): InboundDebounceFlush {
-  let resolveAdmission!: () => void;
   let admitted = false;
-  const admission = new Promise<void>((resolve) => {
-    resolveAdmission = resolve;
-  });
+  const { promise: admission, resolve: resolveAdmission } = createDeferredCore();
   const markAdmitted = () => {
     if (admitted) {
       return;
@@ -255,10 +253,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const runKeyTaskNow = (key: string, task: () => Promise<void>) => {
-    let resolveSettled!: () => void;
-    const settled = new Promise<void>((resolve) => {
-      resolveSettled = resolve;
-    });
+    const { promise: settled, resolve: resolveSettled } = createDeferredCore();
     keyChains.set(key, settled);
     const cleanup = () => {
       resolveSettled();
@@ -282,10 +277,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   const enqueueReservedKeyTask = (key: string, task: () => Promise<void>) => {
     let readyReleased = false;
-    let releaseReady!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      releaseReady = resolve;
-    });
+    const { promise: ready, resolve: releaseReady } = createDeferredCore();
     return {
       task: enqueueKeyTask(key, async () => {
         await ready;

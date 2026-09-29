@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
@@ -161,6 +162,11 @@ export function createUpdateCliFixture() {
       createCaseDir(prefix),
       version,
     );
+    // A real global npm prefix always owns its launcher directory, even when
+    // this scenario has no launcher entries to publish.
+    await fs.mkdir(path.join(path.dirname(path.dirname(nodeModules)), "bin"), {
+      recursive: true,
+    });
     mockNpmGlobalCommands(nodeModules, async (argv) => {
       if (argv[0] === "npm" && argv[1] === "i") {
         await writeNpmPackageInstall(argv, pkgRoot);
@@ -177,6 +183,7 @@ export function createUpdateCliFixture() {
   const primeServiceCommand = (
     programArguments: Array<string | undefined>,
     environment?: NodeJS.ProcessEnv,
+    sourcePath?: string,
   ): void => {
     const managedDefinition = {
       programArguments,
@@ -185,6 +192,7 @@ export function createUpdateCliFixture() {
     serviceReadCommand.mockResolvedValue({
       ...managedDefinition,
       managedDefinition,
+      ...(sourcePath ? { sourcePath } : {}),
     });
   };
 
@@ -215,7 +223,11 @@ export function createUpdateCliFixture() {
 
   const mockOwnedGitService = (root = process.cwd()) => {
     const serviceEntrypoint = path.join(root, "dist", "index.js");
-    primeServiceCommand(["node", serviceEntrypoint, "gateway", "run"]);
+    primeServiceCommand(
+      ["node", serviceEntrypoint, "gateway", "run"],
+      undefined,
+      process.platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined,
+    );
     pathExists.mockImplementation(
       async (candidate: string) =>
         candidate === path.join(root, "package.json") || candidate === serviceEntrypoint,

@@ -8,10 +8,10 @@ import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../scripts/lib/package-dist-inventory.ts";
+import { compareReleaseVersions, parseReleaseVersion } from "../scripts/lib/release-version.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mts";
 import { assertPreparedOpenClawAiDependency } from "../scripts/openclaw-npm-prepublish-verify.ts";
 import {
-  compareReleaseVersions,
   collectControlUiPackErrors,
   collectForbiddenPackedContentErrors,
   collectForbiddenPackedPathErrors,
@@ -20,7 +20,6 @@ import {
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
   parseReleaseTagVersion,
-  parseReleaseVersion,
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
@@ -196,13 +195,14 @@ describe("resolveNpmPublishPlan", () => {
     });
   });
 
-  it("publishes alpha prereleases to alpha only", () => {
-    expect(resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "alpha")).toEqual({
-      channel: "alpha",
-      publishTag: "alpha",
-      mirrorDistTags: [],
-    });
-  });
+  it.each(["2026.3.29-alpha.2", "2026.3.29"])(
+    "rejects retired alpha publication for %s",
+    (version) => {
+      expect(() => resolveNpmPublishPlan(version, undefined, "alpha")).toThrow(
+        "Alpha releases are retired;",
+      );
+    },
+  );
 
   it("publishes stable releases to beta first", () => {
     expect(resolveNpmPublishPlan("2026.3.29")).toEqual({
@@ -251,11 +251,9 @@ describe("resolveNpmPublishPlan", () => {
   });
 
   it("rejects publishing alpha prereleases to beta or latest", () => {
-    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2")).toThrow(
-      "Alpha prereleases must publish to the alpha dist-tag.",
-    );
+    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2")).toThrow("Alpha releases are retired;");
     expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "latest")).toThrow(
-      "Alpha prereleases must publish to the alpha dist-tag.",
+      "Alpha releases are retired;",
     );
   });
 });
@@ -793,8 +791,8 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.0",
       }),
     ).toStrictEqual([
-      'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "2026.3.0".',
-      'Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-alpha.N, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "v2026.3.0".',
+      'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, or YYYY.M.PATCH-beta.N; found "2026.3.0".',
+      'Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "v2026.3.0".',
       "Release tag v2026.3.0 does not match package.json version 2026.3.0; expected v2026.3.0.",
     ]);
   });
@@ -819,13 +817,13 @@ describe("collectReleaseTagErrors", () => {
     ]);
   });
 
-  it("keeps pre-transition June alpha tags parseable for compatibility", () => {
+  it("rejects pre-transition June alpha publication", () => {
     expect(
       collectReleaseTagErrors({
         packageVersion: "2026.6.4-alpha.1",
         releaseTag: "v2026.6.4-alpha.1",
       }),
-    ).toStrictEqual([]);
+    ).toContain("Alpha releases are retired; use a beta prerelease instead.");
   });
 
   it("accepts fallback correction tags for stable package versions", () => {

@@ -336,7 +336,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       action: "remove files",
       requireWritable: true,
       includeDescendants: params.recursive,
-      allowFinalSymlinkForUnlink: true,
       pinnedCanonicalPath: authorizedRemotePinnedPath(
         params.pinnedPath,
         target.containerPath,
@@ -366,7 +365,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       action: "rename files",
       requireWritable: true,
       includeDescendants: true,
-      allowFinalSymlinkForUnlink: true,
       signal: params.signal,
     });
     const toPinned = await this.resolvePinnedTarget({
@@ -609,7 +607,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     containerPath: string;
     mountRootPath: string;
     action: string;
-    allowFinalSymlinkForUnlink?: boolean;
     signal?: AbortSignal;
   }): Promise<RemoteCanonicalPath> {
     return await resolveRemoteCanonicalPath({

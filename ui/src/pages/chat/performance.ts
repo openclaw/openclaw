@@ -20,8 +20,7 @@ export function roundedControlUiDurationMs(durationMs: number): number {
 
 function runAfterPaint(callback: () => void, complete: () => void): () => void {
   let active = true;
-  let firstFrame: number | null = null;
-  let secondFrame: number | null = null;
+  let frame: number | null = null;
   const run = () => {
     if (!active) {
       return;
@@ -36,39 +35,25 @@ function runAfterPaint(callback: () => void, complete: () => void): () => void {
   if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
     queueMicrotask(run);
   } else {
-    let firstFrameCompleted = false;
-    const scheduledFirstFrame = window.requestAnimationFrame(() => {
-      firstFrameCompleted = true;
-      firstFrame = null;
+    frame = window.requestAnimationFrame(() => {
+      frame = null;
       if (!active) {
         return;
       }
-      let secondFrameCompleted = false;
-      const scheduledSecondFrame = window.requestAnimationFrame(() => {
-        secondFrameCompleted = true;
-        secondFrame = null;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
         run();
       });
-      if (!secondFrameCompleted) {
-        secondFrame = scheduledSecondFrame;
-      }
     });
-    if (!firstFrameCompleted) {
-      firstFrame = scheduledFirstFrame;
-    }
   }
   return () => {
     if (!active) {
       return;
     }
     active = false;
-    if (firstFrame !== null) {
-      window.cancelAnimationFrame(firstFrame);
-      firstFrame = null;
-    }
-    if (secondFrame !== null) {
-      window.cancelAnimationFrame(secondFrame);
-      secondFrame = null;
+    if (frame !== null) {
+      window.cancelAnimationFrame(frame);
+      frame = null;
     }
   };
 }

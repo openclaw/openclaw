@@ -30,6 +30,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -253,6 +254,7 @@ describe("update status Node runtime findings", () => {
     "preserves diagnostics with stored=$stored SQLite $sqliteVersion (JSON: $json)",
     async ({ json, stored, sqliteVersion, unavailable }) => {
       const recorded = stored ? createUpdateRun({ trigger: "cli" }) : undefined;
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       vi.resetModules();
       const sqlitePrototype: {
@@ -288,10 +290,21 @@ describe("update status Node runtime findings", () => {
       });
       const command = await import("./status.js");
       const ledger = await import("../../infra/update-run-ledger.js");
+      const readOwner = await import("../../state/openclaw-state-db-readonly.js");
+      const workerRead = vi.spyOn(readOwner, "executeExistingOpenClawStateRead");
       if (unavailable) {
-        expect(() => ledger.findActiveUpdateRun()).toThrow(
-          "SQLite support is unavailable or unsafe",
-        );
+        let nativeFailure: unknown;
+        expect(() => {
+          try {
+            ledger.findActiveUpdateRun();
+          } catch (error) {
+            nativeFailure = error;
+            throw error;
+          }
+        }).toThrow("SQLite support is unavailable or unsafe");
+        // The host SQLite spy cannot cross threads; deliver the same runtime refusal
+        // through the async read owner without replacing status or diagnostic logic.
+        workerRead.mockRejectedValue(nativeFailure);
       }
       await expect(command.updateStatusCommand({ json })).resolves.toBeUndefined();
       if (json) {
@@ -322,6 +335,7 @@ describe("update status Node runtime findings", () => {
       if (!stored) {
         expect(prepare).not.toHaveBeenCalled();
       }
+      workerRead.mockRestore();
       prepare.mockRestore();
       expect(recorded && ledger.getUpdateRun(recorded.runId)).toEqual(recorded);
     },
@@ -427,7 +441,8 @@ describe("update status Node runtime findings", () => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -446,7 +461,7 @@ describe("update status readiness outcome", () => {
         registry: { latestVersion: "9999.0.0" },
       });
       const run = createUpdateRun({ trigger: "cli" });
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [
           {
             pluginId: "sample",
@@ -579,7 +594,7 @@ describe("update status abandoned-run reporting", () => {
   it.each([true, false])(
     "reports unreadable pending migration status without losing availability (JSON: %s)",
     async (json) => {
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [
           {
             pluginId: "codex",
@@ -677,7 +692,7 @@ describe("update status abandoned-run reporting", () => {
         reason: "The configured plugin package is missing.",
         command: "openclaw plugins install @openclaw/codex",
       };
-      recordDeferredPluginMigrations({ pending: [pending] });
+      await recordDeferredPluginMigrations({ pending: [pending] });
       await updateStatusCommand({ json });
       if (json) {
         expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings).toEqual([
@@ -693,7 +708,7 @@ describe("update status abandoned-run reporting", () => {
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
+      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
       runtime.log.mockClear();
       runtime.writeJson.mockClear();
       await updateStatusCommand({ json });
@@ -748,7 +763,7 @@ describe("update status abandoned-run reporting", () => {
       });
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
       if (surface === "status") {
-        const rows = buildStatusUpdateRows(null);
+        const rows = await buildStatusUpdateRows(null);
         expect(rows).toContainEqual(
           expect.objectContaining({
             Item: "Update run",
@@ -829,7 +844,7 @@ describe("update status abandoned-run reporting", () => {
       }
       let output: string;
       if (surface === "status") {
-        output = JSON.stringify(buildStatusUpdateRows(null));
+        output = JSON.stringify(await buildStatusUpdateRows(null));
       } else {
         await updateStatusCommand({ json: surface === "json" });
         output =

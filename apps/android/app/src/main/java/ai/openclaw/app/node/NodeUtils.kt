@@ -2,6 +2,7 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.AppearanceThemeMode
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseInvokeErrorFromThrowable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -11,6 +12,13 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+internal fun escapeSqlLikeLiteral(value: String): String = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+internal fun nodeInvokeError(
+  code: String,
+  message: String,
+): GatewaySession.InvokeResult = GatewaySession.InvokeResult.error(code, "$code: $message")
 
 /** Parses invoke params into a JSON object, returning null for absent/malformed input. */
 fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
@@ -28,19 +36,16 @@ fun readJsonPrimitive(
   key: String,
 ): JsonPrimitive? = params?.get(key) as? JsonPrimitive
 
-/** Parses an optional integer invoke param. */
 fun parseJsonInt(
   params: JsonObject?,
   key: String,
 ): Int? = readJsonPrimitive(params, key)?.contentOrNull?.toIntOrNull()
 
-/** Parses an optional decimal invoke param. */
 fun parseJsonDouble(
   params: JsonObject?,
   key: String,
 ): Double? = readJsonPrimitive(params, key)?.contentOrNull?.toDoubleOrNull()
 
-/** Parses an optional string invoke param. */
 fun parseJsonString(
   params: JsonObject?,
   key: String,
@@ -60,12 +65,7 @@ fun parseJsonBooleanFlag(
 }
 
 /** Converts JSON null to Kotlin null while preserving primitive text content. */
-fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
+fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.contentOrNull
 
 /** Parses #RRGGBB or RRGGBB into opaque ARGB. */
 fun parseHexColorArgb(raw: String?): Long? {

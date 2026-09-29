@@ -339,7 +339,7 @@ describe("createCopilotToolBridge", () => {
       );
       return includeToolSearchControls
         ? [
-            makeTool({ name: "tool_search_code" }),
+            makeTool({ name: "tool_search" }),
             makeTool({ name: "fake_hidden" }),
             makeTool({ name: "read" }),
           ]
@@ -362,19 +362,19 @@ describe("createCopilotToolBridge", () => {
         toolSearchCatalogExecutor: expect.any(Function),
       }),
     );
-    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search", "read"]);
     expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual([
-      "tool_search_code",
+      "tool_search",
       "read",
     ]);
     expect(result.promptToolPolicy.apply().callableToolNames).toEqual([
-      "tool_search_code",
+      "tool_search",
       "read",
       "fake_hidden",
     ]);
     expect(result.promptToolPolicy.apply({ toolsAllow: ["fake_hidden"] })).toMatchObject({
-      callableToolNames: ["tool_search_code", "fake_hidden"],
-      tools: [expect.objectContaining({ name: "tool_search_code" })],
+      callableToolNames: ["tool_search", "fake_hidden"],
+      tools: [expect.objectContaining({ name: "tool_search" })],
     });
   });
 
@@ -384,7 +384,7 @@ describe("createCopilotToolBridge", () => {
         (opts as { includeToolSearchControls?: boolean }).includeToolSearchControls,
       );
       return includeToolSearchControls
-        ? [makeTool({ name: "tool_search_code" }), makeTool({ name: "read" })]
+        ? [makeTool({ name: "tool_search" }), makeTool({ name: "read" })]
         : [makeTool({ name: "read" })];
     });
 
@@ -398,9 +398,9 @@ describe("createCopilotToolBridge", () => {
       createOpenClawCodingTools,
     });
 
-    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code", "read"]);
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search", "read"]);
     expect(result.promptToolPolicy.apply().tools.map((tool) => tool.name)).toEqual([
-      "tool_search_code",
+      "tool_search",
       "read",
     ]);
   });
@@ -410,7 +410,7 @@ describe("createCopilotToolBridge", () => {
     const createOpenClawCodingTools = vi.fn((opts: unknown) => {
       catalogRef = (opts as { toolSearchCatalogRef?: typeof catalogRef }).toolSearchCatalogRef;
       return [
-        makeTool({ name: "tool_search_code" }),
+        makeTool({ name: "tool_search" }),
         makeTool({ name: "read" }),
         makeTool({ name: "edit" }),
         makeTool({ name: "write" }),
@@ -2005,7 +2005,7 @@ describe("createCopilotToolBridge tool conversion", () => {
       createOpenClawCodingTools: (options: unknown) => {
         catalogExecutor = (options as { toolSearchCatalogExecutor?: CatalogExecutor })
           .toolSearchCatalogExecutor;
-        return [makeTool({ name: "tool_search_code" })];
+        return [makeTool({ name: "tool_search" })];
       },
     });
     const target = createOwnerBackedContractTool({

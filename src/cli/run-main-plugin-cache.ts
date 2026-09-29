@@ -27,15 +27,12 @@ export async function withCliPluginInvocation<T>(
       },
     });
     const invoke = () => withPluginCache(cache, () => run(cleanup));
-    const resources = cleanup?.pluginResources;
-    if (!resources) {
+    if (!cleanup?.pluginResources) {
       return invoke();
     }
-    const { GatewayScheduler } = await import("../infra/gateway-scheduler.js");
-    const scheduler = new GatewayScheduler();
-    resources.adopt({ release: () => scheduler.stop() });
+    const resources = cleanup.pluginResources;
     return pluginSourceCaptureMaintenance.run(
-      { scheduler, run: (operation) => resources.run(operation) },
+      { scheduler: cleanup.scheduler, run: (operation) => resources.run(operation) },
       invoke,
     );
   });

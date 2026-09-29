@@ -1,5 +1,3 @@
-// `openclaw update status`: combines install metadata, configured channel, and remote update checks.
-
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -26,11 +24,13 @@ import {
 } from "../../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayLastInstallationReplacement } from "../../infra/gateway-boot-lifecycle.js";
+import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "../../infra/update-network-budget.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
@@ -38,7 +38,7 @@ import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
-import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 
 async function readUpdateRecoverySetStatus() {
@@ -82,12 +82,8 @@ async function readChannelStatusIssues(
   }
 }
 
-/** Print update status in JSON or table form for scripts and humans. */
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const [root, config, runtimeFindings] = await Promise.all([
     resolveUpdateRoot(),
@@ -149,7 +145,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const updateAvailability = resolveUpdateAvailability(update);
 
-  const runStatus = readUpdateRunStatus();
+  const runStatus = await readUpdateRunStatus();
   const recoveryStatus = await readUpdateRecoverySetStatus();
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
@@ -219,6 +215,15 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }
   }
   const migrationWarningsError = migrationWarningErrors.join("\n");
+  let packageActivation;
+  let packageActivationError: string | undefined;
+  try {
+    if (root) {
+      packageActivation = readPackageActivationReceipt(resolveUpdateInstallRoot(root));
+    }
+  } catch (error) {
+    packageActivationError = safeMessage(formatErrorMessage(error));
+  }
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -237,6 +242,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       ...(migrationWarnings.length > 0 ? { migrationWarnings } : {}),
       ...(migrationWarningsError ? { migrationWarningsError } : {}),
       ...runStatus,
+      ...(packageActivation ? { packageActivation } : {}),
+      ...(packageActivationError ? { packageActivationError } : {}),
       ...recoveryStatus,
     });
     return;
@@ -255,6 +262,20 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
+    ...(packageActivation
+      ? [
+          {
+            Item: "Package recovery",
+            Value: `${packageActivation.phase} (${packageActivation.operationId})`,
+          },
+        ]
+      : []),
+    ...(packageActivation?.recoveryCommand
+      ? [{ Item: "Recovery command (external Node)", Value: packageActivation.recoveryCommand }]
+      : []),
+    ...(packageActivationError
+      ? [{ Item: "Package recovery", Value: packageActivationError }]
+      : []),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",

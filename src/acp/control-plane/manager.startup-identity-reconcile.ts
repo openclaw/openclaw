@@ -11,17 +11,17 @@ import type {
   AcpStartupIdentityReconcileResult,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
   WithManagerSessionActor,
 } from "./manager.types.js";
-import { resolveAcpSessionTarget } from "./manager.utils.js";
+import { assertCurrentAcpActor, resolveAcpSessionTarget } from "./manager.utils.js";
 
 /** Resolves pending ACP session identities opportunistically during manager startup. */
 export async function runManagerStartupIdentityReconcile(params: {
   cfg: OpenClawConfig;
   deps: Pick<AcpSessionManagerDeps, "listAcpSessions">;
   withSessionActor: WithManagerSessionActor;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
 }): Promise<AcpStartupIdentityReconcileResult> {
@@ -62,10 +62,15 @@ export async function runManagerStartupIdentityReconcile(params: {
         agentId: session.agentId,
       });
       const becameResolved = await params.withSessionActor(target, async (isCurrentActor) => {
-        const resolution = params.resolveSession({
+        const assertCurrent = () => {
+          assertCurrentAcpActor(isCurrentActor(), target.sessionKey);
+        };
+        const resolution = await params.resolveSession({
           cfg: params.cfg,
           ...target,
+          assertCurrent,
         });
+        assertCurrent();
         if (resolution.kind !== "ready") {
           return false;
         }

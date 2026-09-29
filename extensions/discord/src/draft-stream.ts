@@ -1,7 +1,7 @@
+import { Routes } from "discord-api-types/v10";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  createChannelMessage,
   deleteChannelMessage,
   editChannelMessage,
   type RequestClient,
@@ -97,33 +97,31 @@ export function createDiscordDraftStream(params: {
     }
 
     try {
+      const body = {
+        content: trimmed,
+        allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+        ...(flags ? { flags } : {}),
+      };
       if (streamMessage !== undefined) {
         await editChannelMessage(rest, streamMessage.channelId, streamMessage.messageId, {
-          body: {
-            content: trimmed,
-            allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
-            ...(flags ? { flags } : {}),
-          },
+          body,
         });
         if (generation === streamGeneration) {
           lastSentText = trimmed;
         }
         return true;
       }
-      // Send new message
       const replyToMessageId = resolveReplyToMessageId()?.trim();
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
       activeCreateGeneration = generation;
-      const sent = await createChannelMessage<{ id?: string }>(rest, targetChannelId, {
+      const sent = (await rest.post(Routes.channelMessages(targetChannelId), {
         body: {
-          content: trimmed,
-          allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
-          ...(flags ? { flags } : {}),
+          ...body,
           ...(messageReference ? { message_reference: messageReference } : {}),
         },
-      });
+      })) as { id?: string }; // SAFETY: The create response's ID is checked before use.
       const sentMessageId = sent?.id;
       const shouldDiscardStaleCreate = activeCreateGeneration === generation && discardActiveCreate;
       activeCreateGeneration = undefined;

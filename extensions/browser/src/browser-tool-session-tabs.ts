@@ -2,6 +2,7 @@ import {
   asNullableRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserSessionTabAuthority } from "./browser-runtime-state.js";
 import type { BrowserTabOwnership } from "./browser/client.types.js";
 import type * as sessionTabRegistry from "./browser/session-tab-registry.js";
 import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
@@ -54,12 +55,13 @@ async function trackOpenedBrowserTab(params: {
   fallbackProfile?: string;
   route: BrowserSessionTabRoute;
   track: SessionTabRegistry["trackSessionBrowserTab"];
+  authority?: BrowserSessionTabAuthority;
   closeTab: (targetId: string, profile?: string) => Promise<void>;
 }): Promise<void> {
   const opened = readOpenedTab(params.result);
   const profile = opened.profile ?? params.fallbackProfile;
   try {
-    params.track({
+    await params.track({
       sessionKey: params.sessionKey,
       targetId: opened.targetId,
       route: params.route,
@@ -74,6 +76,7 @@ async function trackOpenedBrowserTab(params: {
           ? undefined
           : opened.ownership,
       aliases: opened.aliases,
+      ...(params.authority ? { authority: params.authority } : {}),
     });
   } catch (trackingError) {
     if (!opened.targetId) {
@@ -105,6 +108,7 @@ export function createBrowserToolSessionTabs(params: {
   routeProfile?: () => string | undefined;
   isHostFallbackActive?: () => boolean;
   registry: SessionTabRegistry;
+  authority?: BrowserSessionTabAuthority;
 }) {
   const trackedRoute = (): BrowserSessionTabRoute =>
     params.nodeRoute && !params.isHostFallbackActive?.()
@@ -123,17 +127,18 @@ export function createBrowserToolSessionTabs(params: {
       targetId,
       route,
       profile: trackedProfile(route),
+      ...(params.authority ? { authority: params.authority } : {}),
     };
   };
   return {
-    touch: (targetId: string | undefined): void => {
+    touch: async (targetId: string | undefined): Promise<void> => {
       if (targetId) {
-        params.registry.touchSessionBrowserTab(identity(targetId));
+        await params.registry.touchSessionBrowserTab(identity(targetId));
       }
     },
-    untrack: (targetId: string | undefined): void => {
+    untrack: async (targetId: string | undefined): Promise<void> => {
       if (targetId) {
-        params.registry.untrackSessionBrowserTab(identity(targetId));
+        await params.registry.untrackSessionBrowserTab(identity(targetId));
       }
     },
     trackOpened: async (
@@ -148,6 +153,7 @@ export function createBrowserToolSessionTabs(params: {
         fallbackProfile: profile,
         route,
         track: params.registry.trackSessionBrowserTab,
+        authority: params.authority,
         closeTab,
       });
     },

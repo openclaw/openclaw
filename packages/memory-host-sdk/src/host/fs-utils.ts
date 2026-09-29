@@ -1,8 +1,15 @@
+import path from "node:path";
+
 // Retain fs-safe's process configuration for host-side memory file operations.
 export { root } from "@openclaw/fs-safe/root";
 export { isPathInside } from "@openclaw/fs-safe/path";
 export { readRegularFile, statRegularFile } from "@openclaw/fs-safe/advanced";
-export { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
+export { walkDirectory } from "@openclaw/fs-safe/walk";
+
+export function normalizeComparablePath(pathname: string): string {
+  const resolved = path.resolve(pathname);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
 
 /**
  * True for missing-file errors emitted by Node or fs-safe.

@@ -26,7 +26,7 @@ export function registerTerminalStateSignalAuthorityTests({
   completeRun: (
     controller: SubagentLifecycleController,
     entry: SubagentRunRecord,
-    options?: Pick<SubagentCompletionRequest, "isChildSessionEffectsCurrent">,
+    options?: Pick<SubagentCompletionRequest, "sessionEffects">,
   ) => Promise<void>;
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
   lifecycleEventMocks: { emitSessionLifecycleEvent: Mock };
@@ -81,8 +81,17 @@ export function registerTerminalStateSignalAuthorityTests({
             }, attachment),
           );
         restoreAdmission = () => observe.mockRestore();
+        const assertSessionCurrent = () => {
+          if (!sessionCurrent) {
+            throw new Error("Session retired");
+          }
+        };
         await completeRun(controller, entry, {
-          isChildSessionEffectsCurrent: () => sessionCurrent,
+          sessionEffects: {
+            isCurrent: async () => sessionCurrent,
+            assertHostCurrent: assertSessionCurrent,
+            assertCurrentEntry: assertSessionCurrent,
+          },
         });
         expect(observed).toBe(true);
         const events = sessionStateEvents.listSessionStateEventsSince(

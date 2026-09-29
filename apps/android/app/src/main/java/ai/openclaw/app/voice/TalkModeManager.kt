@@ -11,6 +11,8 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.node.parseJsonParamsObject
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -69,7 +71,6 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.io.IOException
@@ -80,18 +81,12 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.coroutineContext
 
-/**
- * Gateway payload returned when Android starts a push-to-talk capture.
- */
 data class TalkPttStartPayload(
   val captureId: String,
 ) {
   fun toJson(): String = """{"captureId":"$captureId"}"""
 }
 
-/**
- * Gateway payload returned when a push-to-talk capture ends or is cancelled.
- */
 data class TalkPttStopPayload(
   val captureId: String,
   val transcript: String?,
@@ -461,14 +456,12 @@ class TalkModeManager internal constructor(
   private var realtimePlaying = false
   private val systemSpeech = SystemSpeechSpeaker(context)
 
-  /** Updates the chat session used for TalkMode turns and wake-command replies. */
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
     mainSessionKey = trimmed
   }
 
-  /** Starts or stops continuous realtime TalkMode capture. */
   fun setEnabled(enabled: Boolean) {
     if (_isEnabled.value == enabled) return
     _isEnabled.value = enabled
@@ -521,7 +514,6 @@ class TalkModeManager internal constructor(
   internal val finishingPushToTalkCaptureId: String?
     get() = finishingPttCaptureId
 
-  /** Starts a push-to-talk capture session for gateway node.invoke callers. */
   suspend fun beginPushToTalk(
     allowNewCapture: Boolean,
     canStartCapture: () -> Boolean = { true },
@@ -870,7 +862,6 @@ class TalkModeManager internal constructor(
   /** When true, play TTS for all final chat responses (even ones we didn't initiate). */
   @Volatile var ttsOnAllResponses = false
 
-  /** Plays one text response through the configured Android/TalkMode TTS output. */
   fun playTtsForText(text: String) {
     val playbackToken = cancelActivePlayback()
     invalidateConfig()
@@ -880,7 +871,6 @@ class TalkModeManager internal constructor(
     }
   }
 
-  /** Routes gateway talk/chat events into realtime playback, pending PTT turns, and TTS. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -904,13 +894,7 @@ class TalkModeManager internal constructor(
       return
     }
     if (event != "chat") return
-    if (payloadJson.isNullOrBlank()) return
-    val obj =
-      try {
-        json.parseToJsonElement(payloadJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return
+    val obj = parseJsonParamsObject(payloadJson) ?: return
     val runId = obj["runId"].asStringOrNull() ?: return
     val state = obj["state"].asStringOrNull() ?: return
 
@@ -1012,7 +996,6 @@ class TalkModeManager internal constructor(
     }
   }
 
-  /** Reloads TalkMode voice/TTS settings from the gateway. */
   suspend fun refreshConfig() {
     invalidateConfig()
     ensureConfigLoaded()
@@ -1027,7 +1010,6 @@ class TalkModeManager internal constructor(
     )
   }
 
-  /** Speaks a chat assistant reply when playback is enabled. */
   suspend fun speakAssistantReply(text: String) {
     if (!playbackEnabled) return
     val playbackToken = cancelActivePlayback()
@@ -1265,7 +1247,7 @@ class TalkModeManager internal constructor(
   }
 
   private fun handleRealtimeVoiceChange(payloadJson: String?) {
-    val event = payloadJson?.let { runCatching { json.parseToJsonElement(it).asObjectOrNull() }.getOrNull() } ?: return
+    val event = parseJsonParamsObject(payloadJson) ?: return
     val id = event["changeId"].asStringOrNull()?.takeIf(String::isNotBlank) ?: return
     val originalId = event["voiceSessionId"].asStringOrNull()?.takeIf(String::isNotBlank) ?: return
     val sessionKey = event["sessionKey"].asStringOrNull()?.takeIf(String::isNotBlank) ?: return
@@ -1644,13 +1626,7 @@ class TalkModeManager internal constructor(
   }
 
   private fun handleRealtimeTalkEvent(payloadJson: String?) {
-    if (payloadJson.isNullOrBlank()) return
-    val obj =
-      try {
-        json.parseToJsonElement(payloadJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return
+    val obj = parseJsonParamsObject(payloadJson) ?: return
     val sessionId = obj["relaySessionId"].asStringOrNull() ?: obj["sessionId"].asStringOrNull()
     var stopped: (() -> Unit)? = null
     var afterDispatch: (() -> Unit)? = null
@@ -2863,7 +2839,8 @@ class TalkModeManager internal constructor(
     sinceSeconds: Double? = null,
   ): String? {
     val key = mainSessionKey.ifBlank { "main" }
-    val res = requestGateway("chat.history", "{\"sessionKey\":\"$key\"}")
+    val params = buildJsonObject { put("sessionKey", JsonPrimitive(key)) }
+    val res = requestGateway("chat.history", params.toString())
     val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null
     val messages = root["messages"] as? JsonArray ?: return null
     for (item in messages.reversed()) {
@@ -3366,8 +3343,6 @@ class TalkModeManager internal constructor(
     }
   }
 }
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 internal fun requireAcceptedRealtimeOutputCancellation(
   response: String,

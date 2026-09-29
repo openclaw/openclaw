@@ -202,7 +202,7 @@ describe("CommandPalette search", () => {
   );
 
   it.each([false, true])(
-    "shows an internal catalog failure and empty recovery (retained rows: %s)",
+    "keeps catalog refresh diagnostics out of search and navigation (retained rows: %s)",
     async (hasRows) => {
       const request = vi
         .fn()
@@ -230,11 +230,15 @@ describe("CommandPalette search", () => {
       await palette.updateComplete;
       expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
       expect(palette.querySelectorAll('[role="option"]')).toHaveLength(hasRows ? 1 : 0);
-      expect(palette.querySelector('.cmd-palette__search [role="status"]')?.textContent).toContain(
-        hasRows
-          ? "Some models could not be refreshed. Open Models to try again."
-          : "Models unavailable",
-      );
+      expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+      expect(Boolean(palette.querySelector(".cmd-palette__no-results"))).toBe(!hasRows);
+
+      await enterQuery(palette, "");
+      await palette.updateComplete;
+      expect(findPaletteOption(palette, "Agents")).toBeDefined();
+      expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+      await enterQuery(palette, "needle");
+      await vi.advanceTimersByTimeAsync(200);
 
       harness.emit("chat.metadata.changed");
       await vi.advanceTimersByTimeAsync(200);

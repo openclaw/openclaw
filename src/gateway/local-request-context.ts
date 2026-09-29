@@ -30,6 +30,7 @@ import {
   readPreparedGatewayModelCatalogBatch,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "./server-model-catalog.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -108,6 +109,8 @@ function createLocalGatewayRequestContext(
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    resolveSessionRequestTargets: (request) =>
+      resolveSessionRequestTargets({ ...request, context }),
     // Embedded calls have no running Gateway application owner.
     isConfigReloadSettled: () => false,
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
@@ -131,6 +134,9 @@ function createLocalGatewayRequestContext(
     logHealth: { error: (message) => logGateway.error(message) },
     logGateway,
     publishPresence: () => {},
+    getPresenceSnapshot: () => {
+      throw new Error("Presence requires a running Gateway connection.");
+    },
     broadcast: () => {},
     broadcastToConnIds: () => {},
     nodeSendToSession: () => {},
@@ -152,6 +158,7 @@ function createLocalGatewayRequestContext(
     unsubscribeSessionEvents: (connId) => {
       sessionEvents.delete(connId);
     },
+    forgetConnectionAncestors: () => {},
     subscribeSessionMessageEvents: () => undefined,
     unsubscribeSessionMessageEvents: () => {},
     unsubscribeAllSessionEvents: (connId) => {

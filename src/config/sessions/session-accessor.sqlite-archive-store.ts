@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
@@ -29,10 +29,8 @@ import {
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
-import {
-  resolveSessionReclamationDatabaseOptions,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptArchiveDirectory,
@@ -307,22 +305,26 @@ export async function prunePublishedSessionArchivesByRetention(params: {
     params.scope,
     async () => {
       let removed = 0;
-      runOpenClawAgentWriteTransaction((transactionDb) => {
-        const db = getSessionKysely(transactionDb.db);
-        for (const row of removable) {
-          const result = executeSqliteQuerySync(
-            transactionDb.db,
-            db
-              .deleteFrom("session_transcript_archives")
-              .where("session_id", "=", row.session_id)
-              .where("generation", "=", row.generation)
-              .where("archive_name", "=", row.archive_name)
-              .where("created_at", "=", row.created_at)
-              .where("published_at", "=", row.published_at),
-          );
-          removed += Number(result.numAffectedRows ?? 0n);
-        }
-      }, toDatabaseOptions(params.scope));
+      runOpenClawAgentWriteTransaction(
+        (transactionDb) => {
+          const db = getSessionKysely(transactionDb.db);
+          for (const row of removable) {
+            const result = executeSqliteQuerySync(
+              transactionDb.db,
+              db
+                .deleteFrom("session_transcript_archives")
+                .where("session_id", "=", row.session_id)
+                .where("generation", "=", row.generation)
+                .where("archive_name", "=", row.archive_name)
+                .where("created_at", "=", row.created_at)
+                .where("published_at", "=", row.published_at),
+            );
+            removed += Number(result.numAffectedRows ?? 0n);
+          }
+        },
+        toDatabaseOptions(params.scope),
+        { operationLabel: "session.archive.prune-retention" },
+      );
       return removed;
     },
     "session.archive.retention-commit",

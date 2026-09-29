@@ -1,4 +1,3 @@
-// Qa Lab API module exposes the plugin public contract.
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -22,7 +21,6 @@ export type QaScenarioRuntimeEnv<
 };
 
 type QaScenarioRuntimeApiDeps = {
-  sleep: (ms?: number) => Promise<unknown>;
   waitForTransportReady: (...args: never[]) => unknown;
 };
 
@@ -70,7 +68,6 @@ export function createQaScenarioRuntimeApi<
   const transportState = transport.state;
   const resetTransportState = async () => {
     await transport.reset();
-    await params.deps.sleep(100);
   };
 
   return {

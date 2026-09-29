@@ -30,7 +30,6 @@ describe("createQaScenarioRuntimeApi", () => {
       }
       return value;
     };
-    const sleep = vi.fn(async () => undefined);
     const env = {
       lab: { baseUrl: "http://127.0.0.1:1234" },
       transport: {
@@ -78,7 +77,6 @@ describe("createQaScenarioRuntimeApi", () => {
       },
     };
     const deps = {
-      sleep,
       waitForTransportReady: vi.fn(),
       waitForAgentHistoryReply: vi.fn(),
       browserRequest: vi.fn(),
@@ -126,7 +124,6 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(outboundSpy).toHaveBeenCalledTimes(1);
     expect(readSpy).toHaveBeenCalledTimes(1);
     expect(resetSpy).toHaveBeenCalledTimes(3);
-    expect(sleep).toHaveBeenCalledTimes(3);
   });
 
   it("routes scenario injection through a factory-created transport", async () => {
@@ -181,7 +178,6 @@ describe("createQaScenarioRuntimeApi", () => {
         execution: { kind: "flow", flow: { steps: [] } },
       },
       deps: {
-        sleep: vi.fn(async () => undefined),
         waitForTransportReady: vi.fn(),
       },
       constants,

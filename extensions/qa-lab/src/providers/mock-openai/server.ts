@@ -10,12 +10,12 @@ import {
   dispatchQaHttpRequest,
   writeQaRequestBodyLimitError,
 } from "../../bus-server.js";
-import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 import {
   listMockCodexModelInfos,
   listMockOpenAiServerModelIds,
 } from "../shared/mock-model-config.js";
+import { resolveMockProviderVariant } from "../shared/mock-provider-variant.js";
 import { registerQaSessionObserver } from "../shared/session-observer-registry.js";
 import {
   buildMessagesPayload,
@@ -31,10 +31,7 @@ import {
 import {
   type ResponsesInputItem,
   type StreamEvent,
-  resolveProviderVariant,
-  type MockOpenAiRequestSnapshot,
   type MockOpenAiRequestSnapshotBase,
-  type MockOpenAiRequestSnapshotInput,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
   type AnthropicMessagesRequest,
@@ -108,7 +105,6 @@ import {
   sourceDiscoveryReadPathForProvider,
   subagentHandoffTaskForProvider,
   subagentFanoutTaskForProvider,
-  MOCK_OPENAI_DEBUG_REQUEST_LIMIT,
   readBody,
   parseJsonObjectBody,
   transcriptionTextForAudioRequest,
@@ -123,8 +119,6 @@ import {
   extractExactMarkerDirective,
   resolveWhatsAppStructuredReply,
   extractBlockStreamingMarkerDirectives,
-  extractSlackProgressCommentaryDirectives,
-  QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
   hasDeclaredTool,
   hasToolDefinition,
   findNamedToolDefinition,
@@ -159,10 +153,8 @@ import {
   splitMockConversationContext,
   hasToolOutput,
   extractToolOutput,
-  extractToolOutputValue,
   extractToolOutputStructuredError,
   extractToolOutputCallId,
-  extractLatestToolOutput,
   extractAllToolOutputText,
   extractUserTextAfterLatestToolOutput,
   buildSlackMpimHistoryReply,
@@ -178,22 +170,22 @@ import {
   extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
+import { createMockOpenAiRequestLog } from "./mock-openai-request-log.js";
 import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
+import {
+  buildSlackOwnedRequesterEvents,
+  readSlackProgressTurn,
+} from "./mock-openai-slack-requester.js";
 import { resolveMockSubagentHandoff } from "./mock-openai-subagent-completion.js";
 import {
   QA_CODE_MODE_TARGET_MARKER,
-  stringifyScenarioToolOutput,
   encodeCodeModeTarget,
   resolveCodeModeExecSurface,
   canCallScenarioTool,
-  readScenarioCompletedToolName,
   readProgressCommand,
-  unwrapScenarioCatalogOutput,
+  readScenarioToolCompletion,
   resolveCurrentToolDeclarationSurface,
-  findToolCallByCallId,
-  parseNativeCodeModeOutput,
   readRestartCheckpointProgress,
-  isCodeModeControlToolOutput,
   buildScenarioToolCallEvents,
   extractScenarioPlannedTool,
 } from "./mock-openai-tool-routing.js";
@@ -390,6 +382,73 @@ function extractFollowthroughEvidenceText(input: ResponsesInputItem[]): string {
     .join("\n");
 }
 
+const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
+  {
+    prompt: /personal share-safe diagnostics check/i,
+    includeUserFollowup: false,
+    requestMarker: "# Personal diagnostics request",
+    evidenceMarker: "# Raw personal diagnostics fixture",
+    requestPath: "DIAGNOSTICS_REQUEST.md",
+    evidencePath: "PERSONAL_DIAGNOSTICS_RAW.md",
+    resultPath: "personal-diagnostics-summary.txt",
+    reply: [
+      "Artifact: personal-diagnostics-summary.txt",
+      "Status: share-safe diagnostics summary ready",
+      "PERSONAL-DIAGNOSTICS-SAFE-OK",
+    ].join("\n"),
+    content: [
+      "Status: blocked waiting for explicit publish approval",
+      "Affected surface: telegram direct message",
+      "Omitted content: raw chat text, raw tool output, account id, message id, and fake secret",
+      "Redaction confirmed: yes",
+      "Next step: ask maintainer whether manually landed commits can count for contributor credit",
+    ].join("\n"),
+  },
+  {
+    prompt: /personal no-fake-progress check/i,
+    includeUserFollowup: true,
+    requestMarker: "# Progress request",
+    evidenceMarker: "# Progress evidence",
+    requestPath: "PROGRESS_REQUEST.md",
+    evidencePath: "PROGRESS_EVIDENCE.md",
+    resultPath: "personal-progress-proof.txt",
+    reply: [
+      "Artifact: personal-progress-proof.txt",
+      "Status: local proof artifact written",
+      "External status: not sent, not published, not uploaded, not merged",
+      "PERSONAL-NO-FAKE-PROGRESS-OK",
+    ].join("\n"),
+    content: [
+      "Personal no-fake-progress",
+      "Status: local proof artifact written",
+      "External status: not sent; not published; not uploaded; not merged",
+      "Evidence: PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md were read before this artifact was written",
+    ].join("\n"),
+  },
+  {
+    prompt: /personal failure recovery check/i,
+    includeUserFollowup: true,
+    requestMarker: "# Failure recovery request",
+    evidenceMarker: "# Failure recovery evidence",
+    requestPath: "FAILURE_RECOVERY_REQUEST.md",
+    evidencePath: "FAILURE_RECOVERY_EVIDENCE.md",
+    resultPath: "personal-failure-recovery.txt",
+    reply: [
+      "Artifact: personal-failure-recovery.txt",
+      "Failed step: external calendar update was not attempted",
+      "Retry boundary: do not retry until approval is given",
+      "PERSONAL-FAILURE-RECOVERY-OK",
+    ].join("\n"),
+    content: [
+      "Personal failure recovery",
+      "Completed: request reviewed and local evidence captured",
+      "Failed step: external calendar update was not attempted because explicit approval is missing",
+      "Retry boundary: do not retry the external step until approval is given",
+      "Next step: ask for approval before any external update",
+    ].join("\n"),
+  },
+];
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
@@ -401,27 +460,22 @@ async function buildResponsesPayload(
   },
 ) {
   const model = typeof body.model === "string" ? body.model : "";
-  const providerVariant = resolveProviderVariant(model);
+  const providerVariant = resolveMockProviderVariant(model);
   const input = normalizeResponsesInput(body.input);
   const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
   const hasCompletedToolOutput = hasToolOutput(input);
-  const rawToolOutput = extractToolOutput(input);
-  const codeModeSurface = resolveCodeModeExecSurface(toolDeclarationBody);
-  const hasCodeModeControlOutput = isCodeModeControlToolOutput(toolDeclarationBody, input);
-  const codeModeControlJson = hasCodeModeControlOutput
-    ? codeModeSurface === "native"
-      ? parseNativeCodeModeOutput(extractToolOutputValue(input))
-      : parseToolOutputJson(rawToolOutput)
-    : null;
-  const toolOutput =
-    codeModeControlJson?.status === "completed" && Object.hasOwn(codeModeControlJson, "value")
-      ? stringifyScenarioToolOutput(codeModeControlJson.value)
-      : codeModeSurface === "native" && hasCodeModeControlOutput
-        ? ""
-        : unwrapScenarioCatalogOutput(input, rawToolOutput);
-  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
-  const completedToolName = readScenarioCompletedToolName(completedToolCall);
+  const allInputText = extractAllRequestTexts(input, body);
+  const {
+    rawToolOutput,
+    hasCodeModeControlOutput,
+    codeModeControlJson,
+    toolOutput,
+    completedToolName,
+    scenarioToolOutput,
+    toolJson,
+    hasCompletedStructuredWrite,
+  } = readScenarioToolCompletion(toolDeclarationBody, input, allInputText);
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
   const pendingCommandProgress = (
@@ -447,7 +501,6 @@ async function buildResponsesPayload(
       ? buildAssistantEvents("BUG-TOOL-FAILED")
       : null;
   };
-  const allInputText = extractAllRequestTexts(input, body);
   const hasCompactionRetryDurableContext = allInputText.includes(
     QA_COMPACTION_RETRY_DURABLE_MARKER,
   );
@@ -483,13 +536,6 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
-  const scenarioToolOutput =
-    toolOutput ||
-    (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
-      allInputText,
-    )
-      ? extractLatestToolOutput(input)
-      : "");
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.
   if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
@@ -504,7 +550,6 @@ async function buildResponsesPayload(
   if (QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText)) {
     return buildFailedResponseEvents();
   }
-  const toolJson = parseToolOutputJson(scenarioToolOutput);
   // The hard-kill fixture shares the first real checkpoint below, but recovery
   // must settle without scheduling the repeated-restart fixture's later waits.
   if (
@@ -647,15 +692,12 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE.exec(sideEffectPrompt)?.[1]?.toLowerCase();
   const canCallSessionsSpawn = canCallScenarioTool(toolDeclarationBody, "sessions_spawn");
   const canCallSessionsYield = canCallScenarioTool(toolDeclarationBody, "sessions_yield");
-  const canCallMessage = canCallScenarioTool(toolDeclarationBody, "message");
-  const slackProgressTurn = extractLastMatchingUserTurn(
-    input,
-    QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
-  );
-  const slackProgressDirectives = slackProgressTurn
-    ? extractSlackProgressCommentaryDirectives(slackProgressTurn.text)
-    : null;
-  const slackProgressInput = slackProgressTurn ? input.slice(slackProgressTurn.index) : [];
+  const canCallMessage = canCallScenarioTool(toolDeclarationBody, "message", true);
+  const { slackProgressDirectives, slackProgressInput } = readSlackProgressTurn(input);
+  const slackRequester = buildSlackOwnedRequesterEvents(toolDeclarationBody, input, currentPrompt);
+  if (slackRequester) {
+    return slackRequester;
+  }
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput) {
       scenarioState.toolLoopReadAttempts = 0;
@@ -698,16 +740,6 @@ async function buildResponsesPayload(
       typeof plannedArgs.input === "string"
     ) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
-    }
-    if (!hasCompletedToolOutput && targetTool && hasDeclaredTool(body, "tool_search_code")) {
-      return buildToolCallEventsWithArgs("tool_search_code", {
-        code: [
-          `const hits = await openclaw.tools.search(${JSON.stringify(targetTool)}, { limit: 1 });`,
-          "const match = hits.find((tool) => tool.name === " + JSON.stringify(targetTool) + ");",
-          "if (!match) throw new Error('target tool not found');",
-          `return await openclaw.tools.call(match.id, ${JSON.stringify(plannedArgs)});`,
-        ].join("\n"),
-      });
     }
     if (
       !hasCompletedToolOutput &&
@@ -1395,7 +1427,7 @@ async function buildResponsesPayload(
     QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(prompt) ||
     (hasCompletedToolOutput && QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE.test(allInputText));
   if (isTelegramCurrentSessionStatusTurn) {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "session_status")) {
+    if (!hasCompletedToolOutput && canCallScenarioTool(toolDeclarationBody, "session_status")) {
       return buildToolCallEventsWithArgs("session_status", { sessionKey: "current" });
     }
     const sessionKey = extractSessionStatusSessionKey(toolJson, toolOutput);
@@ -1471,116 +1503,32 @@ async function buildResponsesPayload(
       return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
     }
   }
-  if (/personal share-safe diagnostics check/i.test(allInputText)) {
-    const diagnosticsEvidenceText = extractAllToolOutputText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(diagnosticsEvidenceText)) {
-      return buildAssistantEvents(
-        [
-          "Artifact: personal-diagnostics-summary.txt",
-          "Status: share-safe diagnostics summary ready",
-          "PERSONAL-DIAGNOSTICS-SAFE-OK",
-        ].join("\n"),
-      );
+  for (const fixture of PERSONAL_FOLLOWTHROUGH_FIXTURES) {
+    if (!fixture.prompt.test(allInputText)) {
+      continue;
     }
+    const evidence = fixture.includeUserFollowup
+      ? extractFollowthroughEvidenceText(input)
+      : extractAllToolOutputText(input);
     if (
-      !diagnosticsEvidenceText ||
-      (!diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
-        !diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture"))
+      hasCompletedStructuredWrite ||
+      /successfully (?:wrote|created|updated|replaced)/i.test(evidence)
     ) {
-      return buildToolCallEventsWithArgs("read", { path: "DIAGNOSTICS_REQUEST.md" });
+      return buildAssistantEvents(fixture.reply);
     }
-    if (
-      diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
-      diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture")
-    ) {
+    const hasRequest = evidence.includes(fixture.requestMarker);
+    const hasEvidence = evidence.includes(fixture.evidenceMarker);
+    if (!hasRequest && !hasEvidence) {
+      return buildToolCallEventsWithArgs("read", { path: fixture.requestPath });
+    }
+    if (hasRequest && hasEvidence) {
       return buildToolCallEventsWithArgs("write", {
-        path: "personal-diagnostics-summary.txt",
-        content: [
-          "Status: blocked waiting for explicit publish approval",
-          "Affected surface: telegram direct message",
-          "Omitted content: raw chat text, raw tool output, account id, message id, and fake secret",
-          "Redaction confirmed: yes",
-          "Next step: ask maintainer whether manually landed commits can count for contributor credit",
-        ].join("\n"),
+        path: fixture.resultPath,
+        content: fixture.content,
       });
     }
-    if (diagnosticsEvidenceText.includes("# Personal diagnostics request")) {
-      return buildToolCallEventsWithArgs("read", { path: "PERSONAL_DIAGNOSTICS_RAW.md" });
-    }
-  }
-  if (/personal no-fake-progress check/i.test(allInputText)) {
-    const progressEvidenceText = extractFollowthroughEvidenceText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(progressEvidenceText)) {
-      return buildAssistantEvents(
-        [
-          "Artifact: personal-progress-proof.txt",
-          "Status: local proof artifact written",
-          "External status: not sent, not published, not uploaded, not merged",
-          "PERSONAL-NO-FAKE-PROGRESS-OK",
-        ].join("\n"),
-      );
-    }
-    if (
-      !progressEvidenceText ||
-      (!progressEvidenceText.includes("# Progress request") &&
-        !progressEvidenceText.includes("# Progress evidence"))
-    ) {
-      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_REQUEST.md" });
-    }
-    if (
-      progressEvidenceText.includes("# Progress request") &&
-      progressEvidenceText.includes("# Progress evidence")
-    ) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "personal-progress-proof.txt",
-        content: [
-          "Personal no-fake-progress",
-          "Status: local proof artifact written",
-          "External status: not sent; not published; not uploaded; not merged",
-          "Evidence: PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md were read before this artifact was written",
-        ].join("\n"),
-      });
-    }
-    if (progressEvidenceText.includes("# Progress request")) {
-      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_EVIDENCE.md" });
-    }
-  }
-  if (/personal failure recovery check/i.test(allInputText)) {
-    const recoveryEvidenceText = extractFollowthroughEvidenceText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(recoveryEvidenceText)) {
-      return buildAssistantEvents(
-        [
-          "Artifact: personal-failure-recovery.txt",
-          "Failed step: external calendar update was not attempted",
-          "Retry boundary: do not retry until approval is given",
-          "PERSONAL-FAILURE-RECOVERY-OK",
-        ].join("\n"),
-      );
-    }
-    if (
-      !recoveryEvidenceText ||
-      (!recoveryEvidenceText.includes("# Failure recovery request") &&
-        !recoveryEvidenceText.includes("# Failure recovery evidence"))
-    ) {
-      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_REQUEST.md" });
-    }
-    if (
-      recoveryEvidenceText.includes("# Failure recovery request") &&
-      recoveryEvidenceText.includes("# Failure recovery evidence")
-    ) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "personal-failure-recovery.txt",
-        content: [
-          "Personal failure recovery",
-          "Completed: request reviewed and local evidence captured",
-          "Failed step: external calendar update was not attempted because explicit approval is missing",
-          "Retry boundary: do not retry the external step until approval is given",
-          "Next step: ask for approval before any external update",
-        ].join("\n"),
-      });
-    }
-    if (recoveryEvidenceText.includes("# Failure recovery request")) {
-      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_EVIDENCE.md" });
+    if (hasRequest) {
+      return buildToolCallEventsWithArgs("read", { path: fixture.evidencePath });
     }
   }
   if (/lobster invaders/i.test(prompt)) {
@@ -1929,6 +1877,7 @@ async function buildResponsesPayload(
   if (/repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = extractFollowthroughEvidenceText(input);
     if (
+      hasCompletedStructuredWrite ||
       /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
       /status:\s*complete/i.test(repoEvidenceText)
     ) {
@@ -1965,7 +1914,10 @@ async function buildResponsesPayload(
   }
   if (/personal task followthrough check/i.test(allInputText)) {
     const taskEvidenceText = extractFollowthroughEvidenceText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
+    if (
+      hasCompletedStructuredWrite ||
+      /successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)
+    ) {
       return buildAssistantEvents(
         [
           "Pending: maintainer feedback before publishing",
@@ -2050,18 +2002,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
   const scenarioStateFor = createQaMockScenarioStateStore();
-  let lastRequest: MockOpenAiRequestSnapshot | null = null;
-  const requests: MockOpenAiRequestSnapshot[] = [];
-  let nextRequestCursor = 1;
-  const recordRequest = (snapshot: MockOpenAiRequestSnapshotInput) => {
-    const recorded = { ...snapshot, cursor: nextRequestCursor++ };
-    lastRequest = recorded;
-    requests.push(recorded);
-    if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-      requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-    }
-    return recorded;
-  };
+  const requestLog = createMockOpenAiRequestLog();
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -2112,7 +2053,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       instructions: extractInstructionsText(body) || undefined,
       toolOutput: extractToolOutput(input),
       model,
-      providerVariant: resolveProviderVariant(model),
+      providerVariant: resolveMockProviderVariant(model),
       codeModeExecSurface:
         resolveCodeModeExecSurface(resolveCurrentToolDeclarationSurface(body, input)) ?? undefined,
       imageInputCount: countImageInputs(input),
@@ -2128,7 +2069,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       !scenarioState.compactionOverflowInjected
     ) {
       scenarioState.compactionOverflowInjected = true;
-      recordRequest({
+      requestLog.record({
         ...requestSnapshotBase,
         outcome: "error",
         errorCode: "context_length_exceeded",
@@ -2221,7 +2162,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
             retryAfterSeconds: 120,
           }
         : undefined);
-    recordRequest({
+    const recorded = requestLog.record({
       ...requestSnapshotBase,
       outcome:
         failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
@@ -2245,6 +2186,10 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt);
     if (repeatedRequestRecovery) {
       scenarioState.repeatedRequestRecoveryAttempts += 1;
+    }
+    const held = requestLog.waitForContinuation(recorded);
+    if (held) {
+      await held;
     }
     return {
       events,
@@ -2297,34 +2242,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         });
         return;
       }
-      if (req.method === "GET" && url.pathname === "/debug/last-request") {
-        writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/debug/request-cursor") {
-        writeJson(res, 200, { cursor: nextRequestCursor - 1 });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/debug/requests") {
-        const afterText = url.searchParams.get("after");
-        if (afterText === null) {
-          writeJson(res, 200, requests);
-          return;
-        }
-        const after = resolveQaDebugRequestCursor(
-          afterText,
-          requests[0]?.cursor ?? nextRequestCursor,
-          nextRequestCursor - 1,
-        );
-        if (typeof after !== "number") {
-          writeJson(res, after.status, after.body);
-          return;
-        }
-        writeJson(
-          res,
-          200,
-          requests.filter((request) => request.cursor > after),
-        );
+      if (req.method === "GET" && requestLog.handleGet(url, res)) {
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
@@ -2479,9 +2397,11 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     baseUrl,
     sessionObserverUrl,
     terminalRequesters: { settle: terminalRequesterSettleGate.settle },
+    holdNextContinuation: requestLog.holdNextContinuation,
     async stop() {
       unregisterSessionObserver();
       terminalRequesterSettleGate.stop();
+      requestLog.stop();
       await responsesWebSocket.close();
       await closeQaHttpServer(server);
     },

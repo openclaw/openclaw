@@ -127,7 +127,7 @@ export async function createGatewayKernel(
 ) {
   const scheduler = new GatewayScheduler();
   const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
-  sdkResourceHost.assertOpen();
+  sdkResourceHost.bindScheduler(scheduler);
   return await sdkResourceHost.run(() =>
     createGatewayKernelWithSdkHost(port, opts, options, sdkResourceHost, scheduler),
   );

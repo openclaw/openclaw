@@ -91,6 +91,27 @@ export function userProfilesDb(db: DatabaseSync) {
   return getNodeSqliteKysely<UserProfilesDatabase>(db);
 }
 
+export function selectUserProfileEmailAlias(db: DatabaseSync, email: string) {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    userProfilesDb(db)
+      .selectFrom("user_profile_emails")
+      .select("profile_id")
+      .where("email", "=", email),
+  );
+}
+
+export function selectUserProfileEmails(db: DatabaseSync, profileId: string): string[] {
+  return executeSqliteQuerySync(
+    db,
+    userProfilesDb(db)
+      .selectFrom("user_profile_emails")
+      .select("email")
+      .where("profile_id", "=", profileId)
+      .orderBy("email", "asc"),
+  ).rows.map(({ email }) => email);
+}
+
 /** Keep each exact binding and its profile's email projection in the same committed update. */
 export function applyUserProfileEmailBinding(
   bindings: UserProfileEmailBindingIndex,
@@ -171,7 +192,7 @@ export function selectProfileDisplayEntries(db: DatabaseSync, ids?: string[]) {
   return rows.map((row): [string, typeof row] => [row.id, { ...row }]);
 }
 
-export function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatarMime | null {
+function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatarMime | null {
   return USER_PROFILE_AVATAR_MIME_TYPES.find((candidate) => candidate === value) ?? null;
 }
 
@@ -327,17 +348,7 @@ export function inspectProfileAvatarInDatabase(
       profile: profile && toUserProfile(profile),
       hasAvatar: profile?.has_avatar === 1,
       avatar,
-      emails:
-        profile && !avatar
-          ? executeSqliteQuerySync(
-              db,
-              userProfilesDb(db)
-                .selectFrom("user_profile_emails")
-                .select("email")
-                .where("profile_id", "=", profile.id)
-                .orderBy("email", "asc"),
-            ).rows.map(({ email }) => email)
-          : [],
+      emails: profile && !avatar ? selectUserProfileEmails(db, profile.id) : [],
     };
   });
 }

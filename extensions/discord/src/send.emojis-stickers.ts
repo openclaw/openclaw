@@ -1,11 +1,11 @@
-import type { RESTGetAPIGuildEmojisResult } from "discord-api-types/v10";
+import { Routes, type RESTGetAPIGuildEmojisResult } from "discord-api-types/v10";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
-import { createGuildEmoji, createGuildSticker, listGuildEmojis } from "./internal/discord.js";
+import { listGuildEmojis } from "./internal/discord.js";
 import { normalizeEmojiName, resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordAssetUploadOpts,
@@ -48,7 +48,7 @@ export async function uploadEmojiDiscord(
   }
   const image = `data:${contentType};base64,${media.buffer.toString("base64")}`;
   const roleIds = normalizeStringEntries(payload.roleIds ?? []);
-  return await createGuildEmoji(rest, payload.guildId, {
+  return await rest.post(Routes.guildEmojis(payload.guildId), {
     body: {
       name: normalizeEmojiName(payload.name, "Emoji name"),
       image,
@@ -76,7 +76,7 @@ export async function uploadStickerDiscord(
   if (!contentType || !["image/png", "image/apng", "application/json"].includes(contentType)) {
     throw new Error("Discord sticker uploads require a PNG, APNG, or Lottie JSON file");
   }
-  return await createGuildSticker(rest, payload.guildId, {
+  return await rest.post(Routes.guildStickers(payload.guildId), {
     multipartStyle: "form",
     body: {
       name: normalizeEmojiName(payload.name, "Sticker name"),

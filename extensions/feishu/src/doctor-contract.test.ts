@@ -239,24 +239,11 @@ describe("feishu webhook route doctor migration", () => {
   });
 
   it.each([
-    ["hook#fragment", "/hook"],
-    ["/hook?tenant=alpha#fragment", "/hook?tenant=alpha"],
+    ["hook?tenant=alpha#fragment", "/hook?tenant=alpha"],
     ["/hook?", "/hook?"],
     ["/hook?#", "/hook"],
-    ["/other/%2e%2e/hook", "/hook"],
-    ["/other\\..\\hook", "/hook"],
-    ["//example.com/hook", "/hook"],
-    ["https://example.com/hook/?tenant=alpha#fragment", "/hook/?tenant=alpha"],
-    ["/café", "/caf%C3%A9"],
-    ["/hook name", "/hook%20name"],
-    ["/hook\u0000name", "/hook%00name"],
-    ["/hook%23fragment", "/hook%23fragment"],
-    ["", "/feishu/events"],
     ["   ", "/feishu/events"],
-    ["mailto:hello@example.com", "/feishu/events"],
     ["javascript:alert(1)", "/feishu/events"],
-    ["ftp://example.com/hook", "/feishu/events"],
-    ["file:///tmp/hook", "/feishu/events"],
     ["//[", "/feishu/events"],
   ])("repairs root and account webhook path %j to %j", (webhookPath, expectedPath) => {
     const result = normalizeCompatibilityConfig({

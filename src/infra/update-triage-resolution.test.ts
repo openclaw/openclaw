@@ -142,7 +142,6 @@ function repair() {
         signal,
         validateDoctor,
       }),
-    budget: { maxTurns: 1 },
   });
 }
 

@@ -34,7 +34,7 @@ import {
 } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
-import { setActiveNodeContext } from "../../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import {
   claimHeartbeatOutcomeForRun,
   persistHeartbeatOutcome,
@@ -706,7 +706,7 @@ describe("prepareCliRunContext", () => {
   });
 
   afterEach(async () => {
-    setActiveNodeContext(null);
+    setActiveNodeContexts([]);
     cliBackendsTesting.resetDepsForTest();
     resetCliRunnerPrepareTestDeps();
     resetCliAuthEpochTestDeps();
@@ -1945,7 +1945,7 @@ describe("prepareCliRunContext", () => {
   });
 
   it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {
-    setActiveNodeContext({ nodeId: "active-mac" });
+    setActiveNodeContexts([{ nodeId: "active-mac" }]);
     fixture.appendTranscript({
       id: "msg-1",
       parentId: null,
@@ -2381,7 +2381,7 @@ describe("prepareCliRunContext", () => {
 
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.params.prompt).toBe(
-        "Current event:\nBob: yes\n\n[OpenClaw room event]\n\nCurrent active computer (latest physical input, not message origin): active_node=unknown",
+        "Current event:\nBob: yes\n\n[OpenClaw room event]\n\nCurrent active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown",
       );
       expect(context.openClawHistoryPrompt).toContain("Room context:\nAlice: lunch?");
       expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
@@ -3210,6 +3210,31 @@ describe("prepareCliRunContext", () => {
     expect(context.systemPrompt).toContain("channel=telegram");
     expect(context.systemPrompt).not.toContain("Telegram rich ON");
     expect(context.systemPrompt).not.toContain("Telegram rich OFF");
+  });
+
+  it("keeps per-run helper session identities out of the reusable system prompt", async () => {
+    const prepareRun = (runId: string, runtimeFactsInTurn?: true) =>
+      fixture.prepare({
+        runId,
+        sessionId: runId,
+        sessionKey: `agent:main:main:active-memory:${runId}`,
+        messageChannel: "webchat",
+        ...(runtimeFactsInTurn ? { runtimeFactsInTurn } : {}),
+      });
+
+    const first = await prepareRun("recall-a", true);
+    const second = await prepareRun("recall-b", true);
+
+    expect(second.systemPrompt).toBe(first.systemPrompt);
+    expect(first.systemPrompt).not.toContain("Runtime: ");
+    expect(first.params.prompt).toContain("session=agent:main:main:active-memory:recall-a");
+    expect(second.params.prompt).toContain("session=agent:main:main:active-memory:recall-b");
+    expect(second.params.prompt).toContain("channel=webchat");
+
+    // Resumable turns keep Runtime facts in the prompt they share across turns.
+    const resumable = await prepareRun("turn-c");
+    expect(resumable.systemPrompt).toContain("session=agent:main:main:active-memory:turn-c");
+    expect(resumable.params.prompt).not.toContain("Runtime: ");
   });
 
   it.each(["group", "channel"] as const)(
@@ -5715,7 +5740,7 @@ describe("prepareCliRunContext", () => {
   });
 
   it("preserves a Claude native-control resume when the local transcript is absent", async () => {
-    setActiveNodeContext({ nodeId: "active-mac" });
+    setActiveNodeContexts([{ nodeId: "active-mac" }]);
     setCliBackendForPrepareTest();
     const transcriptCheck = vi.fn(async () => false);
     const orphanCheck = vi.fn(async () => true);

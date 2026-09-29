@@ -321,86 +321,95 @@ describe("worker environment service", () => {
     }
   });
 
-  it("keeps restart-inherited claims recovery-only across every worker authority surface", async () => {
-    const environmentId = "worker-inherited-claim";
-    const sessionId = "session-inherited-claim";
-    const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim, store } = await claimWorkerPlacement({
-      environmentId,
-      ownerEpoch: environmentIdentity.ownerEpoch,
-      sessionId,
-    });
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
-    store.updateAckCursors({ claim, liveEvent: 1 });
-    const preRestartService = support.createService(support.createProvider(), {
-      placementStore: createWorkerSessionPlacementGate(store),
-    });
-    const recoveryCredential = await preRestartService.acquireTurnCredential(claim);
-    await preRestartService.stop();
-    store.handoffWorkspaceResultRecovery(claim);
+  it.each(["inherited", "revoked"] as const)(
+    "keeps %s claims recovery-only across every worker authority surface",
+    async (source) => {
+      const environmentId = "worker-inherited-claim";
+      const sessionId = "session-inherited-claim";
+      const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
+      const { claim, store } = await claimWorkerPlacement({
+        environmentId,
+        ownerEpoch: environmentIdentity.ownerEpoch,
+        sessionId,
+      });
+      store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      store.updateAckCursors({ claim, liveEvent: 1 });
+      const preRestartService = support.createService(support.createProvider(), {
+        placementStore: createWorkerSessionPlacementGate(store),
+      });
+      const recoveryCredential = await preRestartService.acquireTurnCredential(claim);
+      await preRestartService.stop();
+      store.handoffWorkspaceResultRecovery(claim);
 
-    const restartedStore = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-    });
-    const gate = createWorkerSessionPlacementGate(restartedStore, {
-      rejectExistingWorkerClaims: true,
-    });
-    const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>();
-    const executeSessionTool =
-      vi.fn<NonNullable<WorkerEnvironmentServiceOptions["executeSessionTool"]>>();
-    const liveEvents = support.createLiveEvents();
-    const workerService = support.createService(support.createProvider(), {
-      executeInference,
-      executeSessionTool,
-      liveEvents,
-      placementStore: gate,
-    });
-    workerService.start();
-    const identity = {
-      ...environmentIdentity,
-      runId: claim.runId,
-      turnClaim: claim,
-    };
-    const admission = {
-      environmentId,
-      credential: recoveryCredential.credential,
-      sessionId,
-      runId: claim.runId,
-      ownerEpoch: identity.ownerEpoch,
-      rpcSetVersion: 1,
-      handshake: support.BOOTSTRAP_RECEIPT,
-    };
+      const restartedStore = createWorkerSessionPlacementStore({
+        database: support.testState.stateDb,
+      });
+      const gate = createWorkerSessionPlacementGate(restartedStore, {
+        rejectExistingWorkerClaims: source === "inherited",
+      });
+      if (source === "revoked") {
+        gate.fenceWorkerTurnForRecovery(claim);
+      }
+      const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>();
+      const executeSessionTool =
+        vi.fn<NonNullable<WorkerEnvironmentServiceOptions["executeSessionTool"]>>();
+      const liveEvents = support.createLiveEvents();
+      const workerService = support.createService(support.createProvider(), {
+        executeInference,
+        executeSessionTool,
+        liveEvents,
+        placementStore: gate,
+      });
+      workerService.start();
+      const identity = {
+        ...environmentIdentity,
+        runId: claim.runId,
+        turnClaim: claim,
+      };
+      const admission = {
+        environmentId,
+        credential: recoveryCredential.credential,
+        sessionId,
+        runId: claim.runId,
+        ownerEpoch: identity.ownerEpoch,
+        rpcSetVersion: 1,
+        handshake: support.BOOTSTRAP_RECEIPT,
+      };
 
-    expect(restartedStore.validateTurnClaim(claim)).toBe(true);
-    expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
-    await expect(workerService.admitWorker(admission)).resolves.toEqual({
-      ok: false,
-      reason: "placement-mismatch",
-    });
-    expect(await workerService.acknowledgeCredentialDelivery(recoveryCredential)).toBe(false);
-    expect(workerService.validateWorkerConnection(identity)).toBe("placement-mismatch");
-    await expect(
-      workerService.commitTranscript(identity, support.transcriptRequest(identity, "stale")),
-    ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    await expect(
-      workerService.pushLiveEvent(identity, support.assistantEvent(identity, "stale")),
-    ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(
-      await workerService.startInference(identity, support.inferenceRequest(identity), {
-        connectionId: "inherited-claim",
-        send: vi.fn(),
-      }),
-    ).toEqual({ ok: false, closeReason: "placement-mismatch" });
-    await expect(
-      workerService.executeSessionTool(identity, "sessions_send", {
-        toolCallId: "inherited-tool",
-        sessionKey: "agent:main:target",
-        message: "stale",
-      }),
-    ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(executeInference).not.toHaveBeenCalled();
-    expect(executeSessionTool).not.toHaveBeenCalled();
-  });
+      expect(restartedStore.validateTurnClaim(claim)).toBe(true);
+      expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+      await expect(workerService.admitWorker(admission)).resolves.toEqual({
+        ok: false,
+        reason: "placement-mismatch",
+      });
+      expect(await workerService.acknowledgeCredentialDelivery(recoveryCredential)).toBe(false);
+      expect(workerService.validateWorkerConnection(identity)).toBe("placement-mismatch");
+      await expect(
+        workerService.commitTranscript(identity, support.transcriptRequest(identity, "stale")),
+      ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+      await expect(
+        workerService.pushLiveEvent(identity, support.assistantEvent(identity, "stale")),
+      ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+      expect(
+        await workerService.startInference(identity, support.inferenceRequest(identity), {
+          connectionId: "inherited-claim",
+          send: vi.fn(),
+        }),
+      ).toEqual({ ok: false, closeReason: "placement-mismatch" });
+      await expect(
+        workerService.executeSessionTool(identity, "sessions_send", {
+          toolCallId: "inherited-tool",
+          sessionKey: "agent:main:target",
+          message: "stale",
+        }),
+      ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+      expect(executeInference).not.toHaveBeenCalled();
+      expect(executeSessionTool).not.toHaveBeenCalled();
+      console.info(
+        `[worker-authority-proof] source=${source} admission=denied credential-ack=false connection/transcript/live/inference/tools=placement-mismatch effects=0`,
+      );
+    },
+  );
 
   it("binds credentials and reconnect identities to the exact replacement claim", async () => {
     const environmentId = "worker-claim-credential";

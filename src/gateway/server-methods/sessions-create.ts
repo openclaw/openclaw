@@ -19,7 +19,9 @@ import {
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
+import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
+import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -38,6 +40,7 @@ import {
   validateSessionWorktreeSelection,
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
+import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
@@ -87,6 +90,16 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
       return;
     }
+    const uploadError = gatewayClientUploadPolicyError({
+      method: "sessions.create",
+      requestParams: params,
+      client,
+      context,
+    });
+    if (uploadError) {
+      respond(false, undefined, uploadError);
+      return;
+    }
     const p = structuredClone(params);
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     const getCurrentConfig = context.getRuntimeConfig;
@@ -119,9 +132,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedModel = normalizeOptionalString(p.model);
-    let personalAccounts: ReturnType<typeof prepareSessionModelAccountAccess>;
+    let personalAccounts: Awaited<ReturnType<typeof prepareSessionModelAccountAccess>>;
     try {
-      personalAccounts = prepareSessionModelAccountAccess(options, requestedModel);
+      personalAccounts = await prepareSessionModelAccountAccess(options, requestedModel);
     } catch (error) {
       if (!(error instanceof ModelAccountConnectAuthorityError)) {
         throw error;
@@ -475,6 +488,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       };
     }
     let runPayload: Record<string, unknown> | undefined;
+    let initialTurnSourceAccepted = false;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
@@ -562,6 +576,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionId: committed.entry.sessionId,
           lifecycleRevision: committed.entry.lifecycleRevision,
         });
+        if (hasInitialTurn && requestAuthority.family === "worker") {
+          initialTurnSourceAccepted = acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+        }
       },
       afterCreate: async (session) => {
         if (!authority.hasActive()) {
@@ -575,6 +592,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           options,
           {
             ...options,
+            client: initialTurnSourceAccepted ? captureAgentTurnPrincipal(client) : client,
             params: {
               sessionKey: session.key,
               agentId: session.agentId,

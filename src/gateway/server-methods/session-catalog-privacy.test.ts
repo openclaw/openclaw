@@ -40,10 +40,13 @@ async function withCatalog(
     let fixture: Awaited<ReturnType<typeof createCatalog>> | undefined;
     try {
       fixture = await createCatalog();
+      // Deferred providers must not race the response budget while privacy writes settle.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await run(fixture);
     } finally {
       fixture?.projection.dispose();
       setActivePluginRegistry(previousRegistry);
+      vi.useRealTimers();
     }
   });
 }

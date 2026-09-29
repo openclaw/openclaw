@@ -12,6 +12,7 @@ import {
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -38,6 +39,45 @@ export type WhatsAppSendResult = {
   keys: WhatsAppSendKey[];
   providerAccepted: boolean;
 };
+
+export function listWhatsAppDeliveredMessageIdentities(
+  results: readonly OutboundDeliveryResult[],
+  acceptChannel: (channel: string | undefined) => boolean,
+): Array<{ messageId: string; remoteJid: string }> {
+  const identities: Array<{ messageId: string; remoteJid: string }> = [];
+  const seen = new Set<string>();
+  const add = (params: { channel?: string; messageId?: string; toJid?: string }) => {
+    if (!acceptChannel(params.channel)) {
+      return;
+    }
+    const messageId = params.messageId?.trim() ?? "";
+    const remoteJid = params.toJid?.trim() ?? "";
+    const key = `${remoteJid}:${messageId}`;
+    if (!messageId || messageId === "unknown" || !remoteJid || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    identities.push({ messageId, remoteJid });
+  };
+
+  for (const result of results) {
+    if (result.channel !== "whatsapp") {
+      continue;
+    }
+    add(result);
+    for (const raw of result.receipt?.raw ?? []) {
+      add(raw);
+    }
+    for (const part of result.receipt?.parts ?? []) {
+      add({
+        channel: part.raw?.channel,
+        messageId: part.raw?.messageId ?? part.platformMessageId,
+        toJid: part.raw?.toJid,
+      });
+    }
+  }
+  return identities;
+}
 
 // Producer-owned accounting follows the accepted object across nested owner boundaries.
 const activityAccountedWhatsAppSendResults = new WeakSet<WhatsAppSendResult>();

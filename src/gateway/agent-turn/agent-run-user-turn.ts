@@ -256,6 +256,7 @@ export async function prepareAgentRunUserTurn(params: {
         offloadedRefs: params.offloadedRefs,
         log: params.context.logGateway,
         logContext: "agent",
+        assertCurrent: params.assertCurrent,
       });
       durableMediaIds = persistedMedia.entries.map((entry) => entry.id);
       params.assertCurrent();

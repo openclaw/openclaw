@@ -1,5 +1,4 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { Type, type Static } from "typebox";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -20,12 +19,6 @@ import {
   listSessionStateEventsSince,
 } from "../../sessions/session-state-events.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
-import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
-import {
-  formatTaskStatus,
-  formatTaskStatusDetail,
-  formatTaskStatusTitle,
-} from "../../tasks/task-status.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
@@ -53,6 +46,10 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
 import {
+  resolveGatewayToolOperatorSelection,
+  wrapGatewayPersonalToolExecution,
+} from "./gateway-caller-context.js";
+import {
   callAgentToolGatewayRequest,
   hasGatewayToolRoutingContext,
   type AgentToolGatewayRequestCaller,
@@ -69,6 +66,13 @@ import {
   resolveStoreScopedRequesterKey,
 } from "./session-status-session-resolve.js";
 import {
+  SessionStatusOutputSchema,
+  SessionStatusToolSchema,
+  type SessionStatusDeliveryContextDetails,
+  type SessionStatusOriginDetails,
+} from "./session-status-tool.schema.js";
+import { assertSessionStatusVisible } from "./session-status-visibility.js";
+import {
   formatSessionToolAccessDenial,
   resolveCurrentSessionClientAlias,
   resolveSessionReference,
@@ -77,85 +81,6 @@ import {
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
-
-const SessionStatusToolSchema = Type.Object({
-  sessionKey: Type.Optional(Type.String()),
-  model: Type.Optional(Type.String()),
-  changesSince: Type.Optional(Type.Integer({ minimum: 0 })),
-});
-
-const SessionStatusOriginSchema = Type.Object(
-  {
-    provider: Type.Optional(Type.String()),
-    accountId: Type.Optional(Type.String()),
-    threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-  },
-  { additionalProperties: false },
-);
-
-const SessionStatusDeliveryContextSchema = Type.Object(
-  {
-    channel: Type.Optional(Type.String()),
-    to: Type.Optional(Type.String()),
-    accountId: Type.Optional(Type.String()),
-    threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-  },
-  { additionalProperties: false },
-);
-
-const SessionStatusStateEventPayloadSchema = Type.Object(
-  {
-    outcome: Type.Optional(
-      Type.Union([Type.Literal("error"), Type.Literal("timeout"), Type.Literal("cancelled")]),
-    ),
-    channel: Type.Optional(Type.String()),
-    turns: Type.Optional(Type.Integer({ minimum: 1 })),
-  },
-  { additionalProperties: false },
-);
-
-const SessionStatusStateEventSchema = Type.Object(
-  {
-    sequence: Type.Integer(),
-    kind: Type.String(),
-    actorType: Type.Union([Type.Literal("human"), Type.Literal("agent"), Type.Literal("system")]),
-    occurredAt: Type.Number(),
-    summary: Type.String(),
-    actorId: Type.Optional(Type.String()),
-    runId: Type.Optional(Type.String()),
-    payload: Type.Optional(SessionStatusStateEventPayloadSchema),
-  },
-  { additionalProperties: false },
-);
-
-const SessionStatusOutputSchema = Type.Object(
-  {
-    ok: Type.Literal(true),
-    sessionKey: Type.String(),
-    agentId: Type.String(),
-    changedModel: Type.Boolean(),
-    stateVersion: Type.Integer(),
-    statusText: Type.String(),
-    stateChanges: Type.Optional(
-      Type.Object(
-        {
-          events: Type.Array(SessionStatusStateEventSchema),
-          truncated: Type.Boolean(),
-          earliestAvailableSequence: Type.Integer(),
-          historyGap: Type.Boolean(),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-    model: Type.Optional(Type.String()),
-    modelProvider: Type.Optional(Type.String()),
-    modelOverride: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    origin: Type.Optional(SessionStatusOriginSchema),
-    active: Type.Optional(SessionStatusDeliveryContextSchema),
-    deliveryContext: Type.Optional(SessionStatusDeliveryContextSchema),
-  },
-  { additionalProperties: false },
-);
 
 type SessionStatusStateChanges = ReturnType<typeof listSessionStateEventsSince>;
 
@@ -205,9 +130,6 @@ function compactSessionStateChanges(stateChanges: SessionStatusStateChanges) {
 const loadCommandsStatusRuntime = createLazyPromise(() => import("../../status/status-text.js"));
 
 type ActiveStatusModelIdentity = { provider?: string; model: string };
-
-type SessionStatusOriginDetails = Static<typeof SessionStatusOriginSchema>;
-type SessionStatusDeliveryContextDetails = Static<typeof SessionStatusDeliveryContextSchema>;
 
 type SessionStatusRouteDetails = {
   origin?: SessionStatusOriginDetails;
@@ -381,30 +303,6 @@ function withActiveStatusModelIdentity(
   return next;
 }
 
-function formatSessionTaskLine(params: {
-  relatedSessionKey: string;
-  callerOwnerKey: string;
-  callerAgentId: string;
-  config: OpenClawConfig;
-}): string | undefined {
-  const snapshot = buildTaskStatusSnapshotForRelatedSessionKeyForOwner(params);
-  const task = snapshot.focus;
-  if (!task) {
-    return undefined;
-  }
-  const headline =
-    snapshot.activeCount > 0
-      ? `${snapshot.activeCount} active`
-      : snapshot.recentFailureCount > 0
-        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
-        : `latest ${formatTaskStatus(task).replaceAll("_", " ")}`;
-  const title = formatTaskStatusTitle(task);
-  const detail = formatTaskStatusDetail(task);
-  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
-  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
-  return `📌 Tasks: ${parts.join(" · ")}`;
-}
-
 export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
   requesterAgentIdOverride?: string;
@@ -430,8 +328,9 @@ export function createSessionStatusTool(opts?: {
     description: describeSessionStatusTool(),
     parameters: SessionStatusToolSchema,
     outputSchema: SessionStatusOutputSchema,
-    execute: async (_toolCallId, args) => {
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const operatorSelection = resolveGatewayToolOperatorSelection();
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const gatewayScoped = opts?.callGateway !== undefined || hasGatewayToolRoutingContext();
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
@@ -529,13 +428,12 @@ export function createSessionStatusTool(opts?: {
       const requestedKeyParam = readToolStringParam(params, "sessionKey");
       const isImplicitRunSessionStatus =
         requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
-      let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
-
       // No-arg status should prefer the live run session when available (#82669).
-      if (isImplicitRunSessionStatus) {
-        requestedKeyRaw = opts?.runSessionKey;
-      }
-      let requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+      let requestedKeyInput =
+        (isImplicitRunSessionStatus
+          ? opts?.runSessionKey
+          : (requestedKeyParam ?? opts?.agentSessionKey)
+        )?.trim() ?? "";
 
       // Track whether this is a semantic-current request (literal "current" or a
       // current-client alias) BEFORE any rewrite, so visibility treats it as self.
@@ -553,8 +451,7 @@ export function createSessionStatusTool(opts?: {
       // In sandboxed channel runs there may be no separate runSessionKey because the sandbox
       // key already is the live requester; avoid probing literal "current" through the gateway.
       if (requestedKeyInput === "current" && (opts?.runSessionKey || opts?.sandboxed === true)) {
-        requestedKeyRaw = opts.runSessionKey ?? effectiveRequesterKey;
-        requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+        requestedKeyInput = (opts.runSessionKey ?? effectiveRequesterKey).trim();
       }
 
       const currentSessionAlias = resolveCurrentSessionClientAlias({
@@ -562,8 +459,7 @@ export function createSessionStatusTool(opts?: {
         requesterInternalKey: effectiveRequesterKey,
       });
       if (currentSessionAlias) {
-        requestedKeyRaw = opts?.runSessionKey ?? currentSessionAlias;
-        requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+        requestedKeyInput = (opts?.runSessionKey ?? currentSessionAlias).trim();
       }
       const effectiveRequesterLookupKey = effectiveRequesterKey.trim();
       let resolvedViaSessionId = false;
@@ -571,7 +467,6 @@ export function createSessionStatusTool(opts?: {
       if (!requestedKeyInput) {
         throw new Error("sessionKey required");
       }
-      requestedKeyRaw = requestedKeyInput;
       let resolvedRequesterOwned = false;
 
       const deferTargetOwnerResolution =
@@ -619,7 +514,7 @@ export function createSessionStatusTool(opts?: {
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = deferTargetOwnerResolution
         ? undefined
-        : readStatusEntry(requestedKeyRaw, requestedKeyInput !== "current");
+        : readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
 
       if (
         !resolved &&
@@ -673,8 +568,7 @@ export function createSessionStatusTool(opts?: {
           }
           resolvedRequesterOwned = visibleSession.requesterOwned;
           resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
-          requestedKeyRaw = visibleSession.key;
-          requestedKeyInput = requestedKeyRaw.trim();
+          requestedKeyInput = visibleSession.key.trim();
           agentId = visibleAgentId;
           storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
@@ -682,7 +576,7 @@ export function createSessionStatusTool(opts?: {
             agentId,
             mainKey,
           });
-          resolved = readStatusEntry(requestedKeyRaw);
+          resolved = readStatusEntry(requestedKeyInput);
         } else if (!resolvedSession.notFound || resolvedSession.status === "forbidden") {
           throw new Error(resolvedSession.error);
         }
@@ -693,12 +587,12 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved && requestedKeyInput === "current") {
-        resolved = readStatusEntry(requestedKeyRaw, true);
+        resolved = readStatusEntry(requestedKeyInput, true);
       }
 
       if (!resolved && requestedKeyParam === undefined) {
         for (const fallbackKey of listImplicitDefaultDirectFallbackKeys({
-          keyRaw: requestedKeyRaw,
+          keyRaw: requestedKeyInput,
           mainKey,
         })) {
           resolved = readStatusEntry(fallbackKey, true);
@@ -754,6 +648,18 @@ export function createSessionStatusTool(opts?: {
         requestedKeyInput,
       );
       let scopedResolved = resolved;
+      const assertStatusVisible = () =>
+        assertSessionStatusVisible({
+          selection: operatorSelection,
+          resolved: scopedResolved,
+          agentId,
+          requesterAgentId,
+          currentSessionKey: opts?.runSessionKey?.trim() ?? effectiveRequesterLookupKey,
+          normalizeSessionKey: normalizeVisibilityTargetSessionKey,
+          requestedKey: requestedKeyInput,
+          gatewayCall,
+        });
+      await assertStatusVisible();
 
       return await runWithScopedSessionAccess({
         cfg,
@@ -841,12 +747,6 @@ export function createSessionStatusTool(opts?: {
             statusSessionEntry.chatType === "channel" ||
             scopedResolved.key.includes(":group:") ||
             scopedResolved.key.includes(":channel:");
-          const taskLine = formatSessionTaskLine({
-            relatedSessionKey: scopedResolved.key,
-            callerOwnerKey: visibilityRequesterKey,
-            callerAgentId: requesterAgentId,
-            config: cfg,
-          });
           // Tool status may read persisted/configured facts, but must not start provider discovery.
           const thinkingCatalog = await loadPublishedPreparedModelCatalog({
             config: cfg,
@@ -887,14 +787,11 @@ export function createSessionStatusTool(opts?: {
               }),
             isGroup,
             defaultGroupActivation: () => "mention",
-            taskLineOverride: taskLine,
-            skipDefaultTaskLookup: true,
             primaryModelLabelOverride: primaryModelLabel,
             ...(providerForCard ? {} : { modelAuthOverride: undefined }),
             includeTranscriptUsage: true,
           });
-          const fullStatusText =
-            taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
+          const fullStatusText = statusText;
           const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
           const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
           const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
@@ -933,6 +830,7 @@ export function createSessionStatusTool(opts?: {
                   : resultOverrideModel
                 : null;
 
+          await assertStatusVisible();
           return {
             content: [{ type: "text", text: visibleStatusText }],
             details: {
@@ -957,7 +855,7 @@ export function createSessionStatusTool(opts?: {
           };
         },
       });
-    },
+    }),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

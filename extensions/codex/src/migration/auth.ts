@@ -50,7 +50,7 @@ const CODEX_REASON_MISSING_AUTH_METADATA = "missing auth metadata";
 const CODEX_REASON_AUTH_STORAGE_NOT_IMPORTABLE = "credential storage is not importable";
 type CodexConfigPatchMode = "apply" | "none" | "return";
 
-export type CodexAuthSource = Pick<CodexSource, "codexHome" | "authPath" | "modelsCachePath">;
+export type CodexAuthSource = Pick<CodexSource, "codexHome" | "modelsCachePath">;
 
 type CodexAuthProfileConfig = {
   profileId: string;
@@ -299,12 +299,10 @@ async function applyCodexAuthProfileConfig(
       base: "runtime",
       afterWrite: { mode: "auto" },
       mutate(draft) {
-        const current = draft;
-        if (hasAuthProfileConfigConflict(current, profile, Boolean(ctx.overwrite))) {
+        if (hasAuthProfileConfigConflict(draft, profile, Boolean(ctx.overwrite))) {
           throw new CodexAuthConfigConflict();
         }
-        const next = applyConfig(current);
-        replaceConfigDraft(draft, next);
+        replaceConfigDraft(draft, applyConfig(draft));
       },
     });
     return "configured";
@@ -491,10 +489,10 @@ async function applyCodexAuthItem(
       candidate.kind === credentialKind &&
       (!sourceProfileId || candidate.profileId === sourceProfileId),
   );
-  if (!credential) {
-    return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
-  }
-  if (item.details?.sourceCredentialFingerprint !== sourceCredentialFingerprint(credential)) {
+  if (
+    !credential ||
+    item.details?.sourceCredentialFingerprint !== sourceCredentialFingerprint(credential)
+  ) {
     return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
   }
   if (
@@ -607,38 +605,32 @@ function buildCodexAuthConfigPatchItems(
   profileId: string,
 ): MigrationItem[] {
   const next = applyCredentialConfig(ctx.config, credential, profileId);
-  const items: MigrationItem[] = [];
-  if (next.auth) {
-    items.push(
-      createMigrationItem({
-        id: `${item.id}:config:auth`,
-        kind: "config",
-        action: "merge",
-        status: "migrated",
-        target: "auth",
-        message: "Configure imported Codex auth profile.",
-        details: {
-          path: ["auth"],
-          value: next.auth,
-        },
-      }),
-    );
-  }
-  if (next.agents?.defaults) {
-    items.push(
-      createMigrationItem({
-        id: `${item.id}:config:agents-defaults`,
-        kind: "config",
-        action: "merge",
-        status: "migrated",
-        target: "agents.defaults",
-        message: "Configure imported Codex models.",
-        details: {
-          path: ["agents", "defaults"],
-          value: next.agents.defaults,
-        },
-      }),
-    );
-  }
-  return items;
+  return [
+    {
+      suffix: "auth",
+      path: ["auth"],
+      value: next.auth,
+      message: "Configure imported Codex auth profile.",
+    },
+    {
+      suffix: "agents-defaults",
+      path: ["agents", "defaults"],
+      value: next.agents?.defaults,
+      message: "Configure imported Codex models.",
+    },
+  ].flatMap(({ suffix, path, value, message }) =>
+    value
+      ? [
+          createMigrationItem({
+            id: `${item.id}:config:${suffix}`,
+            kind: "config",
+            action: "merge",
+            status: "migrated",
+            target: path.join("."),
+            message,
+            details: { path, value },
+          }),
+        ]
+      : [],
+  );
 }

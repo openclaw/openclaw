@@ -81,6 +81,16 @@ it.each(
     }
     const input = page.getByRole("searchbox", { name: "Search people and agents…" });
     await expect.element(input).toBeVisible();
+    if (surface === "assignment") {
+      const submenu = input
+        .element()
+        .closest("wa-dropdown-item")
+        ?.shadowRoot?.querySelector('[part="submenu"]');
+      const style = submenu ? getComputedStyle(submenu) : null;
+      expect(style?.width).toBe("320px");
+      expect(style?.maxHeight).toBe("420px");
+      expect(style?.overflowY).toBe("auto");
+    }
     const selector = surface !== "members" ? '[value^="assign-owner:"]' : '[value^="member:"]';
     await expect.poll(() => root.querySelectorAll(selector).length).toBe(20);
     if (surface === "compact assignment") {

@@ -17,12 +17,7 @@ export type SessionWorkspaceProps = {
   loading: boolean;
   error: string | null;
   activeId: string | null;
-  dock: ChatWorkspaceDock;
-  /** Pane too narrow for a side rail: presentation forces the bottom dock
-   * (the persisted dock preference still applies once the pane widens). */
-  narrowLayout: boolean;
   onToggleCollapsed: () => void;
-  onSetDock: (dock: ChatWorkspaceDock) => void;
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
@@ -32,7 +27,6 @@ export type SessionWorkspaceProps = {
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
   onToggleDesktop?: () => void;
-  onToggleCustodian?: () => void;
   /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
 };
@@ -86,6 +80,7 @@ export type SessionWorkspaceHost = {
   settings?: UiSettings;
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceDraftScope?: string;
+  sessionWorkspaceDraftContext?: { sessionTitle?: string; paneLabel?: string };
   sidebarContent: SidebarSelection | null;
   requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;

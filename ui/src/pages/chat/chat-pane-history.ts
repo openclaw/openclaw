@@ -118,27 +118,23 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
             resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey
           ) {
-            return;
+            return hydration.complete?.();
           }
           // A sibling can fill the shared cache while this pane still needs its
           // own transcript. Adopt those messages before revalidating their cursor.
-          const snapshot =
-            readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }) ??
-            storedSnapshot;
+          const cache = state.chatMessagesBySession;
+          const snapshot = readChatSessionSnapshot(cache, state, { sessionKey }) ?? storedSnapshot;
           if (!snapshot) {
-            return;
+            return hydration.complete?.();
           }
           applyChatCacheSnapshot(state, snapshot);
           const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(
-            state.chatMessagesBySession,
-            state,
-            { sessionKey },
-            mergedSnapshot,
-          );
+          cacheChatSessionSnapshot(cache, state, { sessionKey }, mergedSnapshot);
+          // Release startup with the adopted cursor before Lit queues the snapshot render.
+          hydration.complete?.();
           state.requestUpdate?.();
         })
-        .catch(() => undefined)
+        .catch(() => hydration.complete?.())
         .finally(() => {
           if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
             delete requests.initialSnapshotHydration;
@@ -446,6 +442,19 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         }
         if (!result || generation !== this.olderLoadGeneration) {
           return false;
+        }
+        if (result.windowReset) {
+          applyChatCacheSnapshot(state, {
+            messages: result.messages ?? [],
+            pagination: resolveChatHistoryPagination(result),
+            sessionId: result.sessionInfo?.sessionId ?? result.sessionId ?? null,
+            displayedLeafEntryId: result.sessionInfo?.activeLeafEntryId ?? null,
+            deltaCursor: result.deltaCursor,
+          });
+          commitCurrentChatHistorySnapshot(state);
+          state.lastError = null;
+          prepended = true;
+          return true;
         }
         const resultSessionId =
           typeof result.sessionInfo?.sessionId === "string" && result.sessionInfo.sessionId.trim()

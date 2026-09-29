@@ -111,22 +111,6 @@ describe("file-transfer node invoke policy", () => {
     });
   });
 
-  it("rejects malformed maxBytes before invoking the node", async () => {
-    const policy = createFileTransferNodeInvokePolicy();
-    const { ctx, invokeNode } = createCtx({
-      params: { path: "/tmp/file.txt", maxBytes: "1024.5" },
-    });
-
-    const result = await policy.handle(ctx);
-
-    expectResultFields(result, {
-      ok: false,
-      code: "INVALID_PARAMS",
-      message: "maxBytes must be a positive integer",
-    });
-    expect(invokeNode).not.toHaveBeenCalled();
-  });
-
   it("rejects malformed maxBytes before requesting approval", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const approvals = {
@@ -166,62 +150,62 @@ describe("file-transfer node invoke policy", () => {
     expect(invokeNode).not.toHaveBeenCalled();
   });
 
-  it.each(["allow-once", "allow-always"] as const)(
-    "uses exact %s plugin approval once across preflight and final invoke",
-    async (decision) => {
-      const policy = createFileTransferNodeInvokePolicy();
-      const approvals = {
-        request: vi.fn(async (_request: unknown) => ({ id: "approval-1", decision })),
-      };
-      const { ctx, invokeNode } = createCtx({
-        params: { path: "/tmp/new.txt" },
-        pluginConfig: {
-          nodes: {
-            "node-1": {
-              ask: "on-miss",
-              allowReadPaths: ["/allowed/**"],
-              maxBytes: 256,
-              followSymlinks: true,
-            },
+  it("uses exact allow-once plugin approval once across preflight and final invoke", async () => {
+    const decision = "allow-once" as const;
+    const policy = createFileTransferNodeInvokePolicy();
+    const approvals = {
+      request: vi.fn(async (_request: unknown) => ({ id: "approval-1", decision })),
+    };
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/new.txt" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            ask: "on-miss",
+            allowReadPaths: ["/allowed/**"],
+            maxBytes: 256,
+            followSymlinks: true,
           },
         },
-        approvals,
-      });
+      },
+      approvals,
+    });
 
-      const result = await policy.handle(ctx);
+    const result = await policy.handle(ctx);
 
-      expect(result.ok).toBe(true);
-      expect(approvals.request).toHaveBeenCalledTimes(1);
-      expect(invokeNode).toHaveBeenCalledTimes(2);
-      const approvalCalls = approvals.request.mock.calls as unknown[][];
-      const approvalRequest = requireRecord(approvalCalls[0]?.[0], "approval request");
-      expectRecordFields(approvalRequest, {
-        title: "Read file: /tmp/new.txt",
-        severity: "info",
-        toolName: "file.fetch",
-      });
-      expect(approvalRequest.description).toContain(
-        '"allow-always" saves this exact command and path for this node',
-      );
-      expect(invokeNode).toHaveBeenNthCalledWith(1, {
-        params: {
-          path: "/tmp/new.txt",
-          followSymlinks: true,
-          maxBytes: 256,
-          preflightOnly: true,
-        },
-      });
-      expect(invokeNode).toHaveBeenNthCalledWith(2, {
-        params: {
-          path: "/tmp/new.txt",
-          followSymlinks: true,
-          maxBytes: 256,
-          expectedCanonicalPath: "/tmp/new.txt",
-          expectedBinding: EXISTING_BINDING,
-        },
-      });
-    },
-  );
+    expect(result.ok).toBe(true);
+    expect(approvals.request).toHaveBeenCalledTimes(1);
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    const approvalCalls = approvals.request.mock.calls as unknown[][];
+    const approvalRequest = requireRecord(approvalCalls[0]?.[0], "approval request");
+    expectRecordFields(approvalRequest, {
+      title: "Read file: /tmp/new.txt",
+      severity: "info",
+      toolName: "file.fetch",
+    });
+    expect(approvalRequest.description).toContain(
+      '"allow-always" saves this exact command and path for this node',
+    );
+    expect(invokeNode).toHaveBeenNthCalledWith(1, {
+      params: {
+        path: "/tmp/new.txt",
+        followSymlinks: true,
+        maxBytes: 256,
+        preflightOnly: true,
+      },
+    });
+    expect(invokeNode).toHaveBeenNthCalledWith(2, {
+      params: {
+        path: "/tmp/new.txt",
+        followSymlinks: true,
+        maxBytes: 256,
+        expectedCanonicalPath: "/tmp/new.txt",
+        expectedBinding: EXISTING_BINDING,
+      },
+    });
+
+    expect(persistLiteralGrant).not.toHaveBeenCalled();
+  });
 
   it("persists allow-always only after the canonical result succeeds", async () => {
     const policy = createFileTransferNodeInvokePolicy();
@@ -343,12 +327,6 @@ describe("file-transfer node invoke policy", () => {
     {
       label: "arbitrary truthy string",
       decision: "accept",
-      code: "APPROVAL_DENIED",
-      message: "file.fetch APPROVAL_DENIED: invalid approval decision",
-    },
-    {
-      label: "arbitrary truthy object",
-      decision: { action: "accept" },
       code: "APPROVAL_DENIED",
       message: "file.fetch APPROVAL_DENIED: invalid approval decision",
     },

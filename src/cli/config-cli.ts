@@ -26,8 +26,6 @@ import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
-export { parseConfigSetPath } from "./config-cli-path.js";
-
 const CONFIG_SET_DESCRIPTION = [
   "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
   "Examples:",
@@ -86,7 +84,12 @@ export async function runConfigSet(opts: {
     if (opts.throwOnError) {
       throw err;
     }
-    handleConfigMutationError({ err, runtime, options: opts.cliOptions });
+    handleConfigMutationError({
+      err,
+      runtime,
+      options: opts.cliOptions,
+      jsonOutput: Boolean(opts.cliOptions.dryRun && opts.cliOptions.json),
+    });
   }
 }
 
@@ -112,7 +115,12 @@ export async function runConfigPatch(opts: {
       successMode: "patch",
     });
   } catch (err) {
-    handleConfigMutationError({ err, runtime, options: opts.cliOptions });
+    handleConfigMutationError({
+      err,
+      runtime,
+      options: opts.cliOptions,
+      jsonOutput: Boolean(opts.cliOptions.json),
+    });
   }
 }
 
@@ -196,7 +204,12 @@ export async function runConfigUnset(opts: {
       ...(opts.beforePersistentApply ? { beforePersistentApply: opts.beforePersistentApply } : {}),
     });
   } catch (err) {
-    handleConfigMutationError({ err, runtime, options: cliOptions });
+    handleConfigMutationError({
+      err,
+      runtime,
+      options: cliOptions,
+      jsonOutput: Boolean(cliOptions.json),
+    });
   }
 }
 
@@ -326,7 +339,7 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
-      const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
+      const { configureCommandFromSectionsArg } = await import("../commands/configure.commands.js");
       await configureCommandFromSectionsArg(opts.section, defaultRuntime);
     });
   setCommandJsonMode(cmd, "output", ({ argv }) => isConfigMachineOutput(argv));

@@ -12,6 +12,7 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
@@ -45,6 +46,16 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
   const toolCaller = getGatewayToolCallerIdentity();
   const assertToolCurrent = captureGatewayToolCallerAssertion();
   const currentProfile = () => {
+    try {
+      resolveGatewayPersonalToolParticipant(client?.internal?.agentRuntimeIdentity, {
+        requireSingleParticipant: true,
+      })?.assertCurrent();
+    } catch (error) {
+      throw new PersonalFileAccessError(
+        "Personal instructions are unavailable in this turn. Ask in your own Control UI turn with a new message.",
+        { cause: error },
+      );
+    }
     options.sessionMutationCommitGuard?.();
     if (!hasMultipleSessionSharingIdentities()) {
       throw new PersonalFileAccessError(

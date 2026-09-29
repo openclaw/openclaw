@@ -47,7 +47,8 @@ type ReportInput = Pick<
   | "verification"
   | "repair"
   | "downtimeMs"
->;
+> &
+  Partial<Pick<UpdateRunRecord, "target">>;
 const PHASES = new Set<string>(UPDATE_RUN_PHASES);
 
 type UpdateRunIdentity =
@@ -178,6 +179,9 @@ function bounded(text: string, limit: number): string {
 }
 
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
+  if (run.target?.installationMethod === "ocm") {
+    return nextAction ? [] : run.origin.nextAction ? [run.origin.nextAction] : [];
+  }
   if (run.status === "running") {
     return ["Check progress with openclaw update status."];
   }
@@ -234,7 +238,10 @@ export function renderUpdateRunReport(
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
   const currentHealth: UpdateRunReportHealth | undefined =
     opts.currentHealth ??
-    (run.status !== "running" && opts.nextAction === undefined && run.origin.nextAction
+    (run.target?.installationMethod !== "ocm" &&
+    run.status !== "running" &&
+    opts.nextAction === undefined &&
+    run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
   // Git updates can change commits without changing the package version.
@@ -277,7 +284,7 @@ export function renderUpdateRunReport(
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
       break;
     case "running":
-      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.phase}.`;
+      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.target?.installationMethod === "ocm" ? "managed by OCM" : run.phase}.`;
       break;
   }
   headline = bounded(headline, 500);
@@ -365,32 +372,30 @@ export function renderUpdateRunReport(
   for (const message of updateRunWarningMessages(run.steps, 3)) {
     lines.push(`Warning: ${bounded(message, 500)}`);
   }
-  const verification: string[] = [];
   const facts = run.verification;
   const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
   const recovery = observation && formatUpdateRunRecovery(facts, observation);
   if (recovery) {
     lines.push(`Recovery: ${recovery}.`);
   }
-  if (facts.booted) {
-    verification.push("gateway booted");
-  }
-  if (facts.serviceRunning !== undefined) {
-    verification.push(facts.serviceRunning ? "service running" : "service stopped");
-  }
-  const identity = formatUpdateRunIdentity(facts, run.after);
-  if (identity) {
-    verification.push(identity);
-  }
-  if (facts.channelsReady !== undefined) {
-    verification.push(facts.channelsReady ? "channels ready" : "channels not ready");
-  }
-  if (facts.readyz !== undefined) {
-    verification.push(facts.readyz ? "HTTP ready" : "HTTP not ready");
-  }
-  if (facts.pluginErrors?.length) {
-    verification.push(`${facts.pluginErrors.length} plugin activation error(s)`);
-  }
+  const verification = [
+    facts.booted ? "gateway booted" : undefined,
+    facts.serviceRunning === undefined
+      ? undefined
+      : facts.serviceRunning
+        ? "service running"
+        : "service stopped",
+    formatUpdateRunIdentity(facts, run.after),
+    facts.channelsReady === undefined
+      ? undefined
+      : facts.channelsReady
+        ? "channels ready"
+        : "channels not ready",
+    facts.readyz === undefined ? undefined : facts.readyz ? "HTTP ready" : "HTTP not ready",
+    facts.pluginErrors?.length
+      ? `${facts.pluginErrors.length} plugin activation error(s)`
+      : undefined,
+  ].filter(Boolean);
   if (verification.length) {
     lines.push(
       `${currentHealth ? "Recorded verification" : "Verification"}: ${verification.join("; ")}.`,

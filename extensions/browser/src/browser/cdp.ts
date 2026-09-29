@@ -153,14 +153,13 @@ export async function createTargetViaCdp(opts: {
   let lastError: unknown;
   for (const candidateWsUrl of candidateWsUrls) {
     try {
-      const endpointSource =
-        candidateWsUrl === opts.cdpUrl
-          ? ({ source: "configured" } as const)
-          : ({ source: "discovered", configuredUrl: opts.cdpUrl } as const);
       const candidateCdpPin =
         candidateWsUrl === opts.cdpUrl
           ? configuredCdpPin
-          : await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
+          : await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, {
+              source: "discovered",
+              configuredUrl: opts.cdpUrl,
+            });
       opts.signal?.throwIfAborted();
       return await withCdpSocket(
         candidateWsUrl,

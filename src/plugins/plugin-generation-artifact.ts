@@ -33,6 +33,7 @@ import {
   isPluginPackageFile as inPackage,
   findPluginCapturedPackage,
 } from "./plugin-package-metadata-capture.js";
+import { isPluginSourceEntry } from "./plugin-source-file.js";
 import {
   capturedPluginModuleUrl,
   visitPluginSourceReferences,
@@ -77,7 +78,7 @@ export function capturePluginGenerationArtifact(
   } = sourceCapture;
   const captureAdmitted = <T>(run: () => T) => {
     const acquired = acquireSources(run);
-    nativeAdmission.finish(directory, receipt.finish());
+    nativeAdmission.finish(receipt.finish());
     return acquired;
   };
   const moduleCaptures = new Map<string, PluginModuleCapture>();
@@ -246,7 +247,7 @@ export function capturePluginGenerationArtifact(
           }
           scannedDirectories.add(real);
           for (const name of fs.readdirSync(real).toSorted()) {
-            if (name !== "node_modules" && name !== ".git") {
+            if (isPluginSourceEntry(name)) {
               captureFile(path.join(source, name), options);
             }
           }
@@ -598,7 +599,7 @@ export function capturePluginGenerationArtifact(
     };
     const initialReceipt = receipt.finish();
     assertSourceCurrent();
-    nativeAdmission.finish(directory, initialReceipt);
+    nativeAdmission.finish(initialReceipt);
     pendingInputs.clear();
     additions.clear();
     const captures = [moduleCaptures, hardlinkedSources, metadataCapture, packages];

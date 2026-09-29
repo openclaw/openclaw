@@ -5,6 +5,7 @@ import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
+  asFiniteNumber,
   asPositiveSafeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -45,19 +46,10 @@ const TOOL_PING: Tool = {
   parameters: Type.Object({}),
 };
 
-type OpenRouterModelMeta = {
-  id: string;
-  name: string;
-  contextLength: number | null;
-  maxCompletionTokens: number | null;
-  supportedParameters: string[];
-  supportedParametersCount: number;
-  supportsToolsMeta: boolean;
-  modality: string | null;
-  inferredParamB: number | null;
-  createdAtMs: number | null;
-  pricing: OpenRouterModelPricing | null;
-};
+type OpenRouterModelMeta = Omit<
+  ModelScanResult,
+  "provider" | "modelRef" | "isFree" | "tool" | "image"
+>;
 
 type OpenRouterModelPricing = {
   prompt: number;
@@ -129,21 +121,8 @@ function parseModality(modality: string | null): Array<"text" | "image"> {
 }
 
 function parseNumberString(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const num = Number(trimmed);
-  if (!Number.isFinite(num)) {
-    return null;
-  }
-  return num;
+  const normalized = typeof value === "string" ? normalizeOptionalString(value) : value;
+  return asFiniteNumber(typeof normalized === "string" ? Number(normalized) : normalized) ?? null;
 }
 
 function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
@@ -255,7 +234,6 @@ async function fetchOpenRouterModels(
               name,
               contextLength,
               maxCompletionTokens,
-              supportedParameters,
               supportedParametersCount,
               supportsToolsMeta,
               modality,
@@ -328,32 +306,6 @@ async function probeModel(
       error: formatErrorMessage(err),
     };
   }
-}
-
-function buildOpenRouterScanResult(params: {
-  entry: OpenRouterModelMeta;
-  isFree: boolean;
-  tool: ProbeResult;
-  image: ProbeResult;
-}): ModelScanResult {
-  const { entry, isFree } = params;
-  return {
-    id: entry.id,
-    name: entry.name,
-    provider: "openrouter",
-    modelRef: `openrouter/${entry.id}`,
-    contextLength: entry.contextLength,
-    maxCompletionTokens: entry.maxCompletionTokens,
-    supportedParametersCount: entry.supportedParametersCount,
-    supportsToolsMeta: entry.supportsToolsMeta,
-    modality: entry.modality,
-    inferredParamB: entry.inferredParamB,
-    createdAtMs: entry.createdAtMs,
-    pricing: entry.pricing,
-    isFree,
-    tool: params.tool,
-    image: params.image,
-  };
 }
 
 export async function scanOpenRouterModels(
@@ -429,15 +381,9 @@ export async function scanOpenRouterModels(
     filtered,
     async (entry) => {
       const isFree = isFreeOpenRouterModel(entry);
-      let result: ModelScanResult;
-      if (!probe) {
-        result = buildOpenRouterScanResult({
-          entry,
-          isFree,
-          tool: { ok: false, latencyMs: null, skipped: true },
-          image: { ok: false, latencyMs: null, skipped: true },
-        });
-      } else {
+      let tool: ProbeResult = { ok: false, latencyMs: null, skipped: true };
+      let image: ProbeResult = { ok: false, latencyMs: null, skipped: true };
+      if (probe) {
         const model: OpenAIModel = {
           ...baseModel,
           id: entry.id,
@@ -445,24 +391,23 @@ export async function scanOpenRouterModels(
           contextWindow: entry.contextLength ?? baseModel.contextWindow,
           maxTokens: entry.maxCompletionTokens ?? baseModel.maxTokens,
           input: parseModality(entry.modality),
-          reasoning: baseModel.reasoning,
         };
 
-        const toolResult = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "tool");
-        const imageResult = model.input?.includes("image")
-          ? await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "image")
-          : { ok: false, latencyMs: null, skipped: true };
-
-        result = buildOpenRouterScanResult({
-          entry,
-          isFree,
-          tool: toolResult,
-          image: imageResult,
-        });
+        tool = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "tool");
+        if (model.input?.includes("image")) {
+          image = await probeModel(model, apiKey, timeoutMs, llmRuntime.complete, "image");
+        }
       }
       completed += 1;
       options.onProgress?.({ phase: "probe", completed, total: filtered.length });
-      return result;
+      return {
+        ...entry,
+        provider: "openrouter",
+        modelRef: `openrouter/${entry.id}`,
+        isFree,
+        tool,
+        image,
+      };
     },
     { concurrency, stopOnError: true },
   );

@@ -16,7 +16,7 @@ struct ConnectOptions {
     var clientMode: String = "ui"
     var displayName: String?
     var role: String = "operator"
-    var scopes: [String] = defaultOperatorConnectScopes
+    var scopes: [String] = GatewayChannelActor.defaultOperatorConnectScopes
     var scopesAreExplicit: Bool = false
     var help: Bool = false
 
@@ -53,13 +53,8 @@ struct ConnectOptions {
             let arg = args[i]
             if let handler = flagHandlers[arg] {
                 handler(&opts)
-                i += 1
-                continue
-            }
-            if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
+            } else if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                 handler(&opts, value)
-                i += 1
-                continue
             }
             i += 1
         }
@@ -239,57 +234,25 @@ private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
 
 func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws -> GatewayEndpoint {
     let resolvedMode = (opts.mode ?? config.mode ?? "local").lowercased()
-    if let raw = opts.url, !raw.isEmpty {
-        return try gatewayEndpoint(
-            fromRawURL: raw,
-            opts: opts,
-            mode: resolvedMode,
-            config: config,
-            inheritConfigCredentials: false)
-    }
-
-    if resolvedMode == "remote" {
-        guard let raw = config.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty
+    let hasExplicitURL = opts.url?.isEmpty == false
+    let raw: String
+    if let explicitURL = opts.url, hasExplicitURL {
+        raw = explicitURL
+    } else if resolvedMode == "remote" {
+        guard let remoteURL = config.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !remoteURL.isEmpty
         else {
             throw NSError(
                 domain: "Gateway",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url is missing"])
         }
-        return try gatewayEndpoint(fromRawURL: raw, opts: opts, mode: resolvedMode, config: config)
+        raw = remoteURL
+    } else {
+        let port = config.port ?? 18789
+        let host = resolveLocalHost(bind: config.bind)
+        raw = "ws://\(host):\(port)"
     }
-
-    let port = config.port ?? 18789
-    let host = resolveLocalHost(bind: config.bind)
-    guard let url = URL(string: "ws://\(host):\(port)") else {
-        throw NSError(
-            domain: "Gateway",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "invalid url: ws://\(host):\(port)"])
-    }
-    return GatewayEndpoint(
-        url: url,
-        token: resolvedCredential(
-            opts.token,
-            mode: resolvedMode,
-            local: config.token,
-            remote: config.remoteToken),
-        password: resolvedCredential(
-            opts.password,
-            mode: resolvedMode,
-            local: config.password,
-            remote: config.remotePassword),
-        mode: resolvedMode)
-}
-
-private func gatewayEndpoint(
-    fromRawURL raw: String,
-    opts: ConnectOptions,
-    mode: String,
-    config: GatewayConfig,
-    inheritConfigCredentials: Bool = true) throws -> GatewayEndpoint
-{
     guard let url = URL(string: raw) else {
         throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
     }
@@ -297,29 +260,17 @@ private func gatewayEndpoint(
         url: url,
         token: resolvedCredential(
             opts.token,
-            mode: mode,
+            mode: resolvedMode,
             local: config.token,
             remote: config.remoteToken,
-            inheritConfigCredentials: inheritConfigCredentials),
+            inheritConfigCredentials: !hasExplicitURL),
         password: resolvedCredential(
             opts.password,
-            mode: mode,
+            mode: resolvedMode,
             local: config.password,
             remote: config.remotePassword,
-            inheritConfigCredentials: inheritConfigCredentials),
-        mode: mode)
-}
-
-private func resolvedCredential(
-    _ explicit: String?,
-    mode: String,
-    local: String?,
-    remote: String?,
-    inheritConfigCredentials: Bool = true) -> String?
-{
-    if let explicit, !explicit.isEmpty { return explicit }
-    guard inheritConfigCredentials else { return nil }
-    return mode == "remote" ? remote : local
+            inheritConfigCredentials: !hasExplicitURL),
+        mode: resolvedMode)
 }
 
 func makeGatewayConnectOptions(

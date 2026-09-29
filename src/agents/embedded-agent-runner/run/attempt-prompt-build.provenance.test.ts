@@ -38,14 +38,8 @@ vi.mock("../../subagents/registry/subagent-registry.js", async () => {
 });
 
 // Completion storage and queue consumption stay real; terminal cleanup is outside this turn.
-vi.mock("../../subagents/registry/subagent-registry-lifecycle-cleanup.js", () => ({
+vi.mock("../../subagents/registry/subagent-registry-terminal-effects.js", () => ({
   completeTerminalEffects: vi.fn(async () => {}),
-}));
-
-vi.mock("../../../tasks/detached-task-runtime.async.js", () => ({
-  completeTaskRunByRunIdAsync: vi.fn(async () => []),
-  failTaskRunByRunIdAsync: vi.fn(async () => []),
-  setDetachedTaskDeliveryStatusByRunIdAsync: vi.fn(async () => []),
 }));
 
 registerAgentSessionLoopTestLifecycle();
@@ -240,12 +234,16 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     getRuntimeConfig: () => ({}),
     persist,
     persistOrThrow: persist,
+    persistAsyncOrThrow: async (_context, publication, ...runIds) => {
+      publication.assertCurrent();
+      persist(...runIds);
+      await Promise.resolve();
+      publication.onCommitted?.();
+    },
     clearPendingLifecycleError: vi.fn(),
     countPendingDescendantRuns: () => 0,
     getLatestRunForChildSession: () => null,
     suppressAnnounceForSteerRestart: () => false,
-    resolveSubagentTask: () => ({ lookup: "available" }),
-    resolveSubagentTaskAsync: async () => ({ lookup: "available" }),
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
     emitSubagentProgressEndedForRun: vi.fn(async () => {}),

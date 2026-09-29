@@ -2,16 +2,16 @@
 import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
-import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
+import type { PortUsage } from "../infra/ports-types.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsageMock,
   killProcessTreeMock,
   resetSchtasksBaseMocks,
+  schtasksCalls,
   schtasksResponses,
   withWindowsEnv,
   writeGatewayScript,
@@ -20,16 +20,15 @@ const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
   vi.fn<(port: number) => number[]>(() => []),
 );
 const timeState = vi.hoisted(() => ({ now: 0 }));
+const callGatewayCli = vi.hoisted(() => vi.fn());
 const readGatewayOwnerLease = vi.hoisted(() =>
   vi.fn<typeof import("../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
 );
 const readWindowsProcessStartTimeSync = vi.hoisted(() =>
   vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessStartTimeSync>(),
 );
-const sleepMock = vi.hoisted(() =>
-  vi.fn(async (ms: number) => {
-    timeState.now += ms;
-  }),
+const readWindowsProcessAncestorsSync = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessAncestorsSync>(),
 );
 type SpawnSyncResult = {
   pid: number;
@@ -72,12 +71,18 @@ vi.mock("../infra/gateway-processes.js", () => ({
     findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
 vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
-vi.mock("../infra/windows-process-start.js", () => ({ readWindowsProcessStartTimeSync }));
+vi.mock("../gateway/call.js", () => ({ callGatewayCli }));
+vi.mock("../infra/windows-process-start.js", () => ({
+  readWindowsProcessAncestorsSync,
+  readWindowsProcessStartTimeSync,
+}));
 vi.mock("../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
   return {
     ...actual,
-    sleep: (ms: number) => sleepMock(ms),
+    sleep: async (ms: number) => {
+      timeState.now += ms;
+    },
   };
 });
 
@@ -125,20 +130,14 @@ function freePortUsage() {
   };
 }
 
-function busyPortUsage(
-  pid: number,
-  options: {
-    command?: string;
-    commandLine?: string;
-  } = {},
-) {
+function busyPortUsage(pid: number, options: { commandLine?: string } = {}) {
   return {
     port: GATEWAY_PORT,
     status: "busy" as const,
     listeners: [
       {
         pid,
-        command: options.command ?? "node.exe",
+        command: "node.exe",
         address: `127.0.0.1:${GATEWAY_PORT}`,
         ...(options.commandLine ? { commandLine: options.commandLine } : {}),
       },
@@ -154,16 +153,34 @@ function expectGatewayTermination(pid: number) {
   }
   expect(killProcessTreeMock).toHaveBeenCalledWith(pid, { graceMs: 300 });
 }
+function scheduledTaskProbeResult(
+  state = schtasksCalls.some(([action]) => action === "/Run") ? 4 : 3,
+) {
+  return spawnSyncResult(
+    JSON.stringify({
+      state,
+      lastRunResult: state === 4 ? 267009 : 0,
+      lastRunTime: "2026-09-27T00:00:00.0000000Z",
+    }),
+  );
+}
+
 function mockWindowsTaskkillSuccess() {
   // Route process-control probes so verified owners terminate cleanly: taskkill
   // succeeds and the follow-up tasklist probe reports the PID as gone.
-  spawnSync.mockImplementation((exe: unknown) => {
+  spawnSync.mockImplementation((exe: unknown, args) => {
     const exeText = String(exe);
+    if (args?.includes("-EncodedCommand")) {
+      return scheduledTaskProbeResult();
+    }
     if (/taskkill\.exe$/i.test(exeText)) {
       return { pid: 0, output: [null, "", ""], stdout: "", stderr: "", status: 0, signal: null };
     }
     if (/tasklist\.exe$/i.test(exeText)) {
-      const stdout = "No tasks";
+      const pid = Number(args?.find((arg) => arg.startsWith("PID eq "))?.slice(7));
+      const gone =
+        taskkillPids().includes(pid) || schtasksCalls.some(([action]) => action === "/End");
+      const stdout = gone ? "No tasks" : `"node.exe","${pid}","Console","1","1 K"`;
       return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
     }
     return {
@@ -194,15 +211,26 @@ function expectTaskkill(pid: number) {
   }
 }
 
-function setTaskStateProbeResult(state: number) {
-  const stdout = JSON.stringify({ state });
-  spawnSync.mockReturnValueOnce({
-    pid: 0,
-    output: [null, stdout, ""],
-    stdout,
-    stderr: "",
-    status: 0,
-    signal: null,
+function setTaskStateProbeResult(state: number | null | (() => number | null)) {
+  const previous = spawnSync.getMockImplementation();
+  spawnSync.mockImplementation((command, args, options) => {
+    if (command.toLowerCase().endsWith("powershell.exe") && args?.includes("-EncodedCommand")) {
+      const current = typeof state === "function" ? state() : state;
+      return current === null
+        ? spawnSyncResult("-2147024894", 1)
+        : scheduledTaskProbeResult(current);
+    }
+    return previous?.(command, args, options) ?? spawnSyncResult("", 1);
+  });
+}
+
+function mockLingeringGatewayListener(pid: number, after: PortUsage = freePortUsage()) {
+  inspectPortUsageMock.mockImplementation(async () => {
+    const terminated =
+      process.platform === "win32"
+        ? taskkillPids().includes(pid)
+        : killProcessTreeMock.mock.calls.some(([candidate]) => candidate === pid);
+    return terminated ? after : busyPortUsage(pid, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE });
   });
 }
 
@@ -210,7 +238,7 @@ async function withPreparedGatewayTask(
   run: (context: { env: Record<string, string>; stdout: PassThrough }) => Promise<void>,
   launcherSuffix = "",
 ) {
-  await withWindowsEnv("openclaw-win-stop-", async ({ tmpDir, env }) => {
+  await withWindowsEnv("openclaw-win-stop-", async ({ env }) => {
     await writeGatewayScript(env, GATEWAY_PORT);
     if (launcherSuffix) {
       const scriptPath = resolveTaskScriptPath(env);
@@ -218,34 +246,27 @@ async function withPreparedGatewayTask(
       await fs.writeFile(scriptPath, `${script.trimEnd()} ${launcherSuffix}\r\n`);
     }
     const stdout = new PassThrough();
-    await withStateDatabaseCoordinatorRuntimeDirectory(path.join(tmpDir, "coordinators"), () =>
-      run({ env, stdout }),
-    );
+    await run({ env, stdout });
   });
 }
 
 beforeEach(() => {
   resetSchtasksBaseMocks();
+  callGatewayCli.mockReset().mockRejectedValue(new Error("unsupported method"));
   readGatewayOwnerLease.mockReset();
   readWindowsProcessStartTimeSync.mockReset();
   readWindowsProcessStartTimeSync.mockReturnValue(GATEWAY_OWNER.startedAt);
+  readWindowsProcessAncestorsSync.mockReset().mockReturnValue({ pids: [], complete: false });
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
   findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
-  sleepMock.mockReset();
-  sleepMock.mockImplementation(async (ms: number) => {
-    timeState.now += ms;
-  });
   spawnSync.mockReset();
-  spawnSync.mockReturnValue({
-    pid: 0,
-    output: [null, "-2147024891", ""],
-    stdout: "-2147024891",
-    stderr: "",
-    status: 1,
-    signal: null,
-  });
+  spawnSync.mockImplementation((_exe, args) =>
+    args?.includes("-EncodedCommand")
+      ? scheduledTaskProbeResult()
+      : spawnSyncResult("-2147024891", 1),
+  );
   inspectPortUsageMock.mockResolvedValue(freePortUsage());
 });
 
@@ -255,6 +276,7 @@ afterEach(() => {
 });
 
 export {
+  callGatewayCli,
   GATEWAY_OWNER,
   GATEWAY_PORT,
   INSTALLED_GATEWAY_COMMAND_LINE,
@@ -264,6 +286,7 @@ export {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatWindowsTaskSupervisorChildArgument,
   mockWindowsTaskkillSuccess,
+  mockLingeringGatewayListener,
   probeProcessState,
   pushSuccessfulSchtasksResponses,
   readGatewayOwnerLease,
@@ -275,6 +298,7 @@ export {
   setTaskStateProbeResult,
   spawnSync,
   spawnSyncResult,
+  scheduledTaskProbeResult,
   startScheduledTask,
   stopScheduledTask,
   suspendScheduledTaskAutoStartForUpdate,

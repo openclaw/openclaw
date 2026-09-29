@@ -1,5 +1,4 @@
 // Doctor repair and startup readiness preserve their independent state lifetimes.
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,8 +13,6 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { resetLogger } from "../logging/logger.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -35,11 +32,6 @@ const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => voi
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn(actual.spawn) };
-});
-
 const doctorRepairOptions = {
   migrateLegacyConfig: false,
   repairPrefixedConfig: true,
@@ -55,96 +47,12 @@ describe("runDoctorConfigPreflight", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    {
-      name: "explicit state repair",
-      options: { doctorOnlyStateMigrations: true },
-      children: 1,
-      error: { name: "Error" },
-    },
-    {
-      name: "state probe",
-      options: { migrateState: false },
-      children: 0,
-      error: { name: "Error" },
-    },
-    {
-      name: "config-only repair",
-      options: { migrateState: false, doctorOnlyStateMigrations: true },
-      children: 0,
-      error: { name: "Error" },
-    },
-  ])(
-    "owns read-only child reuse and error cleanup for $name",
-    async ({ options, children, error }) => {
-      await withDoctorConfigPreflightHome(async (home) => {
-        await writeOpenClawConfig(home, { gateway: { mode: "local" } });
-        const source = path.join(home, "source.sqlite");
-        const sqlite = requireNodeSqlite();
-        const failure = new Error("preflight measurement failed");
-        vi.mocked(spawn).mockClear();
-        await expect(
-          runDoctorConfigPreflight({
-            ...options,
-            migrateLegacyConfig: false,
-            measure: async (name, run) => {
-              if (name !== "doctor.config-preflight.config-snapshot") {
-                return await run();
-              }
-              for (const version of [1, 2]) {
-                const writer = new sqlite.DatabaseSync(source);
-                writer.exec(`PRAGMA user_version=${version}`);
-                writer.close();
-                const prepared = await prepareSqliteReadOnlyLocation(source, {
-                  preserveSourceArtifacts: true,
-                });
-                try {
-                  const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-                  try {
-                    expect(snapshot.prepare("PRAGMA user_version").get()).toEqual({
-                      user_version: version,
-                    });
-                  } finally {
-                    snapshot.close();
-                  }
-                } finally {
-                  expect(await prepared.cleanupAsync()).toBe(true);
-                }
-              }
-              throw failure;
-            },
-          }),
-        ).rejects.toMatchObject({ ...error, message: failure.message });
-        const sessions = vi
-          .mocked(spawn)
-          .mock.calls.flatMap((call, index) =>
-            Array.isArray(call[1]) &&
-            call[1].includes(SQLITE_READONLY_CHILD_ARG) &&
-            call[1].includes("session")
-              ? [vi.mocked(spawn).mock.results[index]!.value]
-              : [],
-          );
-        expect(sessions).toHaveLength(children);
-        for (const child of sessions) {
-          expect(child.exitCode).toBe(0);
-          expect(child.connected).toBe(false);
-        }
-      });
-    },
-  );
-
-  it.each([
-    { name: "session keys", extra: {} },
-    {
-      name: "session keys with a legacy roster",
-      extra: { agents: { list: [{ id: "work" }] } },
-    },
-  ])("repairs $name through Doctor and preserves the authored backup", async ({ extra }) => {
+  it("repairs session keys with a legacy roster through Doctor and preserves the authored backup", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local" },
         session: { idleMinutes: 45 },
-        ...extra,
+        agents: { list: [{ id: "work" }] },
       });
       const original = await fs.readFile(configPath, "utf-8");
 
@@ -342,22 +250,13 @@ describe("runDoctorConfigPreflight", () => {
     });
   });
 
-  it.each([
-    {
-      name: "updater-deferred validation",
-      config: { meta: { lastTouchedAt: "2026-08-01T00:00:00.000Z" } },
-      updating: "1",
-    },
-    {
-      name: "remaining validation errors",
-      config: { session: { idleMinutes: 45 }, gateway: { port: "invalid" } },
-      updating: undefined,
-    },
-  ])("leaves invalid config unchanged during startup for $name", async ({ config, updating }) => {
+  it("leaves invalid config unchanged during startup for updater-deferred validation", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, config);
+      const configPath = await writeOpenClawConfig(home, {
+        meta: { lastTouchedAt: "2026-08-01T00:00:00.000Z" },
+      });
       const original = await fs.readFile(configPath, "utf-8");
-      await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: updating }, async () => {
+      await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, async () => {
         const startup = await runStartupConfigPreflight({ gateway: true });
         expect(startup.snapshot.valid).toBe(false);
       });

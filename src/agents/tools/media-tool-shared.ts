@@ -44,6 +44,7 @@ import {
 } from "./common.js";
 import type { decodeDataUrl } from "./image-tool.helpers.js";
 import {
+  capabilityAuthOperation,
   getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
 } from "./manifest-capability-availability.js";
@@ -70,11 +71,6 @@ type TextToolResult = {
 };
 
 type ParseGenerationModelRef = (raw: string | undefined) => CapabilityModelRef | null;
-
-type TaskRunDetailHandle = {
-  taskId: string;
-  runId: string;
-};
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
 
@@ -288,10 +284,6 @@ export function resolveCapabilityModelConfigForTool(params: {
   });
 }
 
-export function hasExplicitMediaModel(modelConfig?: AgentModelConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(modelConfig));
-}
-
 export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -350,6 +342,7 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
+      capability: capabilityAuthOperation(params.providerKey),
     }),
   );
 }
@@ -439,19 +432,6 @@ export function buildMediaReferenceDetails<T extends { rewrittenFrom?: string }>
     };
   }
   return {};
-}
-
-export function buildTaskRunDetails(
-  handle: TaskRunDetailHandle | null | undefined,
-): Record<string, unknown> {
-  return handle
-    ? {
-        task: {
-          taskId: handle.taskId,
-          runId: handle.runId,
-        },
-      }
-    : {};
 }
 
 export async function resolveMediaToolReferenceAccess(params: {

@@ -631,7 +631,7 @@ describe("Model Setup icon lifecycle through the shared proxy", () => {
           return;
         }
         const result = createResult(present ? [createPlugin({ id: key, hasIcon: true })] : []);
-        pluginIcons.reconcileInstalled(result);
+        pluginIcons.installed.reconcile(result);
         pluginIcons.syncInstalled(result, iconView);
       };
       const eligible = (value: boolean) => {

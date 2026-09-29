@@ -11,7 +11,9 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { canChannelEnforcePluginReviewerPolicy } from "./approval-channel-policy-support.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
+import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 /** Native approval availability for the channel/account that initiated an approval. */
 export type ExecApprovalInitiatingSurfaceState =
@@ -55,6 +57,7 @@ export function resolveApprovalInitiatingSurfaceState(params: {
   accountId?: string | null;
   cfg?: OpenClawConfig;
   approvalKind: ChannelApprovalKind;
+  request?: PluginApprovalRequest;
 }): ExecApprovalInitiatingSurfaceState {
   const channel = normalizeMessageChannel(params.channel);
   const channelLabel = labelForChannel(channel);
@@ -65,6 +68,12 @@ export function resolveApprovalInitiatingSurfaceState(params: {
 
   const cfg = params.cfg ?? getRuntimeConfig();
   const capability = resolveChannelApprovalCapability(getChannelPlugin(channel));
+  if (
+    params.approvalKind === "plugin" &&
+    !canChannelEnforcePluginReviewerPolicy(cfg, channel, capability)
+  ) {
+    return { kind: "disabled", channel, channelLabel, accountId };
+  }
   // Prefer the exec-specific hook, then the generic approval hook, before
   // falling back to basic deliverability for channels without native state.
   const state =
@@ -80,6 +89,7 @@ export function resolveApprovalInitiatingSurfaceState(params: {
       accountId: params.accountId,
       action: "approve",
       approvalKind: params.approvalKind,
+      ...(params.request ? { request: params.request } : {}),
     });
   if (state) {
     return { ...state, channel, channelLabel, accountId };

@@ -766,6 +766,64 @@ describe("AgentSession loop correctness", () => {
     expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
   });
 
+  it("does not replay a length-stopped empty summary and leaves the selected route usable", async () => {
+    const model: Model = { ...testModel, reasoning: true, maxTokens: 4_096 };
+    const sessionManager = SessionManager.inMemory();
+    appendHistory(
+      sessionManager,
+      createAssistant(model, [{ type: "text", text: "historical answer to preserve" }]),
+    );
+    let summaryRequests = 0;
+    let conversationRequests = 0;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      expect(activeModel.provider).toBe(model.provider);
+      if (context.systemPrompt?.includes("context summarization assistant")) {
+        summaryRequests += 1;
+        return createAssistantResultStream(
+          createAssistant(
+            activeModel,
+            [{ type: "thinking", thinking: "reasoning filled the output budget" }],
+            "length",
+          ),
+        );
+      }
+      conversationRequests += 1;
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "usable next reply" }]),
+      );
+    });
+    const { session } = await createTestSession({
+      model,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 8_192, keepRecentTokens: 1 },
+        retry: { enabled: false },
+      }),
+      resourceLoader: createResourceLoader(),
+    });
+    const originalEntries = sessionManager.getEntries();
+
+    await expect(session[agentSessionAutomaticCompaction]()).rejects.toThrow(
+      "summary output budget (4096 tokens) was exhausted",
+    );
+    expect(summaryRequests).toBe(1);
+    expect(sessionManager.getEntries()).toEqual(originalEntries);
+    expect(session.model).toBe(model);
+
+    await session.prompt("continue on the selected provider");
+    expect(conversationRequests).toBe(1);
+    expect(session.model).toBe(model);
+    expect(sessionManager.getBranch()).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "usable next reply" }],
+        }),
+      }),
+    );
+  });
+
   it("stops default auto-compaction after two invalid summaries", async () => {
     const settingsManager = createAutoCompactionSettings();
     const compactionEvents: AgentSessionEvent[] = [];

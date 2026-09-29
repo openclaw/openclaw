@@ -13,6 +13,7 @@ import type { PluginNativeNamespaceFact } from "./plugin-source-admission.types.
 import {
   copyPluginSourceFile,
   hashPluginSourceFile,
+  isPluginSourceEntry,
   linkPluginSourceFile,
   pluginSourceIdentityChangedOnlyByCtime,
   pluginSourceStatIdentity,
@@ -134,7 +135,7 @@ function inspectDirectory(
       directories.set(source, relative);
       ancestors.add(source);
       for (const name of fs.readdirSync(source).toSorted()) {
-        if (name !== ".git" && name !== "node_modules") {
+        if (isPluginSourceEntry(name)) {
           visit(path.join(source, name), path.join(relative, name), packageBoundary);
         }
       }
@@ -145,9 +146,12 @@ function inspectDirectory(
         const manifestFile = path.join(root, "package.json");
         if (isPathInside(packageBoundary, root) && fs.existsSync(manifestFile)) {
           // Use the generation owner's declared dependency selection, each with its own boundary.
+          // Only the namespace package and admitted dependencies are selected scopes; other nested
+          // manifests resolve what is installed, and Node reports a truly missing import at load.
           capturePluginDependencies({
             root,
             manifestFile,
+            incidental: Boolean(relative) && !admittedDependency,
             references: new Map(),
             resolve,
             capture(name, dependency) {
@@ -258,6 +262,7 @@ export function capturePluginNativeNamespace(params: {
     }
   }
   const directory = path.join(capturedRoot, "content");
+  const linkedSources = new Set<string>();
   let referenceRoot: string | undefined;
   try {
     for (const [relative, member] of before) {
@@ -280,6 +285,7 @@ export function capturePluginNativeNamespace(params: {
         !(previous?.members[relative]?.boundaryChecked ?? boundaryFiles.has(member.source))
       ) {
         linkPluginSourceFile(member.source, member.boundary, target);
+        linkedSources.add(member.source);
       } else {
         copyPluginSourceFile(member.source, member.boundary, target);
         fs.chmodSync(target, 0o600 | Number(member.stat.mode & 0o100n));
@@ -298,6 +304,7 @@ export function capturePluginNativeNamespace(params: {
       throw error;
     }
     fs.rmSync(directory, { recursive: true, force: true });
+    linkedSources.clear();
     fs.symlinkSync(sourceDirectory, directory, "junction");
     referenceRoot = params.retainedRoot;
   }
@@ -358,7 +365,11 @@ export function capturePluginNativeNamespace(params: {
     ...(referenceRoot ? { referenceRoot } : {}),
     members: Object.fromEntries(
       [...after].map(([relative, member]) => {
-        if (member.identity !== before.get(relative)!.identity) {
+        // A successful link can share the filesystem's current ctime tick.
+        if (
+          linkedSources.has(member.source) &&
+          member.identity === captured.get(relative)!.identity
+        ) {
           changed.set(member.source, member.identity);
         }
         const old = previous?.members[relative];
@@ -383,9 +394,11 @@ export function capturePluginNativeNamespace(params: {
     for (const [relative, member] of Object.entries(fact.members)) {
       const current = fs.statSync(member.source, { bigint: true, throwIfNoEntry: false });
       if (
+        linkedSources.has(after.get(relative)!.source) &&
         current &&
         current.dev === after.get(relative)!.stat.dev &&
-        current.ino === after.get(relative)!.stat.ino
+        current.ino === after.get(relative)!.stat.ino &&
+        pluginSourceStatIdentity(current) === member.capturedIdentity
       ) {
         member.sourceIdentity = pluginSourceStatIdentity(current);
         previous.members[relative]!.sourceIdentity = member.sourceIdentity;

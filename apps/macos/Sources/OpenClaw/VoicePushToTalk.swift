@@ -40,15 +40,11 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
         guard self.globalMonitor == nil, self.localMonitor == nil else { return }
         // Listen-only global monitor; we rely on Input Monitoring permission to receive events.
         self.globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let keyCode = event.keyCode
-            let flags = event.modifierFlags
-            self?.handleFlagsChanged(keyCode: keyCode, modifierFlags: flags)
+            self?.handleFlagsChanged(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
         }
         // Also listen locally so we still catch events when the app is active/focused.
         self.localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let keyCode = event.keyCode
-            let flags = event.modifierFlags
-            self?.handleFlagsChanged(keyCode: keyCode, modifierFlags: flags)
+            self?.handleFlagsChanged(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
             return event
         }
     }
@@ -78,15 +74,14 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
             self.optionDown = modifierFlags.contains(.option)
         }
 
-        let chordActive = self.optionDown
-        if chordActive, !self.active {
+        if self.optionDown, !self.active {
             self.active = true
             Task {
                 Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
                     .info("ptt hotkey down")
                 await self.beginAction()
             }
-        } else if !chordActive, self.active {
+        } else if !self.optionDown, self.active {
             self.active = false
             Task {
                 Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
@@ -223,8 +218,8 @@ actor VoicePushToTalk {
                 userInfo: [NSLocalizedDescriptionKey: "Recognizer unavailable"])
         }
 
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let request = self.recognitionRequest else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        self.recognitionRequest = request
         SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
@@ -311,12 +306,8 @@ actor VoicePushToTalk {
         self.timeoutTask?.cancel()
         self.timeoutTask = nil
 
-        let finalRecognized: String = {
-            if let override = transcriptOverride?.trimmingCharacters(in: .whitespacesAndNewlines) {
-                return override
-            }
-            return (self.committed + self.volatile).trimmingCharacters(in: .whitespacesAndNewlines)
-        }()
+        let finalRecognized = (transcriptOverride ?? (self.committed + self.volatile))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let finalText = Self.join(self.adoptedPrefix, finalRecognized)
         let chime = finalText.isEmpty ? .none : (self.activeConfig?.sendChime ?? .none)
 

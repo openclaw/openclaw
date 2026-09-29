@@ -1,4 +1,3 @@
-// Shares web provider runtime helpers across plugin-owned providers.
 import { withActivatedPluginIds } from "./activation-context.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginId } from "./config-state.js";
@@ -14,7 +13,7 @@ import {
 } from "./runtime/load-context.js";
 
 /** Shared options for resolving plugin-backed web providers. */
-type ResolvePluginWebProvidersParams = {
+export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
@@ -26,6 +25,11 @@ type ResolvePluginWebProvidersParams = {
   sandboxed?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
 };
+
+export type ResolveRuntimeWebProvidersParams = Omit<
+  ResolvePluginWebProvidersParams,
+  "activate" | "cache" | "mode" | "sandboxed"
+>;
 
 export type WebProviderRuntimeResolution<TEntry> = {
   resolveBundledResolutionConfig: (
@@ -131,15 +135,9 @@ function resolveWebProviderLoadOptions(
 ) {
   return buildPluginRuntimeLoadOptions(
     {
-      env: context.env,
-      config: context.config,
-      activationSourceConfig: context.activationSourceConfig,
-      autoEnabledReasons: context.autoEnabledReasons,
-      workspaceDir: context.workspaceDir,
+      ...context,
       logger: createPluginRuntimeLoaderLogger(),
-      ...(context.preparedManifestRegistry
-        ? { manifestRegistry: context.preparedManifestRegistry }
-        : {}),
+      manifestRegistry: context.preparedManifestRegistry,
     },
     {
       cache: params.cache ?? true,

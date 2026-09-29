@@ -1,4 +1,3 @@
-// Schedules host hook turns requested by plugin hook contracts.
 import { randomUUID } from "node:crypto";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -33,16 +32,7 @@ const PLUGIN_CRON_CLEANUP_PAGE_SIZE = 200;
 const PLUGIN_CRON_CLEANUP_MAX_PAGES = 50;
 const PLUGIN_CRON_CLEANUP_MAX_SNAPSHOT_RESTARTS = 3;
 
-type ResolvedSessionTurnSchedule =
-  | {
-      kind: "cron";
-      expr: string;
-      tz?: string;
-    }
-  | {
-      kind: "at";
-      at: string;
-    };
+type ResolvedSessionTurnSchedule = Extract<CronJob["schedule"], { kind: "cron" | "at" }>;
 
 function resolveSchedule(
   params: PluginSessionTurnScheduleParams,
@@ -103,21 +93,13 @@ async function removeScheduledSessionTurn(params: {
 }): Promise<boolean> {
   try {
     const result = await params.cron.remove(params.jobId);
-    return didCronCleanupJob(result);
+    return isCronRemoveResult(result) && result.ok;
   } catch (error) {
     log.warn(
       `plugin session turn cleanup failed (${formatScheduleLogContext(params)}): ${formatErrorMessage(error)}`,
     );
     return false;
   }
-}
-
-function didCronRemoveJob(value: unknown): boolean {
-  return isCronRemoveResult(value) && value.ok && value.removed;
-}
-
-function didCronCleanupJob(value: unknown): boolean {
-  return isCronRemoveResult(value) && value.ok;
 }
 
 const PLUGIN_CRON_RESERVED_DELIMITER = ":";
@@ -385,9 +367,9 @@ export async function unschedulePluginSessionTurnsByTag(params: {
     log.warn(`plugin session turn untag-list failed: ${formatErrorMessage(error)}`);
     return { removed: 0, failed: 1 };
   }
-  const candidates = jobs.filter((job) => {
-    return job.name.startsWith(namePrefix) && job.sessionTarget === `session:${sessionKey}`;
-  });
+  const candidates = jobs.filter(
+    (job) => job.name.startsWith(namePrefix) && job.sessionTarget === `session:${sessionKey}`,
+  );
   let removed = 0;
   let failed = 0;
   for (const job of candidates) {
@@ -397,7 +379,7 @@ export async function unschedulePluginSessionTurnsByTag(params: {
     }
     try {
       const result = await cron.remove(id);
-      if (didCronRemoveJob(result)) {
+      if (isCronRemoveResult(result) && result.ok && result.removed) {
         removed += 1;
         deletePluginSessionSchedulerJob({
           pluginId: params.pluginId,

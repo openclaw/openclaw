@@ -11,6 +11,7 @@ import {
   resolvePnpmSpawnCall,
 } from "../../scripts/ui.mts";
 import { mergeProcessEnv } from "../../src/infra/process-env.js";
+import { isPidDefinitelyDead } from "../../src/shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { normalizeControlUiBuildInfo } from "../../ui/src/build-info-normalizers.ts";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
@@ -711,10 +712,7 @@ require("node:module").syncBuiltinESMExports();
 });
 
 function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  // A stopped orphan can remain unreaped after the wrapper exits on Linux.
+  // Require thread extinction, not immediate removal of its PID table entry.
+  return !isPidDefinitelyDead(pid);
 }

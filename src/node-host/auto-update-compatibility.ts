@@ -89,7 +89,12 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
 }): Promise<void> {
   params.signal?.throwIfAborted();
   const { schemaVersions } = await readNodeRuntimeUpdateManifest(params.packageRoot);
-  const nodeRuntimeFailure = await checkGitCandidateNodeRuntime(params.packageRoot);
+  // A Bun host runs the candidate with the same Bun, so Node engines describe a
+  // runtime that is not involved; the candidate's runtime guard and the
+  // launcher's readiness fallback own that compatibility check.
+  const nodeRuntimeFailure = process.versions.bun
+    ? null
+    : await checkGitCandidateNodeRuntime(params.packageRoot);
   if (nodeRuntimeFailure) {
     throw new Error(
       nodeRuntimeFailure.stderrTail ?? "Node runtime is incompatible with the update.",

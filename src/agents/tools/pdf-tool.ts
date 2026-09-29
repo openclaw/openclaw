@@ -1,4 +1,5 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -60,7 +61,7 @@ import {
   resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
-import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
+import { type PdfToolActiveModel, resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
@@ -101,6 +102,8 @@ async function runPdfPrompt(params: {
   agentDir: string;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  authProfileStore?: AuthProfileStore;
+  activeModel?: PdfToolActiveModel;
   pdfModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
@@ -155,6 +158,8 @@ async function runPdfPrompt(params: {
     cfg: preparedRuntime.config,
     agentDir: runtimeAgentDir,
     ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
+    authStore: params.authProfileStore,
+    activeModel: params.activeModel,
   });
   if (!committedPdfModelConfig) {
     throw new ToolInputError("No PDF model configured in the active runtime generation.");
@@ -364,6 +369,7 @@ export function createPdfTool(options?: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
   fsPolicy?: ToolFsPolicy;
+  activeModel?: PdfToolActiveModel;
   /**
    * Avoid resolving auto PDF-provider/model candidates while registering the
    * tool. The concrete PDF model is still resolved before execution.
@@ -388,6 +394,7 @@ export function createPdfTool(options?: {
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
+        activeModel: options?.activeModel,
       });
   if (!registrationPdfModelConfig && !shouldDeferAutoModelResolution) {
     return null;
@@ -395,14 +402,8 @@ export function createPdfTool(options?: {
 
   const maxBytesMbDefault = options?.config?.agents?.defaults?.pdfMaxMb;
   const maxPagesDefault = options?.config?.agents?.defaults?.pdfMaxPages;
-  const configuredMaxBytesMb =
-    typeof maxBytesMbDefault === "number" && Number.isFinite(maxBytesMbDefault)
-      ? maxBytesMbDefault
-      : DEFAULT_MAX_BYTES_MB;
-  const configuredMaxPages =
-    typeof maxPagesDefault === "number" && Number.isFinite(maxPagesDefault)
-      ? Math.floor(maxPagesDefault)
-      : DEFAULT_MAX_PAGES;
+  const configuredMaxBytesMb = asFiniteNumber(maxBytesMbDefault) ?? DEFAULT_MAX_BYTES_MB;
+  const configuredMaxPages = Math.floor(asFiniteNumber(maxPagesDefault) ?? DEFAULT_MAX_PAGES);
 
   const description =
     'Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects up to the configured page limit from a range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';
@@ -457,6 +458,7 @@ export function createPdfTool(options?: {
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
+        activeModel: options?.activeModel,
       });
     if (!pdfModelConfig) {
       throw new ToolInputError("No PDF model configured.");
@@ -591,6 +593,8 @@ export function createPdfTool(options?: {
       ...(options?.preparedModelRuntime
         ? { preparedModelRuntime: options.preparedModelRuntime }
         : {}),
+      authProfileStore: options?.authProfileStore,
+      activeModel: options?.activeModel,
       pdfModelConfig,
       modelOverride,
       prompt: promptRaw,

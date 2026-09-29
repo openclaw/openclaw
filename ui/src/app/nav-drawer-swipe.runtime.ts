@@ -16,7 +16,7 @@ type Swipe = {
   backdrop: HTMLElement | null;
 };
 
-type NavDrawerHost = HTMLElement & {
+export type NavDrawerHost = HTMLElement & {
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly navDrawerOpen: boolean;
@@ -31,7 +31,12 @@ export class NavDrawerSwipeOwner {
   ) {}
 
   private canOpen(): boolean {
-    return isMobileNavLayout() && !this.host.navDrawerOpen && !this.host.onboardingMode;
+    return (
+      isMobileNavLayout() &&
+      !this.host.navDrawerOpen &&
+      !this.host.onboardingMode &&
+      !document.openClawModalLayers?.size
+    );
   }
 
   connect(): void {
@@ -152,7 +157,7 @@ export class NavDrawerSwipeOwner {
     const touch = swipe
       ? Array.from(event.touches).find((candidate) => candidate.identifier === swipe.identifier)
       : undefined;
-    if (!swipe || event.touches.length !== 1 || !touch) {
+    if (!this.canOpen() || !swipe || event.touches.length !== 1 || !touch) {
       this.cancel();
       return;
     }

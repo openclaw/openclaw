@@ -64,13 +64,7 @@ export function createMeetingStatusPreludeSource(
   const clickable = (node) => node?.matches?.("button")
     ? node
     : node?.querySelector?.("button") || node?.closest?.("button") || node;
-  const first = (list) => {
-    for (const selector of list) {
-      const node = document.querySelector(selector);
-      if (node) return clickable(node);
-    }
-    return undefined;
-  };
+  const first = (list) => clickable(firstRaw(list));
   const firstRaw = (list) => {
     for (const selector of list) {
       const node = document.querySelector(selector);

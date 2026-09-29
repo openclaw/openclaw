@@ -4,7 +4,10 @@
  * explicit operator allow/deny lists.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
@@ -172,22 +175,7 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
 
 /** Collects explicit deny entries from layered policies. */
 export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefined>): string[] {
-  const entries: string[] = [];
-  for (const policy of policies) {
-    if (!policy?.deny) {
-      continue;
-    }
-    for (const value of policy.deny) {
-      if (typeof value !== "string") {
-        continue;
-      }
-      const trimmed = value.trim();
-      if (trimmed) {
-        entries.push(trimmed);
-      }
-    }
-  }
-  return entries;
+  return policies.flatMap((policy) => normalizeTrimmedStringList(policy?.deny));
 }
 
 /** Builds plugin tool groups from tool metadata. */
@@ -227,20 +215,8 @@ function expandPluginGroups(
   const expanded: string[] = [];
   for (const entry of renamed) {
     const normalized = normalizeToolPolicyName(entry);
-    if (normalized === "group:plugins") {
-      if (groups.all.length > 0) {
-        expanded.push(...groups.all);
-      } else {
-        expanded.push(normalized);
-      }
-      continue;
-    }
-    const tools = groups.byPlugin.get(normalized) ?? [];
-    if (tools.length > 0) {
-      expanded.push(...tools);
-      continue;
-    }
-    expanded.push(normalized);
+    const tools = normalized === "group:plugins" ? groups.all : groups.byPlugin.get(normalized);
+    expanded.push(...(tools?.length ? tools : [normalized]));
   }
   return uniqueStrings(expanded);
 }

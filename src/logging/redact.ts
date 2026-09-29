@@ -37,13 +37,13 @@ import {
 } from "./redact-pattern-runtime.js";
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
+  AMBIGUOUS_ASSIGNMENT_MATCHERS,
   AWS_SECRET_ACCESS_KEY_MATCHER,
   BASE64_SAFE_TOKEN_BOUNDARY,
   BODY_SECRET_KEYS,
   CHUNK_UNSAFE_PATTERN_SOURCES,
   CREDENTIAL_HEADER_FIELD_RE,
   DEFAULT_REDACT_PATTERNS,
-  DEFAULT_REDACT_STRING_PATTERNS,
   FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES,
   FORM_BODY_KEY_INVISIBLE_CHARS,
   IDENTIFIER_SAFE_TOKEN_BOUNDARY,
@@ -158,9 +158,12 @@ const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
   // filler). Require a key character before or after a splice so bare `+=` or line-leading
   // `===` separators do not trip the fast path.
   String.raw`%[0-9A-Fa-f]{2}[${FORM_BODY_KEY_INVISIBLE_CHARS}+A-Za-z0-9_%.-]*=`,
-  // Search at the required assignment separator, not at every invisible character.
-  // Look behind it to retain the same obfuscated-key language without rescanning blank runs.
-  String.raw`=(?<=(?:\+|[${FORM_BODY_KEY_INVISIBLE_CHARS}])(?:[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*[A-Za-z0-9_%.-])+[${FORM_BODY_KEY_INVISIBLE_CHARS}+]*=)|=(?<=[A-Za-z0-9_%.-][${FORM_BODY_KEY_INVISIBLE_CHARS}+]+=)`,
+  // Search at the required assignment separator, not at every invisible character: the key run
+  // right before `=` must hold a splice and a key character. Two flat lookbehinds keep that to
+  // plain character-class scans. A repeated group inside the lookbehind made JSC abandon the whole
+  // match (no error, no match) once the run before `=` passed roughly 70k characters, which
+  // silently skipped default redaction for long texts on Bun.
+  String.raw`=(?<=[${FORM_BODY_KEY_INVISIBLE_CHARS}+][${FORM_BODY_KEY_INVISIBLE_CHARS}+A-Za-z0-9_%.-]*=)(?<=[A-Za-z0-9_%.-][${FORM_BODY_KEY_INVISIBLE_CHARS}+A-Za-z0-9_%.-]*=)`,
 ];
 const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
   `(?:${DEFAULT_REDACT_PREFILTER_SOURCES.join("|")})`,
@@ -192,6 +195,9 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
     return PEM_REDACT_MATCHER;
   }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
+    if (AMBIGUOUS_ASSIGNMENT_MATCHERS.has(raw)) {
+      sourceAssignmentPatterns.add(raw);
+    }
     return raw;
   }
   let pattern: RegExp | null = null;
@@ -271,7 +277,8 @@ function splitSecretValueForMask(token: string): {
   maskEnd: number;
 } {
   const openingQuote = token[0] ?? "";
-  if (SECRET_VALUE_QUOTE_CHARS.has(openingQuote)) {
+  const contentStart = SECRET_VALUE_QUOTE_CHARS.has(openingQuote) ? 1 : 0;
+  if (contentStart) {
     const closingQuoteIndex = token.lastIndexOf(openingQuote);
     if (closingQuoteIndex > 0) {
       const suffix = token.slice(closingQuoteIndex + 1);
@@ -284,35 +291,19 @@ function splitSecretValueForMask(token: string): {
         };
       }
     }
-
-    const tokenWithoutLeadingQuote = token.slice(1);
-    const trailingDelimiter =
-      tokenWithoutLeadingQuote.match(SECRET_VALUE_TRAILING_DELIMITER_RE)?.[1] ?? "";
-    const maskable =
-      trailingDelimiter && trailingDelimiter.length < tokenWithoutLeadingQuote.length
-        ? tokenWithoutLeadingQuote.slice(0, -trailingDelimiter.length)
-        : tokenWithoutLeadingQuote;
-    return {
-      maskable,
-      suffix:
-        trailingDelimiter && trailingDelimiter.length < tokenWithoutLeadingQuote.length
-          ? trailingDelimiter
-          : "",
-      maskStart: 0,
-      maskEnd: 1 + maskable.length,
-    };
   }
 
-  const trailingDelimiter = token.match(SECRET_VALUE_TRAILING_DELIMITER_RE)?.[1] ?? "";
+  const content = token.slice(contentStart);
+  const trailingDelimiter = content.match(SECRET_VALUE_TRAILING_DELIMITER_RE)?.[1] ?? "";
   const maskable =
-    trailingDelimiter && trailingDelimiter.length < token.length
-      ? token.slice(0, -trailingDelimiter.length)
-      : token;
+    trailingDelimiter && trailingDelimiter.length < content.length
+      ? content.slice(0, -trailingDelimiter.length)
+      : content;
   return {
     maskable,
-    suffix: maskable === token ? "" : trailingDelimiter,
+    suffix: maskable === content ? "" : trailingDelimiter,
     maskStart: 0,
-    maskEnd: maskable.length,
+    maskEnd: contentStart + maskable.length,
   };
 }
 
@@ -1288,6 +1279,18 @@ export function resolveFileLogRedactOptions(): ResolvedRedactOptions {
   return resolveRedactOptions(resolveToolPayloadRedaction());
 }
 
+function* redactionEditMatches(input: string, edits: RedactionEdit[]): Iterable<RedactMatch> {
+  for (const edit of edits) {
+    yield {
+      match: input.slice(edit.start, edit.end),
+      groups: [],
+      input,
+      offset: edit.start,
+      replacement: edit.replacement,
+    };
+  }
+}
+
 const preparationPatterns: ResolvedRedactPattern[] = [
   {
     source: "registered secret values",
@@ -1319,15 +1322,7 @@ const preparationPatterns: ResolvedRedactPattern[] = [
     *exec(input) {
       const edits: RedactionEdit[] = [];
       redactAssignmentValues(input, "url", (added) => edits.push(...added));
-      for (const edit of edits) {
-        yield {
-          match: input.slice(edit.start, edit.end),
-          groups: [],
-          input,
-          offset: edit.start,
-          replacement: edit.replacement,
-        };
-      }
+      yield* redactionEditMatches(input, edits);
     },
   },
   {
@@ -1337,15 +1332,7 @@ const preparationPatterns: ResolvedRedactPattern[] = [
       redactFormBody(input, (added) => {
         edits = composeRedactionEdits(input.length, edits, added);
       });
-      for (const edit of edits) {
-        yield {
-          match: input.slice(edit.start, edit.end),
-          groups: [],
-          input,
-          offset: edit.start,
-          replacement: edit.replacement,
-        };
-      }
+      yield* redactionEditMatches(input, edits);
     },
   },
 ];
@@ -1582,8 +1569,9 @@ export function redactModelVisibleSecrets<T>(value: T): T {
   return redactSecretsWithOptions(value, resolveModelVisibleToolPayloadRedaction());
 }
 
-export function getDefaultRedactPatterns(): string[] {
-  return [...DEFAULT_REDACT_STRING_PATTERNS];
+/** The full default policy, programmatic matchers included; keep only the strings for `logging.redactPatterns`. */
+export function getDefaultRedactPatterns(): RedactPattern[] {
+  return [...DEFAULT_REDACT_PATTERNS];
 }
 
 // Match the complete batch, preserving JSON syntax through the transport's scalar editor.

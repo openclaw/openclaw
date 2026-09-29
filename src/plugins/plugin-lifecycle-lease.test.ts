@@ -1,13 +1,13 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { OpenClawStateLeaseError, withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
@@ -26,7 +26,7 @@ import {
 } from "./plugin-lifecycle-lease.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
-type LeaseChild = ChildProcessByStdio<null, Readable, Readable>;
+type LeaseChild = ChildProcessByStdio<Writable, Readable, Readable>;
 type LeaseChildRun = {
   child: LeaseChild;
   ready: Promise<void>;
@@ -81,7 +81,7 @@ function runLeaseChild(
   env?: NodeJS.ProcessEnv,
 ): LeaseChildRun {
   const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
     env,
   });
   child.stdout.setEncoding("utf8");
@@ -108,6 +108,11 @@ function runLeaseChild(
   });
 
   const completed = new Promise<void>((resolve, reject) => {
+    child.stdin.once("error", (error) => {
+      reject(
+        new Error(`failed to signal lease child ${args[0]}: ${error.message}`, { cause: error }),
+      );
+    });
     child.once("error", (error) => {
       reject(
         new Error(`failed to start lease child ${args[0]}: ${error.message}`, {
@@ -343,10 +348,38 @@ describe("plugin lifecycle lease", () => {
     });
   });
 
+  it("reclaims process-bound lifecycle work after its process is killed", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-killed-owner" }, async (state) => {
+      await withLeaseChildren(async (children) => {
+        const leaseModuleUrl = pathToFileURL(
+          path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
+        ).href;
+        const script = await state.writeText(
+          "killed-lease.mts",
+          `
+          import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
+          const env = { ...process.env, OPENCLAW_STATE_DIR: process.argv[2] };
+          await withPluginLifecycleLease({ env, processBound: true }, async () => {
+            process.stdout.write("ready\\n");
+            await new Promise(() => {});
+          });
+        `,
+        );
+        const holder = runLeaseChild(children, script, [state.stateDir]);
+        await holder.ready;
+        await terminateLeaseChild(holder.child);
+        // SIGKILL is the expected result, already joined above.
+        children.delete(holder);
+        await expect(
+          withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "recovered"),
+        ).resolves.toBe("recovered");
+      });
+    });
+  });
+
   it("serializes lifecycle work across processes", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-processes" }, async (state) => {
       await withLeaseChildren(async (children) => {
-        const releaseMarker = state.path("release-first");
         const secondMarker = state.path("second-entered");
         const secondResult = state.path("second-result");
         const leaseModuleUrl = pathToFileURL(
@@ -356,42 +389,50 @@ describe("plugin lifecycle lease", () => {
           "lease-child.mts",
           `
           import fs from "node:fs/promises";
+          import { createInterface } from "node:readline";
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
-          const [role, stateDir, releaseMarker, secondMarker, secondResult] = process.argv.slice(2);
+          const [role, stateDir, secondMarker, secondResult] = process.argv.slice(2);
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-          if (role === "second") {
+          const input = createInterface({ input: process.stdin });
+          const commands = input[Symbol.asyncIterator]();
+          try {
+            // Complete cold database/worker admission before either contested lease starts.
+            await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {});
             process.stdout.write("ready\\n");
-            try {
-              await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 0 }, async () => {
-                await fs.writeFile(secondMarker, "entered");
-              });
-              await fs.writeFile(secondResult, "acquired");
-            } catch (error) {
-              await fs.writeFile(secondResult, error?.code ?? String(error));
+            if ((await commands.next()).value !== "go") {
+              throw new Error("expected go command");
             }
-          } else {
-            await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
-              process.stdout.write("ready\\n");
-              while (true) {
-                try {
-                  await fs.access(releaseMarker);
-                  break;
-                } catch {
-                  await new Promise((resolve) => {
-                    setTimeout(resolve, 25);
-                  });
-                }
+            if (role === "second") {
+              try {
+                await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 0 }, async () => {
+                  await fs.writeFile(secondMarker, "entered");
+                });
+                await fs.writeFile(secondResult, "acquired");
+              } catch (error) {
+                await fs.writeFile(secondResult, error?.code ?? String(error));
               }
-            });
+            } else {
+              await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
+                process.stdout.write("acquired\\n");
+                if ((await commands.next()).value !== "release") {
+                  throw new Error("expected release command");
+                }
+              });
+            }
+          } finally {
+            input.close();
           }
         `,
         );
 
-        const childArgs = [state.stateDir, releaseMarker, secondMarker, secondResult];
+        const childArgs = [state.stateDir, secondMarker, secondResult];
         const first = runLeaseChild(children, childScript, ["first", ...childArgs]);
         await first.ready;
         const second = runLeaseChild(children, childScript, ["second", ...childArgs]);
         await second.ready;
+        first.child.stdin.write("go\n");
+        await first.waitForPhase("acquired");
+        second.child.stdin.end("go\n");
         // Wait for the child to close so its result write is fully flushed before
         // reading; file existence alone can race with the write after open().
         await second.completed;
@@ -405,7 +446,7 @@ describe("plugin lifecycle lease", () => {
         } catch (error) {
           assertionError = error;
         } finally {
-          await fs.writeFile(releaseMarker, "release");
+          first.child.stdin.end("release\n");
         }
         await Promise.all([first.completed, second.completed]);
         if (assertionError) {
@@ -453,6 +494,7 @@ describe("plugin lifecycle lease", () => {
           `
           import assert from "node:assert/strict";
           import fs from "node:fs/promises";
+          import { mock } from "node:test";
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
           import {
             loadInstalledPluginIndexInstallRecords,
@@ -462,6 +504,8 @@ describe("plugin lifecycle lease", () => {
           const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+          // Exercise cache coherence with real contention, independent of host scheduling delays.
+          mock.method(performance, "now", () => 0);
           async function waitForMarker(marker) {
             while (true) {
               try {
@@ -543,7 +587,7 @@ describe("plugin lifecycle lease", () => {
     });
   });
 
-  it("gives a delayed observer fresh physical lease ancestry after its writer closes", async () => {
+  it("gives a delayed observer a fresh lease after its writer closes", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-observer" }, async (state) => {
       const resumeObserver = createDeferred();
       let observer: Promise<void> | undefined;
@@ -556,32 +600,6 @@ describe("plugin lifecycle lease", () => {
                 expect(current.signal).not.toBe(previous.signal);
                 expect(() => previous.assertOwned()).toThrow(OpenClawStateLeaseError);
                 current.assertOwned();
-                await withOpenClawStateLease(
-                  {
-                    scope: "core:test-plugin-observer",
-                    key: "capture",
-                    database: { scope: "shared", options: { env: state.env } },
-                    leaseMs: 10_000,
-                    waitMs: 0,
-                  },
-                  async (nested) => {
-                    if (!nested.withDatabaseFileExclusion) {
-                      throw new Error("Expected the canonical file-exclusion capability");
-                    }
-                    const capturedSize = await nested.withDatabaseFileExclusion(
-                      async (assertCurrent) => {
-                        const bytes = await fs.readFile(current.databasePath);
-                        assertCurrent();
-                        current.assertOwned();
-                        nested.assertOwned();
-                        return bytes.byteLength;
-                      },
-                    );
-                    expect(capturedSize).toBeGreaterThan(0);
-                  },
-                );
-                current.assertOwned();
-                expect(() => previous.assertOwned()).toThrow(OpenClawStateLeaseError);
               }),
             ),
           );

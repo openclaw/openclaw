@@ -498,18 +498,8 @@ final class AppState {
         self.voiceWakeSendChime = Self.loadChime(
             key: voiceWakeSendChimeKey,
             fallback: .system(name: "Glass"))
-        if let storedIconAnimations = AppDefaults.standard.object(forKey: iconAnimationsEnabledKey) as? Bool {
-            self.iconAnimationsEnabled = storedIconAnimations
-        } else {
-            self.iconAnimationsEnabled = true
-            AppDefaults.standard.set(true, forKey: iconAnimationsEnabledKey)
-        }
-        if let storedShowDockIcon = AppDefaults.standard.object(forKey: showDockIconKey) as? Bool {
-            self.showDockIcon = storedShowDockIcon
-        } else {
-            self.showDockIcon = true
-            AppDefaults.standard.set(true, forKey: showDockIconKey)
-        }
+        self.iconAnimationsEnabled = Self.loadEnabledPreference(key: iconAnimationsEnabledKey)
+        self.showDockIcon = Self.loadEnabledPreference(key: showDockIconKey)
         self.voiceWakeMicID = AppDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
         self.voiceWakeMicName = AppDefaults.standard.string(forKey: voiceWakeMicNameKey) ?? ""
         self.voiceWakeLocaleID = AppDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
@@ -520,26 +510,11 @@ final class AppState {
         self.voiceWakeTriggersTalkMode = AppDefaults.standard
             .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
         self.talkEnabled = AppDefaults.standard.bool(forKey: talkEnabledKey)
-        if let storedPhaseSounds = AppDefaults.standard.object(forKey: talkPhaseSoundsEnabledKey) as? Bool {
-            self.talkPhaseSoundsEnabled = storedPhaseSounds
-        } else {
-            self.talkPhaseSoundsEnabled = true
-            AppDefaults.standard.set(true, forKey: talkPhaseSoundsEnabledKey)
-        }
-        if let storedShiftToStop = AppDefaults.standard.object(forKey: talkShiftToStopEnabledKey) as? Bool {
-            self.talkShiftToStopEnabled = storedShiftToStop
-        } else {
-            self.talkShiftToStopEnabled = true
-            AppDefaults.standard.set(true, forKey: talkShiftToStopEnabledKey)
-        }
+        self.talkPhaseSoundsEnabled = Self.loadEnabledPreference(key: talkPhaseSoundsEnabledKey)
+        self.talkShiftToStopEnabled = Self.loadEnabledPreference(key: talkShiftToStopEnabledKey)
         self.seamColorHex = nil
         self.profileAccentHex = nil
-        if let storedHeartbeats = AppDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
-            self.heartbeatsEnabled = storedHeartbeats
-        } else {
-            self.heartbeatsEnabled = true
-            AppDefaults.standard.set(true, forKey: heartbeatsEnabledKey)
-        }
+        self.heartbeatsEnabled = Self.loadEnabledPreference(key: heartbeatsEnabledKey)
         if let storedOverride = AppDefaults.standard.string(forKey: iconOverrideKey),
            let selection = IconOverrideSelection(rawValue: storedOverride)
         {
@@ -642,6 +617,12 @@ final class AppState {
         self.configWatcher?.stop()
     }
 
+    private static func loadEnabledPreference(key: String) -> Bool {
+        if let stored = AppDefaults.standard.object(forKey: key) as? Bool { return stored }
+        AppDefaults.standard.set(true, forKey: key)
+        return true
+    }
+
     private static func remoteHost(from urlString: String?) -> String? {
         guard let raw = urlString?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty,
@@ -652,15 +633,6 @@ final class AppState {
             return nil
         }
         return host
-    }
-
-    private static func sanitizeSSHTarget(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("ssh ") {
-            return trimmed.replacingOccurrences(of: "ssh ", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return trimmed
     }
 
     private static func sshTunnelGatewayUrl(existingUrl: String?, expectedRemoteHost: String?) -> String {
@@ -728,15 +700,11 @@ extension AppState {
         var remote = current
         var changed = false
 
+        if draft.dirtyFields.contains(.remoteTransport) {
+            changed = Self.updateGatewayString(&remote, key: "transport", value: draft.transport.rawValue) || changed
+        }
         switch draft.transport {
         case .direct:
-            if draft.dirtyFields.contains(.remoteTransport) {
-                changed = Self.updateGatewayString(
-                    &remote,
-                    key: "transport",
-                    value: RemoteTransport.direct.rawValue) || changed
-            }
-
             if draft.dirtyFields.contains(.remoteUrl) {
                 // Reconciliation needs the incomplete draft too, or it mistakes the
                 // unchanged disk URL for a saved edit. gatewayDraftCanPersist gates writes.
@@ -745,15 +713,8 @@ extension AppState {
             }
 
         case .ssh:
-            if draft.dirtyFields.contains(.remoteTransport) {
-                changed = Self.updateGatewayString(
-                    &remote,
-                    key: "transport",
-                    value: RemoteTransport.ssh.rawValue) || changed
-            }
-
-            let existingTarget = Self.sanitizeSSHTarget(remote["sshTarget"] as? String ?? "")
-            let sanitizedTarget = Self.sanitizeSSHTarget(draft.remoteTarget)
+            let existingTarget = CommandResolver.normalizeSSHTargetInput(remote["sshTarget"] as? String ?? "")
+            let sanitizedTarget = CommandResolver.normalizeSSHTargetInput(draft.remoteTarget)
             let expectedRemoteHost = CommandResolver.parseSSHTarget(sanitizedTarget)?.host ?? draft.remoteHost
             if draft.dirtyFields.contains(.remoteUrl) {
                 let existingUrl = (remote["url"] as? String)?
@@ -797,7 +758,7 @@ extension AppState {
         self.configWatcher?.start()
     }
 
-    private func applyConfigFromDisk() {
+    func applyConfigFromDisk() {
         let root = OpenClawConfigFile.loadDict()
         let fingerprint = Self.configFingerprint(root)
         guard fingerprint != self.lastConfigFingerprint else { return }
@@ -807,7 +768,7 @@ extension AppState {
         NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
     }
 
-    private static func configFingerprint(_ root: [String: Any]) -> Data? {
+    static func configFingerprint(_ root: [String: Any]) -> Data? {
         var comparableRoot = root
         if var meta = comparableRoot["meta"] as? [String: Any] {
             // Writers refresh these bookkeeping fields without changing runtime configuration.
@@ -913,16 +874,7 @@ extension AppState {
         let remoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         let remoteTransport = remoteResolution.transport
 
-        let desiredMode: ConnectionMode? = switch modeRaw {
-        case "local":
-            .local
-        case "remote":
-            .remote
-        case "unconfigured":
-            .unconfigured
-        default:
-            nil
-        }
+        let desiredMode = modeRaw.flatMap(ConnectionMode.init(rawValue:))
 
         self.isApplyingGatewayConfig = true
         self.applyGatewayConfigMode(
@@ -947,8 +899,8 @@ extension AppState {
 
         let targetMode = desiredMode ?? self.connectionMode
         if forcedFields.contains(.remoteTarget) {
-            let configuredTarget = Self.sanitizeSSHTarget(remote?["sshTarget"] as? String ?? "")
-            if configuredTarget != Self.sanitizeSSHTarget(self.remoteTarget) {
+            let configuredTarget = CommandResolver.normalizeSSHTargetInput(remote?["sshTarget"] as? String ?? "")
+            if configuredTarget != CommandResolver.normalizeSSHTargetInput(self.remoteTarget) {
                 self.remoteTarget = configuredTarget
             }
         } else if !self.dirtyGatewayConfigFields.contains(.remoteTarget),
@@ -956,8 +908,8 @@ extension AppState {
                   remoteTransport != .direct
         {
             let hasConfiguredTarget = remote?.keys.contains("sshTarget") == true
-            let configuredTarget = Self.sanitizeSSHTarget(remote?["sshTarget"] as? String ?? "")
-            if hasConfiguredTarget, configuredTarget != Self.sanitizeSSHTarget(self.remoteTarget) {
+            let configuredTarget = CommandResolver.normalizeSSHTargetInput(remote?["sshTarget"] as? String ?? "")
+            if hasConfiguredTarget, configuredTarget != CommandResolver.normalizeSSHTargetInput(self.remoteTarget) {
                 self.remoteTarget = configuredTarget
             } else if !hasConfiguredTarget,
                       let host = AppState.remoteHost(from: remoteUrl),
@@ -966,14 +918,8 @@ extension AppState {
                 self.updateRemoteTarget(host: host)
             }
         }
-        if forcedFields.contains(.remoteIdentity) {
-            let configuredIdentity = (remote?["sshIdentity"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if configuredIdentity != self.remoteIdentity {
-                self.remoteIdentity = configuredIdentity
-            }
-        } else if !self.dirtyGatewayConfigFields.contains(.remoteIdentity),
-                  remote?.keys.contains("sshIdentity") == true
+        if forcedFields.contains(.remoteIdentity) ||
+            (!self.dirtyGatewayConfigFields.contains(.remoteIdentity) && remote?.keys.contains("sshIdentity") == true)
         {
             let configuredIdentity = (remote?["sshIdentity"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -996,7 +942,7 @@ extension AppState {
         }
     }
 
-    private func applyConfigOverrides(_ root: [String: Any]) {
+    func applyConfigOverrides(_ root: [String: Any]) {
         let gatewayFingerprint = Self.gatewayRoutingFingerprint(root)
         if gatewayFingerprint != self.lastObservedGatewayFingerprint {
             self.advanceGatewayRoutingGeneration()
@@ -1033,11 +979,11 @@ extension AppState {
             connectionMode: self.connectionMode,
             remoteTransport: self.remoteTransport,
             remoteUrl: remoteUrl,
-            remoteTarget: Self.sanitizeSSHTarget(self.remoteTarget))
+            remoteTarget: CommandResolver.normalizeSSHTargetInput(self.remoteTarget))
     }
 
     @discardableResult
-    private func reconcilePreferredGatewayRouteBinding() -> Bool {
+    func reconcilePreferredGatewayRouteBinding() -> Bool {
         let binding = GatewayDiscoveryPreferences.routeBinding(
             connectionMode: self.connectionMode,
             remoteTransport: self.remoteTransport,
@@ -1180,7 +1126,7 @@ extension AppState {
 }
 
 extension AppState {
-    private static func syncedGatewayRoot(
+    static func syncedGatewayRoot(
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft)
         -> (root: [String: Any], changed: Bool, removesGatewayMode: Bool)
@@ -1190,14 +1136,7 @@ extension AppState {
         var changed = false
         var removesGatewayMode = false
 
-        let desiredMode: String? = switch draft.connectionMode {
-        case .local:
-            "local"
-        case .remote:
-            "remote"
-        case .unconfigured:
-            nil
-        }
+        let desiredMode = draft.connectionMode == .unconfigured ? nil : draft.connectionMode.rawValue
 
         if draft.dirtyFields.contains(.mode) {
             let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1293,7 +1232,7 @@ extension AppState {
         self.gatewayRoutingGeneration &+= 1
     }
 
-    private static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
+    static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
         if draft.clearsPrimaryGateway { return true }
         let ownsRemoteRoute = draft.dirtyFields.contains(.remoteTransport) ||
             draft.dirtyFields.contains(.remoteUrl) ||
@@ -1303,7 +1242,7 @@ extension AppState {
         case .direct:
             return GatewayRemoteConfig.normalizeGatewayUrl(draft.remoteUrl) != nil
         case .ssh:
-            let target = Self.sanitizeSSHTarget(draft.remoteTarget)
+            let target = CommandResolver.normalizeSSHTargetInput(draft.remoteTarget)
             return !target.isEmpty &&
                 CommandResolver.sshTargetValidationMessage(target) == nil &&
                 CommandResolver.parseSSHTarget(target) != nil
@@ -1636,10 +1575,6 @@ extension AppState {
 #if DEBUG
 @MainActor
 extension AppState {
-    static func _testConfigFingerprint(_ root: [String: Any]) -> Data? {
-        self.configFingerprint(root)
-    }
-
     static func _testUpdatedRemoteGatewayConfig(
         current: [String: Any],
         draft: RemoteGatewayConfigDraft) -> [String: Any]
@@ -1647,27 +1582,6 @@ extension AppState {
         self.updatedRemoteGatewayConfig(
             current: current,
             draft: draft).remote
-    }
-
-    static func _testSyncedGatewayRoot(
-        currentRoot: [String: Any],
-        draft: GatewayConfigSyncDraft) -> (root: [String: Any], changed: Bool, removesGatewayMode: Bool)
-    {
-        self.syncedGatewayRoot(
-            currentRoot: currentRoot,
-            draft: draft)
-    }
-
-    static func _testGatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
-        self.gatewayDraftCanPersist(draft)
-    }
-
-    func _testApplyConfigOverrides(_ root: [String: Any]) {
-        self.applyConfigOverrides(root)
-    }
-
-    func _testApplyConfigFromDisk() {
-        self.applyConfigFromDisk()
     }
 
     func _testEnableGatewayConfigSync() {
@@ -1678,21 +1592,12 @@ extension AppState {
         await self.gatewayConfigSyncTask?.value
     }
 
-    var _testGatewayConfigIsCurrentForRouting: Bool {
-        self.gatewayConfigIsCurrentForRouting
-    }
-
     var _testDirtyGatewayConfigFields: [String] {
         self.dirtyGatewayConfigFields.map(\.rawValue).sorted()
     }
 
     var _testConflictedGatewayConfigFields: [String] {
         self.conflictedGatewayConfigFields.map(\.rawValue).sorted()
-    }
-
-    @discardableResult
-    func _testReconcilePreferredGatewayRouteBinding() -> Bool {
-        self.reconcilePreferredGatewayRouteBinding()
     }
 }
 #endif

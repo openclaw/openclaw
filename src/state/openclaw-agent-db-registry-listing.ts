@@ -5,7 +5,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -137,7 +136,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
         }
       } finally {
         if (committed) {
-          sessionChanges.emit({ all: true, scope: "stores" });
+          sessionChanges.emit({ all: true, scope: { agentId: params.agentId, topology: true } });
         }
       }
     },
@@ -146,8 +145,12 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
 
 function cloneRegisteredAgentDatabases(
   entries: readonly OpenClawRegisteredAgentDatabase[],
+  options: AgentDatabaseRegistryListOptions,
 ): OpenClawRegisteredAgentDatabase[] {
-  return entries.map((entry) => ({ ...entry }));
+  const cloned = entries.map((entry) => ({ ...entry }));
+  return options.includeIncompatibleSchemaVersions
+    ? cloned
+    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
 }
 
 function hasUnavailableMissingSqlitePath(pathname: string): boolean {
@@ -241,23 +244,13 @@ export function listOpenClawRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions = {},
 ): OpenClawRegisteredAgentDatabase[] {
   const memo = activateRegisteredAgentDatabasesMemo(options);
-  if (memo.entries) {
-    const entries = cloneRegisteredAgentDatabases(memo.entries);
-    return options.includeIncompatibleSchemaVersions
-      ? entries
-      : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
-  }
   // Discovery runs per row in list hot paths, so the legacy-schema gate and the
   // query share one process-held state handle instead of opening two connections.
-  const entries = readRegisteredAgentDatabases(
+  const entries = (memo.entries ??= readRegisteredAgentDatabases(
     { ...options, includeIncompatibleSchemaVersions: true },
     false,
-  );
-  memo.entries = entries;
-  const cloned = cloneRegisteredAgentDatabases(entries);
-  return options.includeIncompatibleSchemaVersions
-    ? cloned
-    : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
+  ));
+  return cloneRegisteredAgentDatabases(entries, options);
 }
 
 /** Capture authority now, but activate the canonical memo only if discovery needs it. */
@@ -312,9 +305,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         assertPreparedCurrent = assertCurrent;
         if (!memo.entries) {
           const reply = await inCapturedScope(() =>
-            withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
-              executeExistingOpenClawStateRead(options, { type: "agentDatabaseRegistry.read" }),
-            ),
+            executeExistingOpenClawStateRead(options, { type: "agentDatabaseRegistry.read" }),
           );
           if (reply && (!reply.ok || reply.type !== "agentDatabaseRegistry.read")) {
             throw new Error("Unexpected agent database registry read result");
@@ -329,15 +320,10 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
           }
           memo.entries ??= result?.entries ?? [];
         }
-        const entries = cloneRegisteredAgentDatabases(memo.entries);
+        const entries = cloneRegisteredAgentDatabases(memo.entries, options);
         assertCurrent();
         return {
-          result: {
-            status: "available",
-            entries: options.includeIncompatibleSchemaVersions
-              ? entries
-              : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION),
-          },
+          result: { status: "available", entries },
           assertCurrent,
           followRegistration,
         };

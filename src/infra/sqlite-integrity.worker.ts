@@ -10,7 +10,7 @@ import type {
   SqliteIntegrityWorkerPhase,
   SqliteIntegrityWorkerResult,
 } from "./sqlite-integrity-worker.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { assertSqliteIntegrity, type SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 
 function nativeErrorDetails(error: Error) {
@@ -42,6 +42,7 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   let database: import("node:sqlite").DatabaseSync | undefined;
   let failure: Error | undefined;
   let checkElapsedMs: number | undefined;
+  const timing: SqliteIntegrityCheckTiming = {};
   try {
     await sendPhase("opening");
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
@@ -52,7 +53,7 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
     await sendPhase("checking");
     const startedAt = performance.now();
     try {
-      assertSqliteIntegrity(database, input.databaseLabel);
+      assertSqliteIntegrity(database, input.databaseLabel, "integrity_check", input.tables, timing);
     } finally {
       checkElapsedMs = performance.now() - startedAt;
     }
@@ -86,6 +87,9 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   }
   if (checkElapsedMs !== undefined) {
     result.checkElapsedMs = checkElapsedMs;
+  }
+  if (timing.tables) {
+    result.tables = timing.tables;
   }
   return result;
 }
