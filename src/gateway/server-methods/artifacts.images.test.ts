@@ -183,7 +183,7 @@ describe("bounded Activity image discovery", () => {
       expect(second.artifacts.map((artifact) => artifact.image?.url)).toEqual([
         "https://images.example.test/1.png",
         "https://images.example.test/0.png",
-        undefined,
+        "data:image/png;base64,aGVsbG8=",
       ]);
       expect(second.artifacts[2]).toMatchObject({
         id: expect.stringMatching(/^artifact_transcript_image_/),
@@ -193,8 +193,8 @@ describe("bounded Activity image discovery", () => {
         sizeBytes: 5,
         source: "session-transcript",
         download: { mode: "bytes" },
+        image: { url: "data:image/png;base64,aGVsbG8=" },
       });
-      expect(second.artifacts[2]).not.toHaveProperty("image");
       expect(second.nextCursor).toBeUndefined();
     });
   });

@@ -262,20 +262,36 @@ function collectArtifactsFromMessage(
     if (params.downloadArtifactIds && !params.downloadArtifactIds.delete(id)) {
       continue;
     }
-    const includeData = params.imagesOnly ? !transcriptImage : params.includeDownloadData !== false;
-    const download = resolveBlockDownload(attachment ?? block, { includeData });
+    // Size inline payloads before materializing them so discovery never decodes large screenshots.
+    const sized = params.imagesOnly
+      ? resolveBlockDownload(attachment ?? block, { includeData: false })
+      : undefined;
+    const previewable =
+      !sized ||
+      sized.mode !== "bytes" ||
+      (sized.payloadSizeBytes ?? 0) <= IMAGE_INLINE_PREVIEW_MAX_BYTES;
+    if (params.imagesOnly && !previewable && !transcriptImage) {
+      // Preserve omitted slots so notices follow the cursor's actual scan window.
+      params.collection.artifacts.push(undefined);
+      continue;
+    }
+    const download =
+      sized && (!previewable || sized.mode !== "bytes")
+        ? sized
+        : resolveBlockDownload(attachment ?? block, {
+            includeData: params.imagesOnly || params.includeDownloadData !== false,
+          });
     const source = asOptionalRecord(block.source);
     const previewOnly =
       params.imagesOnly && !transcriptImage && !parseManagedOutgoingArtifactId(id);
-    const imageUrl =
-      params.imagesOnly && !transcriptImage
-        ? download.data !== undefined
-          ? `data:${download.mimeType ?? "image/png"};base64,${download.data}`
-          : (asNonEmptyString(attachment?.url) ??
-            asNonEmptyString(block.url) ??
-            asNonEmptyString(source?.url) ??
-            mediaUrlValue(block.image_url))
-        : undefined;
+    let imageUrl = params.imagesOnly
+      ? download.data !== undefined
+        ? `data:${download.mimeType ?? "image/png"};base64,${download.data}`
+        : (asNonEmptyString(attachment?.url) ??
+          asNonEmptyString(block.url) ??
+          asNonEmptyString(source?.url) ??
+          mediaUrlValue(block.image_url))
+      : undefined;
     if (params.imagesOnly && (transcriptImage ? download.mode !== "bytes" : !imageUrl)) {
       continue;
     }
@@ -285,9 +301,12 @@ function collectArtifactsFromMessage(
       /^data:/i.test(imageUrl) &&
       Buffer.byteLength(imageUrl) > IMAGE_INLINE_PREVIEW_MAX_BYTES
     ) {
-      // Preserve omitted slots so notices follow the cursor's actual scan window.
-      params.collection.artifacts.push(undefined);
-      continue;
+      if (transcriptImage) {
+        imageUrl = undefined;
+      } else {
+        params.collection.artifacts.push(undefined);
+        continue;
+      }
     }
     const summary: ArtifactRecord = {
       id: previewOnly ? `preview_${id}` : id,
