@@ -738,29 +738,52 @@ describe("channel refresh sequencing", () => {
     channels.dispose();
   });
 
-  it("coalesces config changes during a status read into one fresh trailing read", async () => {
-    const pending = createDeferred<ChannelsStatusSnapshot>();
-    const configured = createChannelsSnapshot("configured");
-    const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValueOnce(configured);
-    const client = { request };
-    const { gateway, emitEvent } = createChannelGatewayFixture(() => ({
-      client,
-      phase: "connected" as const,
-    }));
-    const channels = createChannelCapability(gateway);
-    const refresh = channels.refresh();
+  it.each(["pending", "settling"] as const)(
+    "coalesces config changes ahead of a probe while the status read is %s",
+    async (probeTiming) => {
+      const pending = createDeferred<ChannelsStatusSnapshot>();
+      const slowProbe = createDeferred<ChannelsStatusSnapshot>();
+      const configured = createChannelsSnapshot("configured");
+      const request = vi
+        .fn()
+        .mockImplementation((_method: string, params: { probe: boolean }) =>
+          params.probe ? slowProbe.promise : Promise.resolve(configured),
+        )
+        .mockReturnValueOnce(pending.promise);
+      const client = { request };
+      const { gateway, emitEvent } = createChannelGatewayFixture(() => ({
+        client,
+        phase: "connected" as const,
+      }));
+      const channels = createChannelCapability(gateway);
+      const refresh = channels.refresh();
 
-    emitEvent("config.changed");
-    emitEvent("config.changed");
-    emitEvent("config.changed");
-    expect(request).toHaveBeenCalledOnce();
-    pending.resolve(createChannelsSnapshot("before save"));
-    await refresh;
+      emitEvent("config.changed");
+      emitEvent("config.changed");
+      emitEvent("config.changed");
+      expect(request).toHaveBeenCalledOnce();
+      const probe =
+        probeTiming === "pending"
+          ? channels.refresh(true)
+          : pending.promise.then(() => channels.refresh(true));
+      try {
+        pending.resolve(createChannelsSnapshot("before save"));
+        await refresh;
 
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(channels.state.channelsSnapshot).toBe(configured);
-    channels.dispose();
-  });
+        expect(channels.state.channelsSnapshot).toBe(configured);
+        expect(channels.state.channelsLoading).toBe(false);
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(request).toHaveBeenLastCalledWith("channels.status", {
+          probe: false,
+          timeoutMs: 8000,
+        });
+      } finally {
+        slowProbe.resolve(createChannelsSnapshot("probe"));
+        await probe;
+        channels.dispose();
+      }
+    },
+  );
 
   it.each(["reconnect", "read access", "dispose"] as const)(
     "retires a pending config refresh after %s changes",

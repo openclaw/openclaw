@@ -219,47 +219,6 @@ function isCurrentChannelRefresh(
   return state.client === client && state.channelsRefreshSeq === refreshSeq;
 }
 
-async function loadChannels(state: ChannelsState, probe: boolean) {
-  const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.channelsLoading && (!state.channelsLoadingProbe || probe)) {
-    return;
-  }
-  const refreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
-  state.channelsRefreshSeq = refreshSeq;
-  state.channelsLoading = true;
-  state.channelsLoadingProbe = probe;
-  try {
-    const res = await client.request<ChannelsStatusSnapshot | null>("channels.status", {
-      probe,
-      timeoutMs: 8000,
-    });
-    if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
-      return;
-    }
-    state.channelsSnapshot = res;
-    state.channelsError = null;
-    state.channelsLastSuccess = Date.now();
-  } catch (err) {
-    if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
-      return;
-    }
-    if (isMissingOperatorReadScopeError(err)) {
-      state.channelsSnapshot = null;
-      state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
-    } else {
-      state.channelsError = formatUiError(err);
-    }
-  } finally {
-    if (isCurrentChannelRefresh(state, client, refreshSeq)) {
-      state.channelsLoading = false;
-      state.channelsLoadingProbe = null;
-    }
-  }
-}
-
 function isCurrentPairingRefresh(
   state: ChannelsState,
   client: ChannelGatewayClient,
@@ -503,27 +462,53 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       publish();
     }
   };
-  const refreshChannels = (probe = false): Promise<void> =>
-    run(async () => {
-      const previousRefreshSeq = state.channelsRefreshSeq;
-      const pending = loadChannels(state, probe);
-      const refreshSeq = state.channelsRefreshSeq;
-      if (refreshSeq === previousRefreshSeq) {
-        return pending;
-      }
-      const client = state.client;
+  async function loadChannels(probe: boolean): Promise<void> {
+    const client = state.client;
+    if (!client || !state.connected) {
+      return;
+    }
+    if (state.channelsLoading && (!state.channelsLoadingProbe || probe)) {
+      return;
+    }
+    const refreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
+    state.channelsRefreshSeq = refreshSeq;
+    state.channelsLoading = true;
+    state.channelsLoadingProbe = probe;
+    if (!probe) {
       channelsInvalidated = false;
-      await pending;
-      if (
-        channelsInvalidated &&
-        !disposed &&
-        state.connected &&
-        state.client === client &&
-        state.channelsRefreshSeq === refreshSeq
-      ) {
-        await refreshChannels();
+    }
+    try {
+      const res = await client.request<ChannelsStatusSnapshot | null>("channels.status", {
+        probe,
+        timeoutMs: 8000,
+      });
+      if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
+        return;
       }
-    });
+      state.channelsSnapshot = res;
+      state.channelsError = null;
+      state.channelsLastSuccess = Date.now();
+    } catch (err) {
+      if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
+        return;
+      }
+      if (isMissingOperatorReadScopeError(err)) {
+        state.channelsSnapshot = null;
+        state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
+      } else {
+        state.channelsError = formatUiError(err);
+      }
+    } finally {
+      if (isCurrentChannelRefresh(state, client, refreshSeq)) {
+        state.channelsLoading = false;
+        state.channelsLoadingProbe = null;
+        if (channelsInvalidated) {
+          await loadChannels(false);
+        }
+      }
+    }
+  }
+  const refreshChannels = (probe = false): Promise<void> => run(() => loadChannels(probe));
   const runWhatsApp = (task: () => Promise<boolean>) =>
     run(async () => {
       if (await task()) {
