@@ -2172,6 +2172,8 @@ describe("subagent registry seam flow", () => {
           swarmRequesterSessionKey: "agent:main:main",
         });
       } finally {
+        // Run the zero-delay wait continuation before draining owned root work.
+        await vi.advanceTimersByTimeAsync(0);
         await settleRootWork();
       }
 
