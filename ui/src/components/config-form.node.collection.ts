@@ -115,8 +115,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
   return {
     fields: sorted.map(([propertyKey, node]) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
-      return {
-        ...configChildRenderOptions(params),
+      return Object.assign(configChildRenderOptions(params), {
         schema: hasInheritedChild ? { ...node, default: objectValue[propertyKey] } : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],
@@ -125,7 +124,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
         controlIdentity: params.controlIdentity ?? objectValue,
         searchCriteria: childSearchCriteria,
         onPatch: patchObjectChild,
-      } satisfies ConfigNodeRenderParams;
+      }) satisfies ConfigNodeRenderParams;
     }),
     additional: allowExtra
       ? {
