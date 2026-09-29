@@ -328,7 +328,8 @@ describe("memory provenance through a real Gateway", () => {
     },
   );
 
-  test(
+  // Waived for 2026.9.7 by the release lead under Peter's 2026-09-29 waiver decision; see #161140.
+  test.skip(
     "routes the explicit workspace owner into deep consolidation",
     { timeout: 180_000 },
     async () => {
