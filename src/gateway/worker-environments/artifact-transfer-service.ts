@@ -22,6 +22,7 @@ export type ArtifactTransferCapability = {
   abortController: AbortController;
   stopWatching?: () => void;
   isAuthorized: () => boolean;
+  onProgress?: () => void;
 };
 
 type ArtifactTransferAuthorization = {
@@ -82,6 +83,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       maxServes: 1 | 3;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
+      onProgress?: () => void;
     }): { token: string; expiresAtMs: number } {
       if (
         !Number.isSafeInteger(params.artifact.tarballBytes) ||
@@ -105,6 +107,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
         remainingServes: params.maxServes,
         abortController: new AbortController(),
         isAuthorized: params.isAuthorized,
+        onProgress: params.onProgress,
       };
       capabilities.set(token, capability);
       const revoke = () => revokeCapability(capability);
@@ -143,6 +146,14 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
     },
 
     isAuthorizationCurrent: isCurrent,
+
+    recordProgress(authorization: ArtifactTransferAuthorization): void {
+      try {
+        authorization.capability.onProgress?.();
+      } catch {
+        // Progress observers must not interrupt the transfer.
+      }
+    },
 
     authorizationSignal(authorization: ArtifactTransferAuthorization): AbortSignal {
       return AbortSignal.any([

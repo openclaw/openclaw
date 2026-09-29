@@ -159,6 +159,7 @@ describe("node surface approvals", () => {
           platform: "darwin",
           caps: ["camera", "screen"],
           commands: ["canvas.snapshot", "system.run"],
+          permissions: { "caf\u00e9": true, "cafe\u0301": false },
         },
         baseDir,
       );
@@ -168,6 +169,7 @@ describe("node surface approvals", () => {
           platform: "darwin",
           caps: ["screen", "camera"],
           commands: ["system.run", "canvas.snapshot"],
+          permissions: { "cafe\u0301": false, "caf\u00e9": true },
         },
         baseDir,
       );

@@ -1,4 +1,3 @@
-// Xai provider module implements model/runtime integration.
 import {
   buildLiveModelProviderConfig,
   readLiveModelCatalogBooleanField,

@@ -1,8 +1,54 @@
 import { spawnSync } from "node:child_process";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  exitAfterSignalExitBarriers,
+  registerSignalExitBarrier,
+  registerSignalExitGate,
+  waitForCliSignalExit,
+} from "./signal-exit-barrier.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([
+  { owner: "mutation", code: 0, failed: true, expected: 1 },
+  { owner: "recovery", code: "0", failed: true, expected: 1 },
+  { owner: "recovery", code: 7, failed: true, expected: 7 },
+  { owner: "mutation", code: 7, failed: false, expected: 7 },
+])(
+  "preserves exit $expected while $owner drains (failed: $failed)",
+  async ({ owner, code, failed, expected }) => {
+    const drain = createDeferredCore();
+    const unregister =
+      owner === "mutation"
+        ? registerSignalExitGate(drain.promise)
+        : registerSignalExitBarrier(() => drain.promise);
+    const exited = new Error("Process exited");
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw exited;
+    });
+    const previousExitCode = process.exitCode;
+    process.exitCode = 0;
+    try {
+      exitAfterSignalExitBarriers(code);
+      exitAfterSignalExitBarriers(0);
+      expect(exit).not.toHaveBeenCalled();
+      const finished = expect(waitForCliSignalExit()).rejects.toBe(exited);
+      if (failed) {
+        drain.reject(new Error("Maintenance failed"));
+      } else {
+        drain.resolve();
+      }
+      await finished;
+      expect(exit).toHaveBeenCalledExactlyOnceWith(expected);
+    } finally {
+      unregister();
+      exit.mockRestore();
+      process.exitCode = previousExitCode;
+    }
+  },
+);
 
 it.skipIf(process.platform === "win32").each(["owner", "once-owner", "execa"])(
   "preserves the existing %s signal lifecycle",

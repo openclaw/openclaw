@@ -242,7 +242,10 @@ async function runQaTestFileScenario(params: {
   }
   const result = await runScenarioCommandSteps({
     ...params,
-    steps: buildQaScenarioCommandSteps(params.scenario, { outputDir: params.outputDir }),
+    steps: buildQaScenarioCommandSteps(params.scenario, {
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+    }),
   });
   if (params.scenario.execution.kind !== "script") {
     return result;

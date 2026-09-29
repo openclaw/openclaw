@@ -228,6 +228,67 @@
   white-space: pre-wrap;
 }
 
+.link-reader-hovercard__error-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin: -16px -16px 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.link-reader-hovercard__error-source,
+.link-reader-hovercard__error-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.link-reader-hovercard__error-source svg,
+.link-reader-hovercard__error-open svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+a.link-reader-hovercard__error-open {
+  margin-inline-start: auto;
+  color: var(--link);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.link-reader-hovercard__error-open > span {
+  display: inline-flex;
+}
+
+.link-reader-hovercard__error-open:hover {
+  text-decoration: underline;
+}
+
+.link-reader-hovercard__error-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.link-reader-hovercard__error-body .link-reader-hovercard__title {
+  margin: 14px 0 8px;
+}
+
+.link-reader-hovercard__error-body .link-reader-hovercard__error {
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+}
+
 .link-reader-hovercard__skeleton .skeleton {
   display: block;
   height: 14px;
@@ -271,6 +332,11 @@
 
   .link-reader-hovercard__header {
     flex-wrap: wrap;
+  }
+
+  .link-reader-hovercard__error-header {
+    margin: -14px -14px 0;
+    padding: 12px 14px;
   }
 
   .link-reader-hovercard__time {
