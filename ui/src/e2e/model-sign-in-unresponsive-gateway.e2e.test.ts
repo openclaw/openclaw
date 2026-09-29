@@ -76,7 +76,7 @@ suite.define(() => {
         await closed;
         const dialog = page.locator("openclaw-modal-dialog");
         const notice = dialog.getByRole("alert").filter({
-          hasText: "The Gateway is not responding. Sign-in continues when it reconnects.",
+          hasText: "The Gateway is not responding. Waiting for it to reconnect.",
         });
         await notice.waitFor();
 
