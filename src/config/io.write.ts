@@ -4,7 +4,8 @@ import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import {
-  readDeferredPluginMigrations,
+  readConfigWritePendingMigrations,
+  withDeferredPluginConfigRollback,
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
@@ -131,7 +132,7 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
-  const deferredPluginMigrations = readDeferredPluginMigrations({ env: deps.env });
+  const deferredPluginMigrations = readConfigWritePendingMigrations(configPath, deps.env);
   const configForWrite = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
     nextConfig: cfg,
@@ -502,6 +503,12 @@ export async function writeConfigFileFromContext(
         committedHash: publication.phase === "removed" ? hashConfigRaw(null) : nextHash,
         fsModule: deps.fs,
         ...writeGuard.captureRollbackProof(assertCurrent),
+        withPublication: (publish, didMutate) =>
+          withDeferredPluginConfigRollback(
+            { configPath, env: deps.env, assertCurrent },
+            publish,
+            didMutate,
+          ),
       });
     await using preparedFile = await prepareConfigFileWrite({
       configPath,
@@ -514,7 +521,7 @@ export async function writeConfigFileFromContext(
     });
     await options.beforeCommit?.();
     const result = withDeferredPluginMigrationsCurrent(
-      { env: deps.env, expectedPending: deferredPluginMigrations },
+      { env: deps.env, configPath, expectedPending: deferredPluginMigrations },
       () => {
         const published = preparedFile.publish();
         publication.phase = "published";

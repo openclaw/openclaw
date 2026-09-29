@@ -35,6 +35,30 @@ const tempDirs = createTempDirTracker();
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 afterEach(() => tempDirs.cleanup());
 
+it.each(["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH"])(
+  "fails fast on %s for setup while normal runs retain connection retries",
+  async (errorCode) => {
+    const scenario = {
+      errorMessage: "Connection error.",
+      errorCode,
+      noTools: true,
+      replaySafe: true,
+      content: [],
+    } satisfies TransportDropScenario;
+    vi.mocked(sleepWithAbort).mockClear();
+    const setup = await recoverAfterTransportDrop({ ...scenario, retryConnectionErrors: false });
+    expect(setup.recovery.action).toBe("proceed");
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    await expect(handleAssistantFailureAfterRecovery(setup)).rejects.toMatchObject({
+      reason: "timeout",
+      code: errorCode,
+    });
+    const ordinary = await recoverAfterTransportDrop(scenario);
+    expect(ordinary.recovery.action).toBe("retry");
+    expect(sleepWithAbort).toHaveBeenCalledOnce();
+  },
+);
+
 function handleAssistantFailureAfterRecovery(
   fixture: Awaited<ReturnType<typeof recoverAfterTransportDrop>>,
   previousRetryFailoverReason: Parameters<

@@ -14,7 +14,6 @@ import {
   getLatestSubagentRunByChildSessionKeyFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
-  listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
   listRunsForRequesterFromRuns,
   resolveRequesterForChildSessionFromRuns,
@@ -27,7 +26,6 @@ import {
   getSubagentSessionListRunsSnapshotForChildSessions,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
-  getSubagentRunsSnapshotForRead,
   getSubagentRunsSnapshotForSessions,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
@@ -109,14 +107,6 @@ export function countActiveDescendantRuns(
     requesterAgentId,
     requesterStorePath,
     rootRunIds,
-  );
-}
-
-/** Lists descendant runs under a requester/session tree. */
-export function listDescendantRunsForRequester(rootSessionKey: string): SubagentRunRecord[] {
-  return listDescendantRunsForRequesterFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    rootSessionKey,
   );
 }
 

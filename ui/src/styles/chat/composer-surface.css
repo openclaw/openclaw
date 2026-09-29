@@ -673,21 +673,10 @@
   stroke-linejoin: round;
 }
 
-/* Theme overrides adjust the hover fill via this variable instead of their own
-   :hover rules: a :root[data-theme] selector outranks every variant's hover
-   (--voice, --stop), which painted the idle mic with the send button's loud
-   accent hover in dark themes. */
+/* Capture variants below own their hover fill independently of the primary action. */
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--chat-send-hover-background, var(--accent-hover));
+  background: var(--primary-hover);
   box-shadow: 0 2px 12px var(--accent-glow);
-}
-
-:root[data-theme="dark"] .chat-send-btn {
-  --chat-send-hover-background: var(--primary-hover);
-}
-
-:root[data-theme="openknot"] .chat-send-btn {
-  --chat-send-hover-background: var(--primary-hover);
 }
 
 /* Outline (not box-shadow) so the hover rules' higher-specificity box-shadow
@@ -823,7 +812,7 @@
 
 .chat-send-btn--stop:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
-  color: color-mix(in srgb, var(--danger) 82%, var(--media-foreground));
+  color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
   box-shadow: none;
 }
 

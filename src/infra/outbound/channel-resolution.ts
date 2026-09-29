@@ -120,19 +120,10 @@ function resolveRuntimeOutboundPluginCandidate(params: {
   const hasRuntimeSurface = params.requireActivatedRuntime
     ? channelPluginHasActivatedOutboundSurface
     : channelPluginHasRuntimeOutboundSurface;
-  if (hasRuntimeSurface(params.loaded)) {
-    return params.loaded;
-  }
-  if (hasRuntimeSurface(params.runtime)) {
-    return params.runtime;
-  }
-  if (hasRuntimeSurface(params.bundled)) {
-    return params.bundled;
-  }
-  if (params.allowSetupShell) {
-    return params.loaded ?? params.setupFallback ?? params.bundled;
-  }
-  return undefined;
+  return (
+    [params.loaded, params.runtime, params.bundled].find(hasRuntimeSurface) ??
+    (params.allowSetupShell ? (params.loaded ?? params.setupFallback ?? params.bundled) : undefined)
+  );
 }
 
 function resolveOutboundPluginFromRuntimeRegistry(
@@ -217,10 +208,6 @@ function* resolveOutboundChannelPluginSteps(
   return resolveRuntimeOutboundPluginCandidate({
     loaded: resolveLoaded(),
     runtime: resolveOutboundPluginFromRuntimeRegistry(normalized, registry, true),
-    setupFallback: findChannelPluginInRegistry(
-      registry ?? getOutboundRuntimeRegistry(),
-      normalized,
-    ),
     bundled: resolve(),
     requireActivatedRuntime: true,
   });

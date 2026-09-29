@@ -24,7 +24,7 @@ All Codex harness settings live under `plugins.entries.codex.config`.
         config: {
           discovery: {
             enabled: true,
-            timeoutMs: 2500,
+            timeoutMs: 10000,
           },
           appServer: {
             mode: "guardian",

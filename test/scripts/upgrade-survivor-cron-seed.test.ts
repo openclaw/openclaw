@@ -49,8 +49,9 @@ if (args[0] === "fixture-systemctl") {
   if (args[2] === "is-active") process.exit(fs.existsSync(live) ? 0 : 3);
   if (args[2] === "stop") {
     assert.equal(fs.existsSync(boot), true);
-    fs.unlinkSync(live);
-    fs.unlinkSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE);
+    // Like systemd, stopping an inactive unit succeeds.
+    fs.rmSync(live, { force: true });
+    fs.rmSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, { force: true });
   } else {
     assert.equal(args[2], "start");
     assert.equal(fs.existsSync(live), false);

@@ -62,14 +62,15 @@ function bundleTransferTimeoutMs(tarballBytes: number, floorMs: number): number 
   );
 }
 
+type BootstrapArtifact = WorkerInstallationArtifact | { tarballBytes: number };
+
 /** Bounds the complete bootstrap lifecycle without preempting any permitted phase. */
-export function workerBootstrapOperationTimeoutMs(artifact: WorkerInstallationArtifact): number {
-  const nonTransferTimeoutMs = DEFAULT_BOOTSTRAP_TIMEOUT_MS * 3;
+export function workerBootstrapOperationTimeoutMs(artifact: BootstrapArtifact): number {
   const transferTimeoutMs =
-    artifact.install === "bundle"
+    "tarballBytes" in artifact
       ? bundleTransferTimeoutMs(artifact.tarballBytes, DEFAULT_BOOTSTRAP_TIMEOUT_MS)
       : 0;
-  return nonTransferTimeoutMs + transferTimeoutMs + BOOTSTRAP_OPERATION_HEADROOM_MS;
+  return DEFAULT_BOOTSTRAP_TIMEOUT_MS * 3 + transferTimeoutMs + BOOTSTRAP_OPERATION_HEADROOM_MS;
 }
 
 const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));

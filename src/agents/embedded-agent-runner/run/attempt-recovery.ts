@@ -13,6 +13,7 @@ import {
 } from "../../failover-error.js";
 import { failoverReasonFromClassification } from "../../failover/classification-rules.js";
 import { classifyFailoverSignal } from "../../failover/classify.js";
+import { getFailoverErrorCode } from "../../failover/error.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
@@ -394,6 +395,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     recoveryReason &&
     (await failoverRetryController.maybeRetryTransient({
       reason: recoveryReason,
+      code: promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code,
       message: promptError ? formatErrorMessage(promptError) : assistantSignal?.message,
       retryAfterMs: promptError
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)

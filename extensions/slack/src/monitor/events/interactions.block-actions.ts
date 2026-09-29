@@ -321,7 +321,7 @@ function isSlackReplyActionId(actionId: string): boolean {
 }
 
 function isSlackReplyLinkAction(parsed: ParsedSlackBlockAction): boolean {
-  if (parsed.actionId === SLACK_SESSION_LINK_ACTION_ID) {
+  if (parsed.actionId.replace(/:\d+$/u, "") === SLACK_SESSION_LINK_ACTION_ID) {
     return true;
   }
   if (

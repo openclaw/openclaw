@@ -134,9 +134,10 @@ Each screenshot gets one capture attempt. A failed capture or Xcode test result 
 
 Screenshot tests disable Xcode's verbose failure diagnostics, such as sysdiagnose, while retaining command logs, screenshots, and per-attempt result bundles.
 
-CI pins SimSlim 0.8.0 for the selected iPhone test simulator and iPhone/iPad
-screenshot devices. It disables only search and family services. Preparation
-must succeed before capture; Watch and default local runs remain stock.
+CI pins SimSlim 0.10.0 for the `ios-build` iPhone test simulator and the SimSlim
+arms of [native release qualification](#native-release-qualification) compare mode.
+It disables only search and family services, and preparation must succeed before
+tests run. Screenshot capture, Watch, and default local runs use stock simulators.
 
 From a clean local `main` matching `origin/main`, upload to App Store Connect:
 

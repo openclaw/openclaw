@@ -17,13 +17,17 @@ describe("sent comment attachment presentation", () => {
   ])(
     "recovers the original selection and optional comment without interpreting their headings",
     (text, comment) => {
-      const attachment = createChatSelectionAttachment({
-        text,
-        comment,
-        sessionKey: "agent:main:main",
-        start: 7,
-        end: 7 + text.length,
-      })!;
+      const attachment = createChatSelectionAttachment(
+        {
+          text,
+          comment,
+          sessionKey: "agent:main:main",
+          start: 7,
+          end: 7 + text.length,
+        },
+        undefined,
+        0,
+      )!;
       try {
         const payload = getChatAttachmentDataUrl(attachment)!;
         expect(
@@ -47,13 +51,17 @@ describe("sent comment attachment presentation", () => {
   ])(
     "roundtrips rendered selection $text independently of its DOM range",
     ({ text, comment, domLength }) => {
-      const attachment = createChatSelectionAttachment({
-        text,
-        comment,
-        sessionKey: "agent:main:main",
-        start: 7,
-        end: 7 + domLength,
-      })!;
+      const attachment = createChatSelectionAttachment(
+        {
+          text,
+          comment,
+          sessionKey: "agent:main:main",
+          start: 7,
+          end: 7 + domLength,
+        },
+        undefined,
+        0,
+      )!;
       try {
         const payload = getChatAttachmentDataUrl(attachment)!;
         expect(
