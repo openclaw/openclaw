@@ -85,7 +85,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/nextcloud-talk/src/doctor.test.ts",
   "extensions/raft/src/gateway.test.ts",
   "extensions/telegram/src/message-dispatch-dedupe.test.ts",
-  "extensions/google-meet/index.create.test.ts",
   "extensions/google-meet/index.test.ts",
   "extensions/teams-meetings/index.test.ts",
   "extensions/teams-meetings/src/runtime-node.test.ts",
