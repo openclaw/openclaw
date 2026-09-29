@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { refuseCronEveryJobCommit } from "../../test/helpers/cron/runtime-mutation.js";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -83,7 +84,6 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createGatewaySchedulerClock,
@@ -2359,7 +2359,6 @@ describe("gateway hot reload model state", () => {
         broadcast: vi.fn(),
       });
       cronState.cron.pauseScheduling();
-      const db = openOpenClawStateDatabase().db;
       let state = createDefaultGatewayReloadState({ cronState });
       const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
       const handlers = createGatewayReloadHandlers({
@@ -2404,12 +2403,10 @@ describe("gateway hot reload model state", () => {
           .filter((job) => job.payload.kind === "heartbeat")
           .toSorted((left, right) => (left.agentId ?? "").localeCompare(right.agentId ?? ""))
           .map((job) => (job.schedule.kind === "every" ? job.schedule.everyMs : undefined));
+      let restoreMonitorWrite = () => {};
       try {
         await expect(cronState.reconcileSystemJobs()).resolves.toBe("converged");
-        db.exec(`CREATE TEMP TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
-          WHEN json_extract(NEW.job_json, '$.agentId') = 'second'
-            AND json_extract(NEW.job_json, '$.schedule.everyMs') = 7200000
-          BEGIN SELECT RAISE(FAIL, 'monitor write failed'); END`);
+        restoreMonitorWrite = refuseCronEveryJobCommit("second", 7_200_000, "monitor write failed");
         const result = await managed
           .onHotReload(
             buildGatewayReloadPlan([
@@ -2425,7 +2422,7 @@ describe("gateway hot reload model state", () => {
         expect(result).toBe("applied-restart-required");
         expect(markRuntimeCommitted).toHaveBeenCalledOnce();
         expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(nextConfig);
-        db.exec("DROP TRIGGER monitor_publication_failure");
+        restoreMonitorWrite();
         const successorConfig = { ...nextConfig, logging: { level: "debug" as const } };
         if (successor === "rejected") {
           await expect(
@@ -2454,7 +2451,7 @@ describe("gateway hot reload model state", () => {
             .map((job) => job.enabled),
         ).toEqual([false, false]);
       } finally {
-        db.exec("DROP TRIGGER IF EXISTS monitor_publication_failure");
+        restoreMonitorWrite();
         handlers.stopRestartRetries();
         cronState.cron.stop();
         await scheduler.stop();

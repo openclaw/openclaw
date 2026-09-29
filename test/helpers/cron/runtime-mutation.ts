@@ -100,6 +100,101 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
 
 let cronJobWriteObserverId = 0;
 
+function observeCronChangedJobsByNonce(): {
+  changedJobsByNonce: Map<string, { changedIds: Set<unknown>; replacement: boolean }>;
+  restore: () => void;
+} {
+  const changedJobsByNonce = new Map<string, { changedIds: Set<unknown>; replacement: boolean }>();
+  // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
+  const originalPost = Worker.prototype.postMessage;
+  const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    request: SqliteWorkerRequest,
+    transferList,
+  ) {
+    if (request.type === "execute") {
+      const command: unknown = deserialize(request.input);
+      if (
+        isRecord(command) &&
+        command.type === "cron.mutateJobs" &&
+        isRecord(command.input) &&
+        typeof command.input.nonce === "string" &&
+        isRecord(command.input.changes) &&
+        command.input.changes.changedIds instanceof Set
+      ) {
+        changedJobsByNonce.set(command.input.nonce, {
+          changedIds: command.input.changes.changedIds,
+          replacement: isRecord(command.input.replacement),
+        });
+      }
+    }
+    return originalPost.call(this, request, transferList);
+  });
+  return { changedJobsByNonce, restore: () => post.mockRestore() };
+}
+
+function readCronMutationOutcomeJobs(facts: unknown): unknown[] {
+  if (!isRecord(facts) || !(facts.bytes instanceof Uint8Array)) {
+    return [];
+  }
+  const outcome: unknown = deserialize(facts.bytes);
+  if (!isRecord(outcome)) {
+    return [];
+  }
+  return isRecord(outcome.activation)
+    ? [outcome.activation.job]
+    : isRecord(outcome.store) && Array.isArray(outcome.store.jobs)
+      ? outcome.store.jobs
+      : Array.isArray(outcome.jobs)
+        ? outcome.jobs
+        : Array.isArray(outcome.reservations)
+          ? outcome.reservations.filter(isRecord).map((reservation) => reservation.job)
+          : [];
+}
+
+export function refuseCronEveryJobCommit(
+  agentId: string,
+  everyMs: number,
+  message: string,
+): () => void {
+  const changedJobs = observeCronChangedJobsByNonce();
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const admission = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) =>
+      createAdmission((request, grant) => {
+        const changedJobIds =
+          isRecord(request.facts) && typeof request.facts.nonce === "string"
+            ? changedJobs.changedJobsByNonce.get(request.facts.nonce)?.changedIds
+            : undefined;
+        if (
+          request.stage === "commit" &&
+          readCronMutationOutcomeJobs(request.facts).some(
+            (job) =>
+              isRecord(job) &&
+              typeof job.id === "string" &&
+              changedJobIds?.has(job.id) === true &&
+              job.agentId === agentId &&
+              isRecord(job.schedule) &&
+              job.schedule.everyMs === everyMs,
+          )
+        ) {
+          throw new Error(message);
+        }
+        admit(request, grant);
+      }, attachment),
+    );
+  let active = true;
+  return () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    changedJobs.restore();
+    admission.mockRestore();
+  };
+}
+
 export function observeCronJobWrites(
   jobId: string,
   observer: (state: { queuedAtMs?: number; runningAtMs?: number }) => void,
@@ -126,30 +221,7 @@ export function observeCronJobWrites(
       SELECT ${functionName}(NEW.job_id, NEW.state_json);
     END;
   `);
-  const changedJobsByNonce = new Map<string, Set<unknown>>();
-  // oxlint-disable-next-line typescript/unbound-method -- The intercepted worker remains the receiver.
-  const originalPost = Worker.prototype.postMessage;
-  const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    request: SqliteWorkerRequest,
-    transferList,
-  ) {
-    if (request.type === "execute") {
-      const command: unknown = deserialize(request.input);
-      if (
-        isRecord(command) &&
-        command.type === "cron.mutateJobs" &&
-        isRecord(command.input) &&
-        typeof command.input.nonce === "string" &&
-        !command.input.replacement &&
-        isRecord(command.input.changes) &&
-        command.input.changes.changedIds instanceof Set
-      ) {
-        changedJobsByNonce.set(command.input.nonce, command.input.changes.changedIds);
-      }
-    }
-    return originalPost.call(this, request, transferList);
-  });
+  const changedJobs = observeCronChangedJobsByNonce();
   // TEMP triggers cover native scheduling writes. Worker mutations
   // supply their actual rows after SQL has run but before their retained commit
   // admission. Observe that boundary without replacing SQL, grants, or outcomes.
@@ -163,27 +235,19 @@ export function observeCronJobWrites(
           isRecord(request.facts) &&
           request.facts.bytes instanceof Uint8Array
         ) {
-          const outcome: unknown = deserialize(request.facts.bytes);
-          if (isRecord(outcome)) {
-            const changedJobs =
+          const jobs = readCronMutationOutcomeJobs(request.facts);
+          if (jobs.length > 0) {
+            const mutation =
               typeof request.facts.nonce === "string"
-                ? changedJobsByNonce.get(request.facts.nonce)
+                ? changedJobs.changedJobsByNonce.get(request.facts.nonce)
                 : undefined;
-            const jobs = isRecord(outcome.activation)
-              ? [outcome.activation.job]
-              : isRecord(outcome.store) && Array.isArray(outcome.store.jobs)
-                ? outcome.store.jobs
-                : Array.isArray(outcome.jobs)
-                  ? outcome.jobs
-                  : Array.isArray(outcome.reservations)
-                    ? outcome.reservations.filter(isRecord).map((reservation) => reservation.job)
-                    : [];
+            const changedJobIds = mutation?.replacement ? undefined : mutation?.changedIds;
             for (const job of jobs) {
               if (
                 isRecord(job) &&
                 job.id === jobId &&
                 isRecord(job.state) &&
-                (!changedJobs || changedJobs.has(jobId))
+                (!changedJobIds || changedJobIds.has(jobId))
               ) {
                 observer({
                   ...(typeof job.state.queuedAtMs === "number"
@@ -201,7 +265,7 @@ export function observeCronJobWrites(
       }, attachment),
     );
   return () => {
-    post.mockRestore();
+    changedJobs.restore();
     admission.mockRestore();
     database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
   };
