@@ -59,6 +59,9 @@ const modelTarget = "src/agents/embedded-agent-runner/model-resolution-consisten
 const targets = [modelTarget, "extensions/qa-lab/src/suite-process-lifecycle.test.ts"];
 const lifecycle = targets[1]!;
 const ordinaryQa = "extensions/qa-lab/src/gateway-child.test.ts";
+const qaRuntimeConsumers = listVitestRuntimeConsumerFiles([
+  "test/vitest/vitest.extension-qa.config.ts",
+]);
 const patternFiles = createPatternFileHelper("plugin-build-selection-");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const e2eTarget = "test/openclaw-launcher-version.e2e.test.ts";
@@ -167,8 +170,11 @@ describe("CLI runtime admission", () => {
         lifecycle.replace("extensions/", ""),
       ],
     ],
-    ["scoped exclusion", ["--exclude", lifecycle.replace("extensions/", "")]],
-    ["absolute exclusion", ["--exclude", path.resolve(lifecycle)]],
+    [
+      "scoped exclusion",
+      qaRuntimeConsumers.flatMap((file) => ["--exclude", file.replace("extensions/", "")]),
+    ],
+    ["absolute exclusion", qaRuntimeConsumers.flatMap((file) => ["--exclude", path.resolve(file)])],
     ["alternate root", ["--root", "."]],
     ["alternate directory", ["--dir=extensions"]],
     ["project override", ["--project", "extension-qa"]],
@@ -1764,32 +1770,41 @@ describe("plugin batch build admission", () => {
       configs: [combinedConfig],
     },
     {
-      name: "exact exclusion",
+      name: "selective runtime exclusion",
       args: ["--exclude", lifecycle],
+      build: true,
+      configs: [databaseConfig, qaConfig],
+    },
+    {
+      name: "exact exclusion",
+      args: qaRuntimeConsumers.flatMap((file) => ["--exclude", file]),
       build: false,
       configs: [databaseConfig, qaConfig],
     },
     {
       name: "equals exclusion",
-      args: [`--exclude=${lifecycle}`],
+      args: qaRuntimeConsumers.map((file) => `--exclude=${file}`),
       build: false,
       configs: [databaseConfig, qaConfig],
     },
     {
       name: "scoped exclusion",
-      args: ["--exclude", lifecycle.replace("extensions/", "")],
+      args: qaRuntimeConsumers.flatMap((file) => ["--exclude", file.replace("extensions/", "")]),
       build: false,
       configs: [databaseConfig, qaConfig],
     },
     {
       name: "absolute exclusion",
-      args: ["--exclude", path.resolve(lifecycle)],
+      args: qaRuntimeConsumers.flatMap((file) => ["--exclude", path.resolve(file)]),
       build: false,
       configs: [databaseConfig, qaConfig],
     },
     {
       name: "glob exclusion",
-      args: ["--exclude", "extensions/qa-lab/**/suite-process-*.test.ts"],
+      args: qaRuntimeConsumers.flatMap((file) => [
+        "--exclude",
+        `${path.posix.dirname(file)}/**/*.test.ts`,
+      ]),
       build: false,
       configs: [combinedConfig],
     },

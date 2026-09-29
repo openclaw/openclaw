@@ -803,6 +803,9 @@ describe("node worker supervisor", () => {
       const input = launchInput(workspaceDir, "cancel-rejected-terminal", "tree-cancel-reject");
       const retryStarted = createDeferred();
       const releaseRetry = createDeferred();
+      const journalCalls = retryJournal
+        ? vi.spyOn(NodeWorkerJournalWorker.prototype, "execute")
+        : undefined;
       let cancellation: ReturnType<NodeWorkerSupervisor["cancel"]> | undefined;
       try {
         const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
@@ -814,17 +817,31 @@ describe("node worker supervisor", () => {
           Number(fs.readFileSync(grandchildPath, "utf8")),
         );
 
-        if (retryJournal) {
-          const finish = vi.spyOn(NodeWorkerTurnStore.prototype, "finish");
-          finish
-            .mockImplementationOnce(async () => {
-              throw new Error("injected cancellation journal failure");
-            })
-            .mockImplementation(async function (this: NodeWorkerTurnStore, params) {
+        if (journalCalls) {
+          const claim = journalCalls.mock.calls.findIndex(
+            ([command]) => command.type === "nodeWorker.turn.claim",
+          );
+          const journal = journalCalls.mock.contexts[claim];
+          journalCalls.mockRestore();
+          if (!(journal instanceof NodeWorkerJournalWorker)) {
+            throw new Error("Missing admitted worker journal");
+          }
+          const execute = journal.execute.bind(journal);
+          let firstFinish = true;
+          const finish = vi
+            .spyOn(journal, "execute")
+            .mockImplementation(async (command, authority) => {
+              if (command.type !== "nodeWorker.turn.finish") {
+                return execute(command, authority);
+              }
+              if (firstFinish) {
+                firstFinish = false;
+                throw new Error("injected cancellation journal failure");
+              }
               retryStarted.resolve();
               await releaseRetry.promise;
               finish.mockRestore();
-              return this.finish(params);
+              return journal.execute(command, authority);
             });
         }
         cancellation = supervisor.cancel(testNodeWorkerLaunchIdentity(input));

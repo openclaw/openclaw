@@ -541,10 +541,7 @@ export function readSessionTranscriptHistoryEventByIdFromProjection(
   if (!event) {
     return undefined;
   }
-  const positioned = positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0];
-  return positioned && event.serializedBytes !== undefined
-    ? { ...positioned, serializedBytes: event.serializedBytes }
-    : positioned;
+  return positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0];
 }
 
 /** Select ID candidates and projected-history presence from one validated snapshot. */

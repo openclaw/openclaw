@@ -118,6 +118,7 @@ describe("requester settle retry lifetime", () => {
         subagentAnnounceTimeoutMs: 1_000,
         getRuntimeConfig: () => ({}),
         persist: vi.fn(),
+        persistAsyncOrThrow: unexpected,
         persistOrThrow: () => {
           if (rejectNextCompletion && !entry.requesterSettleWake) {
             rejectNextCompletion = false;

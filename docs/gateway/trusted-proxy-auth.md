@@ -150,10 +150,15 @@ When reconfiguring an existing trusted-proxy setup, the prompt defaults to the e
 With live configuration reload enabled, changes to `gateway.trustedProxies`,
 `gateway.allowRealIpFallback`, `gateway.auth.allowTailscale`,
 `gateway.auth.identityScopes`, and `gateway.auth.trustedProxy` apply without a
-Gateway restart. Gateway clients reconnect under the new policy. A configuration
-writer receives its accepted result before its connection closes. Pending
-handshakes and HTTP requests cannot retain old policy authority through an
-asynchronous wait; already-admitted work follows its existing completion lifecycle.
+Gateway restart. Global authentication policy changes require clients to reconnect.
+An identity-scope edit only revokes operator WebSocket connections whose own
+resolved grant changes, together with their admitted runs and queued inputs.
+Restoring that grant does not revive revoked work. Other identities, clients without
+verified identities, and node connections stay connected. HTTP requests and plugin
+auth cookies do not use identity-scope grants and are unaffected by these edits.
+A configuration writer receives its accepted result before its connection closes.
+Pending handshakes and HTTP requests recheck the policy applicable to their authority
+after asynchronous waits.
 
 ## Per-identity scope grants
 

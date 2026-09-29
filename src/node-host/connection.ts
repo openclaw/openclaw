@@ -7,6 +7,7 @@ import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_STATUS_WAIT_VERSION,
   NODE_WORKER_PORTAL_STREAM_VERSION,
@@ -16,6 +17,7 @@ import {
 } from "../infra/node-runner-inventory.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
+import { WORKER_TOOL_NAMES } from "../worker/tool-authority.js";
 import type { NodeHostClient } from "./client.js";
 import { sampleNodeHostStats } from "./host-stats.js";
 import { buildNodeEventParams } from "./node-event-params.js";
@@ -63,6 +65,7 @@ type NodeOptionalPublicationState = {
   pendingParams?: Record<string, unknown>;
   publishedParams?: Record<string, unknown>;
   rejectedParams?: Record<string, unknown>;
+  loggedFailure?: string;
   retryDelayMs: number;
   retryPending: boolean;
   retryTimer?: NodeJS.Timeout;
@@ -85,6 +88,7 @@ export function startNodeHostConnection({
 }) {
   let publicationClient = client;
   let workerHostingEnabled = prepared.workerHostingEnabled;
+  let workerHostingDisabledReason = prepared.workerHostingDisabledReason;
   let inventory: NodeHostInventory = prepared.initialInventory;
   let workerCapacity: NodeWorkerCapacitySnapshot | undefined;
   let reportedWorkerHostingEnabled = false;
@@ -93,6 +97,7 @@ export function startNodeHostConnection({
   let connectedGatewayProtocol = 0;
   let gatewayCapabilities: ReadonlySet<string> = new Set();
   let hostStatsTimer: NodeJS.Timeout | undefined;
+  let disconnectCleanup: Promise<void> | undefined;
   const optionalPublicationStates = new Map<
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
@@ -219,6 +224,7 @@ export function startNodeHostConnection({
           }
           state.publishedParams = nextParams;
           state.rejectedParams = undefined;
+          state.loggedFailure = undefined;
           state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
           state.retryPending = false;
         } catch (error) {
@@ -231,7 +237,11 @@ export function startNodeHostConnection({
             state.pendingParams = undefined;
             state.retryPending = false;
           } else {
-            writeStderrLine(`node host ${label} publish failed: ${String(error)}`);
+            const message = redactSensitiveText(String(error));
+            if (state.loggedFailure !== message) {
+              state.loggedFailure = message;
+              writeStderrLine(`node host ${label} publish failed: ${message}`);
+            }
             if (failure === "rejected") {
               state.rejectedParams = nextParams;
               state.retryPending = false;
@@ -321,7 +331,16 @@ export function startNodeHostConnection({
         workerHost: hostingCapacity
           ? {
               enabled: true,
-              capacity: hostingCapacity,
+              capacity: {
+                total: hostingCapacity.total,
+                available: hostingCapacity.available,
+                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION)
+                  ? { reclaimableIdle: hostingCapacity.reclaimableIdle ?? 0 }
+                  : {}),
+              },
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION)
+                ? { idleRetention: true }
+                : {}),
               ...(prepared.preparedWorkspacesEnabled
                 ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
                 : {}),
@@ -345,8 +364,22 @@ export function startNodeHostConnection({
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY)
                 ? { capturedExecPolicy: true }
                 : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES)
+                ? { launchToolNames: [...WORKER_TOOL_NAMES] }
+                : {}),
             }
-          : { enabled: false },
+          : {
+              enabled: false,
+              ...(workerHostingDisabledReason &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS)
+                ? {
+                    reason: redactSensitiveText(workerHostingDisabledReason).slice(
+                      0,
+                      NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH,
+                    ),
+                  }
+                : {}),
+            },
       },
       "runner inventory",
     );
@@ -354,6 +387,7 @@ export function startNodeHostConnection({
 
   const onWorkerHostingDisabled = (reason: string) => {
     workerHostingEnabled = false;
+    workerHostingDisabledReason = reason;
     writeStderrLine(`node host worker hosting disabled: ${redactSensitiveText(reason)}`);
     publishRunnerInventory();
   };
@@ -364,7 +398,7 @@ export function startNodeHostConnection({
   const disconnect = () => {
     retireGatewayConnection();
     runtime.updateGatewayConnection();
-    runtime.cancelAll();
+    disconnectCleanup = runtime.cancelAll();
   };
   const runtime = prepared.start({
     client,
@@ -399,20 +433,33 @@ export function startNodeHostConnection({
     },
     connect(connection: NodeHostGatewayConnection, connectionClient: NodeHostClient = client) {
       retireGatewayConnection();
-      publicationClient = connectionClient;
-      runtime.updateGatewayConnection({
-        url: connection.url,
-        ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
-        ...(connection.cloudflareAccess ? { cloudflareAccess: connection.cloudflareAccess } : {}),
-      });
-      gatewayHelloReceived = true;
-      if (!prepared.restrictedSurface) {
-        startHostStatsPublication();
+      const generation = gatewayConnectionGeneration;
+      const publish = () => {
+        if (generation !== gatewayConnectionGeneration) {
+          return;
+        }
+        publicationClient = connectionClient;
+        runtime.updateGatewayConnection(connection);
+        gatewayHelloReceived = true;
+        if (!prepared.restrictedSurface) {
+          startHostStatsPublication();
+        }
+        connectedGatewayProtocol = connection.protocol;
+        gatewayCapabilities = new Set(connection.capabilities);
+        publishRunnerInventory();
+        publishInventory();
+      };
+      if (disconnectCleanup) {
+        disconnectCleanup = disconnectCleanup.catch((error: unknown) => {
+          if (generation !== gatewayConnectionGeneration) {
+            throw error;
+          }
+          return runtime.cancelAll();
+        });
+        void disconnectCleanup.then(publish, () => {});
+      } else {
+        publish();
       }
-      connectedGatewayProtocol = connection.protocol;
-      gatewayCapabilities = new Set(connection.capabilities);
-      publishRunnerInventory();
-      publishInventory();
     },
     disconnect,
     close() {

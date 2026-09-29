@@ -257,7 +257,7 @@ function execFileResult(...result: ExecFileResult): ExecFileMock {
   return (_cmd, _args, _opts, cb) => cb(...result);
 }
 
-function mockNodeInstallNoMediumFailure(machineUser?: string): void {
+function mockNodeInstallNoMediumFailure(): void {
   const unavailable: ExecFileResult = [
     createExecFileError("Failed to connect to bus: No medium found", {
       stderr: "Failed to connect to bus: No medium found",
@@ -269,13 +269,7 @@ function mockNodeInstallNoMediumFailure(machineUser?: string): void {
     .mockImplementationOnce(systemctlUserSuccess("status"))
     .mockImplementationOnce(systemctlUserSuccess("daemon-reload"))
     .mockImplementationOnce(systemctlUserResult(unavailable, "enable", NODE_SERVICE));
-  if (machineUser) {
-    execFileMock
-      .mockImplementationOnce(systemctlMachineUserSuccess(machineUser, "enable", NODE_SERVICE))
-      .mockImplementationOnce(systemctlUserSuccess("restart", NODE_SERVICE));
-  } else {
-    execFileMock.mockImplementationOnce(systemctlUserResult(unavailable, "disable", NODE_SERVICE));
-  }
+  execFileMock.mockImplementationOnce(systemctlUserResult(unavailable, "disable", NODE_SERVICE));
 }
 
 let machineFixtureId = 0;

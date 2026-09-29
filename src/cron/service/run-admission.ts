@@ -33,7 +33,6 @@ import { isRunnableJob } from "./timer-runnable.js";
 
 export {
   cancelCronRunAdmissionWaiters,
-  resolveRunConcurrency,
   runWithCronAdmission,
   setCronRunCapacityListener,
   tryAcquireCronRunSlots,
@@ -429,7 +428,7 @@ export async function executeQueuedCronRun(params: {
   reservationIdentity: object;
   /** A scheduled dispatcher may reserve capacity before durable ownership. */
   admissionRelease?: () => void;
-  runnableOptions?: Omit<Parameters<typeof isRunnableJob>[0], "state" | "job" | "nowMs">;
+  runnableOptions?: Omit<Parameters<typeof isRunnableJob>[0], "job" | "nowMs">;
   isUnavailable?: () => boolean;
   onUnavailable?: () => void;
   onActivated?: () => void;
@@ -490,7 +489,6 @@ export async function executeQueuedCronRun(params: {
       delete runnableJob.state.queuedAtMs;
       if (
         !isRunnableJob({
-          state,
           job: runnableJob,
           nowMs: state.deps.nowMs(),
           ...params.runnableOptions,

@@ -7,11 +7,23 @@ import {
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import {
+  GatewayDrainingError,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
+import {
+  WorkerRuntimeRefreshPendingError,
+  type WorkerRuntimeRefreshInFlight,
+} from "./provider-runtime-refresh.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTurnTunnelHandle,
@@ -283,6 +295,197 @@ async function createBuildRecoveryHarness(
 describe("worker turn launcher build recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => {
+    resetGatewayWorkAdmission();
+    resetDiagnosticRunActivityForTest();
+  });
+
+  async function createRefreshWaitHarness(fence = false) {
+    await seedActivePlacement();
+    const settled = createDeferred();
+    const reachedAdmission = createDeferred();
+    const listeners = new Set<() => void>();
+    let environment = attachedEnvironment();
+    let inFlight = true;
+    let reads = 0;
+    const refresh: WorkerRuntimeRefreshInFlight = {
+      settled: settled.promise,
+      onProgress(listener) {
+        listeners.add(listener);
+        reachedAdmission.resolve();
+        return () => listeners.delete(listener);
+      },
+    };
+    const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
+      request.onDispatchReady?.();
+      const leafId = openSessionManager().appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Ran on the refreshed worker" }],
+          timestamp: 51,
+        }),
+      );
+      createWorkerSessionPlacementGate(placements).updateAckCursors({
+        claim: request.turnClaim,
+        transcriptSeq: 2,
+        liveSeq: 1,
+      });
+      return {
+        stdout: JSON.stringify({
+          status: "completed",
+          transcriptLeafId: leafId,
+          transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+    const acquireTurnCredential = vi.fn(async () => {
+      // This boundary also wakes the negative control on the original launcher.
+      reachedAdmission.resolve();
+      return { ...credential(), bundleHash: environment.bootstrapReceipt!.bundleHash };
+    });
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: () => environment,
+      readRuntimeRefresh: () => (inFlight && (!fence || ++reads > 1) ? refresh : undefined),
+      acquireTurnCredential,
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
+      startTunnel: async () =>
+        createWorkerTurnTunnel({
+          quiesceWorkspace: async () => ({
+            assertActive: async () => {},
+            resume: async () => {},
+          }),
+          launchTurn,
+          syncWorkspace: vi.fn(),
+          reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+          stop: async () => {},
+        }),
+    };
+    const claimTurn = vi.spyOn(placements, "claimTurn");
+    const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
+    const input = turn();
+    const onAdmitted = vi.fn();
+    return {
+      acquireTurnCredential,
+      claimTurn,
+      launchTurn,
+      listeners,
+      onAdmitted,
+      reachedAdmission: reachedAdmission.promise,
+      progress() {
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        for (const listener of listeners) {
+          listener();
+        }
+      },
+      finishRefresh() {
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        const bundleHash = "b".repeat(64);
+        environment = {
+          ...environment,
+          bootstrapReceipt: { ...environment.bootstrapReceipt!, bundleHash },
+        };
+        database.db
+          .prepare(
+            "UPDATE worker_session_placements SET worker_bundle_hash = ? WHERE session_id = ?",
+          )
+          .run(bundleHash, SESSION_ID);
+        inFlight = false;
+        settled.resolve();
+      },
+      cleanup() {
+        inFlight = false;
+        settled.resolve();
+        input.preparedRunAdmission.close();
+      },
+      execute: (signal: AbortSignal) =>
+        provider.executeTurn(
+          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: input.runId },
+          { ...input, abortSignal: signal },
+          vi.fn(async () => ({ meta: { durationMs: 1 } })),
+          onAdmitted,
+        ),
+    };
+  }
+
+  it.each([false, true])(
+    "waits for an in-flight runtime refresh before claiming (fence=%s)",
+    async (fence) => {
+      const harness = await createRefreshWaitHarness(fence);
+      const controller = new AbortController();
+      const execution = harness.execute(controller.signal);
+      const result = execution.catch((error: unknown) => error);
+      try {
+        await Promise.race([harness.reachedAdmission, execution]);
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        expect(harness.acquireTurnCredential).not.toHaveBeenCalled();
+        expect(harness.onAdmitted).not.toHaveBeenCalled();
+        expect(harness.launchTurn).not.toHaveBeenCalled();
+        expect(harness.claimTurn).toHaveBeenCalledTimes(fence ? 1 : 0);
+        harness.progress();
+        expect(
+          getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID, sessionKey: SESSION_KEY })
+            .lastProgressReason,
+        ).toBe("worker:runtime_refresh");
+        harness.finishRefresh();
+        await expect(execution).resolves.toMatchObject({
+          payloads: [{ text: "Ran on the refreshed worker" }],
+        });
+        expect(harness.claimTurn).toHaveBeenCalledTimes(fence ? 2 : 1);
+        expect(harness.acquireTurnCredential).toHaveBeenCalledOnce();
+        expect(harness.onAdmitted).toHaveBeenCalledOnce();
+        expect(harness.launchTurn).toHaveBeenCalledOnce();
+        expect(harness.launchTurn.mock.calls[0]?.[0].plan.admission.handshake.bundleHash).toBe(
+          "b".repeat(64),
+        );
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        expect(harness.listeners.size).toBe(0);
+      } finally {
+        controller.abort();
+        await result;
+        harness.cleanup();
+      }
+    },
+  );
+
+  it.each(["Stop", "Gateway restart"] as const)(
+    "cancels the runtime refresh wait for %s without claiming",
+    async (cancel) => {
+      const harness = await createRefreshWaitHarness();
+      const controller = new AbortController();
+      const execution = harness.execute(controller.signal);
+      const result = execution.catch((error: unknown) => error);
+      try {
+        await Promise.race([harness.reachedAdmission, execution]);
+        expect(harness.listeners.size).toBe(1);
+        if (cancel === "Stop") {
+          const stopped = new Error("turn stopped during runtime refresh");
+          controller.abort(stopped);
+          expect(await result).toBe(stopped);
+        } else {
+          markGatewayRestartDraining();
+          expect(await result).toBeInstanceOf(GatewayDrainingError);
+          await expect(execution).rejects.toThrow(
+            "Gateway is restarting. Please try again shortly.",
+          );
+        }
+        expect(harness.claimTurn).not.toHaveBeenCalled();
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        expect(harness.acquireTurnCredential).not.toHaveBeenCalled();
+        expect(harness.onAdmitted).not.toHaveBeenCalled();
+        expect(harness.launchTurn).not.toHaveBeenCalled();
+        expect(harness.listeners.size).toBe(0);
+      } finally {
+        controller.abort();
+        await result;
+        harness.cleanup();
+      }
+    },
+  );
 
   // A runtime refresh holds the environment lock that credential acquisition queues on.
   // Stuck-session recovery then cancels the admitted turn before that lock is released.

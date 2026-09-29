@@ -9,6 +9,19 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
 
 describe("Control UI service worker HTTP recovery", () => {
+  it("never stores or replays a no-store liveness probe", async () => {
+    const worker = createFetchServiceWorker("https://control.example/");
+    const request = { url: `${worker.scope}healthz`, cache: "no-store" as const };
+    worker.cache.set(request.url, Response.json({ ok: true, status: "live" }));
+    worker.fetch.mockResolvedValueOnce(Response.json({ ok: true, status: "live" }));
+
+    expect(await (await worker.dispatch(request))?.json()).toEqual({ ok: true, status: "live" });
+    expect(worker.cachePut).not.toHaveBeenCalled();
+    worker.fetch.mockRejectedValueOnce(new TypeError("Offline"));
+    expect((await worker.dispatch(request))?.type).toBe("error");
+    expect(worker.cacheMatch).not.toHaveBeenCalled();
+  });
+
   it.each(["/", "/openclaw/"])(
     "keeps dynamic responses out of the cache beneath %s",
     async (basePath) => {
@@ -131,7 +144,7 @@ describe("Control UI service worker HTTP recovery", () => {
   });
 });
 
-type ServiceWorkerFetchRequest = Pick<Request, "url" | "method" | "mode">;
+type ServiceWorkerFetchRequest = Pick<Request, "url" | "method" | "mode" | "cache">;
 type ServiceWorkerFetchEventStub = {
   request: ServiceWorkerFetchRequest;
   clientId: string;
@@ -195,6 +208,7 @@ function createFetchServiceWorker(
             `${scope}__openclaw__/assistant-media?source=media://inbound/image`,
           method: requestOptions.method ?? "GET",
           mode: requestOptions.mode ?? "cors",
+          cache: requestOptions.cache ?? "default",
         },
         clientId: requestOptions.clientId ?? "requesting-window",
         respondWith(pending) {

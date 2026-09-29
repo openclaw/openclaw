@@ -500,6 +500,19 @@ test("failed executable launches settle before credential release", async () => 
   assert.equal(released, true);
 });
 
+test("command completion drains readiness stderr from an inherited pipe after parent exit", async () => {
+  const result = await runCommand(
+    process.execPath,
+    [
+      "-e",
+      `require('node:child_process').spawn(process.execPath, ['-e', 'process.stderr.write("late readiness diagnostic")'], {stdio: ['ignore', 'ignore', 'inherit']}).unref();`,
+    ],
+    { cwd: process.cwd(), env: {}, timeoutMs: 1_000 },
+  );
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "late readiness diagnostic");
+});
+
 test("failed direct probe launches settle before credential release", async () => {
   const probe = ownChild(
     spawn("/missing/openclaw-telegram-uv", [], {

@@ -1,9 +1,11 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as defaultCallGateway } from "../../../gateway/call.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 // This type-only leaf exists solely to keep lifecycle sibling modules from importing the controller.
 // Keeping the controller out of their dependency graph satisfies the architecture cycle gate.
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
+import type { SubagentRegistryWriteOptions } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type CaptureSubagentCompletionReply =
@@ -21,6 +23,11 @@ export type SubagentLifecycleOptions = {
   getRuntimeConfig(): OpenClawConfig;
   persist(...runIds: string[]): void;
   persistOrThrow(...runIds: string[]): void;
+  persistAsyncOrThrow: (
+    context: OpenClawStateWorkerContext,
+    callbacks: Omit<SubagentRegistryWriteOptions, "context"> & { assertCurrent: () => void },
+    ...runIds: string[]
+  ) => Promise<void>;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
   getLatestRunForChildSession(

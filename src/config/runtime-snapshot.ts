@@ -46,20 +46,8 @@ export type ConfigWriteAfterWrite =
   | { mode: "none"; reason: string };
 
 export type ConfigWriteFollowUp =
-  | {
-      mode: "auto";
-      requiresRestart: false;
-    }
-  | {
-      mode: "none";
-      reason: string;
-      requiresRestart: false;
-    }
-  | {
-      mode: "restart";
-      reason: string;
-      requiresRestart: true;
-    };
+  | (Exclude<ConfigWriteAfterWrite, { mode: "restart" }> & { requiresRestart: false })
+  | (Extract<ConfigWriteAfterWrite, { mode: "restart" }> & { requiresRestart: true });
 
 export function resolveConfigWriteAfterWrite(
   afterWrite?: ConfigWriteAfterWrite,

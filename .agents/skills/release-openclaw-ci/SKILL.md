@@ -579,14 +579,18 @@ for publication ordering and prepared/direct recovery.
   use such a tooling tag and still need their own `npm-release` approval job;
   the read-only OIDC preflight also uses `npm-publish` and requires that tag.
   Artifact-only preflights keep their existing refs and have no environment.
-- Never approve ClawHub children (`plugin-clawhub-release.yml`,
-  `plugin-clawhub-new.yml`) by hand. `plugin-clawhub-release.yml` needs no
-  approval on the bot route (receipt-verified); the `Artifact not found` line
-  for `openclaw-clawhub-recovery-approval-<run>-1` is a non-fatal probe, and a
-  late human approval fails at `Revalidate trusted tooling identity` with
-  `parent state completed/failure is not allowed by authorization route`
-  once the parent has died (2026.9.6: runs 35930335388/35930341394). If the
-  parent died, cancel the children and re-dispatch the parent.
+- Never approve a `plugin-clawhub-release.yml` child by hand. It is
+  receipt-verified on the bot route and needs no approval. The
+  `Artifact not found` line for `openclaw-clawhub-recovery-approval-<run>-1`
+  is a non-fatal probe. A late human approval fails at `Revalidate trusted tooling identity`
+  with `parent state completed/failure is not allowed by authorization route`
+  once the parent has died (2026.9.6: runs 35930335388/35930341394). If core
+  npm already published, recover ClawHub through explicit ClawHub recovery
+  ([publication recovery](../release-openclaw-maintainer/references/publication-recovery.md#interrupted-preparation-and-publication));
+  otherwise cancel the children and re-dispatch the parent. Bootstrap children
+  (`plugin-clawhub-new.yml`) always wait on `clawhub-plugin-bootstrap`. Approve
+  them after the secretless pack jobs finish
+  ([first package](../release-openclaw-maintainer/references/first-package.md)).
 - Before every child dispatch the parent sweeps a failed earlier parent's
   `waiting`/`queued` children of the same release (ClawHub and core by the
   `parent=<run>/<attempt>` run title; plugin npm by the release SHA, only

@@ -1,6 +1,7 @@
 // Defines Zod schema fragments for per-agent runtime configuration.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -154,20 +155,12 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
-const TrimmedOptionalConfigStringSchema = z
-  .string()
-  .transform((value) => {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  })
-  .optional();
+const TrimmedOptionalConfigStringSchema = z.string().transform(normalizeOptionalString).optional();
 
 const CodexAllowedDomainsSchema = z
   .array(z.string())
   .transform((values) => {
-    const deduped = uniqueStrings(
-      values.map((value) => value.trim()).filter((value) => value.length > 0),
-    );
+    const deduped = normalizeUniqueStringEntries(values);
     return deduped.length > 0 ? deduped : undefined;
   })
   .optional();

@@ -137,6 +137,43 @@ describe("ChatSessionCompanionThreads", () => {
     ]);
   });
 
+  it("sends a full selected passage as context, not an unsupported file", async () => {
+    const selectedText = "Full selected passage " + "x".repeat(2_000);
+    const request = vi.fn(async (_method: string, _params: unknown) => ({
+      answer: "Answer",
+      ts: 1,
+    }));
+    const client = { request: request as GatewayBrowserClient["request"] };
+    await requestSessionCompanionAnswer(client, "one", "Regarding the selection", "work", [
+      {
+        id: "comment",
+        mimeType: "text/plain",
+        selectionAnnotation: {
+          text: selectedText,
+          comment: "Why does this matter?",
+          sessionKey: "one",
+          start: 2,
+          end: selectedText.length + 2,
+        },
+      },
+    ]);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.companion.ask",
+      {
+        sessionKey: "one",
+        agentId: "work",
+        question: "Regarding the selection",
+        selectionContext: expect.stringContaining("User comment:\nWhy does this matter?"),
+      },
+      { timeoutMs: 70_000 },
+    );
+    expect(request.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        selectionContext: expect.stringContaining(`Selected text:\n${selectedText}`),
+      }),
+    );
+  });
+
   it("hydrates and retains independent per-session threads", async () => {
     const threads = new ChatSessionCompanionThreads();
     const load = vi.fn(async (sessionKey: string) => ({
@@ -444,6 +481,44 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector("script")).toBeNull();
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
   });
+
+  it.each([false, true])(
+    "uses an empty-question fallback only for images (image: %s)",
+    async (image) => {
+      const onSubmit = vi.fn();
+      const element = await mount({
+        onSubmit,
+        companion: {
+          turns: [],
+          loading: false,
+          draft: "",
+          attachments: [
+            image
+              ? { id: "image", mimeType: "image/png" }
+              : {
+                  id: "comment",
+                  mimeType: "text/plain",
+                  selectionAnnotation: {
+                    text: "Selected text",
+                    comment: "Explain this",
+                    sessionKey: "agent:main:run",
+                    start: 0,
+                    end: 13,
+                  },
+                },
+          ],
+        },
+      });
+      expect(element.querySelector<HTMLButtonElement>(".chat-send-btn")?.disabled).toBe(!image);
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      element
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(onSubmit.mock.calls).toEqual(
+        image ? [["What does this image show?"], ["What does this image show?"]] : [],
+      );
+    },
+  );
 
   it("explains unsupported image input and retries the retained image only on user action", async () => {
     const threads = new ChatSessionCompanionThreads(() => {

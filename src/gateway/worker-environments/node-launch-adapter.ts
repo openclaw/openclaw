@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import {
@@ -9,7 +10,7 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../../infra/node-commands.js";
 import {
-  formatNodeRunnerUpdateRequired,
+  formatNodeRunnerInventoryIssue,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_STATUS_WAIT_VERSION,
@@ -134,10 +135,15 @@ function rearmNodeWorkerLaunchInput(
 }
 
 export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLaunchInput): number {
+  const measured = input.descriptor.admission.handshake.protocolFeatures.includes(
+    NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
+  )
+    ? { ...input, idleRetention: true as const }
+    : input;
   // Re-arms replace a UUID with a SHA-256 hex turn ID. Measure both without changing
   // the original plan; the registry bounds timeouts and always generates UUID request IDs.
   return Math.max(
-    ...[input, rearmNodeWorkerLaunchInput(input, 1)].flatMap((attempt) => [
+    ...[measured, rearmNodeWorkerLaunchInput(measured, 1)].flatMap((attempt) => [
       Buffer.byteLength(
         serializeNodeEvent(
           "node.invoke.request",
@@ -152,7 +158,7 @@ export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLa
         ),
         "utf8",
       ),
-      measureWorkerProcessTurnBytes(attempt.descriptor),
+      measureWorkerProcessTurnBytes(attempt.descriptor, attempt.idleRetention),
     ]),
   );
 }
@@ -289,6 +295,8 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     isAuthorized: () => boolean;
     deadline: OperationDeadline;
     onDispatchReady?: () => void;
+    idleRetention?: true;
+    prepareLaunch?: (node: NodeWorkerSupervisorNodeProof) => void;
   }): Promise<{ receipt: NodeWorkerSupervisorReceipt | null; statusWait: boolean }> => {
     if (!params.isAuthorized()) {
       throw new NodeWorkerLaunchTransportError(
@@ -324,13 +332,20 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         deviceId: params.deviceId,
         signal,
       });
+      params.prepareLaunch?.(node);
+      if (!params.prepareLaunch && params.idleRetention && node.workerHost.idleRetention !== true) {
+        throw new NodeWorkerLaunchTransportError(
+          "PRIVATE_DIALECT_UNAVAILABLE",
+          "node worker idle retention is unavailable",
+        );
+      }
       if (
         params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
         (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
           resolveNodeWorkerExecutionIssue(node.workerHost))
       ) {
         throw new Error(
-          formatNodeRunnerUpdateRequired(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+          formatNodeRunnerInventoryIssue(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
         );
       }
       // A retained environment already owns its slot. The node arbitrates new physical
@@ -502,6 +517,24 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
+            ...(!pollStatus && input.idleRetention ? { idleRetention: true as const } : {}),
+            ...(!pollStatus && !mayHaveLaunched
+              ? {
+                  prepareLaunch: (node: NodeWorkerSupervisorNodeProof) => {
+                    if (
+                      node.workerHost.idleRetention === true &&
+                      input.descriptor.admission.handshake.protocolFeatures.includes(
+                        NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
+                      )
+                    ) {
+                      input.idleRetention = true;
+                    } else {
+                      delete input.idleRetention;
+                    }
+                    expected = expectedIdentity(input);
+                  },
+                }
+              : {}),
             isAuthorized: () => {
               if (!dispatchReady) {
                 // Publish expiry through the signal; a guard throw can orphan the invoke promise.

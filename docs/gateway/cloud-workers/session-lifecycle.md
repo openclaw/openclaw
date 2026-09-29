@@ -18,9 +18,13 @@ Starting a cloud session in the Control UI shows your submitted prompt immediate
 
 Gateway updates retain an attached cloud machine and install the new worker bundle in place. The Gateway stops the old worker and revokes its credential before admitting the new build. The machine's workspace, installed packages, and desktop remain available. Failed installation retains the lease for recovery rather than allocating a replacement. The node must support the current bundle installer and reconnect before recovery can finish.
 
+After a Gateway update, background reconciliation starts installing the new runtime on reconnected paired hosts with retained sessions, normally within about a minute of reconnect. Gateway logs record the start, progress every 30 seconds, interruptions with a reason, and completion; use them to follow this background install, because session RPCs such as `sessions.describe` and `sessions.list` can wait until the reconciliation pass finishes. When a first dispatch or a submitted turn performs the install, its progress also appears as `workerRuntimeInstall` in provisioning and active session placements and in the Control UI chat notice. While a first dispatch performs the install, stuck-session diagnostics report `worker:runtime_install` as bytes flow.
+
 If a submitted turn encounters the old build before execution starts, OpenClaw releases that unstarted claim, refreshes the runtime, and retries admission once with fresh authority. This also retries an earlier failed update, so a reconnected worker can handle the submission without waiting for periodic recovery. The session and original submission stay intact. Work already handed to a worker is never replayed through this admission retry.
 
 If the node is still reconnecting after a Gateway restart or update, that same submission waits for its current node connection before retrying admission. A current worker build reconnects without a runtime refresh. The wait uses the existing two-minute worker admission window, capped by the turn's configured timeout. Stop, a replaced session or placement, and another Gateway restart cancel the wait. An incompatible node runtime still reports that it needs an update.
+
+A message that arrives while the Gateway is installing an updated worker runtime on its machine waits for that installation before admission instead of interrupting it. Bytes still transferring to the node keep the turn alive; Stop, the turn's timeout, or a Gateway restart cancels the wait. After installation, the turn runs on the updated runtime; a failed update follows the existing pending-update recovery.
 
 Graceful Gateway stop and restart interrupt OpenClaw worker turns as soon as draining begins, because worker protocol admission is closed during shutdown. The Gateway retains each interrupted turn's claim and pending workspace results for startup recovery instead of waiting for worker admission retries or failing the placement. Local embedded turns keep their normal drain behavior.
 
@@ -39,6 +43,17 @@ File-backed skills may use file symlinks such as `CLAUDE.md` pointing to `AGENTS
 Disconnected workers have no cleanup deadline. Nodes also reclaim copies when the authoritative retention snapshot releases their workspace generation, including after restart; SSH-backed copies follow workspace/provider teardown. Restarting a node alone does not delete a retained generation. Skill-copy paths last only for their turn, so background commands must not depend on them remaining available afterward.
 
 Completed cloud turns preserve eligible, size-bounded workspace files before the turn claim is released. Repository-only sessions accept a cumulative immutable checkpoint in the Gateway's bare artifact repository. Gateway-source sessions apply those changes to their managed worktree. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. Gateway-source changes remain in the managed worktree for normal review and commit; repository-only changes remain on the node and in the accepted checkpoint.
+
+OpenClaw worker-turn sessions may keep a settled worker process idle for up to
+two minutes, with at most two idle workers per node. Follow-up turns reuse the
+loaded runtime with fresh turn authority; placement activation does not start a
+worker. Idle workers inherit the existing background-retention reconciliation
+contract: the process stays alive in both process and container mode, and the
+capture/verify/renew/verify manifest fences detect concurrent workspace changes.
+Turn connections and temporary profiles are disposed before idle readiness.
+Idle workers are evictable for capacity, updates, and disconnect cleanup;
+background commands are not. See [node session hosting](/nodes/session-hosting)
+for compatibility and memory costs.
 
 Workspace quiescence retries slow process probes within one 30-second budget. The recovery watchdog keeps unfinished processes across at most four passes, with up to seven seconds of backoff between them, so recovery has a total probe and backoff budget of 127 seconds. Slow probes cannot repeatedly resume the same workers and starve the rest. Each probe starts with a two-second allowance and gets more time after a timeout. Exhaustion retains the unfinished PID/start references and reason in the lease for the Gateway's next recovery attempt; check host load and `ps` availability, then retry workspace recovery. Failed reconciliation retains the recoverable workspace result and reports the reason through the normal recovery flow.
 

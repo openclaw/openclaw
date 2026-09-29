@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { NODE_WORKER_CAPACITY_MAX } from "../shared/node-list-parse.js";
+import { NODE_WORKER_CAPACITY_MAX } from "../../packages/gateway-protocol/src/worker-capacity.js";
 
 export const NODE_HOST_FIELD_LABELS: Record<string, string> = {
   nodeHost: "Node Host",

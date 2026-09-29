@@ -124,10 +124,6 @@ function deliveryTargetsMatch(channel: string, targetTo: string, deliveryTo: str
   );
 }
 
-function normalizeDeliveryThreadId(threadId: string | number | undefined): string | undefined {
-  return stringifyRouteThreadId(threadId)?.trim() || undefined;
-}
-
 const TOPIC_THREAD_SUFFIX = /:topic:(\d+)$/i;
 
 /** Compares a message-tool target with the required source delivery target. */
@@ -159,8 +155,8 @@ export function sourceDeliveryTargetsMatch(
   ) {
     return false;
   }
-  const deliveryThreadId = normalizeDeliveryThreadId(delivery.threadId) ?? deliveryTopic?.[1];
-  const targetThreadId = normalizeDeliveryThreadId(target.threadId) ?? targetTopic?.[1];
+  const deliveryThreadId = stringifyRouteThreadId(delivery.threadId) ?? deliveryTopic?.[1];
+  const targetThreadId = stringifyRouteThreadId(target.threadId) ?? targetTopic?.[1];
   if (!deliveryThreadId && !targetThreadId) {
     return true;
   }
@@ -230,7 +226,7 @@ function resolveImplicitMessageToolDeliveryTarget(
     tool: "message",
     provider: plan.target.channel,
     ...(plan.target.accountId ? { accountId: plan.target.accountId } : {}),
-    ...(plan.target.to ? { to: plan.target.to } : {}),
+    to: plan.target.to,
     ...(threadId ? { threadId } : {}),
   };
 }

@@ -269,8 +269,8 @@ Foreground:
 Background + poll:
 
 ```json
-{"tool":"exec","command":"npm run build","yieldMs":1000}
-{"tool":"process","action":"poll","sessionId":"<id>"}
+{"tool":"exec","command":"npm run build","background":true}
+{"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 
 Use `process poll` for on-demand status and bounded waits when no automatic completion wake is available. Avoid rapid status loops; pass a timeout while waiting for a result the current task needs. If automatic completion wake is enabled, the command can wake the session when it emits output or fails.

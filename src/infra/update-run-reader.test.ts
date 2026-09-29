@@ -160,7 +160,8 @@ describe("update run history reads", () => {
       expect(fs.existsSync(`${filename}-shm`)).toBe(false);
       expect(fs.existsSync(`${filename}-wal`)).toBe(retainedWal);
       const before = snapshotDatabaseFiles(filename);
-      const nativeCalls = reader.endsWith("-async") ? observeMainThreadSql() : undefined;
+      const nativeCalls =
+        reader.endsWith("-async") || reader === "status" ? observeMainThreadSql() : undefined;
       const result =
         reader === "get"
           ? getUpdateRun(created.runId, options)
@@ -245,7 +246,7 @@ describe("update run history reads", () => {
     expect((await getUpdateRunAsync(created.runId, options))?.phase).toBe("staging");
   });
 
-  it("reads committed history without consuming the cached writer's transaction", async () => {
+  it("keeps committed native reads separate and refuses asynchronous borrowing during a transaction", async () => {
     const options = isolatedOptions();
     const created = createUpdateRun({ trigger: "cli" }, options);
     const { db } = openOpenClawStateDatabase(options);
@@ -255,10 +256,15 @@ describe("update run history reads", () => {
       expect(getUpdateRun(created.runId, options)).toEqual(created);
       expect(listUpdateRuns({}, options)).toEqual([created]);
       expect(findActiveUpdateRun(options)).toEqual(created);
-      expect(await getUpdateRunStatusAsync(options)).toEqual({
-        activeRun: created,
-        lastRun: created,
-      });
+      for (const read of [
+        () => getUpdateRunAsync(created.runId, options),
+        () => listUpdateRunsAsync({}, options),
+        () => getUpdateRunStatusAsync(options),
+      ]) {
+        await expect(read()).rejects.toThrow(
+          "Asynchronous shared-state reads cannot run inside a native transaction",
+        );
+      }
       expect(db.isTransaction).toBe(true);
       expect(
         db.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),
@@ -272,6 +278,10 @@ describe("update run history reads", () => {
       }
     }
     expect(getUpdateRun(created.runId, options)?.phase).toBe("staging");
+    expect(await getUpdateRunStatusAsync(options)).toMatchObject({
+      activeRun: { runId: created.runId, phase: "staging" },
+      lastRun: { runId: created.runId, phase: "staging" },
+    });
   });
 
   it("lists newest runs deterministically and excludes terminal runs from active discovery", async () => {

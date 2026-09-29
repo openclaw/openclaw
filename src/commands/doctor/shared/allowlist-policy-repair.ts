@@ -26,24 +26,6 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
   const next = structuredClone(cfg);
   const changes: string[] = [];
 
-  const applyRecoveredAllowFrom = (params: {
-    account: Record<string, unknown>;
-    allowFrom: string[];
-    mode: AllowFromMode;
-    prefix: string;
-  }) => {
-    const count = params.allowFrom.length;
-    const noun = count === 1 ? "entry" : "entries";
-    setCanonicalDmAllowFrom({
-      entry: params.account,
-      mode: params.mode,
-      allowFrom: params.allowFrom,
-      pathPrefix: params.prefix,
-      changes,
-      reason: `restored ${count} sender ${noun} from pairing store (dmPolicy="allowlist").`,
-    });
-  };
-
   const recoverAllowFromForAccount = async (params: {
     channelName: string;
     // Resolved once per channel by the caller: the lookup can materialize a bundled
@@ -81,11 +63,15 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
       return;
     }
 
-    applyRecoveredAllowFrom({
-      account: params.account,
+    const count = recovered.length;
+    const noun = count === 1 ? "entry" : "entries";
+    setCanonicalDmAllowFrom({
+      entry: params.account,
       allowFrom: recovered,
       mode,
-      prefix: params.prefix,
+      pathPrefix: params.prefix,
+      changes,
+      reason: `restored ${count} sender ${noun} from pairing store (dmPolicy="allowlist").`,
     });
   };
 

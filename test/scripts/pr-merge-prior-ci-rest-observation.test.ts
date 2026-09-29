@@ -57,6 +57,132 @@ describePosix("prior-CI whole REST observation fallback", () => {
     expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(f.base);
   });
 
+  it("lands the pinned head when main advances within a complete REST observation", () => {
+    const f = unknownGraphqlCandidate();
+    f.save({ ...f.state(), restObservation: { advanceMain: true } });
+
+    const result = f.adminPriorCi(f.path);
+
+    expect(result.status, result.output).toBe(0);
+    const state = f.state();
+    expect(state.mainAdvances).toHaveLength(1);
+    expect(state.restObservationAppliedAt).toBe(1);
+    expect(state).toMatchObject({
+      mutations: 1,
+      gates: "fail",
+      restMergePayload: { sha: f.head, merge_method: "squash" },
+    });
+    expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(state.mainAdvances[0]);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(f.record()).not.toHaveProperty("mainBefore");
+    const prefix = "REST merge observation: ";
+    const diagnostics = result.output
+      .split("\n")
+      .filter((line) => line.startsWith(prefix))
+      .map((line) => JSON.parse(line.slice(prefix.length)));
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        transport: "rest",
+        requestedGhRoute: "plain",
+        observedGhRoute: "unrecorded",
+        mainBefore: f.base,
+        mainAfter: state.mainAdvances[0],
+        startedAtMs: expect.any(Number),
+        finishedAtMs: expect.any(Number),
+        elapsedMs: expect.any(Number),
+      }),
+    );
+  });
+
+  it.each(["rewind", "divergence", "conflict", "empty change", "policy"] as const)(
+    "refuses %s within a REST observation before dispatch",
+    (fault) => {
+      const f = unknownGraphqlCandidate();
+      const state = f.state();
+      const first = f.commit(f.tree("before\n", "first advance\n"), [f.base]);
+      state.observations = [{ main: first }];
+      const main =
+        fault === "rewind"
+          ? f.base
+          : f.commit(
+              f.tree(
+                fault === "conflict"
+                  ? "conflicting main\n"
+                  : fault === "empty change"
+                    ? "resolved conflict\n"
+                    : "before\n",
+                "next advance\n",
+              ),
+              [fault === "divergence" ? f.base : first],
+            );
+      state.restObservation = {
+        main,
+        afterPolicyRead: true,
+        ...(fault === "policy" ? { priorCi: { reviewCount: 2 } } : {}),
+      };
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toContain(
+        fault === "policy"
+          ? "branch policy changed while reading evidence"
+          : fault === "conflict"
+            ? "cannot establish prepared-head merge tree"
+            : fault === "empty change"
+              ? "NO NET CHANGE"
+              : "both observed and verified main",
+      );
+      expectNoDispatch(f);
+    },
+  );
+
+  it.each(["start", "end"] as const)(
+    "refuses a missing final REST %s without fetching",
+    (endpoint) => {
+      const f = unknownGraphqlCandidate();
+      const state = f.state();
+      state.priorCi.revokeAdminOnMainFetch = true;
+      if (endpoint === "start") {
+        state.restMainFault = "unavailable-sha-once";
+        state.restMainFaultAfterReads = 8;
+      } else {
+        state.restObservation = { advanceMain: true, postAuthorityRestBoundary: "start" };
+      }
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toContain("final prior-CI main cannot be verified with local-only Git");
+      expect(f.state().priorCi.adminRevokedDuringMainFetch).toBe(false);
+      expect(f.state().restMainReads).toBe(10);
+      expectNoDispatch(f);
+    },
+  );
+
+  it("keeps an unknown prior-CI outcome fenced when main moves inside reconciliation", () => {
+    const f = unknownGraphqlCandidate();
+    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+    f.save({
+      ...f.state(),
+      mode: "unapplied",
+      restMainAdvance: { boundary: "during-evidence", observed: false, main },
+    });
+
+    const result = f.adminPriorCi(f.path);
+
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain(
+      "main changed while reading evidence outside active prior-CI admission",
+    );
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().posts).toBe(0);
+    expect(f.captures()).toHaveLength(1);
+    expect(f.record()).toMatchObject({ phase: "intent", accepted: false, head: f.head });
+  });
+
   it.each([
     ["head", "Merge precondition headRefOid"],
     ["lifecycle", "require OPEN"],
@@ -67,7 +193,6 @@ describePosix("prior-CI whole REST observation fallback", () => {
     ["renewed auto", "open PR already has an auto-merge request"],
     ["queue policy", "unsupported effective branch rule"],
     ["changed policy", "evidence or authority changed during admission"],
-    ["main within snapshot", "main changed while reading evidence"],
     ["CI attempt", "newer or running CI attempt"],
   ] as const)(
     "refuses REST %s rather than combining incompatible observations",
@@ -102,9 +227,6 @@ describePosix("prior-CI whole REST observation fallback", () => {
       }
       if (fault === "changed policy") {
         observation.priorCi = { reviewCount: 2 };
-      }
-      if (fault === "main within snapshot") {
-        observation.advanceMain = true;
       }
       if (fault === "CI attempt") {
         observation.priorCi = { latestAttempt: 3 };
