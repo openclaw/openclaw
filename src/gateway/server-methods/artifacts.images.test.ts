@@ -249,7 +249,7 @@ describe("bounded Activity image discovery", () => {
     });
   });
 
-  it("omits data URL images that have no transcript download reference", async () => {
+  it("bounds inline previews for images without transcript download references", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const url = "data:image/png;base64,aGVsbG8=";
@@ -258,8 +258,28 @@ describe("bounded Activity image discovery", () => {
         { type: "image", source: { url } },
         { type: "image_url", image_url: { url } },
         { type: "attachment", attachment: { kind: "image", url } },
+        { type: "image", url: `data:image/png;base64,${"a".repeat(256 * 1024)}` },
       ]);
-      expect(page(await list()).artifacts).toEqual([]);
+      const previews = page(await list());
+      expect(previews.artifacts).toHaveLength(4);
+      expect(previews.nextCursor).toBeUndefined();
+      for (const artifact of previews.artifacts) {
+        expect(artifact).toMatchObject({
+          id: expect.stringMatching(/^preview_/),
+          type: "image",
+          source: "session-transcript-preview",
+          download: { mode: "unsupported" },
+          image: { url },
+        });
+      }
+      await append([
+        { type: "input_image", data: "aGVsbG8=", mimeType: "image/png" },
+        { type: "input_image", source: { data: "aGVsbG8=", media_type: "image/png" } },
+      ]);
+      expect(page(await list({ limit: 2 })).artifacts).toEqual([
+        expect.objectContaining({ image: { url }, download: { mode: "unsupported" } }),
+        expect.objectContaining({ image: { url }, download: { mode: "unsupported" } }),
+      ]);
     });
   });
 

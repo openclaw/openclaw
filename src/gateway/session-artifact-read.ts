@@ -48,6 +48,7 @@ import {
 
 const IMAGE_PAGE_MESSAGES = 32;
 const IMAGE_PAGE_BYTES = 1024 * 1024;
+const IMAGE_INLINE_PREVIEW_MAX_BYTES = 256 * 1024;
 
 type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
 type ArtifactReaders = Pick<
@@ -257,21 +258,27 @@ function collectArtifactsFromMessage(params: {
     if (params.downloadArtifactIds && !params.downloadArtifactIds.delete(id)) {
       continue;
     }
-    const includeData = params.includeDownloadData !== false;
+    const includeData = params.imagesOnly ? !transcriptImage : params.includeDownloadData !== false;
     const download = resolveBlockDownload(attachment ?? block, { includeData });
     const source = asOptionalRecord(block.source);
     const previewOnly =
       params.imagesOnly && !transcriptImage && !parseManagedOutgoingArtifactId(id);
     const imageUrl =
       params.imagesOnly && !transcriptImage
-        ? (asNonEmptyString(attachment?.url) ??
-          asNonEmptyString(block.url) ??
-          asNonEmptyString(source?.url) ??
-          mediaUrlValue(block.image_url))
+        ? download.data !== undefined
+          ? `data:${download.mimeType ?? "image/png"};base64,${download.data}`
+          : (asNonEmptyString(attachment?.url) ??
+            asNonEmptyString(block.url) ??
+            asNonEmptyString(source?.url) ??
+            mediaUrlValue(block.image_url))
         : undefined;
     if (
       params.imagesOnly &&
-      (transcriptImage ? download.mode !== "bytes" : !imageUrl || /^data:/i.test(imageUrl))
+      (transcriptImage
+        ? download.mode !== "bytes"
+        : !imageUrl ||
+          (/^data:/i.test(imageUrl) &&
+            Buffer.byteLength(imageUrl) > IMAGE_INLINE_PREVIEW_MAX_BYTES))
     ) {
       continue;
     }
@@ -466,7 +473,6 @@ export async function selectSessionArtifacts(
         runId: query.runId,
         messageRole: query.messageRole,
         imagesOnly: true,
-        includeDownloadData: false,
       });
       const images = collected.map(toArtifactSummary).toReversed();
       const start = query.beforeSeq === seq + 1 ? (query.imageOffset ?? 0) : 0;
@@ -519,6 +525,7 @@ async function readTranscriptImageArtifact(
     beforeSeq: reference.messageSeq + 1,
     maxMessages: 1,
     maxBytes: MAX_PAYLOAD_BYTES - 4096,
+    allowOversizedFirst: true,
   });
   const message = asOptionalRecord(page.messages[0]);
   const block = resolveTranscriptImageArtifactBlock(message, query.artifactId);
