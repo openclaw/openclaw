@@ -520,18 +520,17 @@ it("keeps queued pagination separate from background revalidation", async () => 
   const older = createDeferred<ArtifactsListResult>();
   try {
     let settled = false;
-    const request = vi.fn(
-      async (_method: string, params: { sessionKey: string; cursor?: string }) => {
-        if (params.sessionKey === "target") {
-          return settled
-            ? params.cursor
-              ? older.promise
-              : refresh.promise
-            : { ...images("queued", 1), nextCursor: "older" };
-        }
-        return blockers[Number(params.sessionKey)]!.promise;
-      },
-    );
+    const request = vi.fn(async (_method: string, params?: unknown) => {
+      const { sessionKey, cursor } = params as { sessionKey: string; cursor?: string };
+      if (sessionKey === "target") {
+        return settled
+          ? cursor
+            ? older.promise
+            : refresh.promise
+          : { ...images("queued", 1), nextCursor: "older" };
+      }
+      return blockers[Number(sessionKey)]!.promise;
+    });
     const harness = createGatewayHarness(createTestGatewayClient(request));
     const context = createContext(harness.gateway, createSessions("main", []));
     render(
