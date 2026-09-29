@@ -6,6 +6,9 @@
  */
 export { truncateCloseReason } from "./server/close-reason.js";
 export type { GatewayServer, GatewayServerOptions } from "./server-public.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { GatewayServerOptions } from "./server-public.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
 
 async function emitStartupTrace(name: string, durationMs: number, totalMs: number): Promise<void> {
   if (!process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) {
@@ -29,10 +32,31 @@ async function loadServerStart() {
 
 /** Starts the gateway server after lazily loading the full server implementation. */
 export async function startGatewayServer(
-  ...args: Parameters<typeof import("./server-start.js").startGatewayServerCore>
+  port = 18789,
+  opts: GatewayServerOptions = {},
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
-  const mod = await loadServerStart();
-  return await mod.startGatewayServerCore(...args);
+  const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
+  const ownedLock = opts.gatewayStateOwner
+    ? null
+    : await acquireGatewayLock({ port, listenerMode: "foreground" });
+  const gatewayStateOwner = opts.gatewayStateOwner ?? ownedLock ?? undefined;
+  try {
+    gatewayStateOwner?.assertDatabaseAccess(resolveOpenClawStateSqlitePath());
+    const mod = await loadServerStart();
+    const server = await mod.startGatewayServerCore(port, { ...opts, gatewayStateOwner });
+    return {
+      ...server,
+      close: async (closeOptions) => {
+        await server.close(closeOptions);
+        await ownedLock?.release();
+      },
+    };
+  } catch (error) {
+    if (!(error instanceof GatewayStartupCleanupError)) {
+      await ownedLock?.release();
+    }
+    throw error;
+  }
 }
 
 /** Clears prepared model-catalog generations between tests. */

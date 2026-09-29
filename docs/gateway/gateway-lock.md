@@ -14,6 +14,10 @@ title: "Gateway lock"
 
 ## Three layers
 
+Every server start uses the same state-owner admission. Direct callers acquire and hold the
+owner until shutdown completes; the managed run loop passes its existing owner across restart
+generations.
+
 Startup enforces ownership in three steps, in order:
 
 1. **State ownership lock** acquires a lock keyed by the canonical state directory. Every Gateway participates, including Gateways started with `OPENCLAW_ALLOW_MULTI_GATEWAY=1`, so destructive SQLite maintenance cannot race a live owner.

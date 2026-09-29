@@ -18,7 +18,7 @@ import {
   GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
-import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { acquireGatewayLock, type GatewayLockHandle } from "../../infra/gateway-lock.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { flushLogger } from "../../logging/logger.js";
@@ -99,6 +99,7 @@ export async function runGatewayLoop(params: {
   start: (params?: {
     startupStartedAt?: number;
     requestHotReloadRecovery?: GatewayRestartEmitter;
+    gatewayStateOwner?: GatewayLockHandle;
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
   /** Grants this run-loop authority to hard-kill the process it exclusively owns. */
@@ -1060,6 +1061,7 @@ export async function runGatewayLoop(params: {
         const startedServer = await params.start({
           startupStartedAt,
           requestHotReloadRecovery: eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
+          gatewayStateOwner: lock ?? undefined,
         });
         server = startedServer;
         startupFailedWithoutServerHandle = false;

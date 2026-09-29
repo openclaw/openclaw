@@ -22,6 +22,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Internal state-owner capability; managed run loops retain it across generations. */
+  gatewayStateOwner?: import("../infra/gateway-lock.js").GatewayLockHandle;
   /** Exact lifecycle generation projected to connected clients. */
   bootId?: string;
   /**
