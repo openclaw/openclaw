@@ -2903,10 +2903,6 @@ AFTER_CD
         { runnerProfile: "github" },
         { runAttempt: 2 },
         { frozenTarget: true },
-        { authorAssociation: "FIRST_TIME_CONTRIBUTOR" },
-        { authorAssociation: "FIRST_TIMER" },
-        { authorAssociation: "NONE" },
-        { authorAssociation: "MANNEQUIN" },
         { headRepository: "contributor/openclaw" },
         { headRepository: "" },
         { repository: "contributor/openclaw" },
@@ -2922,6 +2918,22 @@ AFTER_CD
         JSON.stringify(context),
       ).toBe(96);
     }
+    // Author association no longer limits capacity; only the origin does.
+    for (const authorAssociation of [
+      "FIRST_TIME_CONTRIBUTOR",
+      "FIRST_TIMER",
+      "NONE",
+      "MANNEQUIN",
+    ]) {
+      expect(
+        evaluateWorkflowExpression(nodeParallel, {
+          ...canonicalNodePr,
+          runnerBackend: "hybrid",
+          authorAssociation,
+        }),
+        authorAssociation,
+      ).toBe(130);
+    }
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
@@ -2932,7 +2944,7 @@ AFTER_CD
       [{ eventName: "push" }, 4],
       [{ eventName: "pull_request", runnerBackend: "blacksmith" }, 4],
       [{ eventName: "pull_request", runnerBackend: "hybrid" }, 4],
-      [{ eventName: "pull_request", authorAssociation: "NONE" }, 2],
+      [{ eventName: "pull_request", authorAssociation: "NONE" }, 4],
       [{ eventName: "push", runnerBackend: "github" }, 2],
       [{ eventName: "push", runnerBackend: "blacksmith", runAttempt: 2 }, 2],
       [{ eventName: "workflow_dispatch", runnerBackend: "blacksmith" }, 2],
@@ -3964,6 +3976,14 @@ setImmediate(() => {
             : "blacksmith-4vcpu-ubuntu-2404",
         );
       }
+      expect(
+        evaluateWorkflowExpression(expression, {
+          ...context,
+          authorAssociation: "NONE",
+          headRepository: "contributor/openclaw",
+        }),
+        `${jobName}: untrusted fork first attempt`,
+      ).toBe(evaluateWorkflowExpression(expression, context));
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -3971,7 +3991,6 @@ setImmediate(() => {
         { runnerBackend: "github" },
         { eventName: "workflow_dispatch" },
         { repository: "contributor/openclaw" },
-        { authorAssociation: "NONE", headRepository: "contributor/openclaw" },
       ] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, ...override }), jobName).toBe(
           "ubuntu-24.04",
@@ -4180,7 +4199,7 @@ setImmediate(() => {
           runAttempt: 1,
           runnerBackend: "blacksmith",
         }),
-      ).toBe("ubuntu-24.04");
+      ).toBe("blacksmith-32vcpu-ubuntu-2404");
     },
   );
 
@@ -4291,8 +4310,7 @@ setImmediate(() => {
           { runnerBackend: "blacksmith" },
           evaluateWorkflowExpression(expression, canonicalPullRequest),
         ],
-        // New contributors stay hosted. GitHub can also report maintainers as
-        // CONTRIBUTOR when organization membership is concealed.
+        // Author association does not change routing; forks route by origin alone.
         [
           "untrusted fork",
           {
@@ -4300,7 +4318,7 @@ setImmediate(() => {
             headRepository: "contributor/openclaw",
             runnerBackend: "hybrid",
           },
-          hostedRunner,
+          expectedHybridForkRunners[jobName as keyof typeof expectedHostedRunners],
         ],
         [
           "returning-contributor fork",
@@ -4504,7 +4522,7 @@ setImmediate(() => {
             headRepository: "contributor/openclaw",
             runnerBackend: "hybrid",
           },
-          "ubuntu-24.04",
+          runner,
         ],
         [
           "workflow dispatch",
@@ -4580,11 +4598,11 @@ setImmediate(() => {
       ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, "ubuntu-24.04"],
       ["manual dispatch", { eventName: "workflow_dispatch" }, "ubuntu-24.04"],
       ["non-canonical repository", { repository: "contributor/openclaw" }, "ubuntu-24.04"],
-      ["untrusted author", { authorAssociation: "NONE" }, "ubuntu-24.04"],
+      ["untrusted author", { authorAssociation: "NONE" }, "blacksmith-8vcpu-ubuntu-2404"],
       [
-        "untrusted fork",
+        "untrusted fork first attempt",
         { authorAssociation: "FIRST_TIME_CONTRIBUTOR", headRepository: "contributor/openclaw" },
-        "ubuntu-24.04",
+        "blacksmith-8vcpu-ubuntu-2404",
       ],
       [
         "trusted fork first attempt",

@@ -168,7 +168,7 @@ ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 
 Native compact plans admit 90 rows and GitHub-hosted plans 96; final Node caps remain 70 push and 130 PR rows.
 The current automatic main/PR source has a conservative union of 71 potentially
-self-hosted non-Node rows, including five core-lint stripes for trusted forks,
+self-hosted non-Node rows, including five core-lint stripes retained as a conservative allowance,
 five type stripes, five Windows rows, and thirteen UI E2E rows. Retain an 84-row
 allowance with thirteen rows reserved: `4 × 154 + 21 × 214 = 5,110` for the
 four-main/21-PR arrival envelope, leaving 890 below the 6,000 reference target.
@@ -231,16 +231,16 @@ These are intentionally guarded by the `ci-workflow-guards`,
   actual CPUs for that row. The second packed row later exceeded its existing
   15-minute limit on the 8-class, so it uses the same 16-class. This adds no
   jobs or registrations and keeps the deadline and complete stripe inventory. The gate has no checkout or dependency setup; retries, ordinary
-  manual dispatches, untrusted contexts, and the GitHub override stay hosted.
+  manual dispatches, noncanonical contexts, and the GitHub override stay hosted.
   Core lint additionally retains hosted routing for frozen targets. Normal hybrid
-  main/same-repository PRs add three assignments; trusted fork PRs can add six
-  because their logical GitHub profile emits five lint rows. These fit the fresh
+  main/same-repository PRs add three assignments; fork PR first attempts add the
+  same three because they share that planner profile. These fit the fresh
   71-row union and reserved 84-row non-Node allowance described above.
-  Trusted automatic hybrid first-attempt `preflight` requests the existing
+  Automatic hybrid first-attempt `preflight` requests the existing
   16-class after hosted assignment stalled across three nearby runs while
   Blacksmith security jobs succeeded. Its logical planner profile, cache trust,
   and 20-minute deadline stay unchanged. Default Blacksmith preflight keeps the
-  4-class; hybrid retries, manual dispatches, untrusted/noncanonical contexts,
+  4-class; hybrid retries, manual dispatches, noncanonical contexts,
   and the `github` override retain hosted routing. `security-fast` stays hosted
   outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
@@ -249,11 +249,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   and one per normal Blacksmith run. All occur in the reserved non-Node inventory.
   Selected baseline ratchets and Node rows start independently after preflight.
   Keep the standalone ratchet owner and exact merge-parent/base checks; the final
-  gate still requires every selected ratchet to pass. Trusted same-repository
+  gate still requires every selected ratchet to pass. Same-repository
   hybrid first attempts use the existing 4-class for the ratchet job, with its
   measured 91-second bound adding at most 6.07 class-vCPU-minutes and no jobs.
   Preserve the existing hosted fallbacks and deadline.
-  The existing `check-plan` prerequisite keeps the 4-class on trusted same-repository
+  The existing `check-plan` prerequisite keeps the 4-class on same-repository
   hybrid PR first attempts, automatic main runs, and admitted qualification dispatches. Its 165–209s hosted wall delayed narrowed type/lint consumers; use
   the unchanged 209s as a conservative 13.93-vCPU-minute added-cost bound until
   native proof measures it. This consumes one non-Node reserve slot and adds no
@@ -263,7 +263,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   completeness and the observer's exact count.
   This measured control-job offload is hybrid-only; RunsOn keeps its existing
   hosted standalone ratchet and check-plan routes, including qualification dispatches.
-  Trusted fork PRs retain hosted hybrid check planning and standalone ratchets,
+  Fork PRs retain hosted hybrid check planning and standalone ratchets,
   preserving the existing cache trust restrictions.
   Optional compiler/check offloads reject observed hosted assignment waits at
   sixty seconds; the former three-minute cutoff exceeded the latency objective.
@@ -294,7 +294,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Record base/total rows and compare the actual workflow expansion in guards.
   This never expands test coverage or workers; Control UI E2E shards, QA,
   real-Gateway, Android, and compiler-heavy jobs retain their existing routes.
-  Frozen/manual targets, retries, untrusted authors and fully hosted fallback
+  Frozen/manual targets, retries and fully hosted fallback
   manifests remain outside this first-attempt limit, including existing >45-row
   fallbacks. Do not change the backend variable or existing caps to enable it.
 - The existing extension-package-boundary matrix row requests the 32-class
@@ -311,7 +311,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   one worker per project. Any nonzero exit stops admission of the next envelope.
   Frozen targets retain their original separate rows.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 130 only for
-  trusted same-repository PR first attempts on a non-frozen Blacksmith or hybrid plan, and otherwise 96; Windows stays at 5 and Android at 2.
+  same-repository PR first attempts on a non-frozen Blacksmith or hybrid plan, and otherwise 96; Windows stays at 5 and Android at 2.
   Hosted plans, RunsOn, forks, retries, main, and all manual/qualification dispatches
   retain 96. This removes a second admission wave for 97–130-row PRs without
   adding jobs or planned vCPU-minutes. Keep the 130/70 final PR/main row caps and 90 native/96 hosted compact
