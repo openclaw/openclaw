@@ -30,6 +30,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCodexPluginsTool } from "../native-plugin-tool.js";
 import {
   disableCodexPluginThreadConfig,
   resolveCodexAppServerExecutionCwd,
@@ -78,6 +79,163 @@ function shellTestToolNames(tools: readonly { name: string }[]): string[] {
 }
 
 describe("Codex app-server dynamic tool build", () => {
+  it("retains explicitly owner-gated plugin tools for an authorized owner", async () => {
+    const workspaceDir = path.join(tempDir, "owner-plugin-registration");
+    const params = createParams(path.join(tempDir, "owner-plugin.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.senderIsOwner = true;
+    const request = vi
+      .fn<NonNullable<Parameters<typeof createCodexPluginsTool>[0]["request"]>>()
+      .mockResolvedValue({ marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] });
+    setCodexTestToolFactory(params, (options) => {
+      const tool = createCodexPluginsTool({
+        bindingStore: { read: () => undefined },
+        context: {
+          config: {},
+          agentId: "main",
+          agentDir: tempDir,
+          workspaceDir,
+          senderIsOwner: options?.senderIsOwner,
+        },
+        getPluginConfig: () => ({}),
+        request,
+      });
+      return tool ? [tool] : [];
+    });
+    const tools = await buildDynamicToolsForTest(params, workspaceDir);
+    expect(tools.map((t) => t.name)).toContain("codex_plugins");
+    const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
+      forceHeartbeatTool: true,
+      ignoreDisableMessageTool: true,
+      ignoreSenderOwnership: true,
+      ignoreRuntimePlan: true,
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      registeredTools,
+      signal: new AbortController().signal,
+    });
+    expect(bridge.availableTools.map((t) => t.name)).toContain("codex_plugins");
+    expect(request).not.toHaveBeenCalled();
+    await expect(
+      bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "owner-turn",
+        callId: "owner-plugin-allowed",
+        namespace: "openclaw",
+        tool: "codex_plugins",
+        arguments: {},
+      }),
+    ).resolves.toMatchObject({ success: true });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map((call) => call[2])).toEqual([
+      { cwds: [workspaceDir] },
+      {
+        cwds: [workspaceDir],
+        marketplaceKinds: [
+          "workspace-directory",
+          "shared-with-me",
+          "created-by-me-remote",
+          "vertical",
+        ],
+      },
+    ]);
+
+    const completionParams = { ...params, senderIsOwner: false };
+    const completionTools = await buildDynamicToolsForTest(completionParams, workspaceDir);
+    const completionRegisteredTools = await buildDynamicToolsForTest(
+      completionParams,
+      workspaceDir,
+      {
+        forceHeartbeatTool: true,
+        ignoreDisableMessageTool: true,
+        ignoreSenderOwnership: true,
+        ignoreRuntimePlan: true,
+      },
+    );
+    const completionBridge = createCodexDynamicToolBridge({
+      tools: completionTools,
+      registeredTools: completionRegisteredTools,
+      signal: new AbortController().signal,
+    });
+    expect(
+      flattenCodexDynamicToolFunctions(completionBridge.specs).map((tool) => tool.name),
+    ).toContain("codex_plugins");
+    expect(completionBridge.specs).toEqual(bridge.specs);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(completionBridge.availableTools.map((t) => t.name)).not.toContain("codex_plugins");
+    await expect(
+      completionBridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "owner-plugin-denied",
+        namespace: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+        tool: "codex_plugins",
+        arguments: {},
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw tool is not available for this turn: codex_plugins",
+        },
+      ],
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps parent completion registration stable while enforcing current sender authority", async () => {
+    const workspaceDir = path.join(tempDir, "parent-continuity");
+    const params = createParams(path.join(tempDir, "parent-continuity.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: { profile: "messaging" },
+      agents: { defaults: { workspace: workspaceDir } },
+    };
+    params.messageChannel = "telegram";
+    params.messageProvider = "telegram";
+    params.senderIsOwner = true;
+    setCodexTestToolFactory(params, createOpenClawCodingTools);
+    const registration = {
+      forceHeartbeatTool: true,
+      ignoreDisableMessageTool: true,
+      ignoreSenderOwnership: true,
+      ignoreRuntimePlan: true,
+    };
+    const normal = await buildDynamicToolsForTest(params, workspaceDir, registration);
+    const completionParams = {
+      ...params,
+      senderIsOwner: false,
+      sourceReplyDeliveryMode: "automatic" as const,
+      inputProvenance: {
+        kind: "inter_session" as const,
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceTool: "subagent_announce",
+      },
+    };
+    const completion = await buildDynamicToolsForTest(completionParams, workspaceDir, registration);
+    const executable = await buildDynamicToolsForTest(completionParams, workspaceDir);
+    expect(executable.map((t) => t.name)).not.toContain("conversations_send");
+    expect(normal.map((t) => t.name)).toContain("conversations_send");
+    const descriptors = (tools: typeof normal) =>
+      tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
+    expect(descriptors(completion)).toEqual(descriptors(normal));
+    const denied = await buildDynamicToolsForTest(
+      {
+        ...params,
+        config: {
+          ...params.config,
+          tools: { profile: "messaging", deny: ["conversations_send"] },
+        },
+      },
+      workspaceDir,
+      registration,
+    );
+    expect(denied.map((t) => t.name)).not.toContain("conversations_send");
+    expect(descriptors(denied)).not.toEqual(descriptors(normal));
+  });
+
   it("forwards private yield context and acknowledgment to the lifecycle owner", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

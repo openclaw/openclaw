@@ -236,6 +236,7 @@ describe("private subagent completion processing receipts", () => {
       let processingCount = 0;
       agentCommandMock.mockImplementationOnce(async (input) => {
         const inputRecorder = recorder(input);
+        expect((input as AgentCommandOpts).senderIsOwner).toBe(false);
         expect(completions()).toEqual([]);
         expect(pending()).toMatchObject([{ run_id: runId }]);
         if (kind !== "handled-hook") {

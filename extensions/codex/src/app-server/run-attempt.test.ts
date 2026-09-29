@@ -219,7 +219,10 @@ async function buildDynamicToolsForTest(
   options: Partial<
     Pick<
       Parameters<typeof testing.buildDynamicTools>[0],
-      "forceHeartbeatTool" | "ignoreDisableMessageTool" | "ignoreRuntimePlan"
+      | "forceHeartbeatTool"
+      | "ignoreDisableMessageTool"
+      | "ignoreSenderOwnership"
+      | "ignoreRuntimePlan"
     >
   > = {},
 ) {
@@ -1644,6 +1647,182 @@ describe("runCodexAppServerAttempt", () => {
     });
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
+
+  it("registers owner tool declarations but rejects their execution on a private completion attempt", async () => {
+    const ownerTool = createRuntimeDynamicTool("conversations_send");
+    const params = createRunParams();
+    setCodexTestToolFactory(params, (options) => [
+      createRuntimeDynamicTool("sessions_send"),
+      ...(options?.senderIsOwner === false ? [] : [ownerTool]),
+    ]);
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.senderIsOwner = false;
+    params.sourceReplyDeliveryMode = "automatic";
+    params.inputProvenance = {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceTool: "subagent_announce",
+    };
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const start = harness.requests.find((r) => r.method === "thread/start");
+    assert(start);
+    const specs = (start.params as { dynamicTools: CodexDynamicToolSpec[] }).dynamicTools;
+    expect(specNames(specs)).toContain("conversations_send");
+    await expect(
+      harness.handleServerRequest({
+        id: "denied-owner-tool",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "denied-owner-tool",
+          namespace: "openclaw",
+          tool: "conversations_send",
+          arguments: {},
+        },
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw tool is not available for this turn: conversations_send",
+        },
+      ],
+    });
+    expect(ownerTool.execute).not.toHaveBeenCalled();
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it.each([false, true])(
+    "tracks parent completion continuity with stable owner registration=%s",
+    async (stableOwnerRegistration) => {
+      const { workspaceDir, agentDir } = createRunPaths();
+      const params = createRunParams();
+      setCodexTestToolFactory(params, createOpenClawCodingTools);
+      setCodexTestModelSupportsTools(params, true);
+      params.disableTools = false;
+      params.config = {
+        tools: { profile: "messaging" },
+        agents: { defaults: { workspace: workspaceDir } },
+      };
+      params.messageChannel = "telegram";
+      params.messageProvider = "telegram";
+      params.senderIsOwner = true;
+      const completionParams = {
+        ...params,
+        senderIsOwner: false,
+        sourceReplyDeliveryMode: "automatic" as const,
+        inputProvenance: {
+          kind: "inter_session" as const,
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceTool: "subagent_announce",
+        },
+      };
+      const registration = {
+        forceHeartbeatTool: true,
+        ignoreDisableMessageTool: true,
+        ignoreSenderOwnership: stableOwnerRegistration,
+        ignoreRuntimePlan: true,
+      };
+      let starts = 0;
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir,
+        respond: async (method, requestParams) => {
+          if (method === "configRequirements/read") {
+            return { requirements: null };
+          }
+          if (method === "config/read") {
+            return { config: {}, origins: {}, layers: [] };
+          }
+          if (method === "thread/start") {
+            return threadStartResult(`parent-${++starts}`);
+          }
+          if (method === "thread/resume") {
+            assert(isJsonObject(requestParams));
+            assert(typeof requestParams.threadId === "string");
+            return threadStartResult(requestParams.threadId);
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      });
+      const ids: string[] = [];
+      const fingerprints: string[] = [];
+      let previousSpecs: ReturnType<typeof flattenSpecsWithNamespace> = [];
+      const evidence: unknown[] = [];
+      for (const turn of [params, completionParams, params]) {
+        const available = await buildDynamicToolsForTest(turn, workspaceDir);
+        const registered = await buildDynamicToolsForTest(turn, workspaceDir, registration);
+        if (turn === params) {
+          expect(registered.map((t) => t.name)).toContain("conversations_send");
+        }
+        const bridge = createCodexToolBridgeForTest(turn, available, registered);
+        fingerprints.push(codexDynamicToolsFingerprint(bridge.specs));
+        if (turn === completionParams) {
+          expect(available.map((t) => t.name)).not.toContain("conversations_send");
+          await expect(
+            bridge.handleToolCall({
+              threadId: "parent-1",
+              turnId: "completion",
+              callId: "forbidden",
+              namespace: "openclaw",
+              tool: "conversations_send",
+              arguments: {},
+            }),
+          ).resolves.toMatchObject({ success: false });
+        }
+        const binding = await startOrResumeThread({
+          client: fixture.client,
+          params: turn,
+          cwd: workspaceDir,
+          dynamicTools: bridge.specs,
+          appServer: createThreadLifecycleAppServerOptions(),
+          signal: new AbortController().signal,
+        });
+        ids.push(binding.threadId);
+        const specs = flattenSpecsWithNamespace(bridge.specs);
+        const names = specs.map((t) => t.name);
+        const previousNames = previousSpecs.map((t) => t.name);
+        evidence.push({
+          turn: ids.length,
+          threadId: binding.threadId,
+          fingerprint: fingerprints.at(-1),
+          registered: names,
+          executable: available.map((t) => t.name),
+          removed: previousNames.filter((n) => !names.includes(n)),
+          added: previousSpecs.length ? names.filter((n) => !previousNames.includes(n)) : [],
+          changed: specs.flatMap((t) => {
+            const previous = previousSpecs.find((p) => p.name === t.name);
+            if (!previous) {
+              return [];
+            }
+            const fields = (["description", "inputSchema"] as const).filter(
+              (k) => JSON.stringify(previous[k]) !== JSON.stringify(t[k]),
+            );
+            return fields.length ? [{ name: t.name, fields }] : [];
+          }),
+        });
+        previousSpecs = specs;
+        await fixture.endTurn(binding.threadId);
+      }
+      if (process.env.OPENCLAW_CHURN_EVIDENCE === "1") {
+        console.log(
+          "CHURN_EVIDENCE " + JSON.stringify({ stableOwnerRegistration, turns: evidence }),
+        );
+      }
+      expect(ids).toEqual(
+        stableOwnerRegistration
+          ? ["parent-1", "parent-1", "parent-1"]
+          : ["parent-1", "parent-2", "parent-3"],
+      );
+      expect(new Set(fingerprints).size).toBe(stableOwnerRegistration ? 1 : 2);
+      expect(starts).toBe(stableOwnerRegistration ? 1 : 3);
+    },
+  );
 
   it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

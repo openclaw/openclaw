@@ -151,6 +151,8 @@ type DynamicToolBuildParams = {
   cronCreatorAuthorityUnavailableReason?: OpenClawCodingToolsOptions["cronCreatorAuthorityUnavailableReason"];
   forceHeartbeatTool?: boolean;
   ignoreDisableMessageTool?: boolean;
+  /** Declaration-only catalog; current-turn executors must retain sender ownership. */
+  ignoreSenderOwnership?: boolean;
   ignoreRuntimePlan?: boolean;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
   isHostScopedToolActive?: (toolName: string) => boolean;
@@ -241,6 +243,12 @@ export async function buildDynamicTools(
     agentId: input.sessionAgentId,
     policyAgentId: input.policyAgentId,
     ...toolRunContext,
+    // Native dynamic-tool declarations live for the thread. Senderless completion
+    // turns must not remove owner-only declarations and rotate that thread. Build
+    // the declaration catalog with owner authority so sender-gated plugin factories
+    // contribute their stable schemas; the bridge authorizes against the separately
+    // constructed current-turn tools, including their owner checks.
+    senderIsOwner: input.ignoreSenderOwnership ? true : params.senderIsOwner,
     exec: {
       ...params.execOverrides,
       ...(input.sessionPermissionPolicy ? { mode: input.sessionPermissionPolicy.execMode } : {}),

@@ -350,6 +350,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           ...commonToolParams,
           forceHeartbeatTool: true,
           ignoreDisableMessageTool: true,
+          ignoreSenderOwnership: true,
           ignoreRuntimePlan: true,
         });
     const policyContext = {

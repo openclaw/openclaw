@@ -169,12 +169,27 @@ describe("spawnSubagentDirect seam flow", () => {
   );
 
   it("binds private completion to the admitted completion owner rather than the controller", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir() },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main", subagents: { allowAgents: ["coder"] } },
+          { id: "coder", workspace: "/tmp/workspace-coder" },
+        ],
+      },
+    });
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:main:main": { sessionId: "controller-incarnation" },
       "agent:main:owner": { sessionId: "owner-incarnation" },
     });
     const result = await spawnSubagentDirect(
-      { task: "private work", completionTarget: "parent" },
+      {
+        task: "private work",
+        agentId: "coder",
+        mode: "run",
+        expectsCompletionMessage: true,
+        completionTarget: "parent",
+      },
       {
         agentSessionKey: "agent:main:main",
         completionOwnerKey: "agent:main:owner",
@@ -185,6 +200,7 @@ describe("spawnSubagentDirect seam flow", () => {
       completionTarget: "parent",
       expectsCompletionMessage: true,
     });
+    expect(result.childSessionKey).toMatch(/^agent:coder:subagent:/);
     expect(result.note).toContain("private requester turn");
     expect(firstRegisteredSubagentRun()).toMatchObject({
       controllerSessionKey: "agent:main:main",
