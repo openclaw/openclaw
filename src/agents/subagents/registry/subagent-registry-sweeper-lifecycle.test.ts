@@ -91,9 +91,9 @@ describe("registered subagent sweeper lifecycle", () => {
   it.each([false, true])(
     "resumes retained-row periodic sweeps through repeated activateSubagentRegistry (suspended: %s)",
     async (suspended) => {
-      initSubagentRegistry();
+      await initSubagentRegistry();
       await register("retained");
-      activateGatewayRuntime();
+      await activateGatewayRuntime();
       await vi.dynamicImportSettled();
       if (suspended) {
         expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
@@ -114,7 +114,7 @@ describe("registered subagent sweeper lifecycle", () => {
       expect(subagentRuns.has("retained")).toBe(true);
 
       resetGatewayWorkAdmission();
-      activateGatewayRuntime();
+      await activateGatewayRuntime();
       await advance(4_999);
       expect(recoverRow).not.toHaveBeenCalled();
       await advance(1);

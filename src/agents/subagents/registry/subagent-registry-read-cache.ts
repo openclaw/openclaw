@@ -17,6 +17,7 @@ import {
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import type { OpenClawStateReadCommand } from "../../../state/openclaw-state-read.types.js";
 import {
   captureOpenClawStateReadContext,
   captureOpenClawStateWorkerContext,
@@ -53,6 +54,7 @@ type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
     promise: Promise<void>;
     ownerAbortSignal?: AbortSignal;
     cleanCancellation?: boolean;
+    committedRevision?: number;
   };
 };
 
@@ -117,7 +119,7 @@ function matchesSubagentCacheAdmission(
   }
 }
 
-export function applySubagentRunChanges<T extends SubagentRunReadRecord>(
+function applySubagentRunChanges<T extends SubagentRunReadRecord>(
   runs: Map<string, T>,
   changes: Map<string, SubagentRunChange<T>> | undefined,
 ): Map<string, T> {
@@ -131,7 +133,7 @@ export function applySubagentRunChanges<T extends SubagentRunReadRecord>(
   return runs;
 }
 
-export function retainUnpublishedSubagentChanges<T>(
+function retainUnpublishedSubagentChanges<T>(
   changes: Map<string, SubagentRunChange<T>> | undefined,
 ) {
   for (const [runId, change] of changes ?? []) {
@@ -204,6 +206,9 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     sourceIdentity: admission?.identity.key ?? retiredPublicationIdentity?.key,
     retiredPublicationIdentity,
   };
+  if (committed && previous.pending?.committedRevision !== undefined) {
+    previous.pending.committedRevision += 1;
+  }
   const snapshot = previous.snapshot;
   if (!changedRunIds) {
     cache.state = {
@@ -423,7 +428,7 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
 
 export async function readFullSubagentRuns(
   context: OpenClawStateWorkerContext,
-  scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] },
+  scope: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>["scope"],
   options: { current?: boolean } = {},
 ) {
   if (scope.kind === "ids" && scope.runIds.length === 0) {
@@ -556,6 +561,57 @@ export async function prepareSubagentRunsCache<T extends SubagentRunReadRecord>(
       cache.state.sourceIdentity !== context.admission.identity.key
     ) {
       throw new Error("Subagent registry database changed during preparation");
+    }
+  }
+}
+
+/** Restore consumes durable rows before another host publication can overtake the accepted read. */
+export async function consumeFreshSubagentRuns<T>(
+  cache: SubagentRunsCache<SubagentRunRecord>,
+  context: OpenClawStateWorkerContext,
+  consume: (runs: Map<string, SubagentRunRecord>) => T,
+): Promise<T> {
+  assertSubagentReadContext(context);
+  while (cache.state.pending) {
+    await cache.state.pending.promise;
+    assertSubagentReadContext(context);
+  }
+  const previous = selectSubagentCacheStateForRead(cache.state, context);
+  const state = {
+    ...previous,
+    admission: captureSubagentFactsAdmission(context.admission.databasePath),
+    sourceIdentity: context.admission.identity.key,
+  };
+  cache.state = state;
+  let result: T;
+  const fill: NonNullable<SubagentRunsCacheState<SubagentRunRecord>["pending"]> = {
+    committedRevision: 0,
+    promise: Promise.resolve().then(async () => {
+      while (true) {
+        assertSubagentReadContext(context);
+        const revision = fill.committedRevision;
+        const runs = await readFullSubagentRuns(context, { kind: "all" }, { current: true });
+        assertSubagentReadContext(context);
+        if (cache.state.pending !== fill) {
+          throw new Error("Subagent restore lost its accepted read owner");
+        }
+        if (revision !== fill.committedRevision) {
+          continue;
+        }
+        // A committed deletion invalidates the read above; unpublished projections never
+        // supply canonical rows. Consume and publish without another asynchronous boundary.
+        result = consumeSubagentRuns(runs, () => consume(runs));
+        return;
+      }
+    }),
+  };
+  state.pending = fill;
+  try {
+    await fill.promise;
+    return result!;
+  } finally {
+    if (cache.state.pending === fill) {
+      cache.state.pending = undefined;
     }
   }
 }

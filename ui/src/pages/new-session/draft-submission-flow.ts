@@ -301,27 +301,9 @@ export class DraftSubmissionFlow {
     ) {
       return this.activeSubmission ? { gate: "submitting" } : undefined;
     }
-    return resolveNewSessionSubmitBlock({
-      gatewayState: this.gateway,
-      placeState: this.place,
-      pendingPlacement: this.pendingPlacement,
-      submitting: this.activeSubmission !== null,
-      message: this.messageValue,
-      submissionOutcomeUnknown: this.submissionOutcomeUnknown,
-      pendingAttachmentReads: this.attachmentDraft.pendingReads,
-      hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
-      hasCapabilityOverrides: this.capabilities.toolOverrides !== null,
-      mentions: this.mentionsValue,
-      visibility: this.visibilityValue,
-      submissionSnapshot: () => this.read(),
-      requiresModelSetup: () => this.requiresModelSetup(),
-      submissionAccess: () => this.submissionAccess(),
-      placementTargetForSubmission: () => this.placement().target,
-      cloudRuntimeUnsupportedReason: () =>
-        this.place.modelControl.cloudRuntimeUnsupportedReason(
-          this.gateway.cloudProfiles.find((profile) => profile.id === this.place.cloudProfileId),
-        ),
-    });
+    return this.activeSubmission
+      ? { gate: "submitting" }
+      : resolveNewSessionSubmitBlock(this.gateway, this.place, this, this.read());
   }
 
   requiresModelSetup = (): boolean =>

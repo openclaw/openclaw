@@ -251,7 +251,7 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
       "persisted notification receipt",
     );
     subagentRuns.set(input.subagent.runId, input.subagent);
-    initSubagentRegistry();
+    await initSubagentRegistry();
     if (change === "unknown retry") {
       await admitCompletionFixtureDatabase();
       database.db.exec(
@@ -261,10 +261,10 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
     if (change === "restore") {
       resetSubagentRegistryForTests({ persist: false });
       publishSystemEventStoreResolver(() => "replacement-store");
-      initSubagentRegistry();
+      await initSubagentRegistry();
       const context = createGatewayRequestContext(makeContextParams());
       context.resolveGatewayContext = () => context;
-      activateSubagentRegistry(() => context);
+      await activateSubagentRegistry(() => context);
     } else {
       publishSystemEventStoreResolver(() =>
         change === "same" || unknownStore ? "original-store" : "replacement-store",
@@ -274,7 +274,7 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
     if (change === "unknown retry") {
       const context = createGatewayRequestContext(makeContextParams());
       context.resolveGatewayContext = () => context;
-      activateSubagentRegistry(() => context);
+      await activateSubagentRegistry(() => context);
       try {
         await expect(settleRootWork(true)).rejects.toMatchObject({
           errors: expect.arrayContaining([
@@ -338,7 +338,7 @@ it("keeps retirement authority closed when the original selector returns before 
   };
   seedSubagentCompletionDelivery({ subagent: input.subagent });
   subagentRuns.set(input.subagent.runId, input.subagent);
-  initSubagentRegistry();
+  await initSubagentRegistry();
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const runWorker = stateWorker.runOpenClawStateWorkerOperation;

@@ -259,6 +259,12 @@ function renderQaMultipassGuestScript(
   plan: QaMultipassPlan,
   options: RenderGuestScriptOptions = {},
 ) {
+  const nodeVersionCheck = [
+    `import { isSupportedOpenClawNodeVersion } from ${JSON.stringify(
+      `file://${plan.guestMountedRepoPath}/node-version.mjs`,
+    )};`,
+    "process.exit(isSupportedOpenClawNodeVersion(process.versions.node) ? 0 : 1);",
+  ].join(" ");
   const redactSecrets = options.redactSecrets ?? false;
   const rsyncCommand = [
     "rsync -a --delete",
@@ -305,12 +311,10 @@ function renderQaMultipassGuestScript(
     "}",
     "",
     "ensure_node() {",
-    "  if command -v node >/dev/null; then",
-    "    local node_major",
-    '    node_major="$(node -p \'process.versions.node.split(".")[0]\' 2>/dev/null || echo 0)"',
-    '    if [ "${node_major}" -ge 22 ]; then',
-    "      return 0",
-    "    fi",
+    // The mounted launcher contract is dependency-free; Node 24 also supplies
+    // Corepack, which newer supported Node releases may omit.
+    `  if command -v corepack >/dev/null && node --input-type=module -e ${shellQuote(nodeVersionCheck)} 2>/dev/null; then`,
+    "    return 0",
     "  fi",
     "  local node_arch",
     '  case "$(uname -m)" in',
@@ -321,7 +325,7 @@ function renderQaMultipassGuestScript(
     "  local node_tmp_dir tarball_name extract_dir base_url",
     '  node_tmp_dir="$(mktemp -d)"',
     "  trap 'rm -rf \"${node_tmp_dir}\"' RETURN",
-    '  base_url="https://nodejs.org/dist/latest-v22.x"',
+    '  base_url="https://nodejs.org/dist/latest-v24.x"',
     '  curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/SHASUMS256.txt" -o "${node_tmp_dir}/SHASUMS256.txt" >>"$BOOTSTRAP_LOG" 2>&1',
     '  tarball_name="$(awk \'/linux-\'"${node_arch}"\'\\.tar\\.xz$/ { print $2; exit }\' "${node_tmp_dir}/SHASUMS256.txt")"',
     '  [ -n "${tarball_name}" ] || { echo "unable to resolve node tarball for ${node_arch}" >&2; return 1; }',
@@ -335,6 +339,9 @@ function renderQaMultipassGuestScript(
     '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/npm" /usr/local/bin/npm >>"$BOOTSTRAP_LOG" 2>&1',
     '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/npx" /usr/local/bin/npx >>"$BOOTSTRAP_LOG" 2>&1',
     '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/corepack" /usr/local/bin/corepack >>"$BOOTSTRAP_LOG" 2>&1',
+    '  export PATH="/usr/local/bin:$PATH"',
+    "  hash -r",
+    `  node --input-type=module -e ${shellQuote(nodeVersionCheck)}`,
     "}",
     "",
     "ensure_pnpm() {",

@@ -138,11 +138,6 @@ function extractMessageText(result: ChromeMcpToolResult): string {
   return blocks.find((block) => block.trim()) ?? "";
 }
 
-function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
-  const message = extractMessageText(result).trim();
-  return message || `Chrome MCP tool "${name}" failed.`;
-}
-
 export function extractChromeMcpToolError(
   result: ChromeMcpToolResult,
   name: string,
@@ -153,7 +148,7 @@ export function extractChromeMcpToolError(
     (name === "close_page" &&
       extractStructuredPages(result).some((page) => page.id === args.pageId))
   ) {
-    return extractToolErrorMessage(result, name);
+    return extractMessageText(result).trim() || `Chrome MCP tool "${name}" failed.`;
   }
   if (name !== "navigate_page") {
     return undefined;

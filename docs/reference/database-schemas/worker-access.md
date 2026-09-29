@@ -67,6 +67,21 @@ policy read obtains current rows; it does not retain migration exclusions across
 later operations. The updater's synchronous effect guards retain their existing
 fresh-read contract in their CLI or child-process owners.
 
+Candidate update validation records snapshot, startup, and temporary-copy cleanup
+progress through the shared-state worker. The updater retains the original
+database and executor authority, awaits accepted receipts before advancing, and
+drains them before signal cleanup releases the executor. The worker uses the
+existing synchronous step mutation and checks recovery policy inside its
+transaction. An uncertain write keeps its cleanup error and prevents further
+rehearsal cleanup; it does not become an ordinary validation failure. Signal
+cleanup leaves history pending when an accepted write's outcome is unknown; a
+later successful receipt does not clear that uncertainty. Stored formats,
+schemas, and path-redaction rules are unchanged.
+
+The installed updater still owns its first upgrade hop. Shipped synchronous
+ledger APIs, effect guards, general command progress, and finalization writes
+remain with their existing owners until their separate worker cutovers.
+
 Plugin requirement batches prepare their final installed index through the existing
 metadata worker after installation and compensation settle. Preparation seals
 collection, reads an uncached row from the captured database, and retains the
@@ -268,6 +283,15 @@ dispatch can refuse work; cancellation after execution must still join its nativ
 settlement. Close and shutdown join accepted work and cleanup before releasing
 the store or replacing its generation.
 
+Cold session reclamation opens and validates its captured existing file in the
+reclamation worker, leaving the foreground executor available during integrity
+checks. Opening expectations do not grant native authority: the host accepts the
+worker's actual file identity and retained lease before dispatching the mutation.
+Both directions preserve revocable validation proof. Caller permission refusal
+does not retire an otherwise healthy actor; source replacement or lifetime
+retirement still refuses work and joins cleanup. Schemas, stored bytes, retention,
+and update behavior are unchanged.
+
 Session-reclamation retirement honors settled cleanup reported by its worker,
 including after a failed request. After an unsettled native exit, the shared-state
 cleanup worker releases the exact retained lease. Retirement joins lease deletion and cleanup
@@ -363,6 +387,17 @@ shared-state writer. Normal terminal exit closes persistence admission and joins
 accepted writes. A newer conversation choice or reset invalidates a pending
 remembered-session restore. The existing scope keys, heartbeat filtering,
 SQLite rows, missing-store behavior, and update behavior are unchanged.
+
+Repository workspace lookup, creation, base binding, checkpoint acceptance, and
+deletion execute in the shared-state worker. Revision comparisons and immutable
+base checks remain in its synchronous transactions. Native commit receipts publish
+current repository facts before session observers run; a lost ordinary reply does
+not discard a committed workspace identity. File cleanup follows settled row
+deletion. Synchronous Git, placement, and publication guards consume prepared
+facts bound to the original database lifecycle, refusing unsettled mutations.
+Session presentation prepares repository rows alongside its other metadata;
+private rows retain facts only for the request's synchronous publication frame.
+Schemas, stored values, permissions, retention, and update behavior are unchanged.
 
 ## Migrate a caller
 
@@ -562,6 +597,13 @@ publication, rollback, and uncertain-outcome owners. Native harness mutation
 objects remain with their process-held owner. No cross-database atomicity,
 retention change, or new update step is introduced.
 
+Deletion keeps the configured session store's artifact directory when worker
+admission pins an alias to its physical database. Process-held native deletion
+checks the original session immediately before its synchronous mutation; it does
+not recheck that row after removing it in the same transaction. Archive locations,
+Incognito expiry, schemas, retention, and update behavior retain their existing
+contracts.
+
 Cron retention discovery uses a separate, single-worker maintenance lane within the
 same session database lifecycle owner. Foreground history and exact-entry reads
 keep their own queue while full-store validation runs. Both lanes retain the same
@@ -633,9 +675,21 @@ removed a terminal receipt.
 
 Uncertain outcomes stay fenced. Definite failures retain the existing delivery
 failure and replay rules, and outcome-bearing settlement publishes its new
-delivery receipt. Initial requester-yield creation and requester/session reads
-remain separate worker migration work. Schema, retention, and update behavior
-are unchanged.
+delivery receipt.
+
+Initial requester yield and cohort creation use the same queued registry writer
+and publication episode. Session authority is captured before cold registry
+restoration yields. A cohort commit retains its original requester-turn marker
+until host promotion finishes; a second acknowledged commit releases that marker
+before scheduling its wake. Restoration reads fresh complete rows through the
+existing state read worker and continues only the same recorded cohort, without
+repeating its first write or treating a persisted flag as a completed handoff.
+Retired episodes preserve known or uncertain native outcomes and refuse further
+writes until canonical reconciliation can establish a current owner.
+
+Other requester/session reads, including process-held incognito authority
+acquisition, remain separate worker migration work. Schema, retention, and update
+behavior are unchanged.
 
 Concurrent first opens wait for owner-record publication and a transient schema
 initializer within one database busy timeout. Incomplete records never grant
@@ -687,9 +741,16 @@ through native settlement; only committed receipts transfer to callers, and a
 conflict retries only after confirmed rollback. Owner edits observe receipts
 through the read worker before their existing synchronous authority capture.
 Pending work retains the partition queue and fences retired service generations,
-including deferred startup jobs. Remaining manual or timer finalizers retain
-their native implementation as migration debt. Schemas, retention, configuration,
-and update behavior are unchanged.
+including deferred startup jobs. Manual and timer finalization use that same
+worker owner to update authoritative job rows and terminal receipts in one
+transaction. The host prepares outcome policy from transaction-held facts and
+rechecks it at commit. Reservation custody retains the original physical store
+through execution, finalization, supersession, and deferred runner settlement.
+Retirement suppresses live publication without abandoning the exact receipt's
+durable result. Unknown outcomes are not replayed. Guarded configuration edits,
+current-authority reads, scratch operations, and Doctor maintenance remain
+separate migration work. Schemas, retention, configuration, and update behavior
+are unchanged.
 
 Direct compaction hydrates durable transcripts through the existing read worker
 before preparing hooks or model calls. The read retains the captured transcript

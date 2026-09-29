@@ -1,14 +1,12 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
-import { createOrderedPolicyShape, firstPolicyShapeFinding } from "./ordered-shape.js";
+import {
+  createOrderedPolicyShape,
+  firstPolicyShapeFinding,
+  type PolicyShapeContext,
+} from "./ordered-shape.js";
 
 type PostureShape = "agents" | "workspace" | "tools" | "scoped-tools" | "sandbox" | "gateway";
-type ShapeContext = {
-  readonly policyDocName: string;
-  readonly policyPath: string;
-  readonly targetPrefix?: string;
-  readonly propertyPrefix?: string;
-};
 type ListStyle =
   | { readonly kind: "node-commands" }
   | {
@@ -157,7 +155,7 @@ const shapes: Record<PostureShape, readonly ShapeStep[]> = {
 export function posturePolicyShapeFinding(
   shape: PostureShape,
   value: unknown,
-  params: ShapeContext,
+  params: PolicyShapeContext,
 ): HealthFinding | undefined {
   if (value === undefined) {
     return undefined;

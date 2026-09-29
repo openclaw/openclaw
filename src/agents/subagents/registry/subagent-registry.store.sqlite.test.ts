@@ -32,7 +32,7 @@ import {
   loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
-  loadSubagentRunsForSessionsFromSqlite,
+  loadSubagentRunsForSessionsInDatabase,
   saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
@@ -332,10 +332,12 @@ describe("subagent registry sqlite store", () => {
   });
 
   it("keeps full identity selection and records in one snapshot across an external move", async () => {
-    const read = (keys: readonly string[]) => loadSubagentRunsForSessionsFromSqlite(keys, []);
     const run = createRun({ model: "original-model" });
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-    const { db, path: databasePath } = openOpenClawStateDatabase();
+    const database = openOpenClawStateDatabase();
+    const { db, path: databasePath } = database;
+    const read = (keys: readonly string[]) =>
+      loadSubagentRunsForSessionsInDatabase(database, keys, []);
     const writer = new DatabaseSync(databasePath);
     let moved = false;
     db.setAuthorizer((action, table, column) => {

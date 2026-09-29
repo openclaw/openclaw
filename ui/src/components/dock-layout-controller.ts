@@ -83,17 +83,9 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     this.setOpen(false, false);
   }
 
-  /**
-   * Full-page route takeovers (settings) own the viewport, so docks hide while
-   * one renders. Hiding never persists — the user's open preference must survive
-   * the visit — and suppression also blocks `restoreOpenState()` so a reconnect
-   * mid-takeover cannot pop the panel back over settings. Returns true when the
-   * caller must resume its surface after the takeover ends.
-   *
-   * Only automatic restores are blocked. An explicit open (Ctrl+`, toolbar,
-   * `ui.command`) still wins and shows the dock over the takeover: swallowing a
-   * requested terminal would be a worse papercut than the one this fixes.
-   */
+  /** Hide during route takeovers without losing the persisted open preference.
+   * Suppression blocks automatic restores, but explicit opens still win.
+   * Returns true when the caller must resume its surface after the takeover. */
   setSuppressed(suppressed: boolean): boolean {
     if (this.suppressed === suppressed) {
       return false;
@@ -115,9 +107,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     ) {
       return false;
     }
-    this.open = true;
-    this.syncReservation();
-    this.host.requestUpdate();
+    this.setOpen(true, false);
     return true;
   }
 

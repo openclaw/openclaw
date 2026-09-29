@@ -21,9 +21,7 @@ import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { normalizeToolModelOverride, ToolAuthorizationError } from "./common.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
-import type { resolveSessionStatusEntry } from "./session-status-session-resolve.js";
-
-type ResolvedStatusSession = NonNullable<ReturnType<typeof resolveSessionStatusEntry>>;
+import type { ResolvedStatusSessionEntry as ResolvedStatusSession } from "./session-status-session-resolve.js";
 
 async function resolveModelOverride(params: {
   cfg: OpenClawConfig;

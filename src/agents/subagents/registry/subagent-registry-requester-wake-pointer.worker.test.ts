@@ -52,7 +52,7 @@ it("keeps a known requester wake commit while native staging waits for its ackno
             ...callbacks,
           }),
         clearPendingLifecycleError: unexpected,
-        countPendingDescendantRuns: () => 0,
+        countPendingDescendantRuns: async () => 0,
         getLatestRunForChildSession: () => null,
         suppressAnnounceForSteerRestart: () => false,
         shouldEmitEndedHookForRun: () => false,

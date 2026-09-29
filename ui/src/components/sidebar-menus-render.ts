@@ -434,23 +434,11 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
     return nothing;
   }
   const groupDefaultsStatus = host.sessionDataContext?.sessions.groupsStatus() ?? "idle";
-  const groupActionAccess = {
-    "group-defaults": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
-      method: "sessions.groups.update",
-      requiredScope: "operator.write",
-    }),
-    "rename-group": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
-      method: "sessions.groups.rename",
-      requiredScope: "operator.write",
-    }),
-    "new-group": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    }),
-    "delete-group": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
-      method: "sessions.groups.delete",
-      requiredScope: "operator.write",
-    }),
+  const groupActionMethods = {
+    "group-defaults": "sessions.groups.update",
+    "rename-group": "sessions.groups.rename",
+    "new-group": "sessions.groups.put",
+    "delete-group": "sessions.groups.delete",
   } as const;
   return renderSidebarSessionGroupMenu({
     menu,
@@ -458,7 +446,11 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
     connected: host.connected,
     groupDefaultsUnavailable: groupDefaultsStatus === "unavailable",
     actionDisabledReasons: Object.fromEntries(
-      Object.entries(groupActionAccess).flatMap(([action, access]) => {
+      Object.entries(groupActionMethods).flatMap(([action, method]) => {
+        const access = readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
+          method,
+          requiredScope: "operator.write",
+        });
         if (!access.allowed) {
           return [[action, access.reason]];
         }

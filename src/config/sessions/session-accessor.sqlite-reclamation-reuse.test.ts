@@ -75,6 +75,7 @@ import {
   tempDirs,
 } from "./session-accessor.sqlite-reclamation-reuse.test-support.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
+import { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import type { SqliteReclamationWorkerMessage } from "./session-accessor.sqlite-reclamation-worker.types.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
@@ -479,9 +480,10 @@ test.each([
       }
       expect(reclamationLeaseId).not.toBe(admittedLeaseId);
       const held = leasesFor(fixture);
-      expect(held).toHaveLength(2);
+      // Cold preparation owns only the reclaimer; it does not open a foreground actor.
+      expect(held).toHaveLength(cold ? 1 : 2);
       expect(new Set(held.map((row) => row.lease_id))).toEqual(
-        new Set([admittedLeaseId, reclamationLeaseId]),
+        new Set(cold ? [reclamationLeaseId] : [admittedLeaseId, reclamationLeaseId]),
       );
     } finally {
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
@@ -559,12 +561,12 @@ test.each(["path", "root"] as const)(
     const enteredQueue = createDeferredCore();
     const releaseQueue = createDeferredCore();
     const enqueued = createDeferredCore();
-    const observed: { claim?: reclamationWorker.SqliteReclamationClaim } = {};
+    const observed: { assertCurrent?: () => void } = {};
     const withWorker = reclamationWorker.withSqliteReclamationWorker;
     vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
       (options, claim, run, assertRequestCurrent, signal) => {
         const result = withWorker(options, claim, run, assertRequestCurrent, signal);
-        observed.claim = claim;
+        observed.assertCurrent = assertRequestCurrent;
         enqueued.resolve();
         return result;
       },
@@ -581,16 +583,16 @@ test.each(["path", "root"] as const)(
     let closing: Promise<unknown> | undefined;
     try {
       await Promise.race([enqueued.promise, request]);
-      const claim = observed.claim;
-      if (!claim) {
-        throw new Error("Expected reclamation to retain its admitted native generation");
+      const assertCurrent = observed.assertCurrent;
+      if (!assertCurrent) {
+        throw new Error("Expected reclamation to retain its original opening authority");
       }
-      expect(() => claim.assertCurrent()).not.toThrow();
+      expect(assertCurrent).not.toThrow();
       closing =
         retirement === "path"
           ? closeOpenClawAgentDatabaseByPathAsync(fixture.database.path)
           : closeOpenClawAgentDatabasesAsync(fixture.options.env.OPENCLAW_STATE_DIR);
-      expect(() => claim.assertCurrent()).toThrow("Agent database execution admission is closed");
+      expect(assertCurrent).toThrow("SQLite mutation Worker request was revoked");
       expect(spawned).toHaveLength(0);
       expect(unrelatedSettled).toBe(false);
       await Promise.all([
@@ -598,9 +600,7 @@ test.each(["path", "root"] as const)(
         closing,
       ]);
       expect(unrelatedSettled).toBe(false);
-      expect(() => claim.assertCurrent()).toThrow(
-        /revoked|no longer current|retired|retiring|released/i,
-      );
+      expect(assertCurrent).toThrow(/revoked|no longer current|retired|retiring|released/i);
       expect(spawned).toHaveLength(0);
       expect(loadSessionEntryReadOnly(fixture.scopes[0]!)).toMatchObject({ sessionId: "first" });
       expect(leasesFor(fixture)).toHaveLength(0);
@@ -802,7 +802,7 @@ test.each(["idle", "active"] as const)(
     validation.admissionPath = fixture.database.path;
     closeOpenClawAgentDatabasesForTest(fixture.options.env.OPENCLAW_STATE_DIR);
     clearOpenClawAgentIntegrityVerification(fixture.database.path, fixture.options.env);
-    const close = vi.spyOn(reclamationWorker.SqliteReclamationWorker.prototype, "close");
+    const close = vi.spyOn(SqliteReclamationWorker.prototype, "close");
     let drainOnCommit = false;
     let closesAtDrain: number | undefined;
     let nativeClosesAtDrain: number | undefined;
@@ -822,10 +822,8 @@ test.each(["idle", "active"] as const)(
     expect(reclamationLeaseId).toBeDefined();
     expect(reclamationLeaseId).not.toBe(admittedLeaseId);
     const held = leasesFor(fixture);
-    expect(held).toHaveLength(2);
-    expect(new Set(held.map((row) => row.lease_id))).toEqual(
-      new Set([admittedLeaseId, reclamationLeaseId]),
-    );
+    expect(held).toHaveLength(1);
+    expect(new Set(held.map((row) => row.lease_id))).toEqual(new Set([reclamationLeaseId]));
     expect(fullChecks()).toBe(1);
     if (timing === "active") {
       drainOnCommit = true;
@@ -840,7 +838,7 @@ test.each(["idle", "active"] as const)(
     }
     // Join the real native retirement without a timer or a whole-Gateway close.
     expect(close).toHaveBeenCalledOnce();
-    expect(nativeCloses).toHaveLength(1);
+    expect(nativeCloses).toHaveLength(0);
     await Promise.all([close.mock.results[0]?.value, ...nativeCloses]);
     expect(spawned[0]?.threadId).toBe(-1);
     expect(leasesFor(fixture)).toHaveLength(0);

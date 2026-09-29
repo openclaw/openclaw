@@ -693,7 +693,7 @@ async function runEmbeddedAgentInternal(
           result.meta.executionTrace?.runner !== "cli" &&
           params.isFinalFallbackAttempt === undefined
         ) {
-          settleRequesterRun(params, result, () => {
+          await settleRequesterRun(params, result, () => {
             throwIfAborted();
             params.preparedRunAdmission?.assertSourceCurrent();
           });
@@ -714,7 +714,7 @@ async function runEmbeddedAgentInternal(
         // candidate is skipped. The outer entry releases its children in that case.
         const failure =
           params.isFinalFallbackAttempt === undefined
-            ? settleFailedRequesterRun(
+            ? await settleFailedRequesterRun(
                 params,
                 error,
                 // Internal loop stops end inference, not the parent's authority to

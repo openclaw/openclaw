@@ -154,8 +154,8 @@ describe("subagent registry persistence resume", () => {
         saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
         await writeChildSession(stateDir, run.childSessionKey, `sess-pending-${label}-delivery`);
 
-        mod.initSubagentRegistry();
-        activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
+        await mod.initSubagentRegistry();
+        await activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
 
         await settleSubagentRegistryPersistenceWork(() => settleOwnedWork?.(true));
         expect(announceSpy).toHaveBeenCalled();
@@ -179,8 +179,8 @@ describe("subagent registry persistence resume", () => {
         "maybeWakeRequesterAfterAllChildrenSettled",
       ).mockImplementation(settlement.run);
       try {
-        mod.initSubagentRegistry();
-        activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
+        await mod.initSubagentRegistry();
+        await activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
         await settlement.waitForCalls(1);
         expect(settlement.run, "replay reached requester settlement").toHaveBeenCalledOnce();
         expect(announceSpy, "replayed announcement delivered").toHaveBeenCalledOnce();
@@ -207,8 +207,8 @@ describe("subagent registry persistence resume", () => {
         await settleSubagentRegistryPersistenceWork(() => settleOwnedWork?.(true));
 
         mod.resetSubagentRegistryForTests({ persist: false });
-        mod.initSubagentRegistry();
-        activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
+        await mod.initSubagentRegistry();
+        await activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
         await settleSubagentRegistryPersistenceWork(() => settleOwnedWork?.(true));
         expect(announceSpy, "retired completion is not replayed again").toHaveBeenCalledOnce();
       } finally {
@@ -268,11 +268,11 @@ describe("subagent registry persistence resume", () => {
         ).mockImplementation(wakeRequester);
         saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
-        mod.initSubagentRegistry();
+        await mod.initSubagentRegistry();
         if (restarting) {
-          mod.activateSubagentRegistry(() => firstGateway as never);
+          await mod.activateSubagentRegistry(() => firstGateway as never);
         } else {
-          activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
+          await activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
         }
         if (failure === "restart throwing source") {
           bindGatewayContextResolver(
@@ -328,11 +328,11 @@ describe("subagent registry persistence resume", () => {
               run.requesterSettleWake,
             );
           }
-          mod.initSubagentRegistry();
-          mod.activateSubagentRegistry(() => replacementGateway as never);
+          await mod.initSubagentRegistry();
+          await mod.activateSubagentRegistry(() => replacementGateway as never);
           const recoveredRun = mod.getSubagentRunByRunId(run.runId);
           expect(recoveredRun).not.toBe(retiredRun);
-          mod.activateSubagentRegistry(() => replacementGateway as never);
+          await mod.activateSubagentRegistry(() => replacementGateway as never);
           expect(mod.getSubagentRunByRunId(run.runId)).toBe(recoveredRun);
           expect(retiredResolver?.()).toBeUndefined();
           await mod.testing.runSweeperTickForTests();
@@ -427,8 +427,8 @@ describe("subagent registry persistence resume", () => {
               "maybeWakeRequesterAfterAllChildrenSettled",
             ).mockImplementation(wakeRequester);
             saveSubagentRegistryToSqlite(new Map(runs.map((run) => [run.runId, run])));
-            mod.initSubagentRegistry();
-            mod.activateSubagentRegistry(() => firstGateway as never);
+            await mod.initSubagentRegistry();
+            await mod.activateSubagentRegistry(() => firstGateway as never);
             const oldActiveCount = Math.min(runCount, 2);
             await waitForCalls(oldActiveCount);
             expect(wakeRequester).toHaveBeenCalledTimes(oldActiveCount);
@@ -453,7 +453,7 @@ describe("subagent registry persistence resume", () => {
                 expectedWakes,
               );
             }
-            mod.activateSubagentRegistry(() => replacementGateway as never);
+            await mod.activateSubagentRegistry(() => replacementGateway as never);
             const recoveredRuns = runs.map((run) => mod.getSubagentRunByRunId(run.runId)!);
             recoveredRuns.forEach((run, index) => {
               expect(run).not.toBe(retiredRuns[index]);
@@ -528,8 +528,8 @@ describe("subagent registry persistence resume", () => {
       const run = createOrphanedRequiredDelivery(expected.status);
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
-      mod.initSubagentRegistry();
-      activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
+      await mod.initSubagentRegistry();
+      await activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
       await nextTask();
 
       expect(announceSpy).not.toHaveBeenCalled();
@@ -603,7 +603,7 @@ describe("subagent registry persistence resume", () => {
       );
       await writeChildSession(stateDir, runningRun.childSessionKey, "sess-hydrated-running");
 
-      mod.initSubagentRegistry();
+      await mod.initSubagentRegistry();
       await nextTask();
 
       expect(mod.getSubagentRunByRunId(yieldedRun.runId)).toBeDefined();
@@ -628,8 +628,8 @@ describe("subagent registry persistence resume", () => {
         firstLifecycleOpen ? (gatewayContext as never) : undefined,
       );
       const resolveGatewayContext = vi.fn(() => gatewayContext as never);
-      mod.activateSubagentRegistry(resolveGatewayContext);
-      mod.activateSubagentRegistry(resolveGatewayContext);
+      await mod.activateSubagentRegistry(resolveGatewayContext);
+      await mod.activateSubagentRegistry(resolveGatewayContext);
       const restoredRun = mod.getSubagentRunByRunId(runningRun.runId);
       expect(restoredRun).toBeDefined();
       const restoredGatewayContextResolver = getGatewayContextResolver(restoredRun!);
@@ -676,8 +676,8 @@ describe("subagent registry persistence resume", () => {
       };
       const resolveReplacementContext = () =>
         ({ resolveGatewayContext: () => ({ recoveryRuntime: replacementRuntime }) }) as never;
-      mod.activateSubagentRegistry(resolveReplacementContext);
-      mod.activateSubagentRegistry(resolveReplacementContext);
+      await mod.activateSubagentRegistry(resolveReplacementContext);
+      await mod.activateSubagentRegistry(resolveReplacementContext);
       expect(getGatewayContextResolver(restoredRun!)).toBe(restoredGatewayContextResolver);
       expect(wakeRequester).not.toHaveBeenCalled();
       expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
@@ -734,11 +734,11 @@ describe("subagent registry persistence resume", () => {
           ),
         );
 
-        mod.initSubagentRegistry();
+        await mod.initSubagentRegistry();
         await nextTask();
         expect(wakeRequester).not.toHaveBeenCalled();
 
-        activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
+        await activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
         try {
           // Restoration can await task projection and a lazy import before admission.
           await waitForCalls(2);
@@ -817,8 +817,8 @@ describe("subagent registry persistence resume", () => {
           await writeChildSession(stateDir, entry.childSessionKey, `sess-${entry.runId}`);
         }
 
-        mod.initSubagentRegistry();
-        activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
+        await mod.initSubagentRegistry();
+        await activateSubagentPersistenceRegistry(mod, callGatewayModule.callGateway);
 
         const restored = mod.getSubagentRunByRunId(run.runId);
         expect(restored).toMatchObject({ runId: run.runId, taskRunId: run.taskRunId });

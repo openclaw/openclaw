@@ -296,14 +296,10 @@ src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
 src/agents/main-session-recovery/main-session-restart-recovery.test.ts
 src/agents/model-auth-availability.ts
-src/agents/model-auth.profiles.test.ts
-src/agents/model-auth.test.ts
 src/agents/model-fallback.test.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
-src/agents/openai-transport-stream.base.test.ts
-src/agents/openai-transport-stream.replay-and-tools.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
@@ -323,7 +319,6 @@ src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
 src/agents/subagents/spawn/acp-spawn.test.ts
 src/agents/subagents/spawn/subagent-spawn.test.ts
-src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts

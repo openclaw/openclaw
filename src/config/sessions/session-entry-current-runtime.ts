@@ -9,27 +9,13 @@ import { readIncognitoSessionEntryCurrent } from "./session-accessor.sqlite-inco
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import type {
-  SessionEntryCurrentFacts,
+  CapturedSessionEntryCurrentRead,
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
 import type { SessionEntryReadWorkerOwner } from "./session-entry-read-runtime.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
-
-export type CapturedSessionEntryCurrentRead =
-  | {
-      kind: "file";
-      source: SessionEntryCurrentSource;
-      assertSourceCurrent(this: void): void;
-      readCurrent(): Promise<SessionEntryCurrentFacts | undefined>;
-    }
-  | {
-      kind: "native" | "missing";
-      source?: undefined;
-      assertSourceCurrent(this: void): void;
-      readCurrent(): SessionEntryCurrentFacts | undefined;
-    };
 
 /** Capture during the initial admitted read; later checks acquire only finite worker custody. */
 export function captureSessionEntryCurrentRead(

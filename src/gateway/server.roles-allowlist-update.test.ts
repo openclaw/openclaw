@@ -78,7 +78,22 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
       }
     },
     prepareSqliteReadOnlyLocation: observeAsync(actual.prepareSqliteReadOnlyLocation),
-    prepareSqliteReadOnlyLocationAsync: observeAsync(actual.prepareSqliteReadOnlyLocationAsync),
+    startSqliteReadOnlyLocationAsync(
+      ...args: Parameters<typeof actual.startSqliteReadOnlyLocationAsync>
+    ) {
+      const finish = observe(args[0]);
+      try {
+        const preparation = actual.startSqliteReadOnlyLocationAsync(...args);
+        void preparation.result.then(
+          (prepared) => finish(prepared),
+          () => finish(),
+        );
+        return preparation;
+      } catch (error) {
+        finish();
+        throw error;
+      }
+    },
   };
 });
 

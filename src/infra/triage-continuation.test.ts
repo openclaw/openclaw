@@ -189,8 +189,9 @@ if(process.argv[4]==='defer'){
   await new Promise(resolve=>process.stdin.once('data',resolve));
 }
 process.stdout.write('{"status":"error","reason":"original"}\\n');
-await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw new Error('original exit overwritten');}},
+const completion=await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw new Error('original exit overwritten');}},
  {kind,phase,error:'original',installationRoot:${JSON.stringify(root)},gateway:'preserve'});
+console.error('triage-completion:'+completion);
 process.exitCode=7;
 ${heldHandle ? "timerControl.close();" : ""}
 `,
@@ -418,6 +419,7 @@ unix.each([
       expect(await loser.exit).toEqual({ code: 7, signal: null });
       expect(loser.output().stdout).toBe('{"status":"error","reason":"original"}\n');
       expect(loser.output().stderr).toContain("already owned");
+      expect(loser.output().stderr).toContain("triage-completion:undefined");
     }
     expect(readClaim(root)).toEqual(held);
     const label = nativeWon ? "native" : firstLabel;
@@ -440,6 +442,7 @@ unix.each([
     if (order === "failed-but-drained") {
       expect(first!.output().stderr).toContain("failed (exit 17)");
       expect(first!.output().stderr).not.toContain("cleanup is uncertain");
+      expect(first!.output().stderr).toContain("triage-completion:undefined");
       expect(first!.output().stdout).toBe('{"status":"error","reason":"original"}\n');
       expect(await first!.exit).toEqual({ code: 7, signal: null });
     }
@@ -448,6 +451,7 @@ unix.each([
     expect(readClaim(root)?.owner).not.toBe(held?.owner);
     await control(root, "next", "release");
     expect(await next.exit).toEqual({ code: 7, signal: null });
+    expect(next.output().stderr).toContain("triage-completion:completed");
   },
   60_000,
 );

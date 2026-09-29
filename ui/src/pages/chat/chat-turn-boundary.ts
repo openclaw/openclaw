@@ -35,17 +35,13 @@ export function hasForwardedSource(group: MessageGroup): boolean {
   return Boolean(group.senderSession) || assistantGroupIsForwardedBoundary(group);
 }
 
-function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
-  return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
-}
-
 /** Canonical user-turn boundary shared by insertion, outcome, and collapse projections. */
 export function chatItemStartsUserTurn(item: ChatItem | MessageGroup): boolean {
   if (item.kind === "notice") {
     return item.startsTurn === true;
   }
   if (item.kind === "message") {
-    return normalizeRoleForGrouping(resolveMessageRole(item.message)).toLowerCase() === "user";
+    return normalizeRoleForGrouping(resolveMessageRole(item.message)) === "user";
   }
   if (item.kind !== "group") {
     return false;
@@ -53,7 +49,7 @@ export function chatItemStartsUserTurn(item: ChatItem | MessageGroup): boolean {
   const role = item.role.toLowerCase();
   return (
     role === "user" ||
-    groupStartsProjectedTurnBoundary(item) ||
+    asRecord(asRecord(item.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true ||
     (role === "assistant" && assistantGroupIsForwardedBoundary(item))
   );
 }

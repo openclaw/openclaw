@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
-import type { ChatWorkspaceDock, UiSettings } from "../../../app/settings.ts";
+import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
 import type { FileSidebarNavigation } from "./chat-sidebar-content-types.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
@@ -11,13 +11,11 @@ export type SessionWorkspaceProps = {
   filter: SessionWorkspaceFilter;
   browserPath: string;
   browserSearch: string;
-  collapsed: boolean;
   sessionKey: string;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
   error: string | null;
   activeId: string | null;
-  onToggleCollapsed: () => void;
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
@@ -51,9 +49,7 @@ export type SessionWorkspaceState = {
   browserPath: string;
   browserSearch: string;
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
-  collapsed: boolean;
   connectionEpoch: number;
-  dock: ChatWorkspaceDock;
   diffContent?: SidebarContent;
   error: string | null;
   errorOwner?: object;

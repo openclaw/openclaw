@@ -1,10 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
 import {
   adoptPreparedLocation,
   cleanupSnapshotOperations,
 } from "../infra/sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-async-lifecycle.js";
@@ -21,8 +26,36 @@ import type {
 } from "./openclaw-state-read.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
+// These awaited fixtures observe Promise settlement; they do not prove blocked-host progress.
+function observeAsyncFixture<T>(run: () => Promise<T>): RetainedOperation<T> {
+  const completion = createRetainedOperation<T>(() => undefined);
+  try {
+    void run().then(completion.resolve, completion.reject);
+  } catch (error) {
+    completion.reject(error);
+  }
+  return completion.operation;
+}
+
+// This fixture's preparation owns no resource beyond the separately cleaned prepared location.
+function retainFixturePreparation<T>(preparation: RetainedOperation<T>) {
+  const close = createRetainedOperation<void>(() => {
+    if (preparation.read().status !== "pending") {
+      close.resolve(undefined);
+    }
+  });
+  void preparation.result.then(
+    () => close.operation.service(),
+    () => close.operation.service(),
+  );
+  return { ...preparation, startClose: () => close.operation };
+}
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 const mocks = vi.hoisted(() => ({
-  source: "/synthetic/state/source.sqlite",
+  source: "",
+  sourceIdentity: { key: "", canonicalPath: "" },
   directory: "/synthetic/state/snapshot",
   resources: new Set<OpenClawStateDatabaseAsyncResource>(),
   removed: [] as string[],
@@ -49,16 +82,20 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const remove = (file: string) => {
+  const remove = (
+    file: Parameters<typeof actual.rmSync>[0],
+    options?: Parameters<typeof actual.rmSync>[1],
+  ) => {
+    if (file !== mocks.directory && file !== "/synthetic/state/initial-snapshot") {
+      return actual.rmSync(file, options);
+    }
     mocks.removed.push(file);
     mocks.events.push("remove");
   };
   return {
     ...actual,
-    statSync: () => ({}),
     default: {
       ...actual,
-      existsSync: () => false,
       rmSync: remove,
       promises: { ...actual.promises, rm: mocks.removeAsync },
     },
@@ -70,7 +107,7 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     coordinationKey: databasePath,
     databasePath,
-    identity: { key: databasePath, canonicalPath: databasePath },
+    identity: mocks.sourceIdentity,
     assertCurrent() {},
   }),
   registerOpenClawStateDatabaseAsyncResource: (resource: OpenClawStateDatabaseAsyncResource) => {
@@ -94,7 +131,7 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
     admission: {
       coordinationKey: path,
       databasePath: path,
-      identity: { key: path, canonicalPath: path },
+      identity: mocks.sourceIdentity,
       assertCurrent() {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic/state" },
@@ -103,7 +140,16 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
 
 vi.mock("../infra/sqlite-snapshot-source.js", () => ({
   prepareSqliteReadOnlyLocation: mocks.prepare,
-  prepareSqliteReadOnlyLocationAsync: mocks.prepare,
+  startSqliteReadOnlyLocationAsync: (...args: Parameters<typeof mocks.prepare>) =>
+    retainFixturePreparation(
+      observeAsyncFixture(async () => {
+        const prepared = await mocks.prepare(...args);
+        return {
+          ...prepared,
+          startCleanup: () => observeAsyncFixture(() => prepared.cleanupAsync()),
+        };
+      }),
+    ),
   prepareSqliteReadOnlyLocationSync: mocks.forbidden,
 }));
 vi.mock("../infra/sqlite-readonly-location.js", () => ({
@@ -120,13 +166,28 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
 vi.mock("./openclaw-state-db-schema-version.js", () => ({
   assertSupportedStateSchemaVersion: mocks.forbidden,
 }));
-vi.mock("./openclaw-state-read-worker.js", () => ({
-  createOpenClawStateReadTransport: () => ({
-    validateFresh: async () => {},
-    read: mocks.read,
-    close: mocks.close,
-  }),
-}));
+vi.mock("./openclaw-state-read-worker.js", () => {
+  const progress = new Set<() => void>();
+  return {
+    captureOpenClawStateReadSource: () => ({
+      createTransport: () => ({
+        startRead: (source: OpenClawStateReadLocation, authority: OpenClawStateReadAuthority) =>
+          observeAsyncFixture(() => mocks.read(source, authority)),
+        startValidateFresh: () => observeAsyncFixture(async () => {}),
+        startClose: () => observeAsyncFixture(mocks.close),
+      }),
+      own(service: () => void) {
+        progress.add(service);
+        return () => progress.delete(service);
+      },
+      service() {
+        for (const service of Array.from(progress)) {
+          service();
+        }
+      },
+    }),
+  };
+});
 
 let exitCleanup: (() => void) | undefined;
 let restoreExitSpy: () => void;
@@ -144,6 +205,9 @@ beforeAll(() => {
 afterAll(() => restoreExitSpy());
 
 beforeEach(() => {
+  mocks.source = join(tempDirs.make("openclaw-signal-custody-source-"), "source.sqlite");
+  fs.writeFileSync(mocks.source, "Controlled source identity; this fixture never opens SQLite.");
+  mocks.sourceIdentity = readDatabasePathIdentitySync(mocks.source);
   mocks.removed.length = 0;
   mocks.events.length = 0;
   mocks.forbidden.mockClear();
@@ -207,7 +271,9 @@ it.each(["direct", "snapshot"] as const)(
         ? runDirectRead()
         : withOpenClawStateDatabaseReadSnapshot(async () => "complete", { path: mocks.source }),
     );
-    await preparing.promise;
+    expect(await Promise.race([preparing.promise.then(() => "preparing"), operation])).toBe(
+      "preparing",
+    );
     const cleanup = cleanupSnapshotOperations();
     try {
       assertFilesRetained();

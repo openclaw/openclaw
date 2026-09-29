@@ -149,7 +149,7 @@ export function registerBrowserCleanupBoundaryTests({
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
 
         if (owner === "session reset") {
-          mod.prepareSubagentSessionCleanupRevocation(childSessionKey)();
+          (await mod.prepareSubagentSessionCleanupRevocation(childSessionKey))();
         } else if (owner !== "current owner") {
           mockPendingAgentWait();
           await mod.registerSubagentRun({

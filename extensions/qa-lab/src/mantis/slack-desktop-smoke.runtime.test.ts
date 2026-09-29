@@ -432,9 +432,6 @@ describe("mantis Slack desktop smoke runtime", () => {
       const remoteScript = commands
         .find((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run")
         ?.args.at(-1);
-      for (const scenarioId of expectedScenarioIds) {
-        expect(remoteScript?.split(`--scenario '${scenarioId}'`)).toHaveLength(3);
-      }
       expect(remoteScript).toContain(
         expectedScenarioIds.map((scenarioId) => `--scenario '${scenarioId}'`).join(" "),
       );

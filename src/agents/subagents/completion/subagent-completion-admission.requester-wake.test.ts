@@ -178,7 +178,7 @@ describe("persisted subagent requester wakes", () => {
       expect(() =>
         assertSubagentRegistryWriteOutcomeKnown([input.subagent.runId], context.admission),
       ).toThrow(observedError);
-      restoreSubagentRunsFromDisk({ runs: subagentRuns });
+      await restoreSubagentRunsFromDisk({ runs: subagentRuns });
       expect(() =>
         assertSubagentRegistryWriteOutcomeKnown(
           [input.subagent.runId],

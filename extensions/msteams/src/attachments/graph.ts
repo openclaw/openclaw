@@ -3,6 +3,7 @@ import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
   isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
@@ -32,7 +33,6 @@ import {
   normalizeContentType,
   resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
-  resolveRequestUrl,
   safeFetchWithPolicy,
 } from "./shared.js";
 import type {

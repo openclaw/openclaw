@@ -427,11 +427,13 @@ export function loadSubagentRunsByRunIdsFromSqlite(
 }
 
 /** Loads the canonical subagent registry from shared SQLite state. */
-export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> {
+export function loadSubagentRegistryFromSqlite(
+  database?: Pick<OpenClawStateDatabase, "db">,
+): Map<string, SubagentRunRecord> {
   // Retired file-era runs are intentionally not recovered here: after SQLite
   // pruning, the file cannot prove whether a run is live or stale. Doctor owns discard.
   const runs = new Map<string, SubagentRunRecord>();
-  for (const row of readSubagentRegistryRows()) {
+  for (const row of readSubagentRegistryRows(undefined, database)) {
     const entry = rowToSubagentRunRecord(row);
     if (entry) {
       runs.set(entry.runId, entry);
@@ -588,13 +590,6 @@ export function subagentRunsDurableBasisMatches(
     loadSubagentRunsForSessionsInDatabase(database, basis.sessionKeys, basis.liveTopology)
       .digest === basis.digest
   );
-}
-
-export function loadSubagentRunsForSessionsFromSqlite(
-  sessionKeys: readonly string[],
-  inMemoryRuns: Iterable<SubagentRunReadRecord>,
-) {
-  return loadSubagentRunsForSessions(openOpenClawStateDatabase(), sessionKeys, inMemoryRuns);
 }
 
 /** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */

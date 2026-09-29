@@ -37,12 +37,8 @@ import {
 } from "./upstream-prompt-provenance.js";
 import {
   buildResolvedCodexUserPromptMessage,
-  buildCodexUserPromptMessage,
   resolveFinalCodexMirrorMessages,
 } from "./user-prompt-message.js";
-
-export { buildCodexUserPromptMessage };
-export { projectBoundedCodexThreadHistory };
 
 type UserMessagePersistenceNotifier = (receipt: MirroredUserMessageReceipt) => void;
 

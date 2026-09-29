@@ -273,7 +273,7 @@ it("publishes removal invalidations before identity and row observers without ar
     expect(lifecycleFacts).toEqual([
       {
         sharing: undefined,
-        generation: undefined,
+        generation: null,
         writableCache: undefined,
         readOnlyCache: undefined,
       },
@@ -283,7 +283,7 @@ it("publishes removal invalidations before identity and row observers without ar
         invalidated: true,
         ownerTagged: true,
         sharing: undefined,
-        generation: undefined,
+        generation: null,
         writableCache: undefined,
         readOnlyCache: undefined,
       },

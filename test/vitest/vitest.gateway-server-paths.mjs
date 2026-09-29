@@ -61,6 +61,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-repository-publication-restart.test.ts",
   "src/gateway/github-repository-publication-workflows.test.ts",
   "src/gateway/github-repository-publication.test.ts",
+  "src/gateway/github-shared-publication-events.test.ts",
   "src/gateway/github-shared-publication-read.test.ts",
   "src/gateway/github-user-identity.cache.test.ts",
   "src/gateway/github-user-identity.oidc.test.ts",
@@ -149,6 +150,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/worktrees.authorization.test.ts",
   "src/gateway/server-methods/worktrees.test.ts",
   "src/gateway/server-worker-environment-startup.test.ts",
+  "src/gateway/server-worker-placement-startup-maintenance.test.ts",
   "src/gateway/server.sessions.create-worktree-spawn.test.ts",
   "src/gateway/server.sessions.create.projects.test.ts",
   "src/gateway/server/skill-library-read.test.ts",
@@ -239,6 +241,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/local-workspace-projection.test.ts",
   "src/gateway/worker-environments/node-desktop-carrier.test.ts",
   "src/gateway/worker-environments/node-enrollment.test.ts",
+  "src/gateway/worker-environments/node-worker-workspace-publication.test.ts",
   "src/gateway/worker-environments/node-workspace-transfer-credential.test.ts",
   "src/gateway/worker-environments/node-workspace-transfer-revocation.test.ts",
   "src/gateway/worker-environments/placement-abandon-lifecycle.test.ts",
@@ -310,6 +313,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/service-prepare.test.ts",
   "src/gateway/worker-environments/service.plugin-create.test.ts",
   "src/gateway/worker-environments/session-attachment-service.test.ts",
+  "src/gateway/worker-environments/session-repository-checkpoints.test.ts",
   "src/gateway/worker-environments/store-change-events.test.ts",
   "src/gateway/worker-environments/store-node-enrollment.test.ts",
   "src/gateway/worker-environments/store-recovery.worker.test.ts",
@@ -339,6 +343,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-launcher.claim-recovery.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher.lazy.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher.test.ts",
+  "src/gateway/worker-environments/worker-turn-media.boundary.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.computer.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.inference-publication.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.inference-reconnect.test.ts",
@@ -446,6 +451,8 @@ export const gatewayMethodsTestExclude = [
 
 // Gateway server tests that need a private module graph and the plain Vitest runner.
 export const gatewayServerIsolatedTestFiles = [
+  // Native source captures must not retain this fixture's forbidden process constructors.
+  "src/gateway/server-startup-post-attach.test.ts",
   "src/gateway/server.agent-artifact-apis.test.ts",
   "src/gateway/server-worker-environment-startup.state.test.ts",
   // A failed native close permanently fences this process's metadata owner.

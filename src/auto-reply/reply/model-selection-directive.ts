@@ -80,17 +80,13 @@ function scoreFuzzyMatch(params: {
     if (!fragment) {
       return 0;
     }
-    let score = 0;
     if (value === fragment) {
-      score = Math.max(score, weights.exact);
+      return weights.exact;
     }
     if (value.startsWith(fragment)) {
-      score = Math.max(score, weights.starts);
+      return weights.starts;
     }
-    if (value.includes(fragment)) {
-      score = Math.max(score, weights.includes);
-    }
-    return score;
+    return value.includes(fragment) ? weights.includes : 0;
   };
 
   let score = 0;
@@ -133,12 +129,7 @@ function scoreFuzzyMatch(params: {
   if (fragmentVariants.length === 0 && variantCount > 0) {
     score -= variantCount * 30;
   } else if (fragmentVariants.length > 0) {
-    if (variantMatchCount > 0) {
-      score += variantMatchCount * 40;
-    }
-    if (variantMatchCount === 0) {
-      score -= 20;
-    }
+    score += variantMatchCount > 0 ? variantMatchCount * 40 : -20;
   }
 
   const defaultProvider = normalizeProviderId(params.defaultProvider);

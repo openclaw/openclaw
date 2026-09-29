@@ -84,12 +84,15 @@ import {
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { isLegacyMcpOAuthWorkerCommand } from "../infra/state-migrations.mcp-oauth.worker-contract.js";
+import { executeLegacyMcpOAuthWorkerCommand } from "../infra/state-migrations.mcp-oauth.worker.js";
 import {
   countRecentTelemetrySessionsInDatabase,
   persistTelemetrySuccessInDatabase,
   readTelemetryStateInWorker,
 } from "../infra/telemetry-store.kernel.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
+import { recordUpdateRunStepInWorker } from "../infra/update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
@@ -153,6 +156,10 @@ import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
 } from "./openclaw-state-worker-contract.js";
+import {
+  executeRepositoryWorkspaceCommand,
+  isRepositoryWorkspaceCommand,
+} from "./session-repository-workspaces.worker.js";
 import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 import { executeUserProfileCommand, isUserProfileCommand } from "./user-profiles.worker.js";
@@ -188,6 +195,9 @@ export function executeSharedStateCommand(
   });
   if (isMcpOAuthWorkerCommand(command)) {
     return executeMcpOAuthWorkerCommand(open(), command);
+  }
+  if (isLegacyMcpOAuthWorkerCommand(command)) {
+    return executeLegacyMcpOAuthWorkerCommand(open(), command);
   }
   if (command.type === "execApprovals.commitAuthorizations" || isOperatorApprovalCommand(command)) {
     const databaseOptions = {
@@ -317,6 +327,11 @@ export function executeSharedStateCommand(
       { database, path: context.databasePath, env: getSqliteWorkerStateContext().environment },
     );
   }
+  if (command.type === "updateRuns.recordStep") {
+    return recordUpdateRunStepInWorker(command.input, stateOptions(), (stage) =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
   if (command.type === "updateRuns.reconcile") {
     return reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), (stage) =>
       requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
@@ -360,6 +375,9 @@ export function executeSharedStateCommand(
       database: open(),
       ...stateOptions(),
     });
+  }
+  if (isRepositoryWorkspaceCommand(command)) {
+    return executeRepositoryWorkspaceCommand(command, open());
   }
   if (isUserProfileCommand(command)) {
     return executeUserProfileCommand(command, {

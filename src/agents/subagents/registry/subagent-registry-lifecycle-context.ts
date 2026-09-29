@@ -30,7 +30,7 @@ export type SubagentLifecycleOptions = {
     ...runIds: string[]
   ) => Promise<void>;
   clearPendingLifecycleError(runId: string): void;
-  countPendingDescendantRuns(rootSessionKey: string): number;
+  countPendingDescendantRuns(rootSessionKey: string, assertCurrent: () => void): Promise<number>;
   getLatestRunForChildSession(
     childSessionKey: string,
     matches?: (entry: SubagentRunRecord) => boolean,
@@ -104,7 +104,7 @@ export interface SubagentLifecycleCleanupContext extends SubagentLifecycleCommon
 
 export interface SubagentLifecycleAnnounceCleanupContext
   extends SubagentLifecycleCleanupContext, SubagentLifecycleWakeContext {
-  completeCleanupBookkeeping(args: CleanupBookkeepingParams): void;
+  completeCleanupBookkeeping(args: CleanupBookkeepingParams): Promise<void>;
 }
 
 export type PendingRequesterSettleWakeCommit = {
@@ -118,6 +118,14 @@ export type PendingRequesterSettleWakeCommit = {
   committedWake?: RequesterWakeCommittedWrite;
   /** One current retry caller must resume the published transition. */
   needsWakeContinuation?: boolean;
+  initialTransfer?: {
+    kind: "intent" | "yielded-cohort" | "completed-cohort";
+    completion: Promise<void>;
+    published: boolean;
+    completed: boolean;
+    blocked: boolean;
+    retire(): void;
+  };
   stateContext?: OpenClawStateWorkerContext;
   isPublishedRetirement(entry: SubagentRunRecord): boolean;
   adoptPublished(entries: readonly SubagentRunRecord[]): void;
@@ -161,6 +169,8 @@ export type CleanupBookkeepingParams = {
   preserveTranscript?: boolean;
   provisionalKill?: boolean;
   skipRequesterSettleWake?: boolean;
+  isCurrent?: () => boolean;
+  discardDelivery?: () => void;
 };
 
 export type ScheduledRequesterSettleWake = {

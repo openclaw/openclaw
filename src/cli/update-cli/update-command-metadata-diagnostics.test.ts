@@ -396,17 +396,19 @@ it.each(cases)(
     ).rejects.toMatchObject({ code: 1 });
 
     const result = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
+    const metadataFailure = expect.objectContaining({
+      name: "target-metadata-preflight",
+      exitCode: 1,
+      failureFacts: [expect.objectContaining({ code, message: expect.stringMatching(detail) })],
+    });
     expect(result).toMatchObject({
       status: "error",
       mode: "npm",
       reason: "target-metadata-preflight",
-      steps: [
-        expect.objectContaining({
-          failureFacts: [expect.objectContaining({ code, message: expect.stringMatching(detail) })],
-        }),
-      ],
+      failedStep: metadataFailure,
+      steps: expect.arrayContaining([metadataFailure]),
     });
-    const message = result.steps[0]?.failureFacts?.[0]?.message;
+    const message = result.failedStep?.failureFacts?.[0]?.message;
     expect(message).toMatch(/openclaw update/);
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     await printResult(result, {});

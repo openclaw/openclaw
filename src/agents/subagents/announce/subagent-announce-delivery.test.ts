@@ -2203,85 +2203,81 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it.each([undefined, 0, 600])(
-    "delivers dormant child completion with requester budget %s under restrictive gateway roles",
-    async (requesterRunTimeoutSeconds) => {
-      const callGateway = createGatewayMock();
-      const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
-        result: {
-          deliveryStatus: sentDeliveryStatus,
-          payloads: [{ text: "requester voice completion" }],
-          meta: { finalAssistantVisibleText: "requester voice completion" },
-        },
-      });
-      testing.setDepsForTest({
-        callGateway,
-        dispatchGatewayMethodInProcess,
-        getRequesterSessionActivity: () => ({
-          sessionId: "requester-session-local",
-          isActive: false,
-        }),
-        getRuntimeConfig: () => cfg,
-      });
+  it("delivers dormant child completion under restrictive gateway roles with Gateway-owned timeout policy", async () => {
+    const callGateway = createGatewayMock();
+    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
+      result: {
+        deliveryStatus: sentDeliveryStatus,
+        payloads: [{ text: "requester voice completion" }],
+        meta: { finalAssistantVisibleText: "requester voice completion" },
+      },
+    });
+    testing.setDepsForTest({
+      callGateway,
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => cfg,
+    });
 
-      const ownerContext = { owner: "gateway-a" } as never;
-      const resolveGatewayContext = () => ownerContext;
-      const signal = new AbortController().signal;
-      const result = await deliverSubagentAnnouncement({
-        requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
-        targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
-        requesterRunTimeoutSeconds,
-        triggerMessage: "child done",
-        steerMessage: "child done",
-        requesterSessionOrigin: slackThreadOrigin,
-        completionDirectOrigin: slackThreadOrigin,
-        directOrigin: slackThreadOrigin,
+    const ownerContext = { owner: "gateway-a" } as never;
+    const resolveGatewayContext = () => ownerContext;
+    const signal = new AbortController().signal;
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      sourceSessionKey: "agent:main:subagent:child",
+      internalEvents: taskCompletionEvents({
+        childSessionKey: "agent:main:subagent:child",
+        childSessionId: "child-session-local",
+      }),
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-dispatch",
+      resolveGatewayContext,
+      signal,
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(result).toMatchObject({
+      requesterVisibleFinalDelivered: true,
+      finalAssistantVisibleText: "requester voice completion",
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      bestEffortDeliver: true,
+    });
+    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 1)).not.toHaveProperty("timeout");
+    const dispatchOptions = mockCallArg(dispatchGatewayMethodInProcess, 0, 2);
+    expect(dispatchOptions).toMatchObject({
+      cancelOnDeadline: true,
+      expectFinal: true,
+      forceSyntheticClient: true,
+      operatorRoleActor: { kind: "system" },
+      delegatedToolPolicyHandoff: {
         sourceSessionKey: "agent:main:subagent:child",
-        internalEvents: taskCompletionEvents({
-          childSessionKey: "agent:main:subagent:child",
-          childSessionId: "child-session-local",
-        }),
-        requesterIsSubagent: false,
-        expectsCompletionMessage: true,
-        bestEffortDeliver: true,
-        directIdempotencyKey: "announce-local-dispatch",
-        resolveGatewayContext,
-        signal,
-      });
-
-      expectDeliveryPath(result, "direct");
-      expect(result).toMatchObject({
-        requesterVisibleFinalDelivered: true,
-        finalAssistantVisibleText: "requester voice completion",
-      });
-      expect(callGateway).not.toHaveBeenCalled();
-      expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
-        deliver: true,
-        timeout: requesterRunTimeoutSeconds,
-        channel: "slack",
-        accountId: "acct-1",
-        to: "channel:C123",
-        threadId: "171.222",
-        bestEffortDeliver: true,
-      });
-      const dispatchOptions = mockCallArg(dispatchGatewayMethodInProcess, 0, 2);
-      expect(dispatchOptions).toMatchObject({
-        cancelOnDeadline: true,
-        expectFinal: true,
-        forceSyntheticClient: true,
-        operatorRoleActor: { kind: "system" },
-        delegatedToolPolicyHandoff: {
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceSessionId: "child-session-local",
-          targetSessionKey: "agent:main:slack:channel:C123:thread:171.222",
-          targetSessionId: "requester-session-local",
-          idempotencyKey: "announce-local-dispatch",
-        },
-        resolveGatewayContext,
-        signal: expect.any(AbortSignal),
-      });
-    },
-  );
+        sourceSessionId: "child-session-local",
+        targetSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+        targetSessionId: "requester-session-local",
+        idempotencyKey: "announce-local-dispatch",
+      },
+      resolveGatewayContext,
+      signal: expect.any(AbortSignal),
+    });
+  });
 
   registerDescendantWakeCurrencyTests({
     createRoleRestrictedInProcessGatewayMock,
