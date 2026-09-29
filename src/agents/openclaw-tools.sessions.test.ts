@@ -914,6 +914,11 @@ describe("sessions tools", () => {
 
   it.each([
     { name: "steers into its running child", steered: true },
+    {
+      name: "steers a child busy past the delivery deadline",
+      steered: true,
+      busyPastDeadline: true,
+    },
     { name: "starts the same child after no_active_run", rejection: "no_active_run" as const },
     { name: "starts the same child after stale_run", rejection: "stale_run" as const },
     { name: "starts the same child after not_streaming", rejection: "not_streaming" as const },
@@ -927,7 +932,8 @@ describe("sessions tools", () => {
     { name: "starts an explicit followup", mode: "followup" as const },
     { name: "starts a waited turn", timeoutSeconds: 1 },
     { name: "starts an idle child", idle: true },
-  ])("sessions_send $name", async ({ steered, rejection, mode, timeoutSeconds = 0, idle }) => {
+  ])("sessions_send $name", async (testCase) => {
+    const { steered, busyPastDeadline, rejection, mode, timeoutSeconds = 0, idle } = testCase;
     const requesterKey = "agent:main:main";
     const targetKey = "agent:main:subagent:steering-child";
     const sessionId = "own-child-active-session";
@@ -936,6 +942,16 @@ describe("sessions tools", () => {
       { sessionId, updatedAt: 1, spawnedBy: requesterKey, spawnDepth: 1 },
     );
     const queueMessage = idle ? undefined : activeRun(targetKey, { sessionId });
+    if (busyPastDeadline && queueMessage) {
+      queueMessage.mockImplementationOnce(async (_text, options) => {
+        // Admission succeeds, but this busy run cannot commit before the delivery deadline.
+        if (options?.waitForTranscriptCommit !== false) {
+          throw new Error(
+            "queued steering message was not committed to the transcript before timeout",
+          );
+        }
+      });
+    }
     const queue = vi.spyOn(embeddedRuns, "queueEmbeddedAgentMessageWithOutcomeAsync");
     const prepare = vi.spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup");
     try {
@@ -979,9 +995,7 @@ describe("sessions tools", () => {
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: 30_000,
-          ...(mode === "steer"
-            ? { waitForTranscriptCommit: false }
-            : { waitForTranscriptCommit: true, sourceReplyDeliveryMode: "message_tool_only" }),
+          waitForTranscriptCommit: false,
           userTurnTranscriptRecorder: expect.any(Object),
         });
       }

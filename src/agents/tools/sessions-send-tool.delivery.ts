@@ -113,8 +113,8 @@ export async function trySessionsSendActiveRunDelivery(
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
-        // Explicit steering acknowledges admission without waiting for a busy run's transcript.
-        ...(params.mode === "steer"
+        // Waiting for a busy run's transcript would withdraw accepted guidance at the deadline.
+        ...(params.mode === "steer" || ownChild
           ? { waitForTranscriptCommit: false }
           : { waitForTranscriptCommit: true, sourceReplyDeliveryMode }),
         // The receiving runtime owns transcript writes to this exact incarnation.
