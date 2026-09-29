@@ -214,6 +214,36 @@ async function withAsyncReadHook<T>(
   }
 }
 
+// A second launch in one test must redispatch through the placement store,
+// which only admits dispatches from local, reclaimed, or failed placements.
+async function reclaimActivePlacement() {
+  const active = placements.get(SESSION_ID);
+  if (active?.state !== "active") {
+    throw new Error("expected an active placement to reclaim");
+  }
+  const draining = placements.startDrain({
+    sessionId: SESSION_ID,
+    environmentId: active.environmentId,
+    ownerEpoch: active.activeOwnerEpoch,
+    expectedGeneration: active.generation,
+  });
+  const reconciling = placements.startReconcile({
+    sessionId: SESSION_ID,
+    environmentId: active.environmentId,
+    ownerEpoch: active.activeOwnerEpoch,
+    expectedGeneration: draining.generation,
+  });
+  const reclaimed = placements.transition({
+    sessionId: SESSION_ID,
+    from: "reconciling",
+    to: "reclaimed",
+    expectedGeneration: reconciling.generation,
+  });
+  if (reclaimed.state !== "reclaimed") {
+    throw new Error("expected a reclaimed placement");
+  }
+}
+
 function afterNextModelContextSnapshot(afterSnapshot: () => Promise<void>) {
   let read = vi.spyOn(WorkerTaskPool.prototype, "run");
   async function intercept(
@@ -741,6 +771,7 @@ describe("worker detached model-context branch parity", () => {
       ...request("worker-fallback-stale-base"),
       userTurnTranscriptRecorder: inputRecorder,
     });
+    await reclaimActivePlacement();
     const writer = SessionManager.open(sessionTarget);
     const failedAssistant = makeAgentAssistantMessage({
       content: [],
@@ -765,6 +796,7 @@ describe("worker detached model-context branch parity", () => {
       ...request("worker-fallback-tool-tail"),
       userTurnTranscriptRecorder: inputRecorder,
     });
+    await reclaimActivePlacement();
     const writer = SessionManager.open(sessionTarget);
     writer.appendMessage(
       attachSessionTranscriptRunId(
@@ -800,6 +832,7 @@ describe("worker detached model-context branch parity", () => {
     });
     const admission = inputRecorder.getAdmissionReceipt();
     expect(admission).toBeDefined();
+    await reclaimActivePlacement();
     const writer = SessionManager.open(sessionTarget);
     const foreignTailId = writer.appendMessage(
       attachSessionTranscriptRunId(
