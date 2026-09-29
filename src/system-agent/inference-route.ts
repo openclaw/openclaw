@@ -21,6 +21,8 @@ import { SYSTEM_AGENT_ID } from "./agent-id.js";
 
 export type SystemAgentConfiguredRoute = {
   modelTarget?: "utility";
+  /** Exact authored fallback reference; never an arbitrary model override. */
+  fallbackModelRef?: string;
   /** Unprojected input, kept separate from prepared execution credentials. */
   sourceConfig: OpenClawConfig;
   runConfig: OpenClawConfig;
@@ -41,14 +43,62 @@ export type SystemAgentConfiguredRoute = {
 export type SystemAgentConfiguredRouteDeps = {
   /** Explicit role selection for verifying a utility candidate alongside a working primary. */
   modelTarget?: "utility";
+  fallbackModelRef?: string;
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
 type SystemAgentRouteProjectionDeps = Pick<
   SystemAgentConfiguredRouteDeps,
-  "loadAuthProfileStoreForRuntime" | "pluginMetadataPlugins" | "modelTarget"
+  "loadAuthProfileStoreForRuntime" | "pluginMetadataPlugins" | "modelTarget" | "fallbackModelRef"
 >;
+
+/** Carry the selected role/candidate through every ownership projection and recheck. */
+export function systemAgentRouteOptions(
+  selection: Pick<SystemAgentConfiguredRoute, "modelTarget" | "fallbackModelRef">,
+  deps: SystemAgentRouteProjectionDeps = {},
+): SystemAgentRouteProjectionDeps {
+  return {
+    ...deps,
+    modelTarget: selection.modelTarget,
+    fallbackModelRef: selection.fallbackModelRef,
+  };
+}
+
+/** Keep ordinary fallback inheritance and ordering, including each reference's own profile. */
+export async function resolveSystemAgentConfiguredFallbackRefs(
+  config: OpenClawConfig,
+  agentId: string,
+  primary: { provider: string; model: string },
+  deps: SystemAgentRouteProjectionDeps = {},
+): Promise<string[]> {
+  const [{ resolveModelCandidateChain }, selection] = await Promise.all([
+    import("../agents/model-fallback-candidates.js"),
+    import("../agents/model-selection-resolve.js"),
+  ]);
+  const options = {
+    cfg: config,
+    agentId,
+    defaultProvider: primary.provider,
+    manifestPlugins: deps.pluginMetadataPlugins,
+  };
+  const aliasIndex = selection.buildModelAliasIndex(options);
+  const refs = selection.resolveConfiguredModelFallbacks(options).flatMap((raw) => {
+    const resolved = selection.resolveModelRefFromString({ ...options, aliasIndex, raw });
+    return resolved ? [{ raw, ref: resolved.ref }] : [];
+  });
+  const candidates = resolveModelCandidateChain({
+    ...options,
+    ...primary,
+    requestedRouteResolution: "resolved",
+  });
+  // Candidate deduplication omits profile pins; retain the authored reference order.
+  return refs
+    .filter(({ ref }) =>
+      candidates.some(({ provider, model }) => ref.provider === provider && ref.model === model),
+    )
+    .map(({ raw }) => raw);
+}
 
 /** The canonical source and default-materialized view from one authoritative read. */
 export type SystemAgentConfigSnapshot = Pick<
@@ -130,7 +180,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
   if (!configuredSelection) {
     return null;
   }
-  const selection = simpleCompletion.resolveSimpleCompletionSelectionForAgent({
+  let selection = simpleCompletion.resolveSimpleCompletionSelectionForAgent({
     cfg: runConfig,
     agentId: modelOwnerAgentId,
     // Catalog IDs can contain @ without naming an auth profile. Keep implicit
@@ -140,6 +190,30 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
   });
   if (!selection) {
     return null;
+  }
+  if (deps.fallbackModelRef !== undefined) {
+    if (
+      configuredSelection.modelTarget === "utility" ||
+      !(
+        await resolveSystemAgentConfiguredFallbackRefs(
+          runConfig,
+          modelOwnerAgentId,
+          { provider: selection.provider, model: selection.modelId },
+          deps,
+        )
+      ).includes(deps.fallbackModelRef)
+    ) {
+      return null;
+    }
+    selection = simpleCompletion.resolveSimpleCompletionSelectionForAgent({
+      cfg: runConfig,
+      agentId: modelOwnerAgentId,
+      modelRef: deps.fallbackModelRef,
+      manifestPlugins: deps.pluginMetadataPlugins,
+    });
+    if (!selection) {
+      return null;
+    }
   }
   const metadataSnapshot = deps.pluginMetadataPlugins
     ? { plugins: deps.pluginMetadataPlugins }
@@ -184,6 +258,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
   const executionConfig = projectSystemAgentExecutionConfig(preparedConfig, modelOwnerAgentId);
   const base = {
     ...(configuredSelection.modelTarget ? { modelTarget: configuredSelection.modelTarget } : {}),
+    ...(deps.fallbackModelRef !== undefined ? { fallbackModelRef: deps.fallbackModelRef } : {}),
     sourceConfig: runConfig,
     runConfig: executionConfig,
     modelLabel: `${selection.provider}/${selection.modelId}`,
@@ -301,6 +376,9 @@ export async function projectInferenceRoute(
   const agentRouteOverrides = agent
     ? {
         model: structuredClone(agent.model),
+        ...(route?.fallbackModelRef !== undefined
+          ? { modelPolicy: structuredClone(agent.modelPolicy) }
+          : {}),
         ...(route?.modelTarget === "utility"
           ? { utilityModel: structuredClone(agent.utilityModel) }
           : {}),
@@ -338,6 +416,10 @@ export async function projectInferenceRoute(
     },
     defaults: {
       model: structuredClone(defaults?.model),
+      // Configured fallback admission binds policy without changing setup's activation projection.
+      ...(route?.fallbackModelRef !== undefined
+        ? { modelPolicy: structuredClone(defaults?.modelPolicy) }
+        : {}),
       ...(route?.modelTarget === "utility"
         ? { utilityModel: structuredClone(defaults?.utilityModel) }
         : {}),

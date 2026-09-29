@@ -23,6 +23,7 @@ import {
 } from "./agent-session-env.js";
 import {
   resolveOpenClawToolsMcpSystemAgentApproval,
+  resolveOpenClawToolsMcpSystemAgentBoundFallbackScope,
   resolveOpenClawToolsMcpSystemAgentSurface,
   resolveOpenClawToolsMcpToolSelection,
   type OpenClawToolsMcpToolId,
@@ -57,6 +58,7 @@ export function resolveOpenClawToolsForMcp(
         agentId: params.agentId,
         surface: params.systemAgentSurface ?? resolveOpenClawToolsMcpSystemAgentSurface(),
         ...resolveOpenClawToolsMcpSystemAgentApproval(),
+        boundFallbackScope: resolveOpenClawToolsMcpSystemAgentBoundFallbackScope(),
       });
     }
     if (!agentSessionKey) {

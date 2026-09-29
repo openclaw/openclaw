@@ -358,6 +358,8 @@ describe("Full Access delegated chat", () => {
         value: "18789",
         cliOptions: {},
         beforePersistentApply: expect.any(Function),
+        expectedConfigRevision: expect.stringMatching(/^[0-9a-f]{64}$/),
+        verifyOwnerBeforeWrite: expect.any(Function),
       });
       expect(engine.getPendingOperatorProposal()).toBeNull();
     } finally {

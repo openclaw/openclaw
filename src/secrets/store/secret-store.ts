@@ -600,10 +600,12 @@ export async function writeSecretStoreEntryForConfigRef(params: {
   value: string;
   updatedBy: string;
   assertCurrent?: () => void;
+  verifyOwnerBeforeWrite?: () => Promise<void>;
   database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
 }): Promise<string> {
   registerSecretValueForRedaction(params.value);
   assertSecretStoreValue(params.value, "secret", params.baseName);
+  await params.verifyOwnerBeforeWrite?.();
   const context = captureOpenClawStateWorkerContext(params.database);
   const assertCurrent = () => {
     context.admission.assertCurrent();

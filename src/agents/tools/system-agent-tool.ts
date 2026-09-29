@@ -9,6 +9,10 @@ import { Type } from "typebox";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
+  BOUND_FALLBACK_OPERATION_SCOPE_MESSAGE,
+  isSystemAgentBoundFallbackOperationAllowed,
+} from "../../system-agent/fallback-operation-scope.js";
+import {
   isSystemAgentNavigationOperation,
   type SystemAgentNavigationOperation,
 } from "../../system-agent/operation-types.js";
@@ -32,6 +36,8 @@ import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } fr
 export type SystemAgentToolOptions = {
   /** Verified inference owner, distinct from the internal OpenClaw execution agent. */
   agentId?: string;
+  /** Host-verified fallback scope for this turn, never a model tool argument. */
+  boundFallbackScope?: boolean;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   surface: "cli" | "gateway";
   /** The host resolves delegated proposals under session policy, never a chat reply. */
@@ -249,6 +255,38 @@ const SystemAgentToolSchema = Type.Object({
   ),
 });
 
+const BOUND_FALLBACK_READ_ACTIONS = [
+  "status",
+  "models",
+  "agents",
+  "channels",
+  "channel_info",
+  "audit",
+  "validate_config",
+  "doctor",
+  "config_get",
+  "config_schema",
+  "gateway_status",
+  "plugin_list",
+  "plugin_search",
+] as const;
+const BOUND_FALLBACK_WRITE_ACTIONS = ["config_set", "config_unset", "config_set_ref"] as const;
+
+const SystemAgentBoundFallbackToolSchema = Type.Object({
+  action: stringEnum([...BOUND_FALLBACK_READ_ACTIONS, ...BOUND_FALLBACK_WRITE_ACTIONS]),
+  path: Type.Optional(
+    Type.String({
+      description: "Dotted config key for config_* actions; use . for the root schema.",
+    }),
+  ),
+  value: SystemAgentToolSchema.properties.value,
+  envVar: SystemAgentToolSchema.properties.envVar,
+  secret: SystemAgentToolSchema.properties.secret,
+  channel: Type.Optional(Type.String({ description: "Channel id for channel_info" })),
+  query: SystemAgentToolSchema.properties.query,
+  approved: SystemAgentToolSchema.properties.approved,
+});
+
 function createCaptureRuntime(): RuntimeEnv & { read: () => string } {
   const lines: string[] = [];
   return {
@@ -454,21 +492,41 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     // Setup authority is never discoverable through tool catalogs: the host
     // scopes it to this run and the model must receive it directly.
     catalogMode: "direct-only",
-    description: [
-      "System agent. Setup, config, channels, plugins, agents, repair.",
-      "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_list, plugin_search, validate_config, doctor, audit.",
-      "Handoff: connect_channel, configure_skills, configure_search (web search), configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. These open interactive setup flows.",
-      "Model providers: configure_model_provider returns Settings → Models sign-in guidance for provider accounts and OAuth. Personal accounts: manage_model_accounts opens the account controls.",
-      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_unset, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
-      "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
-      "plugin_activate_artifact: for a task-authored plugin built with openclaw plugins pack, pass its absolute archive path and sha256. Copies and reviews exact bytes before proposing; approval includes trusted backend code, declared capabilities, and native UI. No dependency fetching. Backend activation requires Gateway restart. Native UI separately requires enabling Settings > Labs > Custom plugin UI, then Gateway restart and browser reload; artifact approval does not enable Labs.",
-      "Unknown config: config_schema first. Remove a setting with config_unset and path; setting null is not deletion. Config writes are proposed, approved, then checked by the canonical config validator and writer. Validation or write errors return to you; propose one correction for fresh approval. Config writes do not test whether a model route or API key works. API keys and tokens the user gives you: config_set_ref with path and secret saves the value in the secret store and points that key at it (for example models.providers.<id>.apiKey, memory.search.remote.apiKey, or a web search provider's apiKey); config_set_ref with envVar points it at an environment variable instead. Never echo secret values. Memory embeddings are memory.search.* (config_set), not web search. set_default_model is the shortcut for switching the primary model.",
-      "No doctor repair. Writes validated, audited. Invalid config: fix now.",
-    ].join(" "),
-    parameters: SystemAgentToolSchema,
+    description: (options.boundFallbackScope === true
+      ? [
+          "System agent in a verified fallback maintenance session.",
+          "Read now: " + BOUND_FALLBACK_READ_ACTIONS.join(", ") + ".",
+          "Guarded write proposals only: " +
+            BOUND_FALLBACK_WRITE_ACTIONS.join(", ") +
+            ". Submit an exact proposal first; direct chat requires exact user approval followed by approved=true. Delegated requests use the host permission policy. Final effects recheck the bound inference owner.",
+          "Unknown config: inspect config_schema first. config_set_ref with secret stores a user-provided value by reference; envVar uses an environment variable instead. Never echo a secret.",
+          "No doctor repair. Config writes are validated and audited; invalid config needs a fresh correction proposal.",
+        ]
+      : [
+          "System agent. Setup, config, channels, plugins, agents, repair.",
+          "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_list, plugin_search, validate_config, doctor, audit.",
+          "Handoff: connect_channel, configure_skills, configure_search (web search), configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. These open interactive setup flows.",
+          "Model providers: configure_model_provider returns Settings → Models sign-in guidance for provider accounts and OAuth. Personal accounts: manage_model_accounts opens the account controls.",
+          "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_unset, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
+          "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
+          "plugin_activate_artifact: for a task-authored plugin built with openclaw plugins pack, pass its absolute archive path and sha256. Copies and reviews exact bytes before proposing; approval includes trusted backend code, declared capabilities, and native UI. No dependency fetching. Backend activation requires Gateway restart. Native UI separately requires enabling Settings > Labs > Custom plugin UI, then Gateway restart and browser reload; artifact approval does not enable Labs.",
+          "Unknown config: config_schema first. Remove a setting with config_unset and path; setting null is not deletion. Config writes are proposed, approved, then checked by the canonical config validator and writer. Validation or write errors return to you; propose one correction for fresh approval. Config writes do not test whether a model route or API key works. API keys and tokens the user gives you: config_set_ref with path and secret saves the value in the secret store and points that key at it (for example models.providers.<id>.apiKey, memory.search.remote.apiKey, or a web search provider's apiKey); config_set_ref with envVar points it at an environment variable instead. Never echo secret values. Memory embeddings are memory.search.* (config_set), not web search. set_default_model is the shortcut for switching the primary model.",
+          "No doctor repair. Writes validated, audited. Invalid config: fix now.",
+        ]
+    ).join(" "),
+    parameters:
+      options.boundFallbackScope === true
+        ? SystemAgentBoundFallbackToolSchema
+        : SystemAgentToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = (args ?? {}) as Record<string, unknown>;
       const operation = operationForAction(params);
+      if (
+        options.boundFallbackScope === true &&
+        !isSystemAgentBoundFallbackOperationAllowed(operation)
+      ) {
+        return textResult(BOUND_FALLBACK_OPERATION_SCOPE_MESSAGE, {});
+      }
       const directive = isSystemAgentNavigationOperation(operation) ? operation : null;
       if (directive) {
         if (options.operatorApprovalOnly) {

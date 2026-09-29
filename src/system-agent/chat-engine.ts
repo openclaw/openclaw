@@ -22,6 +22,7 @@ import {
   type ChatWizardHostDependencies,
   type SystemAgentChatReply,
 } from "./chat-wizard-host.js";
+import { BOUND_FALLBACK_OPERATION_SCOPE_MESSAGE } from "./fallback-operation-scope.js";
 import type {
   SystemAgentGreetingFacts,
   SystemAgentGreetingPlan,
@@ -33,6 +34,7 @@ import {
 } from "./inference-error.js";
 import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
+import { resolveSystemAgentPersistentApplyProof } from "./persistent-apply-proof.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 import {
   resolveSystemAgentVerifiedInferenceRoute,
@@ -85,6 +87,9 @@ export class SystemAgentChatEngine {
     this.wizard = new ChatWizardHost({
       surface: options.surface,
       beforePersistentApply: async (runtime) => {
+        if (this.verifiedInference.execution.fallbackModelRef !== undefined) {
+          throw new Error(BOUND_FALLBACK_OPERATION_SCOPE_MESSAGE);
+        }
         await this.requirePersistentApplyInference(runtime);
       },
       dependencies: internals.wizardDependencies,
@@ -269,14 +274,13 @@ export class SystemAgentChatEngine {
       return this.throwInferenceUnavailable();
     }
     try {
-      const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-      const route = await resolvePersistentApplyInference({
+      const proof = await resolveSystemAgentPersistentApplyProof({
         binding,
         runtime,
         deps: this.options.deps,
       });
-      if (route) {
-        return route;
+      if (proof) {
+        return proof;
       }
     } catch (error) {
       if (isSystemAgentInferenceUnavailableError(error)) {

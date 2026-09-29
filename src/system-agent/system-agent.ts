@@ -4,6 +4,10 @@ import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import { resolveSystemAgentOperation } from "./dialogue.js";
+import {
+  BOUND_FALLBACK_OPERATION_SCOPE_MESSAGE,
+  isSystemAgentBoundFallbackOperationAllowed,
+} from "./fallback-operation-scope.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
   executeSystemAgentOperation,
@@ -17,6 +21,10 @@ import {
   loadSystemAgentOverview,
   type SystemAgentOverview,
 } from "./overview.js";
+import {
+  resolveSystemAgentPersistentApplyProof,
+  type SystemAgentPersistentApplyProof,
+} from "./persistent-apply-proof.js";
 import {
   hasCurrentSystemAgentOwnerPluginArtifacts,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -92,19 +100,18 @@ async function requireVerifiedInference(opts: RunSystemAgentOptions): Promise<vo
 async function requirePersistentApplyInference(
   opts: RunSystemAgentOptions,
   runtime: RuntimeEnv,
-): Promise<void> {
+): Promise<SystemAgentPersistentApplyProof> {
   if (!opts.verifiedInference) {
     throw new SystemAgentInferenceUnavailableError("conversation");
   }
   try {
-    const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-    const route = await resolvePersistentApplyInference({
+    const proof = await resolveSystemAgentPersistentApplyProof({
       binding: opts.verifiedInference,
       runtime,
       deps: opts.deps,
     });
-    if (route) {
-      return;
+    if (proof) {
+      return proof;
     }
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {
@@ -123,15 +130,33 @@ async function runOneShot(
   if (operation.kind === "none" && operation.message === "") {
     return;
   }
+  // Reject unsupported fallback effects before another owner probe or approval.
+  const boundFallbackModelRef = opts.verifiedInference.execution.fallbackModelRef;
+  if (
+    boundFallbackModelRef !== undefined &&
+    !isSystemAgentBoundFallbackOperationAllowed(operation)
+  ) {
+    runtime.log(BOUND_FALLBACK_OPERATION_SCOPE_MESSAGE);
+    return;
+  }
   // The planner may take long enough for the verified route to change. Never
   // apply its result under a different inference owner.
   await requireVerifiedInference(opts);
   const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
-  if (approved && isPersistentSystemAgentOperation(operation)) {
-    await requirePersistentApplyInference(opts, runtime);
-  }
+  const proof =
+    approved && isPersistentSystemAgentOperation(operation)
+      ? await requirePersistentApplyInference(opts, runtime)
+      : undefined;
   await executeSystemAgentOperation(operation, runtime, {
     approved,
+    ...(boundFallbackModelRef !== undefined ? { boundFallbackModelRef } : {}),
+    ...(proof
+      ? {
+          expectedConfigRevision: proof.expectedConfigRevision,
+          assertVerifiedConfigCurrent: proof.assertConfigCurrent,
+          verifyPersistentApplyOwner: proof.assertOwnerCurrent,
+        }
+      : {}),
     deps: systemAgentCommandDepsFromOptions(opts),
   });
 }

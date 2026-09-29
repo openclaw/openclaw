@@ -11,25 +11,19 @@ import {
 } from "../agents/agent-run-result.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { SessionManager } from "../agents/sessions/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
-import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
-import { createPluginCache, withPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
+import { createPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
+  systemAgentRouteOptions,
   type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
@@ -51,6 +45,7 @@ import {
   setupInferenceLog,
   type VerifySetupInferenceResult,
 } from "./setup-inference-core.js";
+import { loadSetupInferencePluginGeneration } from "./setup-inference-plugin-generation.js";
 import {
   registerHiddenSetupInferenceProbeRun,
   runSetupInferenceProbeWork,
@@ -178,6 +173,8 @@ export async function runSetupInferenceTurn(params: {
         authProfileStateMode: "read-only",
         allowAuthProfileFallback: false,
         retryConnectionErrors: false,
+        // Bound admission owns the ladder: a nested winner cannot replace this candidate.
+        ...(params.requireExecutionOwner ? { modelFallbacksOverride: [] } : {}),
         preparedModelRuntimeMode: "isolated-read-only",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
@@ -248,64 +245,12 @@ export async function runSetupInferenceTurn(params: {
   }
 }
 
+export { loadSetupInferencePluginGeneration } from "./setup-inference-plugin-generation.js";
+
 type RevalidationDeps = SystemAgentVerifiedInferenceDeps & {
   createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
   resolvePluginMetadataSnapshot?: typeof resolvePluginMetadataSnapshot;
 };
-
-/** Setup owns fresh package facts without replacing the Gateway's startup generation. */
-export function loadSetupInferencePluginGeneration(params: {
-  cache: PluginCache;
-  config: OpenClawConfig;
-  workspaceDir: string;
-  selection: AgentHarnessPluginSelection;
-  pendingPluginInstalls?: Record<string, PluginInstallRecord>;
-  resolvePluginMetadataSnapshot?: typeof resolvePluginMetadataSnapshot;
-}) {
-  // Revalidation must select the probed artifacts: switching a built Gateway
-  // owner to source files would report drift even when neither tree changed.
-  const preferBuiltPluginArtifacts = getPluginRuntimeLoadContext(
-    getPluginRegistryForContext() ?? undefined,
-  )?.preferBuiltPluginArtifacts;
-  // The install lease may have cached absence before writing the package.
-  // This post-mutation owner must capture new facts without retiring that lease's cache.
-  return withPluginCache(params.cache, () => {
-    const index = params.pendingPluginInstalls
-      ? loadInstalledPluginIndex({
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: process.env,
-          installRecords: {
-            ...loadInstalledPluginIndexInstallRecordsSync(),
-            ...params.pendingPluginInstalls,
-          },
-        })
-      : undefined;
-    const generation = {
-      config: params.config,
-      metadataSnapshot: (params.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot)({
-        config: params.config,
-        env: process.env,
-        workspaceDir: params.workspaceDir,
-        allowCurrent: false,
-        ...(index ? { index } : {}),
-      }),
-    };
-    const pluginRegistry = withPluginRuntimeGenerationScope(generation, () =>
-      loadAgentRuntimePluginRegistryHandle({
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        metadataSnapshot: generation.metadataSnapshot,
-        preferBuiltPluginArtifacts,
-        selections: [params.selection],
-      }),
-    );
-    if (!pluginRegistry) {
-      throw new Error(`Could not load the ${params.selection.runtime} runtime plugin.`);
-    }
-    return { ...generation, pluginRegistry };
-  });
-}
 
 async function revalidateSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
@@ -412,6 +357,7 @@ export async function revalidateStableSetupInferenceOwner(params: {
 type SetupInferenceRequestParams = {
   agentId?: string;
   modelTarget?: "utility";
+  fallbackModelRef?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -446,7 +392,7 @@ export async function verifySetupInference(
     return { ok: false, status: "format", error: invalidSetupConfigError(snapshot) };
   }
   const cfg: OpenClawConfig = snapshot.runtimeConfig ?? snapshot.config;
-  const routeOptions = { modelTarget: params.modelTarget };
+  const routeOptions = systemAgentRouteOptions(params);
   const baselineRoute = await projectInferenceRoute(cfg, params.agentId, routeOptions);
   let verifiedBinding: SystemAgentVerifiedInferenceBinding | undefined;
   const verification = await verifySetupInferenceConfig({
@@ -461,7 +407,7 @@ export async function verifySetupInference(
     },
     runtime: params.runtime,
     requireExecutionOwner: params.bindSession === true,
-    ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
+    ...routeOptions,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.deps ? { deps: params.deps } : {}),
@@ -508,6 +454,7 @@ type BoundSetupInferenceVerifier = (params: {
   runtime: RuntimeEnv;
   bindSession: true;
   agentId?: string;
+  fallbackModelRef?: string;
   deps?: ActivateSetupInferenceDeps;
 }) => Promise<BoundVerifySetupInferenceResult>;
 
@@ -553,6 +500,9 @@ export async function resolvePersistentApplyInference(params: {
     runtime: params.runtime,
     bindSession: true,
     agentId: params.binding.execution.agentId,
+    ...(params.binding.execution.fallbackModelRef !== undefined
+      ? { fallbackModelRef: params.binding.execution.fallbackModelRef }
+      : {}),
     deps,
   });
   if (
@@ -598,10 +548,9 @@ export async function verifySetupInferenceConfig(
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     params.config,
     params.agentId,
-    {
+    systemAgentRouteOptions(params, {
       loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
-      modelTarget: params.modelTarget,
-    },
+    }),
     params.configSnapshot,
   );
   if (!configuredRoute) {
@@ -617,7 +566,7 @@ export async function verifySetupInferenceConfig(
   const requireExecutionOwner =
     params.requireExecutionOwner === true || params.onVerifiedExecution !== undefined;
   const baselineRoute = requireExecutionOwner
-    ? await projectInferenceRoute(params.config, route.agentId, { modelTarget: params.modelTarget })
+    ? await projectInferenceRoute(params.config, route.agentId, systemAgentRouteOptions(params))
     : undefined;
   let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
   if (requireExecutionOwner) {
@@ -656,19 +605,20 @@ export async function verifySetupInferenceConfig(
       const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
         currentConfig,
         route.agentId,
-        {
+        systemAgentRouteOptions(params, {
           loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime,
-          modelTarget: params.modelTarget,
-        },
+        }),
         currentSnapshot,
       );
       if (
         !currentRoute ||
         !sameDefaultInferenceRoute(
           baselineRoute!,
-          await projectInferenceRoute(currentConfig, route.agentId, {
-            modelTarget: params.modelTarget,
-          }),
+          await projectInferenceRoute(
+            currentConfig,
+            route.agentId,
+            systemAgentRouteOptions(params),
+          ),
         )
       ) {
         throw new Error(
@@ -683,7 +633,8 @@ export async function verifySetupInferenceConfig(
       });
       params.onVerifiedExecution?.(binding);
     } catch (error) {
-      return { ok: false, status: "auth", error: await redactSetupInferenceError(error) };
+      // A successful response followed by owner drift is not a retryable auth outage.
+      return { ok: false, status: "unknown", error: await redactSetupInferenceError(error) };
     }
   }
   return {

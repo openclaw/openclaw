@@ -327,6 +327,7 @@ async function runSystemAgentTurnWithDeps(
   const directiveRef: { current?: SystemAgentTurnDirective } = {};
   const systemAgentTool = {
     agentId: plan.agentId,
+    ...(binding.execution.fallbackModelRef !== undefined ? { boundFallbackScope: true } : {}),
     surface: params.surface,
     approvalArmed: params.approvalArmed,
     ...(params.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
@@ -403,6 +404,8 @@ async function runSystemAgentTurnWithDeps(
         model: plan.model,
         agentDir: plan.agentDir,
         agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride,
+        // Session reuse must keep the exact inference owner that admission verified.
+        modelFallbacksOverride: [],
         sandboxSessionKey: policySessionKey,
         ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
         ...(plan.authProfileId

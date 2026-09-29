@@ -12,6 +12,7 @@ import {
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV,
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
+  resolveOpenClawToolsMcpSystemAgentBoundFallbackScope,
   resolveOpenClawToolsMcpSystemAgentSurface,
   resolveOpenClawToolsMcpToolSelection,
 } from "./openclaw-tools-serve-config.js";
@@ -168,6 +169,47 @@ describe("OpenClaw tools MCP server", () => {
     });
 
     expect(JSON.stringify(result)).toContain("directive:approved-operation:");
+  });
+
+  it("passes the host's fallback scope through the CLI MCP server before staging approval", async () => {
+    const config = buildSystemAgentToolsMcpServerConfig({
+      surface: "cli",
+      boundFallbackScope: true,
+    });
+    const server = config.mcpServers.openclaw as { env?: Record<string, string> };
+    expect(server.env?.[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]).toBe("cli:fallback");
+    const gateway = buildSystemAgentToolsMcpServerConfig({
+      surface: "gateway",
+      boundFallbackScope: true,
+    }).mcpServers.openclaw as { env?: Record<string, string> };
+    expect(gateway.env?.[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]).toBe("gateway:fallback");
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV, "cli:fallback");
+    expect(resolveOpenClawToolsMcpSystemAgentSurface()).toBe("cli");
+    expect(resolveOpenClawToolsMcpSystemAgentBoundFallbackScope()).toBe(true);
+    const handlers = createPluginToolsMcpHandlers(
+      resolveOpenClawToolsForMcp({ tools: ["openclaw"] }),
+    );
+    const denied = await handlers.callTool({
+      name: "openclaw",
+      arguments: { action: "create_agent", agentId: "helper", approved: true },
+    });
+    expect(JSON.stringify(denied)).toContain("cannot start a multi-stage privileged action");
+    expect(JSON.stringify(denied)).not.toContain("needs-approval:");
+    const allowed = await handlers.callTool({
+      name: "openclaw",
+      arguments: { action: "config_set", path: "env.vars.SAMPLE", value: "local" },
+    });
+    expect(JSON.stringify(allowed)).toContain("needs-approval:");
+    expect(
+      resolveOpenClawToolsMcpSystemAgentBoundFallbackScope({
+        [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: "cli",
+      }),
+    ).toBe(false);
+    expect(() =>
+      resolveOpenClawToolsMcpSystemAgentBoundFallbackScope({
+        [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: "gateway:invalid",
+      }),
+    ).toThrow(OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV);
   });
 
   it("parses the served tool selection from env and defaults to cron", () => {

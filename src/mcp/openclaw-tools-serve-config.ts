@@ -50,18 +50,40 @@ export function resolveOpenClawToolsMcpToolSelection(
   return selection;
 }
 
-/** Parse the OpenClaw surface for served openclaw tools; defaults to cli. */
+/** Parse the per-turn host surface and verified fallback scope; defaults to primary CLI. */
+function resolveSystemAgentSurfaceScope(env: NodeJS.ProcessEnv = process.env): {
+  surface: SystemAgentToolOptions["surface"];
+  boundFallbackScope: boolean;
+} {
+  const raw = env[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]?.trim();
+  switch (raw) {
+    case undefined:
+    case "":
+    case "cli":
+      return { surface: "cli", boundFallbackScope: false };
+    case "gateway":
+      return { surface: "gateway", boundFallbackScope: false };
+    case "cli:fallback":
+      return { surface: "cli", boundFallbackScope: true };
+    case "gateway:fallback":
+      return { surface: "gateway", boundFallbackScope: true };
+    default:
+      throw new Error(
+        OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV + " has an invalid surface or scope",
+      );
+  }
+}
+
 export function resolveOpenClawToolsMcpSystemAgentSurface(
   env: NodeJS.ProcessEnv = process.env,
 ): SystemAgentToolOptions["surface"] {
-  const raw = env[OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]?.trim();
-  if (!raw || raw === "cli") {
-    return "cli";
-  }
-  if (raw === "gateway") {
-    return "gateway";
-  }
-  throw new Error(`${OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV} must be "cli" or "gateway"`);
+  return resolveSystemAgentSurfaceScope(env).surface;
+}
+
+export function resolveOpenClawToolsMcpSystemAgentBoundFallbackScope(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return resolveSystemAgentSurfaceScope(env).boundFallbackScope;
 }
 
 /**
@@ -139,7 +161,9 @@ export function buildSystemAgentToolsMcpServerConfig(
           : entry.args,
         env: {
           [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "openclaw" satisfies OpenClawToolsMcpToolId,
-          [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: options.surface,
+          // Keep the host-selected scope in this existing per-turn transport.
+          [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]:
+            options.boundFallbackScope === true ? options.surface + ":fallback" : options.surface,
           // Per-turn approval state travels with the per-run MCP config; the
           // host mirrors proposal transitions back from tool events.
           ...(options.operatorApprovalOnly === true

@@ -6,6 +6,7 @@ import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { SystemAgentTurnRunner } from "./agent-turn.js";
 import {
   fakeOverviewLoader,
+  fakePersistentApplyProof,
   sharedVerifiedInference,
   sharedVerifiedInferenceConfig,
   classifySystemAgentApprovalText,
@@ -62,7 +63,7 @@ function createRouterHarness(
     }),
     {
       requireVerifiedInference: async () => verifiedInference.execution,
-      requirePersistentApplyInference: async () => verifiedInference.execution,
+      requirePersistentApplyInference: async () => fakePersistentApplyProof(),
       rebindVerifiedInference: () => {},
       getVerifiedInference: () => verifiedInference,
       loadOverview: internals.loadOverview ?? fakeOverviewLoader(),

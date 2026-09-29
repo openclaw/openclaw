@@ -2912,7 +2912,6 @@ src/system-agent/assistant-prompts.ts	1
 src/system-agent/greeting.ts	1
 src/system-agent/hosted-setup.runtime.ts	1
 src/system-agent/operations-execute.ts	1
-src/system-agent/operations-execution-helpers.ts	1
 src/system-agent/operations-parse.ts	1
 src/system-agent/probes.ts	1
 src/system-agent/rescue-message.ts	2

@@ -5,6 +5,7 @@ import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import type { SystemAgentTurnRunner } from "./agent-turn.js";
 import {
   fakeOverviewLoader,
+  fakePersistentApplyProof,
   sharedVerifiedInference,
   classifySystemAgentApprovalText,
   mocks,
@@ -36,7 +37,7 @@ function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRoute
     new ChatWizardHost({ beforePersistentApply: async () => {} }),
     {
       requireVerifiedInference: async () => verifiedInference.execution,
-      requirePersistentApplyInference: async () => verifiedInference.execution,
+      requirePersistentApplyInference: async () => fakePersistentApplyProof(),
       rebindVerifiedInference: () => {},
       getVerifiedInference: () => verifiedInference,
       loadOverview: fakeOverviewLoader(),
@@ -126,6 +127,8 @@ describe("SystemAgentChatEngine approval", () => {
           path: "gateway.port",
           value: "19001",
           cliOptions: {},
+          expectedConfigRevision: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          verifyOwnerBeforeWrite: expect.any(Function),
         });
         expect(applied?.text).toContain("[openclaw] done: config.set");
         expect(observedInputs[1]).toContain("was approved");

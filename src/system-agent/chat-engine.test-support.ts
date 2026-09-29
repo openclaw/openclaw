@@ -430,6 +430,15 @@ afterEach(() => {
 export const CANCEL_HINT = "Say `cancel` to stop this setup.";
 export const countCancelHints = (text: string) => text.split(CANCEL_HINT).length - 1;
 
+/** Only mocked executors consume this shape; it does not authorize a real write. */
+export function fakePersistentApplyProof() {
+  return {
+    expectedConfigRevision: "0".repeat(64),
+    assertConfigCurrent() {},
+    async assertOwnerCurrent() {},
+  };
+}
+
 export function fakeOverviewLoader(
   overrides: {
     defaultModel?: string;

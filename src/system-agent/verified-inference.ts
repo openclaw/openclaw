@@ -42,6 +42,7 @@ import {
 } from "../plugins/providers.js";
 import {
   projectInferenceRoute,
+  systemAgentRouteOptions,
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
   type SystemAgentConfiguredRouteDeps,
@@ -426,10 +427,8 @@ async function projectVerifiedExecutionFingerprint(
   ownerPluginIds: readonly string[],
   deps: SystemAgentVerifiedInferenceDeps,
 ): Promise<SystemAgentVerifiedExecutionFingerprint> {
-  const projection = await projectInferenceRoute(config, route.agentId, {
-    ...deps,
-    modelTarget: route.modelTarget,
-  });
+  const options = systemAgentRouteOptions(route, deps);
+  const projection = await projectInferenceRoute(config, route.agentId, options);
   const { authProfileId: _authProfileId, ...routeIdentity } = projection.route ?? {};
   return {
     route: projection.route ? routeIdentity : null,
@@ -874,7 +873,7 @@ export async function resolveSystemAgentVerifiedInferenceState(
   const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     config,
     binding.execution.agentId,
-    deps,
+    systemAgentRouteOptions(binding.execution, deps),
     snapshot,
   );
   if (

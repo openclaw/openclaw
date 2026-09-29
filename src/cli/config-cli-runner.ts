@@ -286,6 +286,8 @@ export async function runConfigOperations(params: {
   successMode: "set" | "patch";
   currentExpectation?: ConfigSetCurrentExpectation;
   beforePersistentApply?: () => void;
+  expectedConfigRevision?: string;
+  verifyOwnerBeforeWrite?: () => Promise<void>;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -301,6 +303,14 @@ export async function runConfigOperations(params: {
   }
   const mutationStart = await loadValidConfigForWrite(runtime);
   const { snapshot } = mutationStart;
+  if (
+    params.expectedConfigRevision !== undefined &&
+    snapshot.hash !== params.expectedConfigRevision
+  ) {
+    throw new ConfigMutationConflictError("verified maintenance config changed before write", {
+      retryable: false,
+    });
+  }
   const currentExpectation = params.currentExpectation;
   let assertCurrentExpectation: (() => void) | undefined;
   if (currentExpectation) {
@@ -528,6 +538,10 @@ export async function runConfigOperations(params: {
     return;
   }
 
+  if (params.verifyOwnerBeforeWrite) {
+    await params.verifyOwnerBeforeWrite();
+    params.beforePersistentApply?.();
+  }
   await replaceConfigFile({
     sourceConfig: authoredNextConfig,
     snapshot,

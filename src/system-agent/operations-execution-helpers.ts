@@ -28,28 +28,8 @@ import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.j
 export const CONFIG_GET_OUTPUT_MAX_CHARS = 2_000;
 export const CONFIG_SCHEMA_CHILDREN_MAX = 40;
 
-export function readConfigValueAtPath(
-  config: unknown,
-  path: string,
-): { found: boolean; value?: unknown } {
-  let current: unknown = config;
-  for (const part of parseConfigSetPath(path)) {
-    if (current === null || typeof current !== "object") {
-      return { found: false };
-    }
-    // Reads allow array properties and indices beyond the CLI writer's sparse-write limit.
-    const index = /^\d+$/.test(part) ? Number(part) : undefined;
-    if (index !== undefined && Array.isArray(current)) {
-      current = current[index];
-    } else {
-      current = (current as Record<string, unknown>)[part];
-    }
-    if (current === undefined) {
-      return { found: false };
-    }
-  }
-  return { found: true, value: current };
-}
+export { readConfigValueAtPath } from "./operations-parse.js";
+export { isPluginBackingDefaultInferenceRoute } from "./operations-plugin-owner.js";
 
 export function formatGatewayStatusLine(overview: SystemAgentOverview): string {
   return [
@@ -206,6 +186,8 @@ export function getRegularAgentSetupNotice(
 
 export type ExecuteOptions = {
   approved?: boolean;
+  /** Host-supplied exact fallback selected for this bound maintenance session. */
+  boundFallbackModelRef?: string;
   /** Host-owned origin for team members; never supplied by model tool arguments. */
   requesterAgentId?: string;
   operatorApprovalOnly?: boolean;
@@ -217,6 +199,12 @@ export type ExecuteOptions = {
    * immediately followed by the persistent effect it authorizes.
    */
   beforePersistentApply?: () => void;
+  /** Config/include revision verified for this bound maintenance operation. */
+  expectedConfigRevision?: string;
+  /** Synchronous config fence for non-config store effects only; never postcommit config writes. */
+  assertVerifiedConfigCurrent?: () => void;
+  /** Re-resolve the frozen credential owner at the side-effect boundary. */
+  verifyPersistentApplyOwner?: () => Promise<void>;
   /** Adopt the exact final binding after a verified model-route write commits. */
   onVerifiedInferenceChanged?: (binding: SystemAgentVerifiedInferenceBinding) => void;
 };
@@ -232,6 +220,9 @@ type PersistentApplyContext = {
   deps?: SystemAgentCommandDeps;
   /** Synchronous authority guard for the owner immediately before mutation. */
   assertPersistentApply?: () => void;
+  expectedConfigRevision?: string;
+  assertVerifiedConfigCurrent?: () => void;
+  verifyPersistentApplyOwner?: () => Promise<void>;
   /** Re-check authority, then enter one persistent side-effect boundary. */
   commit<T>(effect: () => Promise<T> | T): Promise<T>;
 };
@@ -264,12 +255,25 @@ export async function applyPersistentOperation(params: {
   const assertPersistentApply = opts.beforePersistentApply;
   const commit: PersistentApplyContext["commit"] = async (effect) => {
     assertPersistentApply?.();
+    if (opts.verifyPersistentApplyOwner) {
+      await opts.verifyPersistentApplyOwner();
+      assertPersistentApply?.();
+    }
     return await effect();
   };
   const outcome = await params.run({
     runtime,
     deps: opts.deps,
     ...(assertPersistentApply ? { assertPersistentApply } : {}),
+    ...(opts.expectedConfigRevision !== undefined
+      ? { expectedConfigRevision: opts.expectedConfigRevision }
+      : {}),
+    ...(opts.assertVerifiedConfigCurrent
+      ? { assertVerifiedConfigCurrent: opts.assertVerifiedConfigCurrent }
+      : {}),
+    ...(opts.verifyPersistentApplyOwner
+      ? { verifyPersistentApplyOwner: opts.verifyPersistentApplyOwner }
+      : {}),
     commit,
   });
   const after = await readConfigFileSnapshot();
@@ -317,6 +321,13 @@ export async function runConfigSetOperation(params: {
   const beforePersistentApply = ctx.assertPersistentApply
     ? { beforePersistentApply: ctx.assertPersistentApply }
     : {};
+  const liveOwner = ctx.verifyPersistentApplyOwner
+    ? { verifyOwnerBeforeWrite: ctx.verifyPersistentApplyOwner }
+    : {};
+  const verifiedRevision =
+    ctx.expectedConfigRevision !== undefined
+      ? { expectedConfigRevision: ctx.expectedConfigRevision }
+      : {};
   if (operation.kind === "config-set" || operation.secret === undefined) {
     await ctx.commit(() =>
       runConfigSet({
@@ -331,6 +342,8 @@ export async function runConfigSetOperation(params: {
               },
             }),
         ...beforePersistentApply,
+        ...verifiedRevision,
+        ...liveOwner,
       }),
     );
     return {};
@@ -358,13 +371,19 @@ export async function runConfigSetOperation(params: {
   // Every save gets a fresh entry and no entry is ever overwritten or deleted
   // here: another config key or auth profile may use, or start using, any
   // entry at any time. The new ref is picked up by the normal config reload.
+  const assertStoreCurrent = () => {
+    ctx.assertPersistentApply?.();
+    ctx.assertVerifiedConfigCurrent?.();
+  };
   const storeEntry = await ctx.commit(() =>
     writeSecretStoreEntryForConfigRef({
       baseName: operation.id,
       value: secret,
       updatedBy: "openclaw",
-      // The worker re-checks the requester at transaction and commit admission.
-      ...(ctx.assertPersistentApply ? { assertCurrent: ctx.assertPersistentApply } : {}),
+      // Re-check the requester and pinned fallback config at store transaction
+      // and commit admission; the later config writer has its own revision CAS.
+      assertCurrent: assertStoreCurrent,
+      ...liveOwner,
     }),
   );
   try {
@@ -372,6 +391,8 @@ export async function runConfigSetOperation(params: {
       path: operation.path,
       cliOptions: { refProvider, refSource: "store", refId: storeEntry },
       ...beforePersistentApply,
+      ...verifiedRevision,
+      ...liveOwner,
     });
   } catch (error) {
     // The writer can fail after publication and can decline or fail rollback.
@@ -655,6 +676,7 @@ export async function executeSetDefaultModel(
             }
             // The live probe can outlive the original OpenClaw authority.
             // Re-check it last, immediately before the writer crosses to disk.
+            await ctx.verifyPersistentApplyOwner?.();
             ctx.assertPersistentApply?.();
             persistedVerification = latestVerification;
             persistedBinding = latestBinding;
@@ -707,52 +729,4 @@ export async function executeSetDefaultModel(
       };
     },
   });
-}
-
-/**
- * Uninstalling the plugin that provides the active default inference route
- * would break the very session driving the change, so that case stays a
- * terminal-only operation. Every other plugin is uninstallable behind the
- * standard approval gate — matching what the operator can do from the UI/CLI.
- */
-export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Promise<boolean> {
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.exists || !snapshot.valid) {
-    return true;
-  }
-  const config = snapshot.runtimeConfig ?? snapshot.config;
-  const route = (await projectDefaultInferenceRoute(config ?? {})).route;
-  if (!route) {
-    return false;
-  }
-  // The route's execution owners are the provider plus whichever runtime
-  // component executes it (embedded harness override or the resolved model
-  // runtime policy, e.g. a CLI-backend harness plugin) — removing any of them
-  // breaks the session driving this change.
-  const { resolveModelRuntimePolicy } = await import("../agents/model-runtime-policy.js");
-  const runtimePolicyId = resolveModelRuntimePolicy({
-    config,
-    provider: route.provider,
-    modelId: route.model,
-    agentId: route.agentId,
-  }).policy?.id;
-  const normalizedPluginId = pluginId.trim().toLowerCase();
-  const components = [
-    route.provider,
-    runtimePolicyId,
-    route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
-  ]
-    .map((component) => component?.trim().toLowerCase())
-    .filter((component): component is string => Boolean(component));
-  // Same-name convention covers components with no resolvable plugin metadata.
-  if (components.includes(normalizedPluginId)) {
-    return true;
-  }
-  const { resolveOwningPluginIdsForProviderRef } = await import("../plugins/providers.js");
-  return components.some((component) =>
-    (resolveOwningPluginIdsForProviderRef({ provider: component, config }) ?? []).some(
-      (owner) => owner.trim().toLowerCase() === normalizedPluginId,
-    ),
-  );
 }
