@@ -46,13 +46,9 @@ function assertCanonicalSubagentRunRecord(
   }
 }
 
-function parseJson(raw: string | null): unknown {
-  return raw ? safeParseJson(raw) : undefined;
-}
-
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
 export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
-  const stored = parseJson(row.payload_json);
+  const stored = row.payload_json ? safeParseJson(row.payload_json) : undefined;
   const payload =
     isRecord(stored) &&
     isRecord(stored.parentCompletion) &&

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -33,6 +34,7 @@ import {
   createClient,
   getOperatorApproval,
 } from "./approval.test-support.js";
+import { createExecApprovalHandlers } from "./exec-approval.js";
 
 let sharedState: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
 beforeAll(async () => {
@@ -45,6 +47,10 @@ afterEach(() => {
 });
 afterAll(async () => sharedState?.cleanup());
 
+const unrelatedAgentConfig: OpenClawConfig = {
+  agents: { list: [{ id: "main", default: true }, { id: "other" }] },
+};
+
 it.each([
   "current",
   "lookup",
@@ -55,6 +61,7 @@ it.each([
   "native-refused",
   "native-config-equivalent",
   "native-config-unrelated",
+  "native-config-unrelated-agent",
   "native-config-role-aba",
   "native-config-routing-aba",
   "access",
@@ -65,6 +72,9 @@ it.each([
   "config",
   "config-equivalent",
   "config-unrelated",
+  "config-unrelated-agent",
+  "config-target-routing-aba",
+  "config-target-store-aba",
   "config-other-identity",
   "config-own-identity-aba",
   "config-role-revoked",
@@ -72,6 +82,7 @@ it.each([
   "config-routing-aba",
   "transport-reviewer",
   "transport-source",
+  "transport-unrelated-agent",
 ] as const)("preserves disconnected request custody with %s authority", async (revocation) => {
   const verdictChange = revocation.startsWith("verdict");
   const native = revocation.startsWith("native");
@@ -80,10 +91,14 @@ it.each([
     "native",
     "config-equivalent",
     "config-unrelated",
+    "config-unrelated-agent",
     "config-other-identity",
     "native-config-equivalent",
     "native-config-unrelated",
+    "native-config-unrelated-agent",
   ].includes(revocation);
+  const targetsMainSession =
+    revocation.endsWith("unrelated-agent") || revocation.startsWith("config-target-");
   const state = expectDefined(sharedState, "shared approval test state");
   {
     const databaseOptions = { env: state.env };
@@ -100,7 +115,10 @@ it.each([
       persistence,
     });
     const record = exec.create(
-      { command: "echo fixture" },
+      {
+        command: "echo fixture",
+        ...(targetsMainSession ? { sessionKey: "agent:main:main", agentId: "main" } : {}),
+      },
       600_000,
       `request-custody-${revocation}`,
     );
@@ -183,6 +201,7 @@ it.each([
                 case "native-refused":
                 case "native-config-equivalent":
                 case "native-config-unrelated":
+                case "native-config-unrelated-agent":
                 case "native-config-role-aba":
                 case "native-config-routing-aba":
                 case "verdict":
@@ -214,6 +233,21 @@ it.each([
                   break;
                 case "config-unrelated":
                   publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
+                  break;
+                case "config-unrelated-agent":
+                case "transport-unrelated-agent":
+                  publishConfig(unrelatedAgentConfig);
+                  break;
+                case "config-target-routing-aba":
+                  publishConfig({ ...initialConfig, session: { mainKey: "other" } });
+                  publishConfig(initialConfig);
+                  break;
+                case "config-target-store-aba":
+                  publishConfig({
+                    ...initialConfig,
+                    session: { store: path.join(state.stateDir, "moved", "{agentId}.sqlite") },
+                  });
+                  publishConfig(initialConfig);
                   break;
                 case "config-other-identity":
                 case "config-own-identity-aba":
@@ -272,6 +306,8 @@ it.each([
         publishConfig(structuredClone(initialConfig));
       } else if (revocation === "native-config-unrelated") {
         publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
+      } else if (revocation === "native-config-unrelated-agent") {
+        publishConfig(unrelatedAgentConfig);
       } else if (revocation === "native-config-role-aba") {
         publishConfig(rolePolicyConfig());
         publishConfig(initialConfig);
@@ -330,6 +366,60 @@ it.each([
     } finally {
       await Promise.all([exec.drain(), plugin.drain()]);
     }
+  }
+});
+
+it("keeps a legacy decision wait when an unrelated agent is added", async () => {
+  const state = expectDefined(sharedState, "shared approval test state");
+  const databaseOptions = { env: state.env };
+  openOpenClawStateDatabase(databaseOptions);
+  const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
+    persistence: { runtimeEpoch: "wait-unrelated-agent-test", databaseOptions },
+    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+  });
+  const record = exec.create(
+    { command: "echo wait", sessionKey: "agent:main:main", agentId: "main" },
+    600_000,
+    "wait-unrelated-agent",
+  );
+  record.approvalReviewerDeviceIds = ["wait-reviewer"];
+  await exec.register(record, 600_000);
+  const waiting = createDeferred();
+  const awaitDecision = exec.awaitDecision.bind(exec);
+  vi.spyOn(exec, "awaitDecision").mockImplementation((id) => {
+    const decision = awaitDecision(id);
+    waiting.resolve();
+    return decision;
+  });
+  const client = createClient({ deviceId: "wait-reviewer" });
+  const invocation = createApprovalInvocation({
+    handlers: createExecApprovalHandlers(exec),
+    method: "exec.approval.waitDecision",
+    body: { id: record.id },
+    client,
+  });
+  const initialConfig: OpenClawConfig = {};
+  setRuntimeConfigSnapshot(initialConfig);
+  client.authPolicy = captureGatewayAuthPolicy(initialConfig, {
+    role: "operator",
+    verifiedIdentity: "reviewer@example.test",
+  });
+  let currentConfig = initialConfig;
+  invocation.context.getRuntimeConfig = () => currentConfig;
+  try {
+    const pending = invocation.invoke();
+    await waiting.promise;
+    currentConfig = unrelatedAgentConfig;
+    setRuntimeConfigSnapshot(currentConfig);
+    publishOperatorRoleConfigChange(invocation.context);
+    await expect(exec.resolve(record.id, "allow-once")).resolves.toBe(true);
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      result: { id: record.id, decision: "allow-once" },
+    });
+  } finally {
+    await exec.drain();
   }
 });
 

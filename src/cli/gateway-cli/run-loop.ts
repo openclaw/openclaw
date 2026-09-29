@@ -140,7 +140,6 @@ export async function runGatewayLoop(params: {
     );
     restartDrainWarning = undefined;
   };
-  let restartDrainingMarked = false;
   const observeSignal = loopLogs.createGatewaySignalObserver(gatewayLog);
   let startupFailedWithoutServerHandle = false;
   let failureWork: { controller: AbortController; settled: Promise<void> } | undefined;
@@ -629,14 +628,10 @@ export async function runGatewayLoop(params: {
     }
   };
   const markRestartDraining = (reason: GatewayDrainReason) => {
-    if (restartDrainingMarked) {
-      return;
-    }
     // The lifecycle module is primed before listeners are installed. Keep this
     // transition synchronous so an accepted signal cannot yield between token
     // handling and closing process-wide root admission.
     eagerLifecycleRuntime.markGatewayDraining(reason);
-    restartDrainingMarked = true;
   };
 
   const handleHostedStopAfterServerClose = async (
@@ -1028,6 +1023,7 @@ export async function runGatewayLoop(params: {
         pendingStartupRequest = null;
         clearPendingStartupForceExitTimer();
         startupFailedWithoutServerHandle = false;
+        markRestartDraining(formatShutdownReason(acceptedRequest));
         runAcceptedRequest(acceptedRequest);
         return;
       }
@@ -1217,9 +1213,6 @@ export async function runGatewayLoop(params: {
       }
       try {
         eagerLifecycleRuntime.rollbackGatewayRestartSignalAdmission();
-        // A later signal must repeat the synchronous close transition even if
-        // this handler failed after marking the one-way drain.
-        restartDrainingMarked = false;
       } catch {
         // Keep admission recovery independent from restart-token recovery.
       }
@@ -1272,9 +1265,6 @@ export async function runGatewayLoop(params: {
           await prepareGatewayRestartIteration(
             await gatewayLifecycleRuntimeLoader.load(),
             gatewayLog,
-            () => {
-              restartDrainingMarked = false;
-            },
           );
         }
         if (installationReplacement) {

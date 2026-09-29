@@ -35,7 +35,16 @@ final checkpoint and close, `no-proof` for unavailable or nonmatching proof, and
 Slow-open summaries include the same facts. A dirty receipt alone does not
 distinguish an incomplete checkpoint from a live lease; neither permits restart
 reuse. A process exiting with status zero after its shutdown deadline can still
-leave a stale lease and require the admission gate.
+leave a stale lease and require the admission gate. Stale-lease diagnostics name
+`owner-pid-dead` or `owner-start-time-changed`; agent leases do not use an expiry,
+boot ID, or generation field. A surviving stale lease means its release was not
+observed, rather than proving which signal ended the old process.
+
+The lease owner logs `agent database clean-close receipt` with `written` or the
+reason it skipped publication: another active lease, incomplete checkpoint,
+unconfirmed close, read-only release, missing lease, changed file, mismatched
+path, or missing matching verification. An interrupted release leaves its lease
+for the next admission to diagnose.
 
 | When                                        | Check                                                                                                                                           |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -77,6 +86,15 @@ reuse their admitted handles. Requests still share the archive FIFO. Each Worker
 retires after 30 idle minutes, on database close, or when idle under critical
 memory pressure; failed cleanup retains its original lease until settlement.
 Integrity revocation, schema checks, and update behavior are unchanged.
+During a one-way Gateway shutdown drain, idle native execution and retained
+reclamation connections close immediately. Active executions close when their
+final borrower releases them; active reclamation requests settle before closing.
+External cleanup can still be pending. Cancellation alone never certifies a
+receipt: the last lease must still complete its checkpoint and native close.
+Cleanup that needs another connection uses ordinary admission, which dirties the
+receipt again. A forced exit during a write still requires the admission gate.
+This changes no schema, update, or rollback contract.
+
 Native execution workers can also borrow retained host proof after the host handle
 closes or is evicted. The receiving opener rechecks the physical file identity and
 shared revocation cell; a closed handle alone does not discard valid proof.

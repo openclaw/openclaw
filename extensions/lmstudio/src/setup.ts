@@ -63,15 +63,11 @@ import {
   resolveLmstudioProviderHeaders,
   resolveLmstudioRequestContext,
 } from "./runtime.js";
-
-type ProviderPromptText = (params: {
-  message: string;
-  initialValue?: string;
-  placeholder?: string;
-  validate?: (value: string | undefined) => string | undefined;
-}) => Promise<string | undefined>;
-
-type ProviderPromptNote = (message: string, title?: string) => Promise<void> | void;
+import {
+  type ProviderPromptNote,
+  type ProviderPromptText,
+  validateLmstudioSetupUrl,
+} from "./setup-prompts.js";
 type LmstudioDiscoveryResult = Awaited<ReturnType<typeof fetchLmstudioModels>>;
 const LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 
@@ -499,7 +495,7 @@ export async function promptAndConfigureLmstudioInteractive(params: {
         message: `${LMSTUDIO_PROVIDER_LABEL} base URL`,
         initialValue: defaultBaseUrl,
         placeholder: defaultBaseUrl,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        validate: validateLmstudioSetupUrl,
       });
   const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw ?? defaultBaseUrl);
   let credentialInput: SecretInput | undefined = params.suppliedApiKey;

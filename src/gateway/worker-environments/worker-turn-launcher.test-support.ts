@@ -207,6 +207,49 @@ export function setWorkerTurnAdmissionCleanup(cleanup: () => void): void {
   cleanupAdmissionSink = cleanup;
 }
 
+export function abortWorkerTurnClaimWaitOnSignal(signal: AbortSignal) {
+  const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+  vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) =>
+    waitForClaim(sessionId, {
+      ...options,
+      signal: options.signal ? AbortSignal.any([options.signal, signal]) : signal,
+    }),
+  );
+}
+
+export function createWorkerTurnSessionRuntimeLoader() {
+  const entry = {
+    sessionId: SESSION_ID,
+    updatedAt: 1,
+    worktree: { id: "workspace", branch: "fixture", repoRoot: root },
+  };
+  return async () => ({
+    managedWorktrees: {
+      findLiveByOwner: () => ({
+        id: "workspace",
+        name: "fixture",
+        repoFingerprint: "fixture",
+        repoRoot: root,
+        path: root,
+        branch: "fixture",
+        baseRef: "main",
+        ownerKind: "session" as const,
+        ownerId: SESSION_KEY,
+        createdAt: 1,
+        lastActiveAt: 1,
+      }),
+    },
+    resolveGatewaySessionStoreTargetWithStore: () => ({
+      storePath: sessionTarget.storePath,
+      canonicalKey: SESSION_KEY,
+      storeKeys: [SESSION_KEY],
+      agentId: "main",
+      store: { [SESSION_KEY]: entry },
+    }),
+    resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+  });
+}
+
 export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof sessionTarget {
   sessionTarget = target;
   sessionFile = target.sessionKey;

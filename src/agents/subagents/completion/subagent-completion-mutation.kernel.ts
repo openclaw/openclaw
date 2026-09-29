@@ -1,10 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   bindDeliveryQueueEntry,
   loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "../../../infra/delivery-queue-sqlite-bound.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import {
   prepareClaimedSessionDelivery,
   SESSION_DELIVERY_QUEUE_NAME,
@@ -12,7 +10,6 @@ import {
 } from "../../../infra/session-delivery-queue.records.js";
 import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
-import type { DB } from "../../../state/openclaw-state-db.generated.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
@@ -33,6 +30,7 @@ import {
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
+  readSubagentRunRow,
 } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
@@ -43,7 +41,6 @@ import type {
 } from "./subagent-completion-mutation.types.js";
 
 const SUSPENDED_RETENTION_MS = 7 * 24 * 60 * 60_000;
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
 type CompletionMutation = {
   subagent: SubagentRunRecord;
   queued?: QueuedSessionDelivery;
@@ -238,13 +235,7 @@ function commitCompletionMutations(
     records: mutations
       .filter((mutation) => !mutation.retire)
       .map(({ subagent }) => {
-        const row = executeSqliteQuerySync(
-          database.db,
-          query(database.db)
-            .selectFrom("subagent_runs")
-            .selectAll()
-            .where("run_id", "=", subagent.runId),
-        ).rows[0];
+        const row = readSubagentRunRow(database, subagent.runId);
         if (!row) {
           throw new Error("Subagent completion mutation lost its native row");
         }
@@ -375,13 +366,7 @@ export function mutateSubagentCompletionInDatabase(
         // SAFETY: The session namespace stores only the canonical delivery payload.
       ) as QueuedSessionDelivery | null;
       const owner = queued?.kind === "agentTurn" ? queued.owner : undefined;
-      const row = executeSqliteQuerySync(
-        database.db,
-        query(database.db)
-          .selectFrom("subagent_runs")
-          .selectAll()
-          .where("run_id", "=", mutation.expected.runId),
-      ).rows[0];
+      const row = readSubagentRunRow(database, mutation.expected.runId);
       const current = row && rowToSubagentRunRecord(row);
       if (
         !current ||

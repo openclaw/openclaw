@@ -117,6 +117,12 @@ To consume a release lock:
 The companion `npm-package-locks.md` includes counts and a package table. Each
 entry records `bundleRuntimeDependencies` and direct dependency counts so
 packagers can identify lockless packages that need an external lock.
+Each entry also records a path-sorted `bundledDependencies` array with `path`,
+`name`, `version`, and `parent`. These dependencies carry `inBundle: true` in the
+npm lock; `parent` identifies the nearest enclosing non-bundled package whose
+`resolved` and `integrity` verify the tarball carrying their bytes. The report
+rejects missing or unverifiable carriers and preserves the lock payload. The
+Markdown table counts bundled dependencies per package and includes their total.
 
 ## Maintainer procedures
 

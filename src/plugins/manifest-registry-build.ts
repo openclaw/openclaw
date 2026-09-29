@@ -422,6 +422,7 @@ export function buildPluginManifestRegistry(
       ) {
         diagnostics.push({
           level: "warn",
+          configDisposition: "preserve",
           pluginId: effectivePluginId,
           source: packageManifestSource,
           message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,

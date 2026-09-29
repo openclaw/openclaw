@@ -188,8 +188,7 @@ export class DraftPlaceBrowser {
     ) {
       return null;
     }
-    const error = this.projectSearchTask.error;
-    return formatUiError(error);
+    return formatUiError(this.projectSearchTask.error);
   }
 
   get browserOpen(): boolean {
@@ -298,14 +297,11 @@ export class DraftPlaceBrowser {
       recentPlaces(params.sessions, {
         workspace: params.workspace,
         allowGatewayFolder,
-      }).map((recent) => {
-        const item: ProjectRecent = {
-          kind: "folder",
-          folder: recent.folder,
-          displayName: folderDisplayName(recent.folder),
-        };
-        return item;
-      })
+      }).map<ProjectRecent>((recent) => ({
+        kind: "folder",
+        folder: recent.folder,
+        displayName: folderDisplayName(recent.folder),
+      }))
     );
   }
 

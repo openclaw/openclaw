@@ -9,8 +9,14 @@ import {
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
+import * as reclamationWorker from "../config/sessions/session-accessor.sqlite-reclamation-worker.js";
+import {
+  createSessionMaintenanceStatisticsOperation,
+  runSqliteSessionReclamation,
+} from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as systemdTimeout from "../infra/systemd-stop-timeout.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -22,7 +28,6 @@ import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   OpenClawAgentDatabaseLeaseActiveError,
 } from "../state/openclaw-agent-db-lease.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import * as schema from "../state/openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -30,6 +35,7 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
@@ -99,6 +105,8 @@ it.skipIf(process.platform !== "linux")(
     let unregister: (() => void) | undefined;
     let stop: ((signal: "SIGTERM") => void) | undefined;
     let operation: ReplyOperation | undefined;
+    let execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
+    const writerReleased = createDeferredCore();
     try {
       for (const name of SUPERVISOR_HINT_ENV_VARS) {
         vi.stubEnv(name, undefined);
@@ -135,20 +143,72 @@ it.skipIf(process.platform !== "linux")(
       });
       operation.setPhase("running");
       bindGatewayContextResolver(operation, kernel.resolvePluginGatewayContext);
-      operation.abortSignal.addEventListener("abort", () => operation?.complete(), { once: true });
+      operation.abortSignal.addEventListener(
+        "abort",
+        () => {
+          void execution?.release().then(() => {
+            operation?.complete();
+            writerReleased.resolve();
+          }, writerReleased.reject);
+        },
+        { once: true },
+      );
       const options = { agentId: "main", env: fixture.state.env };
       const agent = openOpenClawAgentDatabase(options);
       agent.db.exec("INSERT INTO auth_profile_state VALUES ('restart-proof', '{}', 1)");
       const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-      unregister = registerOpenClawAgentDatabaseAsyncResource({
-        agentId: "main",
-        path: agent.path,
-        revoke() {},
-        async close() {
+      execution = captureOpenClawAgentDatabaseExecution(options);
+      const writer = execution;
+      await writer.runExisting(
+        {
+          assertCurrent: () => writer.assertCurrent(),
+          createAdmission: (binding) => () => ({
+            nativeLocations: binding.nativeLocations,
+            admission: createSqliteWorkerOperationAdmission((request, grant) => {
+              binding.authorize(request);
+              writer.assertCurrent();
+              assert(grant());
+            }, binding.attachment),
+          }),
+        },
+        (scope) =>
+          scope.execute({
+            type: "session.entries.replace",
+            input: {
+              expectedRows: new Map(),
+              validationKeys: ["agent:main:managed-restart"],
+              labelOwnerKeys: [],
+              replacements: [
+                {
+                  sessionKey: "agent:main:managed-restart",
+                  entry: { sessionId: "managed-restart", updatedAt: 1 },
+                },
+              ],
+            },
+          }),
+      );
+      const reclamationClose = vi.spyOn(
+        reclamationWorker.SqliteReclamationWorker.prototype,
+        "close",
+      );
+      await runSqliteSessionReclamation({
+        forceInProcess: false,
+        plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),
+      });
+      const hostLeaseCount = shared
+        .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
+        .get(agent.path)?.n;
+      expect(hostLeaseCount).toBe(3);
+      // External cleanup can outlive the stop budget; idle writers must not wait for it.
+      const removeSidecar = kernel.registerConnectionDependentSidecars({
+        async stop() {
           entered.resolve();
           await release.promise;
         },
       });
+      unregister = () => {
+        removeSidecar();
+      };
       expect(
         writeGatewayRestartIntentSync({
           env: fixture.state.env,
@@ -178,6 +238,14 @@ it.skipIf(process.platform !== "linux")(
         }),
       ]);
       expect(isAgentRunRestartAbortReason(operation.abortSignal.reason)).toBe(true);
+      await writerReleased.promise;
+      expect(reclamationClose).toHaveBeenCalledOnce();
+      await reclamationClose.mock.results[0]?.value;
+      expect(
+        shared
+          .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
+          .get(agent.path)?.n,
+      ).toBe(1);
       await vi.advanceTimersByTimeAsync(10_001);
       expect(exit).not.toHaveBeenCalled();
       expect(agent.db.isOpen).toBe(true);
@@ -222,6 +290,7 @@ it.skipIf(process.platform !== "linux")(
     } finally {
       release.resolve();
       operation?.complete();
+      await execution?.release();
       await Promise.allSettled([closing]);
       vi.useRealTimers();
       if (!exit.mock.calls.length && stop) {

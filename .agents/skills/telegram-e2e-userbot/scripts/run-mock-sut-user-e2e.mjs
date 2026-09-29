@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -800,12 +800,12 @@ function processGroupExists(child) {
     return true;
   } catch (error) {
     if (error.code === "ESRCH") return false;
-    // macOS answers EPERM for a signal-0 probe of a group that holds a process we do not own;
-    // the group inventory decides instead of aborting cleanup (2026-09-14, lease left unreleased).
-    if (error.code !== "EPERM" || process.platform !== "darwin") throw error;
-    const groups = execFileSync("ps", ["-axo", "pgid="], { encoding: "utf8" }).trim().split(/\s+/u);
-    if (groups.some((group) => !/^\d+$/u.test(group))) throw error;
-    return groups.includes(String(child.pid));
+    // macOS can report EPERM while an exiting group awaits reap. Keep waiting
+    // for ESRCH; EPERM never confirms cleanup, and setuid ps cannot run confined.
+    if (error.code === "EPERM") {
+      return true;
+    }
+    throw error;
   }
 }
 

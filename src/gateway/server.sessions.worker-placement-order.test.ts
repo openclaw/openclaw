@@ -72,6 +72,8 @@ test.each(["delete", "archive", "recover"] as const)(
     let serializedReclaim: Promise<unknown> | undefined;
     const moveBarrier = createGatewayWorkerPlacementMoveBarrier({
       placements: { waitForTurnClaimRelease: async () => {} },
+      awaitTurnClaimRelease: (claimSessionId, wait) =>
+        service.awaitTurnClaimRelease(claimSessionId, wait),
       loadSessionRuntime: async () => {
         moveLoading.resolve();
         await releaseMove.promise;

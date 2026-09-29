@@ -295,7 +295,11 @@ describe("cron batch outcome finalization", () => {
 
       try {
         await started.promise;
-        await expect(remove(state, original.id)).resolves.toEqual({ ok: true, removed: true });
+        await expect(remove(state, original.id)).resolves.toEqual({
+          ok: true,
+          removed: true,
+          activeRunCancellationRequested: true,
+        });
         await add(state, {
           id: original.id,
           name: "independent replacement scheduled job",

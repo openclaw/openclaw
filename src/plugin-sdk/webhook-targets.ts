@@ -1,6 +1,7 @@
 // Webhook target helpers resolve and validate plugin webhook destinations.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { canonicalizePathVariant } from "../gateway/security-path.js";
+import { normalizePluginHttpPath } from "../plugins/http-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { beginWebhookRequestPipelineOrReject } from "./webhook-request-guards.js";
 
@@ -26,12 +27,8 @@ export { registerPluginHttpRoute };
 
 /** Normalize a webhook path to a leading slash without a trailing slash. */
 export function normalizeWebhookPath(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
+  const path = normalizePluginHttpPath(raw.trim()) ?? "/";
+  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
 }
 
 /** Canonicalize a webhook path for Gateway route identity and registry keys. */
@@ -50,11 +47,8 @@ export function resolveWebhookPath(params: {
     return normalizeWebhookPath(trimmedPath);
   }
   if (params.webhookUrl?.trim()) {
-    try {
-      return normalizeWebhookPath(new URL(params.webhookUrl).pathname || "/");
-    } catch {
-      return null;
-    }
+    const url = URL.parse(params.webhookUrl);
+    return url ? normalizeWebhookPath(url.pathname || "/") : null;
   }
   return params.defaultPath ?? null;
 }

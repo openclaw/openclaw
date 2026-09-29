@@ -424,9 +424,9 @@ const rootEntries = [
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
-  // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
-  // Jiti virtualizes openclaw/plugin-sdk/agent-sessions through this cycle-safe barrel.
+  // Jiti exposes this SDK barrel and its type-only declaration owner.
   "src/agents/sessions/extension-sdk.ts!",
+  "src/agents/sessions/extensions/types.ts!",
   // Plugin-SDK ACP facades expose the registry's runtime signatures.
   "src/acp/runtime/registry.ts!",
   "src/plugins/runtime/index.ts!",
