@@ -67,6 +67,17 @@ characters, must use HTTP or HTTPS, cannot include credentials, and cannot
 contain control or invisible characters. Invalid URLs produce a visible
 explanation and an explicit decline.
 
+When the current turn can execute OpenClaw's `ask_user`, OpenClaw disables
+Codex's duplicate blocking `request_user_input` tool by default, because its
+normal mode restriction rejects Default-mode questions. A retained tool
+catalog entry alone does not count as an available executor. Explicit native
+question opt-ins (`tools.experimental_request_user_input.enabled` or
+`features.default_mode_request_user_input`) remain honored, including authored
+native config settings. Thread creation, resume, and fork use the same rule;
+changes refresh the loaded thread configuration. Without a callable `ask_user`,
+the native tool retains its configured availability and mode requirements.
+Native async questions and MCP elicitations are unaffected.
+
 Codex `request_user_input` and ordinary MCP elicitations share one per-turn
 interactive queue. The Control UI renders each non-secret Gateway question, and
 a single choice uses typed channel buttons when the channel supports them.

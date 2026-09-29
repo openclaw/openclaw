@@ -24,6 +24,7 @@ import {
 import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
+  nativeQuestionConfigFixture,
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
@@ -39,6 +40,85 @@ function readNativeConfig(method: string, config: JsonObject = {}) {
 }
 
 describe("Codex native configuration lifecycle", () => {
+  it.each([undefined, false, true])(
+    "honors authored native questions and refreshes warm availability (authored: %s)",
+    async (authored) => {
+      let enabled = authored;
+      const params = createParams(path.join(tempDir, "question-config.jsonl"), tempDir);
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "thread/start" || method === "thread/resume") {
+            return threadStartResult("question-thread");
+          }
+          if (method === "thread/inject_items") {
+            return {};
+          }
+          return method === "config/read"
+            ? nativeQuestionConfigFixture(enabled)
+            : readNativeConfig(method);
+        },
+      });
+      const common = {
+        client: fixture.client,
+        params,
+        cwd: tempDir,
+        dynamicTools: [
+          {
+            type: "function" as const,
+            name: "ask_user",
+            description: "Ask a question",
+            inputSchema: { type: "object" },
+          },
+        ],
+        appServer: createAppServerOptions(),
+        userMcpServersEnabled: false,
+      };
+      const binding = await startOrResumeThread({ ...common, askUserAvailable: true });
+      await retainCodexAppServerLiveThread(
+        fixture.client,
+        binding.threadId,
+        binding.liveThreadOwnership?.release,
+        binding.liveThreadConfigFingerprint,
+      );
+      const start = fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+      expect(start).toBeDefined();
+      const startConfig = isJsonObject(start) && isJsonObject(start.config) ? start.config : {};
+      expect(startConfig["tools.experimental_request_user_input.enabled"]).toBe(
+        authored ? undefined : false,
+      );
+      enabled = authored !== true;
+      const changed = await startOrResumeThread({ ...common, askUserAvailable: true });
+      expect(changed.threadId).toBe(binding.threadId);
+      const refreshed = fixture.request.mock.calls.filter(([method]) => method === "thread/resume");
+      expect(refreshed).toHaveLength(1);
+      const refresh = refreshed[0]?.[1];
+      const refreshConfig =
+        isJsonObject(refresh) && isJsonObject(refresh.config) ? refresh.config : {};
+      expect(refreshConfig["tools.experimental_request_user_input.enabled"]).toBe(
+        enabled ? undefined : false,
+      );
+      await retainCodexAppServerLiveThread(
+        fixture.client,
+        changed.threadId,
+        changed.liveThreadOwnership?.release,
+        changed.liveThreadConfigFingerprint,
+      );
+      const next = await startOrResumeThread({ ...common, askUserAvailable: false });
+      expect(next.threadId).toBe(binding.threadId);
+      const resumes = fixture.request.mock.calls.filter(([method]) => method === "thread/resume");
+      // Authored native questions remain enabled across both turns; otherwise the
+      // loaded thread must be unsubscribed and resumed to remove our default deny.
+      expect(resumes).toHaveLength(enabled ? 1 : 2);
+      if (!enabled) {
+        const resumed = resumes.at(-1)?.[1];
+        const config = isJsonObject(resumed) && isJsonObject(resumed.config) ? resumed.config : {};
+        expect(config).not.toHaveProperty("tools.experimental_request_user_input.enabled");
+      }
+      fixture.client.close();
+    },
+  );
+
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
     async (overridden) => {

@@ -8,6 +8,8 @@ import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
+  readCodexAuthoredConfigValue,
+  readCodexConfigValue,
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
@@ -323,6 +325,22 @@ export function buildCodexRuntimeThreadConfig(
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }
 
+function hasNativeQuestionOptIn(
+  config: JsonObject,
+  nativeConfig: CodexConfigReadResponse | undefined,
+): boolean {
+  return [
+    "tools.experimental_request_user_input.enabled",
+    "features.default_mode_request_user_input",
+  ].some((key) => {
+    const authored = readCodexConfigValue(config, key);
+    if (authored !== undefined) {
+      return authored === true;
+    }
+    return nativeConfig !== undefined && readCodexAuthoredConfigValue(nativeConfig, key) === true;
+  });
+}
+
 function ensureDirectOnlyToolNamespaces(
   config: JsonObject,
   requiredNamespaces: readonly string[] | undefined,
@@ -367,6 +385,8 @@ export function buildCodexRuntimeThreadConfigForRun(
     nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
     directOnlyToolNamespaces?: readonly string[];
+    askUserAvailable?: boolean;
+    nativeQuestionConfig?: CodexConfigReadResponse;
     webSearchAllowed?: boolean;
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
     hostSystemAgentActive?: boolean;
@@ -411,6 +431,11 @@ export function buildCodexRuntimeThreadConfigForRun(
     mergeCodexThreadConfigs(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
+      // Declarations can outlive executors. Prefer a currently callable Ask User,
+      // unless the operator explicitly enabled native questions (including Default mode).
+      options.askUserAvailable && !hasNativeQuestionOptIn(baseConfig, options.nativeQuestionConfig)
+        ? { "tools.experimental_request_user_input.enabled": false }
+        : undefined,
       isCodexResponsesOAuthRun(params)
         ? {
             ...CODEX_DELEGATION_DISABLED_THREAD_CONFIG,

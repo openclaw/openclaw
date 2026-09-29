@@ -178,6 +178,8 @@ export async function startOrResumeThread(
           attempt: params.params,
           cwd: params.cwd,
           dynamicTools: params.dynamicTools,
+          askUserAvailable: params.askUserAvailable,
+          nativeQuestionConfig: params.nativeQuestionConfig,
           appServer: params.appServer,
           developerInstructions: params.developerInstructions,
           skillsInstructions: params.skillsInstructions,

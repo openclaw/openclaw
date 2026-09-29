@@ -17,6 +17,8 @@ import {
   type RpcRequest,
   type RpcResponse,
   type CodexServerNotification,
+  type CodexConfigReadResponse,
+  type JsonObject,
 } from "./protocol.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
@@ -26,6 +28,30 @@ import {
 } from "./shared-client.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+
+export function nativeQuestionConfigFixture(enabled: boolean | undefined): CodexConfigReadResponse {
+  const metadata = {
+    name: { type: "user" as const, file: "/synthetic/codex/config.toml", profile: null },
+    version: "question-config",
+  };
+  const config: JsonObject =
+    enabled === undefined ? {} : { tools: { experimental_request_user_input: { enabled } } };
+  return {
+    // ToolsV2 intentionally projects only web_search; the authored value stays in layers.
+    config: { tools: enabled === undefined ? null : { web_search: null } },
+    origins:
+      enabled === undefined ? {} : { "tools.experimental_request_user_input.enabled": metadata },
+    layers: [
+      {
+        name: { type: "project", dotCodexFolder: "/synthetic/untrusted/.codex" },
+        version: "untrusted-question-config",
+        config: { tools: { experimental_request_user_input: { enabled: true } } },
+        disabledReason: "Project is not trusted",
+      },
+      { ...metadata, config },
+    ],
+  };
+}
 
 type NativeFixtureThread = {
   response: Record<string, unknown>;

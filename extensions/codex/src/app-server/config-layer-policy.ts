@@ -1,6 +1,7 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { CodexConfigReadParams, CodexConfigReadResponse } from "./protocol-control-plane.js";
-import { isJsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 // Native session flags override these layers. Legacy managed layers sit above
 // them, so app admission and restricted turns cannot replace their tool policy.
@@ -37,4 +38,42 @@ export async function readCodexEffectiveConfig(
     throw new Error("Codex config/read returned an invalid effective config");
   }
   return response;
+}
+
+export function readCodexConfigValue(config: JsonObject, key: string): JsonValue | undefined {
+  if (Object.hasOwn(config, key)) {
+    return config[key];
+  }
+  const separator = key.indexOf(".");
+  if (separator < 0) {
+    return undefined;
+  }
+  const child = config[key.slice(0, separator)];
+  return isJsonObject(child) ? readCodexConfigValue(child, key.slice(separator + 1)) : undefined;
+}
+
+export function readCodexAuthoredConfigValue(
+  snapshot: CodexConfigReadResponse,
+  key: string,
+): JsonValue | undefined {
+  const origin = snapshot.origins[key];
+  if (!origin) {
+    return undefined;
+  }
+  const effective = readCodexConfigValue(snapshot.config, key);
+  if (effective !== undefined) {
+    return effective;
+  }
+  // Typed config/read projections omit some native keys. Its origin identifies
+  // the winning enabled raw layer; array order also includes disabled layers.
+  const layer = snapshot.layers?.find(
+    (entry) =>
+      isJsonObject(entry) &&
+      !entry.disabledReason &&
+      entry.version === origin.version &&
+      isDeepStrictEqual(entry.name, origin.name),
+  );
+  return isJsonObject(layer) && isJsonObject(layer.config)
+    ? readCodexConfigValue(layer.config, key)
+    : undefined;
 }

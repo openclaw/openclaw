@@ -1,10 +1,19 @@
 import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
-import type { CodexDynamicToolSpec, CodexTurnEnvironmentParams, JsonObject } from "./protocol.js";
+import type {
+  CodexConfigReadResponse,
+  CodexDynamicToolSpec,
+  CodexTurnEnvironmentParams,
+  JsonObject,
+} from "./protocol.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 export type CodexThreadConfigurationOptions = {
   cwd?: string;
   dynamicTools?: CodexDynamicToolSpec[];
+  /** Current bridge executor availability, independent of retained native declarations. */
+  askUserAvailable?: boolean;
+  /** Existing preflight snapshot; origins distinguish authored settings from native defaults. */
+  nativeQuestionConfig?: CodexConfigReadResponse;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   /** Skill catalog carried with thread developer instructions; refreshable, never generic policy. */
