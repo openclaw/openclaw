@@ -510,9 +510,9 @@ export async function createOllamaEmbeddingProvider(
         return await embedQuery(text, optionsValue);
       }
       // SAFETY: optionsValue is the SDK opaque options object; widening to Record<symbol, unknown> allows accessing the MEMORY_SEARCH_DEADLINE_CONTROL symbol key, and the outer cast narrows to the known deadline control shape.
-      const deadlineControl = (optionsValue as Record<symbol, unknown> | undefined)?.[MEMORY_SEARCH_DEADLINE_CONTROL] as
-        | { report: (action: "pause" | "resume") => void }
-        | undefined;
+      const deadlineControl = (optionsValue as Record<symbol, unknown> | undefined)?.[
+        MEMORY_SEARCH_DEADLINE_CONTROL
+      ] as { report: (action: "pause" | "resume") => void } | undefined;
       const onReadinessWait = deadlineControl
         ? (waiting: boolean) => deadlineControl.report(waiting ? "pause" : "resume")
         : undefined;
