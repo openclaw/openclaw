@@ -186,7 +186,7 @@ function makeNodeServiceEnv(env: Record<string, string>): Record<string, string>
   };
 }
 
-function mockWindowsNodeHostProcess(processId = 5151): void {
+function mockWindowsNodeHostProcess(): void {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   let processAlive = true;
   spawnSync.mockImplementation((command, args) => {
@@ -200,7 +200,7 @@ function mockWindowsNodeHostProcess(processId = 5151): void {
           processAlive
             ? [
                 {
-                  ProcessId: processId,
+                  ProcessId: 5151,
                   CommandLine: "C:\\bin\\openclaw.cmd node run --host 127.0.0.1 --port 18789",
                 },
                 { ProcessId: 9999, CommandLine: "powershell.exe" },

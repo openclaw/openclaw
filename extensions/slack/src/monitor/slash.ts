@@ -732,7 +732,7 @@ export function createSlackCommandHandler(params: {
             From: from,
           }) ?? (isDirectMessage ? senderName : roomLabel),
         GroupSubject: isRoomish ? roomLabel : undefined,
-        GroupSpace: ctx.teamId || undefined,
+        GroupSpace: routingTeamId,
         GroupSystemPrompt: groupSystemPrompt,
         ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,
         SenderName: senderName,

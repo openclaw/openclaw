@@ -930,13 +930,18 @@ describe("gateway/node-command-policy", () => {
   it("keeps policy-withheld declared commands unauthorized", () => {
     expect(
       resolveRequiredNodeCommandAuthority({
+        nodeId: "node-1",
         requiredCommands: ["screen.snapshot", "computer.act"],
         declaredCommands: ["screen.snapshot", "computer.act"],
         effectiveCommands: [],
         withheldCommands: ["computer.act"],
         allowlist: new Set(["screen.snapshot", "computer.act"]),
       }),
-    ).toEqual({ command: "computer.act", state: "unauthorized" });
+    ).toEqual({
+      command: "computer.act",
+      state: "unauthorized",
+      message: expect.stringContaining("gateway.nodes.commands.deny"),
+    });
   });
 
   it("allows node-enabled and paired mobile UI without a persistent allow", () => {

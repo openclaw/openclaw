@@ -92,7 +92,6 @@ function fixture(
       recursive: true,
     });
     for (const file of [
-      "record-shared.mjs",
       "update-compat-contract.mjs",
       "openclaw-e2e-instance.sh",
       "docker-e2e-watchdog.mjs",
@@ -554,6 +553,7 @@ describe("frozen admission bootstrap repairs", () => {
   it.each([
     reader,
     "scripts/lib/docker-e2e-scenarios.mts",
+    "scripts/lib/record-shared.mjs",
     shell,
     "scripts/lib/trusted-native-typescript.mjs",
     "scripts/lib/native-typescript.mts",

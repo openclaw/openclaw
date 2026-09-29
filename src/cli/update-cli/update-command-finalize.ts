@@ -22,7 +22,7 @@ import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
   getUpdateRun,
-  reconcileAbandonedUpdateRuns,
+  reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -473,7 +473,7 @@ async function updateFinalizeCommandInternal(
         if (result.status !== "error" && recoveryRunIds.length) {
           // Publish successful recovery only after convergence and the ledger's
           // transactional inactivity/driver check both finish.
-          reconcileAbandonedUpdateRuns({ explicit: true, runIds: recoveryRunIds });
+          await reconcileAbandonedUpdateRunsAsync({ explicit: true, runIds: recoveryRunIds });
           const unresolved = recoveryRunIds
             .map((runId) => getUpdateRun(runId))
             .find((run) => run?.status === "running");

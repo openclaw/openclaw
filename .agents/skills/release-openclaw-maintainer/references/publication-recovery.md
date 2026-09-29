@@ -128,12 +128,33 @@ rerun only failed verification jobs when the publisher succeeded; otherwise
 inspect its children and follow the recovery route above. Never repeat an
 uncertain dispatch or rerun all publication jobs to fix a download failure.
 
+With `wait_for_clawhub=false` the parent authorizes the ClawHub child and
+does not wait for it. The child publishes on its own and needs no approval.
+It revalidates that the parent is still active or succeeded, so a parent that
+fails first strands it. Watch the child until every package's
+`versions/<version>` returns 200. Seen in 2026.9.6: Convex 512 MB out-of-memory
+errors, runner ENOSPC, and curl timeouts. Recover only the failed packages,
+with `publish_scope=selected` and `plugins=<failed subset>`, from the original
+tooling tag and child identity. A package the ClawHub LLM scan flags
+`suspicious` still publishes; record it for the ClawHub owner. A bootstrap
+child (`plugin-clawhub-new.yml`) always waits for `clawhub-plugin-bootstrap`
+approval, once for validation and once for publication.
+
 Explicit ClawHub recovery uses `recovered_clawhub_run_id` and
 `recovered_clawhub_run_attempt` to name the original child. Keep the original
 parent's tooling, inputs, run ID, and attempt. Do not reuse an approval from another
 child. Docker-only recovery does not recover canceled ClawHub publication;
 verify and recover that surface separately. Recover a failed Plugin ClawHub New
 bootstrap child through its [direct route](first-package.md), not a rerun.
+
+## Docker mirror
+
+The Vercel Container Registry mirror is advisory and fails without failing the
+parent. 2026.9.6 hit a stale 500 MB layer cap, which #156954 raised to 2 GB.
+After a failed mirror, dispatch `vercel-container-registry-publish.yml` from
+`main` with `version`, `include_browser`, and the `source_digests` block copied
+from the parent's mirror job log. Verify the `latest`, `main`, `slim`, and
+`browser` tags carry the version.
 
 ## Registry selectors
 

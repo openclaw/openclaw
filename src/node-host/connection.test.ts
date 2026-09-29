@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -401,6 +402,64 @@ it("fences late failures and sends replacement samples only through the new clie
   }
 });
 
+it("logs runner publication failure changes while continuing retries through recovery", async () => {
+  const { connection, request, start, writeStderrLine } = startConnectionFixture(true);
+  const approvalMessage = "runner capability surface is awaiting operator approval";
+  let failure: string | undefined = approvalMessage;
+  request.mockImplementation(async (method) => {
+    if (method === NODE_RUNNER_INVENTORY_UPDATE_METHOD && failure) {
+      throw new GatewayClientRequestError({ code: "UNAVAILABLE", message: failure });
+    }
+    return {};
+  });
+  const publications = () =>
+    request.mock.calls.filter(([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD);
+  const capacityChanged = start.mock.calls[0]![0].onRunnerCapacityChanged!;
+  try {
+    capacityChanged({ total: 2, available: 2 });
+    connection.connect(gateway);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writeStderrLine).toHaveBeenCalledExactlyOnceWith(
+      `node host runner inventory publish failed: GatewayClientRequestError: ${approvalMessage}`,
+    );
+    for (const delay of [250, 500, 1_000, 2_000, 4_000, 5_000, 5_000]) {
+      const before = publications().length;
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(publications()).toHaveLength(before);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(publications()).toHaveLength(before + 1);
+      expect(writeStderrLine).toHaveBeenCalledOnce();
+    }
+
+    failure = "Gateway unavailable";
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(writeStderrLine).toHaveBeenCalledTimes(2);
+    expect(writeStderrLine).toHaveBeenLastCalledWith(
+      "node host runner inventory publish failed: GatewayClientRequestError: Gateway unavailable",
+    );
+
+    failure = undefined;
+    await vi.advanceTimersByTimeAsync(5_000);
+    const recoveredPublications = publications().length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(publications()).toHaveLength(recoveredPublications);
+
+    failure = "Gateway unavailable";
+    capacityChanged({ total: 2, available: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writeStderrLine).toHaveBeenCalledTimes(3);
+
+    connection.disconnect();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(writeStderrLine).toHaveBeenCalledTimes(3);
+    connection.connect(gateway);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writeStderrLine).toHaveBeenCalledTimes(4);
+  } finally {
+    await connection.close();
+  }
+});
+
 it.each([false, true])(
   "refreshes acknowledged runner facts without changing hosting consent: %s",
   async (enabled) => {
@@ -538,3 +597,29 @@ it.each([false, true])(
     }
   },
 );
+
+it("negotiates disabled hosting diagnostics and retains the old declaration for older Gateways", async () => {
+  const { connection, request, start } = startConnectionFixture(true);
+  const reason =
+    "State directory /srv/node-state is group-writable; run chmod go-w /srv/node-state";
+  try {
+    start.mock.calls[0]![0].onWorkerHostingDisabled?.(reason);
+    for (const supported of [false, true, false]) {
+      connection.connect({
+        ...gateway,
+        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_HOST_DIAGNOSTICS] : [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const declaration = request.mock.calls.findLast(
+        ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      )?.[1];
+      expect(declaration).toEqual({
+        protocolFeatures: ["node-worker-supervisor-v6"],
+        workerHost: { enabled: false, ...(supported ? { reason } : {}) },
+      });
+      expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
+    }
+  } finally {
+    await connection.close();
+  }
+});

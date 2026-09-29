@@ -135,8 +135,10 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-4.7": "claude-opus-4-7",
       "opus-4.6": "claude-opus-4-6",
       "mythos-5": "claude-mythos-5",
+      "sonnet-5.5": "claude-sonnet-5-5",
+      "sonnet-5-5": "claude-sonnet-5-5",
       "sonnet-5": "claude-sonnet-5",
-      sonnet: "claude-sonnet-5",
+      sonnet: "claude-sonnet-5-5",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const providerModel = stripSelfProviderModelPrefix(normalizedProvider, model);

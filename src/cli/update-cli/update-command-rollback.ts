@@ -345,6 +345,7 @@ export async function rollbackFailedUpdate(params: {
           runId: run.runId,
           env,
           assertCurrent,
+          assertRollbackSafe: packageTransaction.assertRollbackSafe,
         });
       } catch (cause) {
         // A partial restore must not reopen the ledger through ordinary failure reporting.
@@ -433,7 +434,7 @@ export async function rollbackFailedUpdate(params: {
               step: "package rollback",
               status: restored.exitCode === 0 ? "completed" : "failed",
               endedAtMs: Date.now(),
-              ...(restored.reason ? { detail: restored.stderrTail ?? restored.reason } : {}),
+              detail: restored.advisory?.message ?? restored.stderrTail ?? restored.reason,
             },
             { env: opts.run.env },
           );

@@ -279,9 +279,7 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
   if (configuredEntries.length === 0) {
     return [];
   }
-  const alsoAllow = Array.isArray(tools?.alsoAllow)
-    ? tools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
-    : params.inheritedAlsoAllow;
+  const alsoAllow = readPreviewStringList(tools?.alsoAllow) ?? params.inheritedAlsoAllow;
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
   return collectProfileConfiguredSectionWarnings({
     configuredEntries,
@@ -421,9 +419,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
 function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
-  const globalAlsoAllow = Array.isArray(globalTools?.alsoAllow)
-    ? globalTools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
+  const globalAlsoAllow = readPreviewStringList(globalTools?.alsoAllow);
   const globalProfile = typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
   const globalConfiguredEntries = collectConfiguredToolSectionGrantEntries({
     tools: globalTools,

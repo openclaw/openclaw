@@ -390,6 +390,33 @@ Startup errors containing `state lease heartbeat did not become ready` include `
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 
+## btrfs and NOCOW
+
+SQLite repeatedly rewrites database pages. On btrfs, copy-on-write can fragment
+large stores and make checkpoints and fsync slow. New Linux SQLite stores request
+`chattr +C` on their directory before creation, so database, WAL, and shared-memory
+files inherit NOCOW. Missing tooling or unsupported permissions produce a warning;
+the database still opens. NOCOW trades btrfs data checksums and compression for
+in-place writes; SQLite's integrity checks still apply.
+
+Doctor reports existing btrfs stores without NOCOW. Explicit `openclaw doctor --fix`
+can rewrite them under its stopped-Gateway maintenance owner. The repair needs
+`lsattr`, `chattr`, `fuser`, `getfacl`, `setfacl`, GNU `mv` with `--exchange` and `--no-copy`, and
+free space of at least twice the uncompressed store directory size. It takes
+verified WAL-aware SQLite backups, streams copies into a fresh NOCOW sibling,
+preserves ownership, modes, and access/default ACLs, checks copy size and
+`PRAGMA quick_check`, then atomically exchanges directories.
+The report names the retained original directory and the standalone backups.
+Keep them until the updated Gateway has been verified; do not overwrite newer
+runtime state with an old copy.
+
+Missing tools skip repair with a note. Insufficient space, active Gateway
+ownership, or failed pre-publication verification leave the previous store in
+place. An uncertain exchange stops activation and names the retained recovery
+path for inspection. No SQL schema migration is involved. The rewritten database
+has a new physical identity (device/inode/birthtime), so the next boot re-runs
+canonical validation once instead of reusing the original identity receipt.
+
 ## Troubleshooting
 
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.

@@ -1,6 +1,8 @@
 // Windows launcher normalization for npm/bun wrappers that duplicate node.exe in argv.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+const CONTROL_CHARS = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
+
 /** Remove duplicated Windows node launcher argv entries while preserving normal POSIX argv. */
 export function normalizeWindowsArgv(
   argv: string[],
@@ -17,19 +19,9 @@ export function normalizeWindowsArgv(
     return argv;
   }
 
-  const stripControlChars = (value: string): string => {
-    let out = "";
-    for (let i = 0; i < value.length; i += 1) {
-      const code = value.charCodeAt(i);
-      if (code >= 32 && code !== 127) {
-        out += value[i];
-      }
-    }
-    return out;
-  };
-
   const normalizeCandidate = (value: string): string =>
-    stripControlChars(value)
+    value
+      .replace(CONTROL_CHARS, "")
       .replace(/^['"]+|['"]+$/g, "")
       .trim()
       .replace(/^\\\\\\?\\/, "");

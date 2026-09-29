@@ -159,6 +159,7 @@ describe("applyModelDefaults", () => {
           models: {
             "anthropic/claude-opus-5-5": {},
             "anthropic/claude-opus-5": {},
+            "anthropic/claude-sonnet-5-5": {},
             "anthropic/claude-sonnet-5": {},
             "openai/gpt-5.4": {},
           },
@@ -169,7 +170,8 @@ describe("applyModelDefaults", () => {
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5-5"]?.alias).toBe("opus");
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBeUndefined();
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5-5"]?.alias).toBe("sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
   });
 
@@ -196,8 +198,8 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            "anthropic/claude-sonnet-5": {},
+            "anthropic/claude-sonnet-5": { alias: "Sonnet" },
+            "anthropic/claude-sonnet-5-5": {},
           },
         },
       },
@@ -205,8 +207,8 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("Sonnet");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("Sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5-5"]?.alias).toBeUndefined();
   });
 
   it("respects explicit empty alias disables", () => {

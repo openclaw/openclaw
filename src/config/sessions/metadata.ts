@@ -27,6 +27,24 @@ import {
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
+function hasExternalOriginChange(
+  existing: SessionOrigin | undefined,
+  next: SessionOrigin | undefined,
+): boolean {
+  const nextProvider = next?.provider;
+  return (
+    nextProvider != null &&
+    nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
+    !isInternalNonDeliveryChannel(nextProvider) &&
+    (!existing ||
+      (existing.provider != null && nextProvider !== existing.provider) ||
+      (existing.surface != null && next?.surface != null && next.surface !== existing.surface) ||
+      (existing.accountId != null &&
+        next?.accountId != null &&
+        next.accountId !== existing.accountId))
+  );
+}
+
 const mergeSessionOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
@@ -39,20 +57,7 @@ const mergeSessionOrigin = (
   // moving Slack -> Telegram, or between Slack accounts). Channel-keyed fields belong to the prior
   // channel; drop them so an inbound that omits them does not keep reactions, native threading, and
   // status reads pointed at the previous channel.
-  const nextProvider = next?.provider;
-  const nextIsDeliverableChannel =
-    nextProvider != null &&
-    nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(nextProvider);
-  const channelChanged =
-    existing != null &&
-    nextIsDeliverableChannel &&
-    ((existing.provider != null && nextProvider !== existing.provider) ||
-      (existing.surface != null && next?.surface != null && next.surface !== existing.surface) ||
-      (existing.accountId != null &&
-        next?.accountId != null &&
-        next.accountId !== existing.accountId));
-  if (channelChanged) {
+  if (existing != null && hasExternalOriginChange(existing, next)) {
     delete merged.nativeChannelId;
     delete merged.nativeDirectUserId;
     delete merged.avatar;
@@ -218,11 +223,6 @@ export function deriveSessionMetaPatch(params: {
       patch.chatType = mergedOrigin.chatType;
     }
     const nextProvider = origin?.provider;
-    const nextOwnsExternalRoute = Boolean(
-      nextProvider &&
-      nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-      !isInternalNonDeliveryChannel(nextProvider),
-    );
     const existingRoute = sessionDeliveryRoute(params.existing);
     const existingRouteAccountId =
       existingRoute?.accountId ?? deliveryContextFromSession(params.existing)?.accountId;
@@ -232,16 +232,9 @@ export function deriveSessionMetaPatch(params: {
       existingRoute?.channel === nextProvider &&
       (origin?.accountId == null || existingRouteAccountId === origin.accountId);
     const deliveryIdentityChanged =
-      nextOwnsExternalRoute &&
+      Boolean(nextProvider) &&
       !freshRouteOwnsNextProvider &&
-      (!existingOrigin ||
-        (existingOrigin.provider != null && nextProvider !== existingOrigin.provider) ||
-        (existingOrigin.surface != null &&
-          origin?.surface != null &&
-          origin.surface !== existingOrigin.surface) ||
-        (existingOrigin.accountId != null &&
-          origin?.accountId != null &&
-          origin.accountId !== existingOrigin.accountId));
+      hasExternalOriginChange(existingOrigin, origin);
     patch.delivery = normalizeSessionDeliveryState({
       route: deliveryIdentityChanged ? undefined : sessionDeliveryRoute(params.existing),
       context: deliveryIdentityChanged

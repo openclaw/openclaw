@@ -469,9 +469,9 @@ merge_read() {
 }
 
 merge_outcome_read_remote() {
-  local response
+  local response observation before main previous local_only="${2:-false}"
   response=$(merge_read observe "$1") || return 1
-  printf '%s\n' "$response" | jq -ce --argjson repo "$MERGE_REPO" --argjson pr "$1" '
+  observation=$(printf '%s\n' "$response" | jq -ce --argjson repo "$MERGE_REPO" --argjson pr "$1" '
     .transport as $transport | .payload |
     def oid: type == "string" and test("^[0-9a-f]{40}$");
     select(.errors == null) | . as $response | .data.repository |
@@ -495,7 +495,28 @@ merge_outcome_read_remote() {
       (.pr | has("mergeCommit")) and
       (if .pr.state == "MERGED" then (.pr.mergeCommit.oid | oid) else
         (.pr.state == "OPEN" or .pr.state == "CLOSED") and .pr.mergeCommit == null end))
-  '
+  ') || return 1
+  if [ "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" = true ] &&
+    [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
+    [ "$(printf '%s\n' "$observation" | jq -r .transport)" = rest ]; then
+    before=$(printf '%s\n' "$response" | jq -er '.payload.mainBefore | select(type == "string" and test("^[0-9a-f]{40}$"))') || return 1
+    main=$(printf '%s\n' "$observation" | jq -r .main) || return 1
+    if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] &&
+      [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ] &&
+      [ "$(printf '%s\n' "$observation" | jq -r .pr.state)" = OPEN ]; then
+      previous="${MERGE_PRIOR_CI_OBSERVED_MAIN:-$PR_MAIN_SHA}"
+      if [ -z "${MERGE_PRIOR_CI_OBSERVED_MAIN:-}" ] && [ -n "${MERGE_OBSERVATION:-}" ]; then
+        previous=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -er .main) || return 1
+      fi
+      # Consume transient read boundaries before emitting normalized/retained facts.
+      verify_prior_ci_main_advance "$previous" "$before" "$local_only" >&2 || return 1
+      [ "$before" = "$main" ] || verify_prior_ci_main_advance "$before" "$main" "$local_only" >&2 || return 1
+    elif [ "$(printf '%s\n' "$observation" | jq -r .pr.state)" != MERGED ] && [ "$before" != "$main" ]; then
+      merge_outcome_stop "main changed while reading evidence outside active prior-CI admission" >&2
+      return 1
+    fi
+  fi
+  printf '%s\n' "$observation"
 }
 
 merge_outcome_require_main() {
@@ -509,11 +530,18 @@ merge_outcome_require_main() {
 }
 
 merge_outcome_observe() {
+  local main
   MERGE_OBSERVATION=$(merge_outcome_read_remote "$1") || {
     merge_outcome_stop "PR/main metadata: observed=unavailable or invalid; expected=authoritative valid snapshot"; return 1;
   }
   MERGE_TRANSPORT=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r '.transport') || return 1
-  merge_outcome_require_main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)"
+  main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main) || return 1
+  merge_outcome_require_main "$main" || return 1
+  if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] &&
+    [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
+    [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; then
+    MERGE_PRIOR_CI_OBSERVED_MAIN="$main"
+  fi
 }
 
 verify_prior_ci_main_advance() {
@@ -521,10 +549,15 @@ verify_prior_ci_main_advance() {
   [ "$main" != "$previous" ] || [ "$main" != "$PR_MAIN_SHA" ] || return 0
   if [ "$local_only" = true ]; then
     # The CLI switch fails closed on Git versions that ignore the environment variable.
-    GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch cat-file -e "$main^{commit}" 2>/dev/null || {
-      merge_outcome_stop "final prior-CI main cannot be verified with local-only Git; no fetch after authority verification"; return 1;
-    }
+    local GIT_NO_LAZY_FETCH=1 revision
+    export GIT_NO_LAZY_FETCH
+    for revision in "$previous" "$main" "$PR_MAIN_SHA"; do
+      pr_git --no-lazy-fetch cat-file -e "$revision^{commit}" 2>/dev/null || {
+        merge_outcome_stop "final prior-CI main cannot be verified with local-only Git; no fetch after authority verification"; return 1;
+      }
+    done
   else
+    merge_outcome_require_main "$previous" || return 1
     merge_outcome_require_main "$main" || return 1
   fi
   if ! pr_git merge-base --is-ancestor "$previous" "$main" ||
@@ -533,28 +566,53 @@ verify_prior_ci_main_advance() {
   fi
   # The fixed CI/security proof remains bound to its verified main ancestor.
   # Prove the new composition without changing the pinned intent/audit anchor.
-  [ "$main" = "$previous" ] || verify_merge_candidate_tree "$main" "$PREP_HEAD_SHA"
+  verify_merge_candidate_tree "$main" "$PREP_HEAD_SHA"
 }
 
 merge_outcome_stable() {
-  local reread main local_only="${2:-false}"
-  reread=$(merge_outcome_read_remote "$1") || {
-    merge_outcome_stop "observation reread: observed=unavailable or invalid; expected=authoritative PR/main metadata"; return 1;
-  }
-  # Keep the main used for local tree proof and intent while rechecking every PR
-  # fact. Prior-CI admission additionally proves forward ancestry and composition.
-  if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] && [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; then
-    if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ] ||
-      printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" \
-        'del(.main) == ($observed | del(.main))' >/dev/null; then
-      if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
-        verify_prior_ci_main_advance \
-          "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" \
-          "$(printf '%s\n' "$reread" | jq -r .main)" "$local_only" || return 1
+  local reread main previous_main observation_attempt settling=false local_only="${2:-false}"
+  for observation_attempt in 1 2 3; do
+    reread=$(merge_outcome_read_remote "$1" "$local_only") || {
+      merge_outcome_stop "observation reread: observed=unavailable or invalid; expected=authoritative PR/main metadata"; return 1;
+    }
+    # Keep the intent anchor separate from the latest verified main. Recalculation
+    # may temporarily erase projections, but never replaces their known pins.
+    if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ] && [ "${MERGE_USE_CRABBOX_ADMIN_BYPASS:-false}" = false ]; then
+      previous_main="${MERGE_PRIOR_CI_OBSERVED_MAIN:-$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)}"
+      if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ] ||
+        printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" \
+          --arg previous "$previous_main" --argjson settling "$settling" \
+          --argjson priorRest "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" '
+          def facts: del(.main,.pr.mergeable,.pr.mergeStateStatus);
+          facts == ($observed | facts) and
+          ((.pr.mergeable == $observed.pr.mergeable and .pr.mergeStateStatus == $observed.pr.mergeStateStatus) or
+           ($priorRest and .transport == "rest" and .pr.state == "OPEN" and
+            ($settling or .main != $previous) and
+            $observed.pr.mergeable == "MERGEABLE" and $observed.pr.mergeStateStatus != "UNKNOWN" and
+            (.pr.mergeable == "UNKNOWN" or .pr.mergeable == $observed.pr.mergeable) and
+            (.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $observed.pr.mergeStateStatus)))
+        ' >/dev/null; then
+        if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
+          main=$(printf '%s\n' "$reread" | jq -r .main) || return 1
+          verify_prior_ci_main_advance "$previous_main" "$main" "$local_only" || return 1
+          MERGE_PRIOR_CI_OBSERVED_MAIN="$main"
+          if printf '%s\n' "$reread" | jq -e '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
+            if [ "$observation_attempt" -eq 3 ]; then
+              merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
+              merge_outcome_stop "mergeability recalculation remained UNKNOWN after 3 observations; stopped before intent/dispatch"
+              return 1
+            fi
+            [ "$settling" = true ] || echo "Waiting for prior-CI mergeability recalculation after verified main advance (up to 3 observations)."
+            settling=true
+            sleep "$observation_attempt"
+            continue
+          fi
+        fi
+        reread=$(printf '%s\n' "$reread" | jq -c --arg main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" '.main=$main') || return 1
       fi
-      reread=$(printf '%s\n' "$reread" | jq -c --arg main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" '.main=$main') || return 1
     fi
-  fi
+    break
+  done
   [ "$reread" = "$MERGE_OBSERVATION" ] && return 0
   # Both APIs bind the same PR/main facts. Compare REST policy evidence whenever
   # both reads support it; GraphQL admission relies on GitHub's policy enforcement.
