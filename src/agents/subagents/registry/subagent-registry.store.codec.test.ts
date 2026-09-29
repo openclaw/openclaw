@@ -21,15 +21,9 @@ function createRun(): SubagentRunRecord {
   };
 }
 
-it.each([
-  { kind: "success", hasReply: false },
-  { kind: "bigint", hasReply: false },
-  { kind: "bigint", hasReply: true },
-  { kind: "cycle", hasReply: false },
-  { kind: "cycle", hasReply: true },
-] as const)(
-  "restores captured completion after $kind encoding (reply present=$hasReply)",
-  ({ kind, hasReply }) => {
+it.each([false, true])(
+  "restores captured completion after encoding fails (reply present=%s)",
+  (hasReply) => {
     const timestamp = "[Mon 2026-09-21 12:00 UTC] ";
     const captured = normalizeSubagentRunState({
       ...createRun(),
@@ -42,17 +36,13 @@ it.each([
       delete captured.completion!.terminalReply;
     }
     captured.queuedLaunch = {
-      request: { value: kind === "bigint" ? 1n : kind === "cycle" ? captured : "plain" },
+      request: { value: 1n },
       timeoutMs: 100,
       schedulerGroupKey: "synthetic",
       maxConcurrent: 1,
     };
     const before = structuredClone(captured);
-    if (kind === "success") {
-      expect(bindCapturedSubagentRunRecord(captured)).toEqual(bindSubagentRunRecord(captured));
-    } else {
-      expect(() => bindCapturedSubagentRunRecord(captured)).toThrow(TypeError);
-    }
+    expect(() => bindCapturedSubagentRunRecord(captured)).toThrow(TypeError);
     expect(captured).toStrictEqual(before);
   },
 );

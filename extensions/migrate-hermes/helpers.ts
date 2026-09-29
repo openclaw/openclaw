@@ -45,21 +45,6 @@ export function parseHermesConfig(content: string | undefined): Record<string, u
   return content ? asNonArrayRecord(parseYaml(content)) : {};
 }
 
-export function childRecord(
-  root: Record<string, unknown> | undefined,
-  key: string,
-): Record<string, unknown> {
-  const value = root?.[key];
-  return asNonArrayRecord(value);
-}
-
-export function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
-}
-
 export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
   if (!item.source || !item.target) {
     return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);

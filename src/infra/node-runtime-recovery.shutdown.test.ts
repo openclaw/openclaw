@@ -18,6 +18,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   child = new ChildProcess();
   kill = vi.spyOn(child, "kill").mockReturnValue(true);
+  // `spawn` is hoisted once for the file, so its call log survives across cases
+  // and `toHaveBeenCalledExactlyOnceWith` would only ever hold for the first one.
+  spawn.mockClear();
   spawn.mockReturnValue(child);
   exit = vi.spyOn(process, "exit").mockImplementation(vi.fn<typeof process.exit>());
   vi.spyOn(process, "kill").mockReturnValue(true);
@@ -50,6 +53,21 @@ it.each([
       XPC_SERVICE_NAME: "ai.openclaw.fixture",
     });
     detach = () => child.emit("exit", 0, null);
+    // The launcher tells the child nothing about the timer it armed: the serving
+    // Gateway derives the same deadline from the same shared expression, which is what
+    // lets a Gateway started by an already-running older launcher bound itself
+    // correctly. So the env must reach the child unchanged, and the escalation
+    // asserted below is what that derivation has to land on.
+    expect(spawn).toHaveBeenCalledExactlyOnceWith(
+      "node",
+      ["child.mjs"],
+      expect.objectContaining({
+        env: {
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
+          XPC_SERVICE_NAME: "ai.openclaw.fixture",
+        },
+      }),
+    );
     const signal = process.listeners("SIGTERM").find((listener) => !previous.has(listener));
     expect(signal).toBeDefined();
     signal!("SIGTERM");

@@ -54,11 +54,7 @@ import {
   collectSessionStateIdsForEntry,
   SESSION_STATE_ID_TRIM_CHARACTERS,
 } from "./session-accessor.sqlite-references.js";
-import {
-  cloneSessionEntry,
-  getSessionKysely,
-  withSqliteSessionDatabase,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
 import {
   parseSessionEntryJson as parseSessionEntryRow,
   sessionEntryMetadataJson,
@@ -549,7 +545,7 @@ export async function projectSessionEntryLifecycleMutation(
             `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,
           );
         }
-        entry = removal.expectedEntry ? cloneSessionEntry(removal.expectedEntry) : undefined;
+        entry = removal.expectedEntry ? structuredClone(removal.expectedEntry) : undefined;
       }
       if (!shouldRemoveSessionEntry(entry, removal)) {
         continue;
@@ -571,7 +567,7 @@ export async function projectSessionEntryLifecycleMutation(
       projectedRemovals.push({
         // Capture each archive decision before an async builder can change its input.
         archiveTranscript: removal.archiveRemovedTranscript === true,
-        expectedEntry: cloneSessionEntry(entry),
+        expectedEntry: structuredClone(entry),
         removal,
         sessionKey,
       });
@@ -595,7 +591,7 @@ export async function projectSessionEntryLifecycleMutation(
       ) {
         continue;
       }
-      const expectedEntry = store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined;
+      const expectedEntry = store[sessionKey] ? structuredClone(store[sessionKey]) : undefined;
       if (upsert.resetBoundary && !expectedEntry) {
         throw new Error(
           `Cannot append reset boundary without an existing session row: ${sessionKey}`,
@@ -605,13 +601,13 @@ export async function projectSessionEntryLifecycleMutation(
         upsert.buildEntry === undefined
           ? upsert.entry
           : await upsert.buildEntry({
-              currentEntry: expectedEntry ? cloneSessionEntry(expectedEntry) : undefined,
+              currentEntry: expectedEntry ? structuredClone(expectedEntry) : undefined,
               sessionKey,
             });
       if (!entry) {
         continue;
       }
-      const cloned = cloneSessionEntry(entry);
+      const cloned = structuredClone(entry);
       store[sessionKey] = cloned;
       changedSessionKeys.add(sessionKey);
       upsertedEntries.push({

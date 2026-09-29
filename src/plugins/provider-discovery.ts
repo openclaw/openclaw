@@ -21,10 +21,6 @@ function resolveProviderCatalogOrderHook(provider: ProviderPlugin) {
   return provider.catalog ?? provider.staticCatalog;
 }
 
-function createProviderConfigRecord(): Record<string, ModelProviderConfig> {
-  return Object.create(null) as Record<string, ModelProviderConfig>;
-}
-
 function isSafeProviderConfigKey(value: string): boolean {
   return value !== "" && !isBlockedObjectKey(value);
 }
@@ -118,29 +114,20 @@ export function normalizePluginDiscoveryResult(params: {
   }
 
   const projection = copyProviderCatalogResultProjection(result);
-  if (projection.kind === "provider") {
-    const normalized = createProviderConfigRecord();
-    for (const providerId of [
-      params.provider.id,
-      ...(params.provider.aliases ?? []),
-      ...(params.provider.hookAliases ?? []),
-    ]) {
-      const normalizedKey = normalizeProviderId(providerId);
-      if (!isSafeProviderConfigKey(normalizedKey)) {
-        continue;
-      }
-      normalized[normalizedKey] = projection.provider;
-    }
-    return normalized;
-  }
-
-  const normalized = createProviderConfigRecord();
-  if (projection.kind !== "providers") {
-    return normalized;
-  }
-  for (const [key, value] of projection.providers) {
+  const normalized = Object.create(null) as Record<string, ModelProviderConfig>;
+  const entries =
+    projection.kind === "provider"
+      ? [
+          params.provider.id,
+          ...(params.provider.aliases ?? []),
+          ...(params.provider.hookAliases ?? []),
+        ].map((id) => [id, projection.provider] as const)
+      : projection.kind === "providers"
+        ? projection.providers
+        : [];
+  for (const [key, value] of entries) {
     const normalizedKey = normalizeProviderId(key);
-    if (!isSafeProviderConfigKey(normalizedKey) || !value) {
+    if (!isSafeProviderConfigKey(normalizedKey)) {
       continue;
     }
     normalized[normalizedKey] = value;

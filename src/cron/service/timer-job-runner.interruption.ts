@@ -5,7 +5,7 @@ import type { CronJob, CronWebhookDeliveryOutcome } from "../types.js";
 import type { IsolatedAgentSetupTimeoutSignal } from "./timer-execution-timeout.js";
 import type { executeJobCore } from "./timer-execution.js";
 
-type CronCoreRunOutcome = Awaited<ReturnType<typeof executeJobCore>> & {
+export type CronCoreRunOutcome = Awaited<ReturnType<typeof executeJobCore>> & {
   isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
 };
 export type CronRunProgress = {
@@ -46,7 +46,7 @@ export function withPrimaryWebhookTrace(params: {
     delivered,
     deliverySuppressionReason: params.deliverySuppressionReason,
     deliveryAttempted: params.deliverySuppressionReason === undefined,
-    ...(error ? { deliveryError: error } : { deliveryError: undefined }),
+    deliveryError: error || undefined,
     delivery: {
       ...params.result.delivery,
       intended,

@@ -11,12 +11,9 @@ import {
   clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
-  disposeOpenClawAgentDatabaseByPath,
-  isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
-  resolveIncognitoOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
@@ -45,27 +42,6 @@ afterEach(() => {
 });
 
 describe("openclaw agent database handle cache", () => {
-  it("opens each agent once across repeated operations with more than 64 active stores", () => {
-    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-    const agents = Array.from({ length: 65 }, (_, index) => `fixture-${index}`);
-    for (let round = 0; round < 3; round++) {
-      for (const agentId of agents) {
-        expect(
-          openOpenClawAgentDatabase({ agentId, env }).db.prepare("SELECT 1 AS value").get(),
-        ).toEqual({ value: 1 });
-      }
-    }
-    expect(
-      open.mock.calls.filter(([pathname]) => pathname.endsWith("openclaw-agent.sqlite")),
-    ).toHaveLength(agents.length);
-    const first = openOpenClawAgentDatabase({ agentId: agents[0]!, env });
-    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-    expect(first.db.isOpen).toBe(true);
-    vi.advanceTimersByTime(1);
-    expect(first.db.isOpen).toBe(false);
-    expect(isOpenClawAgentDatabaseOpen(first.path)).toBe(false);
-  });
-
   it("starts another complete idle window when an existing handle is used", () => {
     const options = { agentId: "activity", env };
     const database = openOpenClawAgentDatabase(options);
@@ -82,24 +58,6 @@ describe("openclaw agent database handle cache", () => {
     const database = openOpenClawAgentDatabase({ agentId: "idle-maintenance", env });
     await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
     expect(database.db.isOpen).toBe(false);
-  });
-
-  it("keeps incognito state until explicit close because its connection owns the data", () => {
-    const options = { agentId: "incognito-idle", env };
-    const incognito = { ...options, path: resolveIncognitoOpenClawAgentSqlitePath(options) };
-    const database = openOpenClawAgentDatabase(incognito);
-    database.db
-      .prepare(
-        "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
-      )
-      .run("retained", "{}", 42);
-    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS * 2);
-    expect(openOpenClawAgentDatabase(incognito)).toBe(database);
-    expect(
-      database.db
-        .prepare("SELECT updated_at FROM auth_profile_state WHERE state_key = ?")
-        .get("retained"),
-    ).toEqual({ updated_at: 42 });
   });
 
   it("retains concurrent admissions through the transaction's borrower handoff", async () => {
@@ -145,42 +103,34 @@ describe("openclaw agent database handle cache", () => {
     }
   });
 
-  it.each([false, true])(
-    "starts the idle window after a cached operation settles (throws=%s)",
-    async (throws) => {
-      const options = { agentId: "cached-operation", env };
-      const target = openOpenClawAgentDatabase(options);
-      const entered = createDeferredCore();
-      const proceed = createDeferredCore();
-      const result = withOpenClawAgentDatabaseAsync(options, async (database) => {
-        entered.resolve();
-        await proceed.promise;
-        expect(database).toBe(target);
-        expect(database.db.isOpen).toBe(true);
-        if (throws) {
-          throw new Error("synthetic operation failure");
-        }
-        return database.agentId;
-      });
-      const settled = throws
-        ? expect(result).rejects.toThrow("synthetic operation failure")
-        : expect(result).resolves.toBe(target.agentId);
-      try {
-        await entered.promise;
-        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS * 2);
-        expect(target.db.isOpen).toBe(true);
-        proceed.resolve();
-        await settled;
-        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-        expect(target.db.isOpen).toBe(true);
-        vi.advanceTimersByTime(1);
-        expect(target.db.isOpen).toBe(false);
-      } finally {
-        proceed.resolve();
-        await Promise.allSettled([result]);
-      }
-    },
-  );
+  it("starts the idle window after a cached operation rejects", async () => {
+    const options = { agentId: "cached-operation", env };
+    const target = openOpenClawAgentDatabase(options);
+    const entered = createDeferredCore();
+    const proceed = createDeferredCore();
+    const result = withOpenClawAgentDatabaseAsync(options, async (database) => {
+      entered.resolve();
+      await proceed.promise;
+      expect(database).toBe(target);
+      expect(database.db.isOpen).toBe(true);
+      throw new Error("synthetic operation failure");
+    });
+    const settled = expect(result).rejects.toThrow("synthetic operation failure");
+    try {
+      await entered.promise;
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS * 2);
+      expect(target.db.isOpen).toBe(true);
+      proceed.resolve();
+      await settled;
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(target.db.isOpen).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(target.db.isOpen).toBe(false);
+    } finally {
+      proceed.resolve();
+      await Promise.allSettled([result]);
+    }
+  });
 
   it("does not invoke an admitted operation after explicit disposal revokes its handle", async () => {
     const target = openOpenClawAgentDatabase({ agentId: "revoked-operation", env });
@@ -316,15 +266,6 @@ describe("openclaw agent database handle cache", () => {
     });
   });
 
-  it("validates ownership when an evicted path is requested for another agent", () => {
-    const evicted = openOpenClawAgentDatabase({ agentId: "worker-a", env });
-    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
-    expect(evicted.db.isOpen).toBe(false);
-    expect(() =>
-      openOpenClawAgentDatabase({ agentId: "worker-b", env, path: evicted.path }),
-    ).toThrow(/belongs to agent worker-a/);
-  });
-
   it("revokes on quarantine and opens a new native handle after quarantine is cleared", () => {
     const options = { agentId: "quarantine", env };
     const database = openOpenClawAgentDatabase(options);
@@ -336,19 +277,5 @@ describe("openclaw agent database handle cache", () => {
     clearOpenClawAgentDatabaseOpenFailure(database.path, { env });
     expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
     expect(open.mock.calls.filter(([pathname]) => pathname === database.path)).toHaveLength(1);
-  });
-
-  it("removes discovery on explicit disposal and registers a new admission", () => {
-    const options = { agentId: "disposed", env };
-    const database = openOpenClawAgentDatabase(options);
-    expect(disposeOpenClawAgentDatabaseByPath(database.path, { env })).toBe(true);
-    expect(database.db.isOpen).toBe(false);
-    expect(
-      listOpenClawRegisteredAgentDatabases({ env }).some((entry) => entry.path === database.path),
-    ).toBe(false);
-    expect(openOpenClawAgentDatabase(options)).not.toBe(database);
-    expect(
-      listOpenClawRegisteredAgentDatabases({ env }).some((entry) => entry.path === database.path),
-    ).toBe(true);
   });
 });

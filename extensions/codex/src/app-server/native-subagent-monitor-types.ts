@@ -95,6 +95,7 @@ export type ParentOwner = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
   modelExecutionCancelled?: true;
   modelExecutionSettled?: true;
+  isTurnYielded?: () => boolean;
   nativeReviewRequirement?: { required: boolean };
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
   rejectPendingDirectChild?: (threadId: string, reason: string) => void;

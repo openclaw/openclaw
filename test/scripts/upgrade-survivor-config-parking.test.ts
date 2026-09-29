@@ -186,6 +186,8 @@ exit "$probe_status"
         `#!/usr/bin/env bash
 [ "$*" != '--user is-active --quiet openclaw-gateway.service' ] || exit "$PROBE_ACTIVE_STATUS"
 printf '%s\\n' "$*" >>"$PROBE_EVENTS"
+# Stopping an inactive unit succeeds; PROBE_ACTIVE_STATUS models the state after stop.
+[ "$*" != '--user stop openclaw-gateway.service' ] || exit 0
 [ "$*" = '--user start openclaw-gateway.service' ] || exit 97
 printf 'synthetic start diagnostic\\n' >&2
 [ "$PROBE_START_STATUS" -eq 0 ] || exit "$PROBE_START_STATUS"
@@ -221,6 +223,7 @@ printf 'original env\\n' >"$OPENCLAW_STATE_DIR/gateway.systemd.env"
 printf 'original dotenv\\n' >"$OPENCLAW_STATE_DIR/.env"
 printf 'baseline timeline\\n' >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG"
 : >"$PROBE_EVENTS"
+openclaw_e2e_probe_tcp() { return 1; }
 openclaw_e2e_wait_gateway_ready() {
   printf 'readiness\\n' >>"$PROBE_EVENTS"
   return "$PROBE_READY_STATUS"
@@ -294,8 +297,9 @@ exit "$probe_status"
       expect(result.status, result.stdout + result.stderr).toBe(expected);
       expect(
         readFileSync(path.join(root, "events"), "utf8").trimEnd().split("\n").filter(Boolean),
-      ).toEqual(
-        activeStatus !== 3
+      ).toEqual([
+        "--user stop openclaw-gateway.service",
+        ...(activeStatus !== 3
           ? []
           : startStatus || mutation !== "none"
             ? ["--user start openclaw-gateway.service"]
@@ -310,8 +314,8 @@ exit "$probe_status"
                   "serving-turn",
                   "assert-survival",
                   ...(scenario === "sqlite-volume" ? ["volume-doctor", "volume-state"] : []),
-                ],
-      );
+                ]),
+      ]);
       if (activeStatus === 3) {
         expect(
           readFileSync(
@@ -331,11 +335,16 @@ exit "$probe_status"
           .map((line) => JSON.parse(line));
         expect(
           completedPhases.filter((event) => event.status === "passed").map((event) => event.phase),
-        ).toEqual([
-          "prepare-restart-inference",
-          "prepare-restart-fixture",
-          "prepare-restart-manager",
-        ]);
+        ).toEqual(
+          activeStatus !== 3
+            ? []
+            : [
+                "stop-recovery-service",
+                "prepare-restart-inference",
+                "prepare-restart-fixture",
+                "prepare-restart-manager",
+              ],
+        );
         expect(phases).not.toContain("recovery-update-restart");
       }
     },
@@ -364,6 +373,7 @@ update_repair_required=0
 candidate_version=2026.9.3
 baseline_version=2026.9.2
 OPENCLAW_CLAWHUB_URL=fixture
+stop_update_restart_probe_gateway() { :; }
 prepare_restart_inference() { :; }
 prepare_restart_fixture() { restart_fixture_package=/tmp/fixture.tgz; restart_fixture_version=2026.9.3; }
 install_update_restart_systemctl_shim() { :; }

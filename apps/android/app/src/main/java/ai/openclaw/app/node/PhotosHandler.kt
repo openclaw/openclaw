@@ -240,25 +240,16 @@ class PhotosHandler internal constructor(
 ) {
   fun handlePhotosLatest(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "PHOTOS_PERMISSION_REQUIRED",
-        message = "PHOTOS_PERMISSION_REQUIRED: grant Photos permission",
-      )
+      return nodeInvokeError("PHOTOS_PERMISSION_REQUIRED", "grant Photos permission")
     }
     val request =
       parseRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     return try {
       val photos = dataSource.latest(appContext, request)
       GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("photos" to photos)))
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "PHOTOS_UNAVAILABLE",
-        message = "PHOTOS_UNAVAILABLE: ${err.message ?: "photo fetch failed"}",
-      )
+      nodeInvokeError("PHOTOS_UNAVAILABLE", err.message ?: "photo fetch failed")
     }
   }
 

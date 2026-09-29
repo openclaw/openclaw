@@ -229,6 +229,8 @@ describe("webchat admission to plugin node duplex authority", () => {
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
         stop: async () => {},

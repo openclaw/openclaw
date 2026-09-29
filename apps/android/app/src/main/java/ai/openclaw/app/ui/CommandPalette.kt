@@ -136,7 +136,7 @@ internal fun CommandPalette(
             if (actionRows.isEmpty()) {
               ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Threads, Providers, or Settings."))
             } else {
-              CommandActionList(rows = actionRows, onOpen = onOpen)
+              CommandList(rows = actionRows) { row -> CommandActionRow(row = row, onOpen = onOpen) }
             }
           }
         }
@@ -155,10 +155,9 @@ internal fun CommandPalette(
               )
             }
           } else {
-            CommandSessionList(
-              rows = sessionRows,
-              onOpen = onOpenSession,
-            )
+            CommandList(rows = sessionRows) { row ->
+              CommandSessionListRow(row = row, onClick = { onOpenSession(row.key, row.ownerAgentId) })
+            }
           }
         }
       }
@@ -258,14 +257,12 @@ internal fun commandActionAccessibilityDescription(
   }
 
 @Composable
-private fun CommandActionList(
-  rows: List<CommandItem>,
-  onOpen: (CommandAction) -> Unit,
+private fun <T> CommandList(
+  rows: List<T>,
+  content: @Composable (T) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      CommandActionRow(row = row, onOpen = onOpen)
-    }
+    ClawSeparatedColumn(items = rows, row = content)
   }
 }
 
@@ -288,18 +285,6 @@ private fun CommandActionRow(
     leading = { CommandRowIcon(icon = row.icon) },
     trailing = { CommandRowChevron(contentDescription = null) },
   )
-}
-
-@Composable
-private fun CommandSessionList(
-  rows: List<ChatSessionEntry>,
-  onOpen: (String, String?) -> Unit,
-) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      CommandSessionListRow(row = row, onClick = { onOpen(row.key, row.ownerAgentId) })
-    }
-  }
 }
 
 @Composable
