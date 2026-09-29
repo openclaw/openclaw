@@ -23,7 +23,7 @@ export function formatChatSelectionAnnotation(annotation: ChatSelectionAnnotatio
 
 export function createChatSelectionAttachment(
   annotation: ChatSelectionAnnotation,
-  options: Pick<ChatAttachmentControlsProps, "attachmentLimits" | "selectionContextOnly"> = {},
+  options: Pick<ChatAttachmentControlsProps, "attachmentLimits" | "selectionContextOnly">,
   stagedBytes: number,
 ): ChatAttachment | null {
   const attachment = {
