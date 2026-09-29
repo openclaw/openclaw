@@ -607,11 +607,7 @@ describe("MemorySettingsPage tab routing", () => {
 
   it("renders every canonical tab path and honors browser history restoration", async () => {
     const navigate = vi.fn();
-    const { element, settingsAgentSelection } = createPage({
-      configObject: {},
-      catalog: [],
-      navigate,
-    });
+    const { element } = createPage({ configObject: {}, catalog: [], navigate });
     element.routeData = memoryTabRoute("settings");
     document.body.append(element);
     try {
@@ -639,9 +635,24 @@ describe("MemorySettingsPage tab routing", () => {
       expect(visibleTab(element)).toBe("dreams");
       expect(element.querySelector("openclaw-agent-select")).toBeNull();
       expect(element.textContent).not.toContain("Dreaming frequency");
-      settingsAgentSelection.setScope(null);
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("keeps Dreams empty when no configured agent is available", async () => {
+    const { element, settingsAgentSelection } = createPage({
+      configObject: {},
+      agents: [],
+      routeData: memoryTabRoute("dreams"),
+    });
+    document.body.append(element);
+    try {
       await element.updateComplete;
+      expect(settingsAgentSelection.state.selectedId).toBeNull();
       expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
+      expect(element.querySelector("openclaw-agent-select")).toBeNull();
+      expect(element.textContent).not.toContain("Dreaming frequency");
     } finally {
       element.remove();
     }

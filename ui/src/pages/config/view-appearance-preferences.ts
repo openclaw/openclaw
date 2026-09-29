@@ -231,6 +231,7 @@ export function renderChatPreferencesSection(props: ConfigProps) {
               placeholder="48rem"
               .value=${props.chatMessageMaxWidth ?? ""}
               @change=${(event: Event) => {
+                // SAFETY: The listener is bound directly to this input.
                 const input = event.currentTarget as HTMLInputElement;
                 const normalized = normalizeChatMessageMaxWidth(input.value);
                 if (input.value.trim() && !normalized) {
