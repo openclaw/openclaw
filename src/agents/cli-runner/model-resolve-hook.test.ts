@@ -10,7 +10,12 @@ const hookRunnerStub = vi.hoisted(() => ({
   runBeforeModelResolve: vi.fn(
     async (
       _event: { prompt: string },
-      _ctx: { modelProviderId?: string; channelId?: string; accountId?: string },
+      _ctx: {
+        modelProviderId?: string;
+        modelId?: string;
+        channelId?: string;
+        accountId?: string;
+      },
     ) => undefined as { providerOverride?: string; modelOverride?: string } | undefined,
   ),
 }));
