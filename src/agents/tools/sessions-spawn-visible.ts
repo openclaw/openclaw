@@ -35,7 +35,6 @@ import {
   countActiveRunsForSession,
   registerSubagentRun,
 } from "../subagents/registry/subagent-registry.js";
-import { deleteSubagentSessionForCleanup } from "../subagents/registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
@@ -60,6 +59,10 @@ import {
   type InProcessGatewayCaller,
 } from "./in-process-gateway.js";
 import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
+import {
+  cleanupVisibleSpawnSession,
+  summarizeVisibleSessionSpawnError,
+} from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
 import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
 
@@ -88,10 +91,6 @@ type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
     config?: OpenClawConfig;
     requesterAgentIdOverride?: string;
   };
-
-function summarizeSessionsSpawnError(error: unknown): string {
-  return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
-}
 
 export async function maybeSpawnVisibleSession(params: {
   raw: Record<string, unknown>;
@@ -543,7 +542,7 @@ export async function maybeSpawnVisibleSession(params: {
     }
     const runId = response.runId?.trim();
     const runError = response.runError
-      ? summarizeSessionsSpawnError(response.runError)
+      ? summarizeVisibleSessionSpawnError(response.runError)
       : "Visible session run failed";
     if (!childSessionKey) {
       return {
@@ -551,22 +550,13 @@ export async function maybeSpawnVisibleSession(params: {
         error: runError,
       };
     }
-    const cleanupCreatedSession = async () => {
-      // Deletion drains active work only after checking the creation receipt.
-      // Never recapture identity from a key that a reset or replacement may own.
-      const outcome = await deleteSubagentSessionForCleanup({
-        callGateway: ({ method, params: cleanupParams }) => gatewayCall(method, cleanupParams),
+    const cleanupCreatedSession = () =>
+      cleanupVisibleSpawnSession({
+        callGateway: gatewayCall,
         childSessionKey,
         expectedSessionId: response.sessionId,
         expectedLifecycleRevision: response.entry?.lifecycleRevision,
-        emitLifecycleHooks: false,
       });
-      return outcome === "deleted"
-        ? "Session removed."
-        : outcome === "changed"
-          ? "Session changed; newer session kept."
-          : "Session cleanup unconfirmed. Inspect the child session before retrying.";
-    };
     if (placement && (response.runStarted !== true || !runId)) {
       return {
         status: "error",
@@ -631,7 +621,7 @@ export async function maybeSpawnVisibleSession(params: {
       }
       return {
         status: "error",
-        error: `Visible run registration failed: ${summarizeSessionsSpawnError(error)}. ${placement ? "Cloud child kept; inspect its run before retrying." : await cleanupCreatedSession()}`,
+        error: `Visible run registration failed: ${summarizeVisibleSessionSpawnError(error)}. ${placement ? "Cloud child kept; inspect its run before retrying." : await cleanupCreatedSession()}`,
         childSessionKey,
         runId,
       };

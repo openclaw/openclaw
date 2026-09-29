@@ -58,7 +58,10 @@ class SessionDeletionError extends Error {
   }
 }
 
-/** Shared lifecycle owner for operator deletion and automatic Incognito expiry. */
+/**
+ * Shared lifecycle owner for operator deletion, automatic Incognito expiry, and
+ * rollback of unstarted spawn children.
+ */
 export async function deleteGatewaySession({
   params: p,
   client,

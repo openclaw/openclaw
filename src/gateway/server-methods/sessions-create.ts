@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  type ErrorShape,
   missingScopeErrorShape,
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -61,7 +62,10 @@ import {
   prepareSessionCreateFilesystemRoot,
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
-import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
+import {
+  resolveSessionCreateSpawnContext,
+  rollBackUnstartedSpawnChild,
+} from "./session-create-spawn.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
@@ -143,11 +147,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
     const cfg = getCurrentConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
-    // Both uncommitted selections must remain authorized after awaited preparation.
-    const commitGuard = () => {
+    const sessionAuthorityGuard = () => {
       requestAuthority.assertCurrent();
       authority.commitGuard?.();
       sessionMutationAuthorization?.assertCurrent();
+    };
+    // Both uncommitted selections must remain authorized after awaited preparation.
+    const commitGuard = () => {
+      sessionAuthorityGuard();
       assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
       personalModelSelection?.assertCurrent();
       personalAccountDefaults?.assertCurrent();
@@ -486,8 +493,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       };
     }
     let runPayload: Record<string, unknown> | undefined;
-    let runError: unknown;
+    let runError: ErrorShape | undefined;
     let runMeta: Record<string, unknown> | undefined;
+    let committedIncarnation: { sessionId: string; lifecycleRevision?: string } | undefined;
     const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
       ADMIN_SCOPE,
       clientScopes,
@@ -566,6 +574,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           source,
         ),
       onCreatedSessionCommitted: (committed) => {
+        committedIncarnation = {
+          sessionId: committed.entry.sessionId,
+          lifecycleRevision: committed.entry.lifecycleRevision,
+        };
         sessionMutationAuthorization?.recordCreatedSession?.({
           agentId: committed.agentId,
           sessionKey: committed.key,
@@ -642,6 +654,27 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         payload: runPayload,
         cached: runMeta?.cached === true,
       });
+    if (
+      sessionCreation.via === "spawn" &&
+      sessionCreation.completionOwnerSessionKey &&
+      hasInitialTurn &&
+      !runStarted &&
+      runError &&
+      committedIncarnation &&
+      (await rollBackUnstartedSpawnChild({
+        client,
+        context,
+        assertCurrent: sessionAuthorityGuard,
+        key: created.key,
+        agentId: created.agentId,
+        ...committedIncarnation,
+      }))
+    ) {
+      diagnostics?.mark("response");
+      respond(false, undefined, runError);
+      diagnostics?.mark("handlerExit");
+      return;
+    }
 
     diagnostics?.mark("response");
     respond(true, {
