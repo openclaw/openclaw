@@ -269,8 +269,8 @@ function wrapResolvedContextEngine(
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 const CORE_CONTEXT_ENGINE_OWNER = "core";
 
-type ContextEngineRuntimeQuarantine = ReturnType<
-  typeof listPersistedContextEngineQuarantines
+type ContextEngineRuntimeQuarantine = Awaited<
+  ReturnType<typeof listPersistedContextEngineQuarantines>
 >[number];
 
 type ContextEngineRegistryState = {
@@ -336,15 +336,14 @@ function getContextEngineQuarantine(engineId: string): ContextEngineRuntimeQuara
   return contextEngineRegistryState.quarantinedEngines.get(engineId);
 }
 
-export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[] {
+export async function listContextEngineQuarantines(): Promise<ContextEngineRuntimeQuarantine[]> {
+  const persisted = await listPersistedContextEngineQuarantines();
   const quarantines = Array.from(
     contextEngineRegistryState.quarantinedEngines.values(),
     ({ failedAt, ...quarantine }) => ({ ...quarantine, failedAt: new Date(failedAt) }),
   );
   const seenEngineIds = new Set(quarantines.map((entry) => entry.engineId));
-  return quarantines.concat(
-    listPersistedContextEngineQuarantines().filter(({ engineId }) => !seenEngineIds.has(engineId)),
-  );
+  return quarantines.concat(persisted.filter(({ engineId }) => !seenEngineIds.has(engineId)));
 }
 
 function clearContextEngineRuntimeQuarantine(engineId: string): void {

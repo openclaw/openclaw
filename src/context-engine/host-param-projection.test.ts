@@ -343,7 +343,7 @@ describe("context-engine host parameter projection", () => {
     });
 
     expect(assembleCalls).toHaveLength(1);
-    expect(listContextEngineQuarantines()).toEqual([
+    expect(await listContextEngineQuarantines()).toEqual([
       expect.objectContaining({ engineId, operation: "assemble" }),
     ]);
   });
@@ -438,7 +438,7 @@ describe("context-engine host parameter projection", () => {
     await expect(
       processEngine.compact({ sessionId: "session-1", sessionKey: "agent:main:session-1" }),
     ).rejects.toBe(processFailure);
-    const quarantine = listContextEngineQuarantines();
+    const quarantine = await listContextEngineQuarantines();
     expect(quarantine).toEqual([expect.objectContaining({ engineId, operation: "compact" })]);
 
     const resolution = await resolveLogicalTurnContextEngines(config);
@@ -461,7 +461,7 @@ describe("context-engine host parameter projection", () => {
       await returned?.catch(() => {});
       expect(thrown).toBe(syncFailure);
       expect(assemble).toHaveBeenCalledTimes(2);
-      expect(listContextEngineQuarantines()).toEqual(quarantine);
+      expect(await listContextEngineQuarantines()).toEqual(quarantine);
     } finally {
       await Promise.allSettled([
         processEngine.dispose?.(),

@@ -4310,7 +4310,7 @@ describe("requester settle wake trigger", () => {
           );
           expect(factory).not.toHaveBeenCalled();
           expect(getActiveGatewayRootWorkCount()).toBe(0);
-          expect(listContextEngineQuarantines()).toEqual([]);
+          expect(await listContextEngineQuarantines()).toEqual([]);
           return;
         }
         expect(suspension?.release()).toBe(true);
@@ -4330,7 +4330,7 @@ describe("requester settle wake trigger", () => {
         expect(dispose).toHaveBeenCalledOnce();
         expect(onSubagentEnded).toHaveBeenCalledTimes(mode === "completed" ? 1 : 0);
         expect(warn).not.toHaveBeenCalled();
-        expect(listContextEngineQuarantines()).toEqual([]);
+        expect(await listContextEngineQuarantines()).toEqual([]);
         expect(getActiveGatewayRootWorkHolders()).toContain("subagents:lifecycle-cleanup");
         descendantGate.resolve();
         await descendantDone.promise;
