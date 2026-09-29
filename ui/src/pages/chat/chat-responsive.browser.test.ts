@@ -1316,12 +1316,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
         const { toolRowGap, ...disclosureStyles } = styles;
         expect(disclosureStyles).toEqual({
-          activity: "text",
+          activity: "none",
           activityBackground: "rgba(0, 0, 0, 0)",
           activityPaddingBlock: hasTouch ? ["8px", "8px"] : ["5px", "5px"],
           // Summary gap (8px) less the chevron's own -3px inset.
           chevronGap: 5,
-          tool: "text",
+          tool: "none",
           toolPaddingBlock: ["3px", "3px"],
         });
         expect(toolRowGap).toBeGreaterThanOrEqual(0);

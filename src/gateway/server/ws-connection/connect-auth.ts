@@ -14,6 +14,7 @@ import {
   deviceBootstrapProfilesEqual,
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
+import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
@@ -512,6 +513,10 @@ async function authenticateGatewayConnectCore(
   });
 
   return {
+    authPolicy: captureGatewayAuthPolicy(context.configSnapshot, {
+      role,
+      verifiedIdentity: authResult.user,
+    }),
     resolvedAuth,
     minProtocol,
     maxProtocol,

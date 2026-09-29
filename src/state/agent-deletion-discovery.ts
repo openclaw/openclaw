@@ -28,7 +28,7 @@ type RetainedAgentDatabaseNamespace =
       readDatabasePaths: () => readonly string[];
     };
 
-function hasSqliteFileFamily(pathname: string): boolean {
+export function hasSqliteFileFamily(pathname: string): boolean {
   return resolveSqliteDatabaseFilePaths(pathname).some(
     (file) => fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined,
   );

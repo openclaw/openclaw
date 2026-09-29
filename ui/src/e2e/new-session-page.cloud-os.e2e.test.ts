@@ -23,7 +23,7 @@ suite.define(() => {
           providerId: "crabbox",
           machines: [{ id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true }],
         };
-        const disabledReason = "Upgrade Crabbox to 0.53.1 or newer, then restart the Gateway.";
+        const disabledReason = "Upgrade Crabbox to enable this operating system.";
         const gateway = await installMockGateway(page, {
           operatorScopes: ["operator.admin", "operator.read", "operator.write"],
           workspaceGit: true,

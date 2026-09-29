@@ -21,7 +21,6 @@ import type {
   SessionEntryReplacementCommit,
   SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-types.js";
-import { cloneSessionEntry } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -116,7 +115,7 @@ export function commitSessionEntryReplacementsInDatabase(
     const written = writeSessionEntry(
       database,
       replacement.sessionKey,
-      cloneSessionEntry(replacement.entry),
+      structuredClone(replacement.entry),
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedBefore ?? null,

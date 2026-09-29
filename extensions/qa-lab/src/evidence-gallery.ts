@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements generic QA evidence gallery data.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -62,7 +62,7 @@ export function activateSubagentPersistenceRegistry(
   );
 }
 
-export function listFixtureAgentDatabases(
+function listFixtureAgentDatabases(
   listDatabases: typeof listOpenClawAgentDatabasesForTest,
   stateDir: string,
 ) {

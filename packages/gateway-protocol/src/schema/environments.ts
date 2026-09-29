@@ -85,8 +85,9 @@ export const WorkerSlotSummarySchema = Type.Refine(
   closedObject({
     total: Type.Integer({ minimum: 1, maximum: 1_024 }),
     available: Type.Integer({ minimum: 0, maximum: 1_024 }),
+    reclaimableIdle: Type.Optional(Type.Integer({ minimum: 0, maximum: 2 })),
   }),
-  (slots) => slots.available <= slots.total,
+  (slots) => slots.available + (slots.reclaimableIdle ?? 0) <= slots.total,
   (slots) => `available worker slots ${slots.available} exceed total ${slots.total}`,
 );
 
@@ -164,10 +165,6 @@ function createEnvironmentSummaryProperties() {
       }),
     ),
   };
-}
-
-function createEnvironmentSummarySchema() {
-  return closedObject(createEnvironmentSummaryProperties());
 }
 
 /** Public environment summary shown in listings and status responses. */
@@ -265,7 +262,7 @@ export const EnvironmentsStatusParamsSchema = closedObject({
 });
 
 /** Status lookup result for one environment id. */
-export const EnvironmentsStatusResultSchema = createEnvironmentSummarySchema();
+export const EnvironmentsStatusResultSchema = closedObject(createEnvironmentSummaryProperties());
 
 /** Creates a worker environment from one configured provider profile. */
 export const EnvironmentsCreateParamsSchema = closedObject({
@@ -274,7 +271,7 @@ export const EnvironmentsCreateParamsSchema = closedObject({
 });
 
 /** Create result uses the same public summary shape as list and status. */
-export const EnvironmentsCreateResultSchema = createEnvironmentSummarySchema();
+export const EnvironmentsCreateResultSchema = closedObject(createEnvironmentSummaryProperties());
 
 /** Prepares a configured profile's local Git project without dispatching a session. */
 export const EnvironmentsPrepareParamsSchema = closedObject({
@@ -295,7 +292,7 @@ export const EnvironmentsDestroyParamsSchema = closedObject({
 });
 
 /** Destroy result exposes the terminal worker lifecycle state. */
-export const EnvironmentsDestroyResultSchema = createEnvironmentSummarySchema();
+export const EnvironmentsDestroyResultSchema = closedObject(createEnvironmentSummaryProperties());
 
 export const WorkerDesktopObserveParamsSchema = closedObject({
   environmentId: NonEmptyString,

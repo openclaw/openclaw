@@ -29,11 +29,11 @@ import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
   type CronJobRunResult,
   type ExecuteJobCoreOptions,
-  type IsolatedAgentSetupTimeoutSignal,
   runsDetachedFromMainSession,
 } from "./timer-execution-timeout.js";
 import { executeJobCore } from "./timer-execution.js";
 import {
+  type CronCoreRunOutcome,
   type CronRunProgress,
   resolveInterruptedRunProgress,
   withPrimaryWebhookInterruption,
@@ -41,9 +41,6 @@ import {
 } from "./timer-job-runner.interruption.js";
 import { resolveDeliveryState } from "./timer-trigger.js";
 
-type CronCoreRunOutcome = Awaited<ReturnType<typeof executeJobCore>> & {
-  isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
-};
 type CronRunTimeout = { timeoutMs: number; reason: string };
 type CronCoreRunOptions = {
   runId?: string;

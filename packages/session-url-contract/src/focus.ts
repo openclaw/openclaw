@@ -240,40 +240,28 @@ export function parseControlUiFocusLocation(
   if (control) {
     index += 1;
   }
-  if (segments.length === index) {
-    return {
-      status: "valid",
-      basePath: resolvedBasePath,
-      target: { kind: "desktop", control, selector: null },
-    };
-  }
-  const selectorKind = segments[index];
-  const encodedValue = segments[index + 1];
-  if (
-    segments.length !== index + 2 ||
-    (selectorKind !== "source" && selectorKind !== "session") ||
-    encodedValue === undefined
-  ) {
-    return { status: "unsupported", basePath: resolvedBasePath };
-  }
-  const decoded = decodeFocusValue(encodedValue);
-  if (!decoded.ok) {
-    return { status: "unsupported", basePath: resolvedBasePath };
-  }
-  if (!decoded.value) {
-    return {
-      status: "valid",
-      basePath: resolvedBasePath,
-      target: { kind: "desktop", control, selector: null },
-    };
+  let selector: Extract<ControlUiFocusTarget, { kind: "desktop" }>["selector"] = null;
+  if (segments.length !== index) {
+    const selectorKind = segments[index];
+    const encodedValue = segments[index + 1];
+    if (
+      segments.length !== index + 2 ||
+      (selectorKind !== "source" && selectorKind !== "session") ||
+      encodedValue === undefined
+    ) {
+      return { status: "unsupported", basePath: resolvedBasePath };
+    }
+    const decoded = decodeFocusValue(encodedValue);
+    if (!decoded.ok) {
+      return { status: "unsupported", basePath: resolvedBasePath };
+    }
+    if (decoded.value) {
+      selector = { kind: selectorKind, value: decoded.value };
+    }
   }
   return {
     status: "valid",
     basePath: resolvedBasePath,
-    target: {
-      kind: "desktop",
-      control,
-      selector: { kind: selectorKind, value: decoded.value },
-    },
+    target: { kind: "desktop", control, selector },
   };
 }

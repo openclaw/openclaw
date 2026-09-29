@@ -41,8 +41,10 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { hasOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
-import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import {
+  createRetainedAgentDatabaseMatcher,
+  hasSqliteFileFamily,
+} from "../state/agent-deletion-discovery.js";
 import { planSessionJsonlArchiveMove } from "./doctor-session-sqlite-archive.js";
 import { countLegacyTranscript } from "./doctor-session-sqlite-diagnostics.js";
 import {
@@ -78,7 +80,7 @@ export function prepareRetainedSessionImport(
     if (
       disposition &&
       (disposition !== "unavailable" ||
-        hasOrphanedSqliteSidecars(sqlitePath) ||
+        hasSqliteFileFamily(sqlitePath) ||
         hasDeferredPluginSessionImport({
           target: { ...params.target, sqlitePath },
           sqlitePath,
