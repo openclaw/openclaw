@@ -24,11 +24,6 @@ export type ConfigJsonSchemaObject = Record<string, unknown> & {
   oneOf?: ConfigJsonSchemaObject[];
 };
 
-/** Deep-clone schema payloads before callers mutate plugin or base schema fragments. */
-export function cloneSchema<T>(value: T): T {
-  return structuredClone(value);
-}
-
 /** Narrow unknown JSON-schema fragments to non-array objects. */
 export function asSchemaObject(value: unknown): ConfigJsonSchemaObject | null {
   return asNullableRecord(value);

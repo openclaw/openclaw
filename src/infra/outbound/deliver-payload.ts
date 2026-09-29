@@ -50,6 +50,24 @@ export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPa
   return payload;
 }
 
+export function normalizeTransformedPayloadForDelivery(
+  payload: ReplyPayload,
+  handler: ChannelHandler,
+  copyMetadata: (
+    source: ReplyPayload,
+    payload: ReplyPayload,
+  ) => ReplyPayload = copyReplyPayloadMetadata,
+): ReplyPayload | null {
+  const normalizedPayload = handler.normalizePayload ? handler.normalizePayload(payload) : payload;
+  if (!normalizedPayload) {
+    return null;
+  }
+  const normalized = copyMetadata(payload, normalizedPayload);
+  const stripped = copyMetadata(normalized, stripInternalRuntimeScaffoldingFromPayload(normalized));
+  const nonEmpty = normalizeEmptyPayloadForDelivery(stripped);
+  return nonEmpty ? copyMetadata(stripped, nonEmpty) : null;
+}
+
 export function normalizePayloadsForChannelDelivery(
   plan: readonly OutboundPayloadPlan[],
   handler: ChannelHandler,
@@ -82,18 +100,11 @@ export function normalizePayloadsForChannelDelivery(
         }
       }
     }
-    const normalizedPayload = handler.normalizePayload
-      ? handler.normalizePayload(sanitizedPayload)
-      : sanitizedPayload;
-    let normalized = normalizedPayload ? copyMetadata(sanitizedPayload, normalizedPayload) : null;
-    if (normalized) {
-      const stripped = copyMetadata(
-        normalized,
-        stripInternalRuntimeScaffoldingFromPayload(normalized),
-      );
-      const nonEmpty = normalizeEmptyPayloadForDelivery(stripped);
-      normalized = nonEmpty ? copyMetadata(stripped, nonEmpty) : null;
-    }
+    const normalized = normalizeTransformedPayloadForDelivery(
+      sanitizedPayload,
+      handler,
+      copyMetadata,
+    );
     if (normalized) {
       normalizedPayloads.push({ index: entry.sourceIndex, payload: normalized });
     }

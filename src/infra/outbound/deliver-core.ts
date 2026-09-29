@@ -3,7 +3,6 @@ import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.
 import { payloadRequiresDurablePayloadTransport } from "../../channels/message/capabilities.js";
 import { renderPresentationForDelivery } from "../../channels/plugins/outbound/presentation-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
@@ -72,8 +71,6 @@ export async function deliverOutboundPayloadsCore(
   });
   let activeSourceIndex: number | undefined;
   let payloadSendStarted: boolean;
-  const resolveMediaAccess = (mediaSources: readonly string[]): OutboundMediaAccess =>
-    resolveOutboundMediaAccessForSend(params, channel, mediaSources);
   const createHandler = (mediaSources: readonly string[]) =>
     createChannelHandler({
       cfg,
@@ -91,7 +88,7 @@ export async function deliverOutboundPayloadsCore(
       forceDocument: params.forceDocument,
       silent: params.silent,
       abortSignal,
-      mediaAccess: resolveMediaAccess(mediaSources),
+      mediaAccess: resolveOutboundMediaAccessForSend(params, channel, mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
       conversationReadOrigin: params.conversationReadOrigin,
       deliveryQueueId: params.deliveryQueueId,
@@ -205,13 +202,7 @@ export async function deliverOutboundPayloadsCore(
     params.onPayloadDeliveryOutcome?.(outcome);
   }
   const deliveredMirrorPayloads: NormalizedOutboundPayload[] = [];
-  const recordDeliveredPayload = (
-    payloadSummary: NormalizedOutboundPayload,
-    deliveredResults: readonly OutboundDeliveryResult[],
-  ): void => {
-    if (deliveredResults.length === 0) {
-      return;
-    }
+  const recordDeliveredPayload = (payloadSummary: NormalizedOutboundPayload): void => {
     // Post-send observers are bookkeeping only. Never turn an identified
     // platform delivery into a retryable failure if an observer misbehaves.
     try {
@@ -458,7 +449,7 @@ export async function deliverOutboundPayloadsCore(
           status: "sent",
           results: deliveredResults,
         });
-        recordDeliveredPayload(mirroredPayload, deliveredResults);
+        recordDeliveredPayload(mirroredPayload);
       } else {
         recordPayloadOutcome(
           suppressedPayloadOutcome({

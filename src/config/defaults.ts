@@ -409,9 +409,6 @@ export function applyModelDefaults(
 
   const existingAgent = nextAgents?.defaults;
   if (!existingAgent) {
-    if (!mutated) {
-      return cfg;
-    }
     return nextAgents === nextCfg.agents ? nextCfg : { ...nextCfg, agents: nextAgents };
   }
 

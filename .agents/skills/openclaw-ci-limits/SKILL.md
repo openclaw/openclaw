@@ -225,10 +225,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
 - Trusted canonical hybrid first attempts route `ci-gate` to the Blacksmith
-  4-class and the packed core-lint rows to the 16/8-classes after hosted assignment
+  4-class and both packed core-lint rows to the 16-class after hosted assignment
   added 416 seconds to main's critical chain. Admitted qualifications use the
   same route. The first packed lint row took 621s on the 8-class; retain four
-  actual CPUs for that row. The gate has no checkout or dependency setup; retries, ordinary
+  actual CPUs for that row. The second packed row later exceeded its existing
+  15-minute limit on the 8-class, so it uses the same 16-class. This adds no
+  jobs or registrations and keeps the deadline and complete stripe inventory. The gate has no checkout or dependency setup; retries, ordinary
   manual dispatches, untrusted contexts, and the GitHub override stay hosted.
   Core lint additionally retains hosted routing for frozen targets. Normal hybrid
   main/same-repository PRs add three assignments; trusted fork PRs can add six

@@ -6,6 +6,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
   installTalkBrowserFixtures,
+  TALK_READY_HISTORY_MESSAGE,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -353,7 +354,9 @@ suite.define(() => {
 
   it("gates unavailable voice capabilities in the microphone picker", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
+        heldMethods: ["chat.startup", "talk.catalog"],
+        historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: {
           "talk.catalog": {
             transcription: { ready: false, providers: [] },
@@ -368,7 +371,13 @@ suite.define(() => {
       await installTalkBrowserFixtures(page);
       await page.goto(`${suite.server.baseUrl}chat`);
 
+      // The enabled dictation microphone can be clicked before history/catalog admission.
+      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("talk.catalog");
       await page.getByRole("button", { name: "Start voice input" }).click();
+      await gateway.resolveDeferred("talk.catalog");
+      await gateway.resolveDeferred("chat.startup");
+      await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
       const unavailable = page.locator('[data-status="unavailable"]');
       await expect.poll(() => unavailable.count()).toBe(2);
       const picker = page.locator("wa-dropdown.chat-talk-input-picker");

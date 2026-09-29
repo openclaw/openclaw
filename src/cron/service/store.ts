@@ -21,7 +21,6 @@ import {
 } from "../store/run-receipt-store.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronStoreFile } from "../types.js";
-import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
 import { dispatchCronNotification } from "./notification-dispatch.js";
 import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
@@ -163,11 +162,7 @@ export async function ensureLoaded(
     const hydratedIsValid = !invalidReason && isValidatedCronJob(hydratedRaw);
     if (hydratedIsValid && hydratedRaw.enabled && hydratedSchedule.kind === "every") {
       try {
-        assertTimeScheduleSatisfiable(
-          { ...hydratedRaw, state: {} },
-          loadNowMs,
-          computeJobNextRunAtMs,
-        );
+        assertTimeScheduleSatisfiable({ ...hydratedRaw, state: {} }, loadNowMs);
       } catch {
         invalidReason = "unsatisfiable-schedule";
       }

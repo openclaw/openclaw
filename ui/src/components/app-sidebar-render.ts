@@ -48,8 +48,6 @@ import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   teamOnlineExpanded: boolean;
-  onlineRunningOnly: boolean;
-  onlineSessionSort: "presence" | "open" | "running";
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
   toggleSection(sectionId: string): void;

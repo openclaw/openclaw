@@ -82,15 +82,6 @@ export async function prepareQaTransportAdapterFactories(params: {
 
 const DEFAULT_QA_TRANSPORT_ID: QaTransportId = "qa-channel";
 
-async function createBuiltInQaTransport(
-  context: QaTransportFactoryContext,
-): Promise<QaTransportAdapter | undefined> {
-  if (context.driver === "qa-channel" && context.channelId === "qa-channel") {
-    return createQaChannelTransport(context.state, context.adapterOptions?.transportPolicy);
-  }
-  return undefined;
-}
-
 function requireQaTransportFactory(
   factories: readonly QaTransportAdapterFactory[],
   context: Pick<QaTransportFactoryContext, "channelId" | "driver">,
@@ -157,9 +148,8 @@ export async function createQaTransportAdapter(
 ): Promise<QaTransportAdapterFactoryResult> {
   let adapter: QaTransportAdapter;
   try {
-    const builtIn = await createBuiltInQaTransport(context);
-    if (builtIn) {
-      adapter = builtIn;
+    if (context.driver === "qa-channel" && context.channelId === "qa-channel") {
+      adapter = createQaChannelTransport(context.state, context.adapterOptions?.transportPolicy);
     } else {
       const factory = requireQaTransportFactory(
         [...factories, createQaCrablineTransportAdapterFactory(context.state)],

@@ -48,26 +48,15 @@ export type PreparedManualRun =
       ran: false;
       reason: "already-running" | "disabled" | "not-due" | "invalid-spec" | "stopped" | "ownerless";
     }
-  | {
+  | (ManualRunOptions & {
       ok: true;
       ran: true;
       jobId: string;
-      runId?: string;
-      terminalTracker?: ManualRunTerminalTracker;
-      owningCronLaneTaskMarker?: CommandLaneTaskMarker;
-      commitGuard?: () => void;
       reservationAt: number;
       scheduleOwnershipAtMs: number;
       reservationIdentity: object;
       wasEnabled: boolean;
-      onExit?: OnExitRunOptions;
-      payload?: CronPayload;
-      evaluateTrigger?: boolean;
-      streamBatch?: string;
-      streamScheduleKey?: string;
-      streamSourceIdentity?: string;
-      onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
-    }
+    })
   | { ok: false };
 
 export type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {

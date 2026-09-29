@@ -63,10 +63,23 @@ function isCiLikeEnv(env: Env = process.env) {
   return env.CI === "true" || env.GITHUB_ACTIONS === "true";
 }
 
+export function resolveCheckMemoryCapacityBytes(
+  resources: Pick<Resources, "totalMemoryBytes" | "memoryCapacityBytes">,
+) {
+  // Omitted capacity is a physical-only caller; null means discovery was unresolved.
+  // A known ancestor ceiling, or unknown ownership, must not select a roomy workload.
+  return Math.min(
+    resources.totalMemoryBytes,
+    resources.memoryCapacityBytes === undefined
+      ? resources.totalMemoryBytes
+      : (resources.memoryCapacityBytes ?? 0),
+  );
+}
+
 // Small CI runners share one constraint check for shard concurrency and Go memory policy.
 export function isConstrainedCiCheckHost(hostResources: Resources) {
   return !(
-    hostResources.totalMemoryBytes >= CI_PARALLEL_MIN_MEMORY_BYTES &&
+    resolveCheckMemoryCapacityBytes(hostResources) >= CI_PARALLEL_MIN_MEMORY_BYTES &&
     hostResources.logicalCpuCount >= CI_PARALLEL_MIN_CPUS
   );
 }
@@ -290,7 +303,8 @@ export function applyLocalOxlintPolicy(args: string[], env: Env, hostResources: 
     nextEnv.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(args) &&
     hostResources.platform === "linux" &&
     hostResources.logicalCpuCount >= 4 &&
-    Math.min(hostResources.totalMemoryBytes, hostResources.memoryCapacityBytes ?? 0) >= 15 * GIB &&
+    hostResources.memoryCapacityBytes != null &&
+    resolveCheckMemoryCapacityBytes(hostResources) >= 15 * GIB &&
     (hostResources.memoryLimitBytes ?? 0) >= (extensionShard ? 10 : 14) * GIB &&
     ["config/tsconfig/oxlint.core.json", "extensions/tsconfig.json"].includes(
       option("--tsconfig") ?? "",
@@ -341,7 +355,8 @@ function shouldThrottleLocalChecks(
 
   const resolvedHostResources = resolveHostResources(hostResources);
   return (
-    resolvedHostResources.totalMemoryBytes < DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
+    resolveCheckMemoryCapacityBytes(resolvedHostResources) <
+      DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resolvedHostResources.logicalCpuCount < DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS
   );
 }

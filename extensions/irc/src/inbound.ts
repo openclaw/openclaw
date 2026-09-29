@@ -1,4 +1,3 @@
-// Irc plugin module implements inbound behavior.
 import {
   logInboundDrop,
   resolveChannelInboundRouteEnvelope,
@@ -27,6 +26,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { createIrcIngressSubject, ircIngressIdentity } from "./ingress-identity.js";
 import type { IrcIngressDispatchResult, IrcIngressLifecycle } from "./irc-ingress.js";
@@ -40,7 +40,6 @@ import type { CoreConfig, IrcInboundMessage } from "./types.js";
 const CHANNEL_ID = "irc" as const;
 type IrcGroupPolicy = "open" | "allowlist" | "disabled";
 
-const escapeIrcRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // IRC nicknames permit punctuation, so ASCII word boundaries lose valid leading/trailing chars.
 const IRC_NICK_CHARACTER = String.raw`[A-Za-z0-9_\-\[\]\\\x60^{}|~]`;
 const IRC_RFC1459_CASE_EQUIVALENTS = new Map([
@@ -58,8 +57,8 @@ function buildIrcNickMentionPattern(value: string): string {
   return Array.from(value, (character) => {
     const equivalent = IRC_RFC1459_CASE_EQUIVALENTS.get(character);
     return equivalent
-      ? `[${escapeIrcRegexLiteral(character)}${escapeIrcRegexLiteral(equivalent)}]`
-      : escapeIrcRegexLiteral(character);
+      ? `[${escapeRegExp(character)}${escapeRegExp(equivalent)}]`
+      : escapeRegExp(character);
   }).join("");
 }
 

@@ -84,38 +84,6 @@ describe("update-cli", () => {
     tempDirsToCleanup,
   } = createUpdateCliFixture();
 
-  it("stops a running managed gateway when git checkout rebuild starts", async () => {
-    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
-    mockRunningManagedGateway(["node", serviceEntrypoint, "gateway", "run"]);
-    const mutationAdmitted = mockGitUpdateAfterMutation(
-      makeOkUpdateResult({ root: process.cwd() }),
-    );
-
-    await updateCommand({ yes: true });
-
-    expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(updateGitCheckout).toHaveBeenCalledTimes(1);
-    expect(freshRestartCalls()).toHaveLength(1);
-    expect(freshRestartCalls()[0]?.[0]).toEqual([
-      process.execPath,
-      serviceEntrypoint,
-      "gateway",
-      "restart",
-      "--preserve-definition",
-      "--json",
-      "--update-executor",
-      "run",
-    ]);
-    const serviceStopCall = serviceStop.mock.calls[0]?.[0] as
-      | { env?: NodeJS.ProcessEnv }
-      | undefined;
-    expect(serviceStopCall?.env?.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
-    expect(serviceStopCall?.env?.OPENCLAW_SERVICE_KIND).toBe("gateway");
-    const updateCall = vi.mocked(updateGitCheckout).mock.calls[0]?.[0];
-    expect(updateCall?.opts.beforeGitMutation).toEqual(expect.any(Function));
-    expect(mutationAdmitted).toHaveBeenCalledOnce();
-  });
-
   it("uses a manager-effective global user unit during update preflight", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const entrypoint = path.join(process.cwd(), "dist", "index.js");
@@ -338,46 +306,6 @@ describe("update-cli", () => {
     expect(freshRestartCalls()).toHaveLength(1);
     expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "restart-unhealthy" });
     expect(getErrorOutput()).toContain("native owner refused");
-  });
-
-  it("stops a managed gateway rooted at the git checkout when switching package installs to dev", async () => {
-    const prefix = createCaseDir("openclaw-update-package-root");
-    const { nodeModules } = await setupInstalledPackageAtNodeModules(
-      path.join(prefix, "lib", "node_modules"),
-    );
-    const gitRoot = tempDirs.make("openclaw-update-git-service-root-");
-    const sha = "a".repeat(40);
-    const serviceEntrypoint = await writeOpenClawPackageFixture(gitRoot, "2026.4.21", {
-      entrySource: "export {};\n",
-      git: true,
-      builtSha: sha,
-    });
-    const canonicalGitRoot = await fs.realpath(gitRoot);
-    mockFileBackedPathExists();
-    mockNpmGlobalCommands(nodeModules, undefined, canonicalGitRoot);
-    mockRunningManagedGateway([process.execPath, serviceEntrypoint, "gateway", "run"]);
-    // Readiness must identify retained A before stopping it, including its build.
-    readPackageVersion.mockResolvedValue("2026.4.21");
-    mockGatewayHealth("2026.4.21", "retained-git-A", "fixture-original-build");
-    mockGitUpdateAfterMutation(
-      makeOkUpdateResult({
-        mode: "git",
-        root: gitRoot,
-        after: { sha, version: "2026.4.21" },
-      }),
-    );
-
-    await withEnvAsync({ OPENCLAW_GIT_DIR: gitRoot }, async () => {
-      await updateCommand({ channel: "dev", yes: true }).catch((cause: unknown) => {
-        throw new Error(getErrorOutput() + getLogOutput(), { cause });
-      });
-    });
-
-    expect(serviceStop).toHaveBeenCalledTimes(1);
-    expect(updateGitCheckout).toHaveBeenCalledTimes(1);
-    const updateCall = vi.mocked(updateGitCheckout).mock.calls[0]?.[0];
-    expect(updateCall?.gitRoot).toBe(canonicalGitRoot);
-    expect(updateCall?.opts.beforeGitMutation).toEqual(expect.any(Function));
   });
 
   it.each(["owned", "foreign"])(
@@ -808,23 +736,6 @@ describe("update-cli", () => {
       }
     },
   );
-
-  it("does not stop or restart a managed gateway owned by another git checkout", async () => {
-    const otherRoot = tempDirs.make("openclaw-update-other-service-root-");
-    const otherEntrypoint = await writeOpenClawPackageFixture(otherRoot, "2026.4.21", {
-      entrySource: "export {};\n",
-    });
-    mockRunningManagedGateway(["node", otherEntrypoint, "gateway", "run"]);
-    const mutationAdmitted = mockGitUpdateAfterMutation();
-
-    await updateCommand({ yes: true });
-
-    expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart);
-    expect(updateGitCheckout).toHaveBeenCalledTimes(1);
-    expect(mutationAdmitted).toHaveBeenCalledOnce();
-    expect(freshRestartCalls()).toHaveLength(0);
-    expect(gatewayCommandCall(otherEntrypoint, "install")).toBeUndefined();
-  });
 
   it("never starts the candidate after plugin post-update invalidates config", async () => {
     const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");

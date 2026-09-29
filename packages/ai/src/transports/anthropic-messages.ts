@@ -250,27 +250,14 @@ export async function convertAnthropicMessages(
               type: "text",
               text: sanitizeTransportPayloadText(block.thinking),
             });
-          } else {
-            const thinking =
-              thinkingSignature === "reasoning_content"
-                ? sanitizeTransportPayloadText(block.thinking)
-                : block.thinking;
-            if (thinkingSignature === "reasoning_content") {
-              if (allowReasoningContentReplay) {
-                blocks.push({
-                  type: "thinking",
-                  thinking,
-                  signature: thinkingSignature ?? "",
-                });
-                reasoningContent.push(thinking);
-              }
-              continue;
+          } else if (!isReasoningContent || allowReasoningContentReplay) {
+            const thinking = isReasoningContent
+              ? sanitizeTransportPayloadText(block.thinking)
+              : block.thinking;
+            blocks.push({ type: "thinking", thinking, signature: thinkingSignature ?? "" });
+            if (isReasoningContent) {
+              reasoningContent.push(thinking);
             }
-            blocks.push({
-              type: "thinking",
-              thinking,
-              signature: thinkingSignature ?? "",
-            });
           }
           continue;
         }
@@ -386,7 +373,6 @@ export function buildAnthropicGenerationParams({
       // older Claude 4 models (whose API default is also "summarized").
       const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
       if (supportsClaudeAdaptiveThinking(model)) {
-        // Adaptive thinking: Claude decides when and how much to think.
         params.thinking = { type: "adaptive", display };
         const effort =
           options?.effort ??
@@ -397,7 +383,6 @@ export function buildAnthropicGenerationParams({
           params.output_config = { effort };
         }
       } else {
-        // Budget-based thinking for older models.
         params.thinking = {
           type: "enabled",
           budget_tokens: options?.thinkingBudgetTokens ?? 1024,

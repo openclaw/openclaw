@@ -60,7 +60,7 @@ export class WorkerTaskError extends Error {
 }
 
 /** Bounded execution workers; each worker accepts one task at a time. */
-class WorkerTaskPoolCore<Input, Output> {
+export class WorkerTaskPoolCore<Input, Output> {
   private readonly slots = new Set<Slot<Input, Output>>();
   private readonly ownedTasks = new Set<Task<Input, Output>>();
   private readonly resourceClosures = new WeakMap<Worker, { pending: number }>();
@@ -518,13 +518,13 @@ class WorkerTaskPoolCore<Input, Output> {
       this.fail(slot, toErrorObject(error, "worker result validation failed"));
       return;
     }
-    if (task.exchange || (task.options.onInputConsumed && !task.inputConsumed)) {
-      // A failed handler may not reach its consumption receipt. Termination,
-      // rather than a result message, proves it no longer owns those inputs.
-      this.finish(task, undefined, reply.value, true);
-      return;
-    }
-    this.finish(task, undefined, reply.value);
+    // A result cannot release inputs whose consumption receipt never arrived.
+    this.finish(
+      task,
+      undefined,
+      reply.value,
+      Boolean(task.exchange) || Boolean(task.options.onInputConsumed && !task.inputConsumed),
+    );
   }
 
   private armTimeout(task: Task<Input, Output>, timeoutMs: number): void {
@@ -742,11 +742,4 @@ class WorkerTaskPoolCore<Input, Output> {
     }
     this.retirement.idle(slot);
   }
-}
-
-export function createWorkerTaskPoolCore<Input, Output>(
-  options: WorkerTaskPoolOptions<Output>,
-  publicDispatch?: WorkerTaskPoolDispatch,
-) {
-  return new WorkerTaskPoolCore<Input, Output>(options, publicDispatch);
 }
