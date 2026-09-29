@@ -12,7 +12,11 @@ export function replacePreparedModelCatalogAuth(
   next: Partial<PreparedModelCatalogAuth> &
     Pick<PreparedModelCatalogAuth, "authStore" | "authModes">,
   includesProvider: (provider: string) => boolean,
-  options: { observeScopedRemovals?: boolean } = {},
+  options: {
+    observeScopedRemovals?: boolean;
+    /** Providers whose omitted auth was observed removed; defaults to every scoped provider. */
+    observedRemovals?: (provider: string) => boolean;
+  } = {},
 ): PreparedModelCatalogAuth {
   const take = ([provider]: readonly [string, unknown]) => includesProvider(provider);
   const rediscoveredProviders = new Set(
@@ -21,13 +25,16 @@ export function replacePreparedModelCatalogAuth(
   // A partial refresh is authoritative only for the providers it actually
   // re-discovered; a scoped-but-absent entry keeps the prior value so a
   // passive read cannot blank out still-valid auth (e.g. cli backends).
-  // A refresh that observes each scoped provider's credential source (an
-  // explicit auth refresh, or a scoped catalog refresh whose worker re-reads
-  // the source) turns a scoped omission into a removal: prior entries must
-  // not survive it, or a logged-out provider stays published as available.
+  // A refresh that observes a scoped provider's credential source turns its
+  // omission into a removal: prior entries must not survive it, or a
+  // logged-out provider stays published as available.
+  const observedRemoval = (provider: string) =>
+    options.observedRemovals
+      ? options.observedRemovals(provider)
+      : options.observeScopedRemovals === true;
   const keepsPriorEntry = (provider: string) =>
     includesProvider(provider)
-      ? options.observeScopedRemovals !== true && !rediscoveredProviders.has(provider)
+      ? !observedRemoval(provider) && !rediscoveredProviders.has(provider)
       : true;
   const replace = <T>(
     before: Readonly<Record<string, T>> | undefined,
@@ -96,7 +103,7 @@ export function replacePreparedModelCatalogAuth(
                 // provider keeps it so an unobserved label omission cannot
                 // churn the publication.
                 (!next.providerAuthLabels?.has(provider) &&
-                  (options.observeScopedRemovals !== true || rediscoveredProviders.has(provider))),
+                  (!observedRemoval(provider) || rediscoveredProviders.has(provider))),
             )
             .concat([...next.providerAuthLabels].filter(take)),
         )

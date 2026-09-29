@@ -334,7 +334,7 @@ export function createFullModelCatalogAccess(
       // omission there is a removal, not a pass-over. An unavailable outcome never
       // observed the source, so its omission must keep the prior auth until a
       // refresh observes that provider again.
-      const observedProviders = new Set(
+      const observedRemovals = new Set(
         (workerCatalog.providerOutcomes ?? [])
           .filter((outcome) => outcome.status !== "unavailable")
           .map((outcome) => normalizeProvider(outcome.provider)),
@@ -343,8 +343,11 @@ export function createFullModelCatalogAccess(
         ? replacePreparedModelCatalogAuth(
             retainedAuth,
             discoveredAuth,
-            (provider) => observedProviders.has(normalizeProvider(provider)),
-            { observeScopedRemovals: true },
+            (provider) => scope.has(normalizeProvider(provider)),
+            {
+              observeScopedRemovals: true,
+              observedRemovals: (provider) => observedRemovals.has(normalizeProvider(provider)),
+            },
           )
         : discoveredAuth;
       const { legacyRows, ...publication } = prepareModelCatalogPublication(
