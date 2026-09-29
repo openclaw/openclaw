@@ -58,7 +58,7 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | LM Studio         | `lmstudio`          | No            | Local/self-hosted server          |
 | Mistral           | `mistral`           | Yes           | Default model `mistral-embed`     |
 | Ollama            | `ollama`            | No            | Local/self-hosted server          |
-| OpenAI            | `openai`            | Yes           | Default                           |
+| OpenAI            | `openai`            | Depends       | API key or eligible Codex OAuth   |
 | OpenAI-compatible | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint |
 | Voyage            | `voyage`            | Yes           | Default model `voyage-4-large`    |
 
