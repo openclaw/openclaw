@@ -345,15 +345,63 @@ static void SetPhaseEPassword(const wchar_t* name) {
 static const GUID kFwpmSublayer = {0x9f1d8d41,0x80c7,0x4d02,{0x8e,0x3a,0x90,0x2f,0x17,0x8b,0x61,0x10}};
 static GUID SlotFilterKey(size_t index) { return GUID{0x9f1d8d42,0x80c7,0x4d02,{0x8e,0x3a,0x90,0x2f,0x17,0x8b,0x61,static_cast<unsigned char>(0x11+index)}}; }
 static bool SameGuid(const GUID& left,const GUID& right) { return !memcmp(&left,&right,sizeof(GUID)); }
+static void FwpmStage(size_t index,const char* stage) {
+  fprintf(stderr,"PHASE_E_FWPM_STAGE:slot:%zu:%s\n",index+1,stage);
+  fflush(stderr);
+}
+static void FwpmStatus(size_t index,const char* operation,DWORD status) {
+  fprintf(stderr,"PHASE_E_FWPM_STATUS:slot:%zu:%s:%lu\n",index+1,operation,
+          static_cast<unsigned long>(status));
+  fflush(stderr);
+}
+static std::string FwpmFilterAddFailure(size_t index,DWORD status) {
+  return std::string("PHASE_E_FWPM_FILTER_ADD_FAILED:")+std::to_string(index+1)+":"+
+         std::to_string(static_cast<unsigned long>(status));
+}
+static PSECURITY_DESCRIPTOR UserFilterSecurityDescriptor(PSID sid,ULONG* length) {
+  EXPLICIT_ACCESS_W access{};
+  access.grfAccessPermissions=FWP_ACTRL_MATCH_FILTER;
+  access.grfAccessMode=GRANT_ACCESS;
+  access.grfInheritance=NO_INHERITANCE;
+  BuildTrusteeWithSidW(&access.Trustee,sid);
+  PSECURITY_DESCRIPTOR descriptor=nullptr;
+  DWORD status=BuildSecurityDescriptorW(nullptr,nullptr,1,&access,0,nullptr,length,&descriptor);
+  if(status!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_SECURITY_DESCRIPTOR_FAILED:")+
+                                  std::to_string(static_cast<unsigned long>(status));
+  SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision=0;
+  if(!IsValidSecurityDescriptor(descriptor) ||
+     !GetSecurityDescriptorControl(descriptor,&control,&revision) || !(control&SE_SELF_RELATIVE)) {
+    LocalFree(descriptor);
+    throw std::string("PHASE_E_FWPM_SECURITY_DESCRIPTOR_INVALID");
+  }
+  return descriptor;
+}
+static bool SecurityDescriptorMatchesSid(const FWP_BYTE_BLOB* blob,PSID expected) {
+  if(!blob || !blob->data || blob->size<SECURITY_DESCRIPTOR_MIN_LENGTH)return false;
+  auto* descriptor=reinterpret_cast<PSECURITY_DESCRIPTOR>(blob->data);
+  SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision=0;
+  if(!IsValidSecurityDescriptor(descriptor) || GetSecurityDescriptorLength(descriptor)!=blob->size ||
+     !GetSecurityDescriptorControl(descriptor,&control,&revision) || !(control&SE_SELF_RELATIVE))return false;
+  BOOL present=FALSE,defaulted=FALSE; PACL dacl=nullptr;
+  if(!GetSecurityDescriptorDacl(descriptor,&present,&dacl,&defaulted) || !present || !dacl ||
+     !IsValidAcl(dacl) || dacl->AceCount!=1)return false;
+  void* rawAce=nullptr;
+  if(!GetAce(dacl,0,&rawAce) || !rawAce)return false;
+  auto* ace=static_cast<ACCESS_ALLOWED_ACE*>(rawAce);
+  PSID actual=&ace->SidStart;
+  return ace->Header.AceType==ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags==0 &&
+         ace->Mask==FWP_ACTRL_MATCH_FILTER && IsValidSid(actual) && EqualSid(actual,expected);
+}
 static void VerifyOwnedFilter(const FWPM_FILTER0* filter,const Account& account,size_t index) {
   if(!filter || !SameGuid(filter->filterKey,SlotFilterKey(index)) || !SameGuid(filter->subLayerKey,kFwpmSublayer) ||
      !SameGuid(filter->layerKey,FWPM_LAYER_ALE_AUTH_CONNECT_V4) || filter->action.type!=FWP_ACTION_BLOCK ||
      filter->numFilterConditions!=1 || !SameGuid(filter->filterCondition[0].fieldKey,FWPM_CONDITION_ALE_USER_ID) ||
-     filter->filterCondition[0].matchType!=FWP_MATCH_EQUAL || filter->filterCondition[0].conditionValue.type!=FWP_SID ||
-     !filter->filterCondition[0].conditionValue.sid)
+     filter->filterCondition[0].matchType!=FWP_MATCH_EQUAL ||
+     filter->filterCondition[0].conditionValue.type!=FWP_SECURITY_DESCRIPTOR_TYPE ||
+     !filter->filterCondition[0].conditionValue.sd)
     throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH");
   PSID sid=nullptr; if(!ConvertStringSidToSidW(account.sid.c_str(),&sid))throw std::string("PHASE_E_SID_RESOLUTION_FAILED");
-  bool exact=GetLengthSid(filter->filterCondition[0].conditionValue.sid)==GetLengthSid(sid) && !memcmp(filter->filterCondition[0].conditionValue.sid,sid,GetLengthSid(sid)); LocalFree(sid);
+  bool exact=SecurityDescriptorMatchesSid(filter->filterCondition[0].conditionValue.sd,sid); LocalFree(sid);
   if(!exact)throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH");
 }
 static void ReconcileFwpm(const std::vector<Account>& accounts) {
@@ -365,7 +413,7 @@ static void ReconcileFwpm(const std::vector<Account>& accounts) {
     else { if(status!=ERROR_SUCCESS || !existing || existing->weight!=0x8000)throw std::string("PHASE_E_FWPM_OWNERSHIP_MISMATCH"); FwpmFreeMemory0(reinterpret_cast<void**>(&existing)); }
     for(size_t i=0;i<accounts.size();++i) { GUID key=SlotFilterKey(i); FWPM_FILTER0* found=nullptr; status=FwpmFilterGetByKey0(engine,&key,&found);
       if(status==ERROR_SUCCESS) { VerifyOwnedFilter(found,accounts[i],i); FwpmFreeMemory0(reinterpret_cast<void**>(&found)); continue; }
-      if(status!=FWP_E_FILTER_NOT_FOUND)throw std::string("PHASE_E_FWPM_QUERY_FAILED"); PSID sid=nullptr; if(!ConvertStringSidToSidW(accounts[i].sid.c_str(),&sid))throw std::string("PHASE_E_SID_RESOLUTION_FAILED"); FWPM_FILTER_CONDITION0 condition{}; condition.fieldKey=FWPM_CONDITION_ALE_USER_ID; condition.matchType=FWP_MATCH_EQUAL; condition.conditionValue.type=FWP_SID; condition.conditionValue.sid=static_cast<SID*>(sid); FWPM_FILTER0 filter{}; filter.filterKey=key; filter.displayData.name=const_cast<wchar_t*>(L"SRT Phase E owned slot filter"); filter.layerKey=FWPM_LAYER_ALE_AUTH_CONNECT_V4; filter.subLayerKey=kFwpmSublayer; filter.numFilterConditions=1; filter.filterCondition=&condition; filter.action.type=FWP_ACTION_BLOCK; filter.weight.type=FWP_UINT8; filter.weight.uint8=0x80; status=FwpmFilterAdd0(engine,&filter,nullptr,nullptr); LocalFree(sid); if(status!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_FILTER_ADD_FAILED"); }
+      if(status!=FWP_E_FILTER_NOT_FOUND)throw std::string("PHASE_E_FWPM_QUERY_FAILED"); PSID sid=nullptr; if(!ConvertStringSidToSidW(accounts[i].sid.c_str(),&sid))throw std::string("PHASE_E_SID_RESOLUTION_FAILED"); ULONG descriptorLength=0; PSECURITY_DESCRIPTOR descriptor=nullptr; try { descriptor=UserFilterSecurityDescriptor(sid,&descriptorLength); } catch(...) { LocalFree(sid); throw; } FWP_BYTE_BLOB descriptorBlob{descriptorLength,static_cast<UINT8*>(descriptor)}; FWPM_FILTER_CONDITION0 condition{}; condition.fieldKey=FWPM_CONDITION_ALE_USER_ID; condition.matchType=FWP_MATCH_EQUAL; condition.conditionValue.type=FWP_SECURITY_DESCRIPTOR_TYPE; condition.conditionValue.sd=&descriptorBlob; FWPM_FILTER0 filter{}; filter.filterKey=key; filter.displayData.name=const_cast<wchar_t*>(L"SRT Phase E owned slot filter"); filter.layerKey=FWPM_LAYER_ALE_AUTH_CONNECT_V4; filter.subLayerKey=kFwpmSublayer; filter.numFilterConditions=1; filter.filterCondition=&condition; filter.action.type=FWP_ACTION_BLOCK; filter.weight.type=FWP_UINT8; filter.weight.uint8=0x80; FwpmStage(i,"before-filter-add"); status=FwpmFilterAdd0(engine,&filter,nullptr,nullptr); FwpmStatus(i,"filter-add",status); LocalFree(descriptor); LocalFree(sid); if(status!=ERROR_SUCCESS)throw FwpmFilterAddFailure(i,status); FwpmStage(i,"after-filter-add"); }
     if(FwpmTransactionCommit0(engine)!=ERROR_SUCCESS)throw std::string("PHASE_E_FWPM_TRANSACTION_FAILED");
   } catch(...) { FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); throw; } FwpmEngineClose0(engine);
 }

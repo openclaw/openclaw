@@ -179,12 +179,28 @@ describe("Phase E maintainer policy", () => {
       fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
     );
     expect(source).toContain("FWPM_CONDITION_ALE_USER_ID");
-    expect(source).toContain("conditionValue.type=FWP_SID");
-    expect(source).toContain("condition.conditionValue.sid=static_cast<SID*>(sid)");
+    expect(source).toContain("conditionValue.type=FWP_SECURITY_DESCRIPTOR_TYPE");
+    expect(source).toContain("condition.conditionValue.sd=&descriptorBlob");
+    expect(source).toContain("BuildTrusteeWithSidW(&access.Trustee,sid)");
+    expect(source).toContain("access.grfAccessPermissions=FWP_ACTRL_MATCH_FILTER");
+    expect(source).toContain("control&SE_SELF_RELATIVE");
+    expect(source).toContain("SecurityDescriptorMatchesSid");
+    expect(source).not.toContain("conditionValue.type=FWP_SID");
     expect(source).toContain("FwpmFilterGetByKey0");
     expect(source).toContain("VerifyOwnedFilter");
     expect(source).toContain("RemoveOwnedFwpm(accounts)");
     expect(source).not.toMatch(/FwpmFilter(?:Create|Enum)|FwpmSubLayer(?:Create|Enum)/);
+  });
+  it("records each WFP filter-add boundary with a one-based slot and numeric status", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
+    );
+    expect(source).toContain('"PHASE_E_FWPM_STAGE:slot:%zu:%s\\n",index+1,stage');
+    expect(source).toContain('"PHASE_E_FWPM_STATUS:slot:%zu:%s:%lu\\n",index+1,operation');
+    expect(source).toContain('"PHASE_E_FWPM_FILTER_ADD_FAILED:")+std::to_string(index+1)+":"');
+    expect(source).toContain('FwpmStage(i,"before-filter-add")');
+    expect(source).toContain('FwpmStatus(i,"filter-add",status)');
+    expect(source).toContain('FwpmStage(i,"after-filter-add")');
   });
   it("uses one locale-independent SID JSON conversion at native fact boundaries", async () => {
     const source = await import("node:fs/promises").then((fs) =>
