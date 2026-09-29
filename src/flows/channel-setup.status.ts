@@ -3,7 +3,6 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import { isChannelVisibleInSetup } from "../channels/plugins/exposure.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelSetupPlugin,
@@ -14,7 +13,10 @@ import type {
 import type { ChannelMeta } from "../channels/plugins/types.core.js";
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
+import {
+  resolveChannelSetupEntries,
+  shouldShowChannelInSetup,
+} from "../commands/channel-setup/discovery.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
@@ -317,7 +319,7 @@ export async function collectChannelStatus(params: {
   const statusEntries = (
     await Promise.all(
       installedPlugins
-        .filter((plugin) => isChannelVisibleInSetup(plugin.meta))
+        .filter((plugin) => shouldShowChannelInSetup(plugin.meta))
         .map(async (plugin): Promise<ChannelSetupStatus | undefined> => {
           try {
             const adapter = resolveAdapter(plugin.id);
@@ -347,7 +349,7 @@ export async function collectChannelStatus(params: {
     statusEntries.map((entry: ChannelSetupStatus) => [entry.channel, entry]),
   );
   const fallbackStatuses = listChatChannels()
-    .filter((meta) => isChannelVisibleInSetup(meta))
+    .filter((meta) => shouldShowChannelInSetup(meta))
     .filter((meta) => !statusByChannel.has(meta.id))
     .map((meta) => {
       const configured = isChannelConfigured(params.cfg, meta.id);
@@ -491,7 +493,7 @@ export function resolveChannelSetupSelectionContributions(params: {
 }): ChannelSetupSelectionContribution[] {
   const bundledChannelIds = new Set(listChatChannels().map((channel) => channel.id));
   return params.entries
-    .filter((entry) => isChannelVisibleInSetup(entry.meta))
+    .filter((entry) => shouldShowChannelInSetup(entry.meta))
     .toSorted((left, right) => compareChannelSetupSelectionEntries(left, right))
     .map((entry) => {
       const disabledHint = params.resolveDisabledHint(entry.id);

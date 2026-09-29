@@ -22,6 +22,11 @@ type ChannelCatalogEntry = {
   meta: ChannelMeta;
 };
 
+/** Return true when channel metadata should appear in setup/onboarding choices. */
+export function shouldShowChannelInSetup(meta: Pick<ChannelMeta, "exposure">): boolean {
+  return isChannelVisibleInSetup(meta);
+}
+
 type ResolvedChannelSetupEntries = {
   entries: ChannelCatalogEntry[];
   installedCatalogEntries: ChannelPluginCatalogEntry[];
@@ -98,7 +103,7 @@ export function resolveChannelSetupEntries(params: {
       (entry) =>
         !installedPluginIds.has(entry.id) &&
         manifestInstalledIds.has(entry.id as ChannelChoice) &&
-        isChannelVisibleInSetup(entry.meta),
+        shouldShowChannelInSetup(entry.meta),
     )
     .map((entry) =>
       Object.assign({}, entry, {
@@ -111,7 +116,7 @@ export function resolveChannelSetupEntries(params: {
         !installedPluginIds.has(entry.id) &&
         !manifestInstalledIds.has(entry.id as ChannelChoice) &&
         !isStaticallyChannelConfigured(params.cfg, entry.id, params.env ?? process.env) &&
-        isChannelVisibleInSetup(entry.meta),
+        shouldShowChannelInSetup(entry.meta),
     )
     .map((entry) =>
       Object.assign({}, entry, {
@@ -149,7 +154,7 @@ export function resolveChannelSetupEntries(params: {
     entries: Array.from(metaById, ([id, meta]) => ({
       id: id as ChannelChoice,
       meta,
-    })).filter((entry) => isChannelVisibleInSetup(entry.meta)),
+    })).filter((entry) => shouldShowChannelInSetup(entry.meta)),
     installedCatalogEntries,
     installableCatalogEntries,
     installedCatalogById: new Map(
