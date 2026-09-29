@@ -13,11 +13,7 @@ import {
   type TalkEventInput,
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { FaceTimeConfig } from "./config.js";
-import {
-  AGENT_CONSULT_MESSAGE_PROVIDER,
-  CONSULT_SYSTEM_PROMPT,
-  FACETIME_END_CALL_TOOL_NAME,
-} from "./talk-driver-config.js";
+import { AGENT_CONSULT_MESSAGE_PROVIDER, CONSULT_SYSTEM_PROMPT } from "./talk-driver-config.js";
 
 type PendingAgentConsult = {
   callId: string;
@@ -50,10 +46,8 @@ export function createFaceTimeConsultController(params: {
   suspendMedia: (reason: string) => Promise<void>;
   reportFailure: (error: Error) => Promise<boolean>;
   close: (reason: string) => Promise<void>;
-  onHangupRequested: () => Promise<void>;
 }) {
   const pending = new Map<string, PendingAgentConsult>();
-  let hangupRequested = false;
 
   const ownsConsult = (consult: PendingAgentConsult) =>
     pending.get(consult.callId) === consult &&
@@ -143,46 +137,6 @@ export function createFaceTimeConsultController(params: {
       })();
     }
   };
-  const submitHangupResult = async (event: RealtimeVoiceToolCallEvent) => {
-    const bridge = params.getBridge();
-    const callId = event.callId || event.itemId;
-    const turnId = params.ensureTurn();
-    const result = {
-      status: "ending",
-      message: "The current FaceTime call is ending. Do not speak another response.",
-    };
-    params.remember({
-      type: "tool.call",
-      turnId,
-      itemId: event.itemId,
-      callId,
-      payload: { name: event.name, args: event.args },
-    });
-    try {
-      const options =
-        bridge?.bridge.supportsToolResultSuppression === false
-          ? undefined
-          : { suppressResponse: true };
-      await bridge?.submitToolResult(callId, result, options);
-      params.remember({
-        type: "tool.result",
-        turnId,
-        callId,
-        payload: { name: event.name, result },
-        final: true,
-      });
-    } catch (error) {
-      const message = formatErrorMessage(error);
-      params.logger.debug?.(`[facetime] hangup tool result ignored: ${message}`);
-      params.remember({
-        type: "tool.error",
-        turnId,
-        callId,
-        payload: { name: event.name, error: message },
-        final: true,
-      });
-    }
-  };
   const submitToolError = async (event: RealtimeVoiceToolCallEvent, error: string) => {
     const callId = event.callId || event.itemId;
     const generation = params.getGeneration();
@@ -209,21 +163,6 @@ export function createFaceTimeConsultController(params: {
       return;
     }
     const callId = event.callId || event.itemId;
-    if (event.name === FACETIME_END_CALL_TOOL_NAME) {
-      const shouldRequestHangup = !hangupRequested;
-      hangupRequested = true;
-      await submitHangupResult(event);
-      if (shouldRequestHangup) {
-        try {
-          await params.onHangupRequested();
-        } catch (error) {
-          params.logger.warn?.(
-            `[facetime] caller-requested hangup remains pending: ${formatErrorMessage(error)}`,
-          );
-        }
-      }
-      return;
-    }
     if (event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       await submitToolError(event, `Tool "${event.name}" not available`);
       return;

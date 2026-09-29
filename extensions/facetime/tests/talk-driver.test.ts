@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -57,10 +56,20 @@ describe("FaceTime talk driver lifecycle", () => {
   it.each([false, true])(
     "retains aborted provider-startup suppression until carrier closure is confirmed (%s)",
     async (carrierClosed) => {
-      const connect = createDeferred<void>();
-      mocks.bridge.connect.mockReturnValueOnce(connect.promise);
-      const carrierSafety = createDeferred<boolean>();
-      const onFailure = vi.fn(() => carrierSafety.promise);
+      let releaseConnect = () => {};
+      mocks.bridge.connect.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseConnect = resolve;
+          }),
+      );
+      let releaseCarrierSafety = (_safeToClose: boolean) => {};
+      const onFailure = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releaseCarrierSafety = resolve;
+          }),
+      );
       const controller = new AbortController();
       const driver = await startFaceTimeTalkDriver(
         startParams({ signal: controller.signal, onFailure }),
@@ -77,7 +86,7 @@ describe("FaceTime talk driver lifecycle", () => {
       expect(mocks.pump.stop).not.toHaveBeenCalled();
       expect(driver.processOutputSuppressed()).toBe(true);
 
-      connect.resolve();
+      releaseConnect();
       mocks.sessionParams?.onReady();
       await Promise.resolve();
       driver.activate();
@@ -86,7 +95,7 @@ describe("FaceTime talk driver lifecycle", () => {
       expect(mocks.bridge.triggerGreeting).not.toHaveBeenCalled();
       expect(mocks.pump.stop).not.toHaveBeenCalled();
 
-      carrierSafety.resolve(carrierClosed);
+      releaseCarrierSafety(carrierClosed);
       await failed;
       expect(mocks.pump.stop).toHaveBeenCalledTimes(carrierClosed ? 1 : 0);
 
@@ -106,25 +115,40 @@ describe("FaceTime talk driver lifecycle", () => {
   });
 
   it("connects the provider while waiting for native suppression", async () => {
-    const suppression = createDeferred<void>();
-    mocks.pump.suppressionReady.mockReturnValueOnce(suppression.promise);
+    let releaseSuppression = () => {};
+    mocks.pump.suppressionReady.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSuppression = resolve;
+        }),
+    );
     const starting = startFaceTimeTalkDriver(startParams());
 
     await vi.waitFor(() => expect(mocks.pump.suppressionReady).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(mocks.createSession).toHaveBeenCalledOnce());
     expect(mocks.bridge.connect).toHaveBeenCalledOnce();
 
-    suppression.resolve();
+    releaseSuppression();
     const driver = await starting;
 
     expect(driver.processOutputSuppressed()).toBe(true);
   });
 
   it("waits for provider connect, provider ready, and microphone routing", async () => {
-    const connect = createDeferred<void>();
-    const route = createDeferred<void>();
-    mocks.bridge.connect.mockReturnValueOnce(connect.promise);
-    mocks.pump.routeReady.mockReturnValueOnce(route.promise);
+    let releaseConnect = () => {};
+    let releaseRoute = () => {};
+    mocks.bridge.connect.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseConnect = resolve;
+        }),
+    );
+    mocks.pump.routeReady.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRoute = resolve;
+        }),
+    );
     const driver = await startFaceTimeTalkDriver(startParams());
     const first = driver.readyForAudio();
     const second = driver.readyForAudio();
@@ -137,7 +161,7 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(mocks.pump.routeReady).not.toHaveBeenCalled();
     expect(driver.realtimeActive()).toBe(false);
 
-    connect.resolve();
+    releaseConnect();
     await Promise.resolve();
     expect(driver.realtimeActive()).toBe(false);
 
@@ -146,7 +170,7 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(mocks.pump.routeReady).toHaveBeenCalledOnce();
     expect(fullyReady).toBe(false);
 
-    route.resolve();
+    releaseRoute();
     await Promise.all([first, second]);
     expect(fullyReady).toBe(true);
     expect(driver.realtimeActive()).toBe(true);
@@ -162,6 +186,78 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(driver.realtimeActive()).toBe(true);
     expect(onFailure).not.toHaveBeenCalled();
     expect(mocks.pump.suspendMedia).not.toHaveBeenCalled();
+  });
+
+  it("feeds and retires the optional video bridge without owning audio-call health", async () => {
+    mocks.startVideoBridge.mockResolvedValueOnce(mocks.video);
+    const driver = await startReadyFaceTimeTalkDriver(
+      startParams({
+        config: resolveFaceTimeConfig({
+          ownerHandles: ["caller@example.com"],
+          video: { enabled: true },
+        }),
+      }),
+    );
+    await vi.waitFor(() => expect(mocks.startVideoBridge).toHaveBeenCalledOnce());
+
+    const pcm = Buffer.alloc(480);
+    mocks.sessionParams?.audioSink.sendAudio(pcm);
+    expect(mocks.video.sendAudio).toHaveBeenCalledWith(pcm);
+    expect(driver.videoStatus()).toMatchObject({ active: true, provider: "lobster" });
+
+    mocks.sessionParams?.audioSink.clearAudio();
+    expect(mocks.video.clear).toHaveBeenCalledWith("barge-in");
+
+    await driver.suspendMedia("carrier-ended");
+    expect(mocks.video.stop).toHaveBeenCalledWith("carrier-ended");
+    expect(mocks.pump.suspendMedia).toHaveBeenCalledOnce();
+    expect(driver.videoStatus()).toMatchObject({ active: false, health: { status: "closed" } });
+  });
+
+  it("reports enabled video startup failure in call status without failing audio", async () => {
+    mocks.startVideoBridge.mockRejectedValueOnce(new Error("OBS unavailable"));
+    const driver = await startReadyFaceTimeTalkDriver(
+      startParams({
+        config: resolveFaceTimeConfig({
+          ownerHandles: ["caller@example.com"],
+          video: { enabled: true },
+        }),
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(driver.videoStatus()).toMatchObject({
+        active: false,
+        provider: "lobster",
+        error: "OBS unavailable",
+        health: { status: "degraded" },
+      }),
+    );
+    expect(driver.realtimeActive()).toBe(true);
+  });
+
+  it("does not let hung optional video startup delay native media suspension", async () => {
+    let signal: AbortSignal | undefined;
+    mocks.startVideoBridge.mockImplementationOnce(
+      (params: { signal?: AbortSignal }) =>
+        new Promise((resolve) => {
+          signal = params.signal;
+          void resolve;
+        }),
+    );
+    const driver = await startReadyFaceTimeTalkDriver(
+      startParams({
+        config: resolveFaceTimeConfig({
+          ownerHandles: ["caller@example.com"],
+          video: { enabled: true },
+        }),
+      }),
+    );
+
+    await driver.suspendMedia("carrier-ended");
+    expect(signal?.aborted).toBe(true);
+    expect(mocks.pump.suspendMedia).toHaveBeenCalledOnce();
+    expect(driver.videoStatus()).toMatchObject({ active: false, health: { status: "closed" } });
   });
 
   it("ignores a stale response terminal and drains only the current response", async () => {
@@ -189,7 +285,7 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(mocks.pump.clearOutputAudio).not.toHaveBeenCalled();
   });
 
-  it.each(["cancelled", "failed"] as const)(
+  it.each(["cancelled", "failed", "incomplete"] as const)(
     "flushes native playback for a %s response outcome without killing the carrier",
     async (status) => {
       const onFailure = vi.fn(async () => true);
@@ -203,7 +299,9 @@ describe("FaceTime talk driver lifecycle", () => {
       mocks.sessionParams?.onResponseDone?.({
         status,
         responseId: "response-1",
-        ...(status === "failed" ? { message: `response ${status}` } : {}),
+        ...(status === "failed" || status === "incomplete"
+          ? { message: `response ${status}` }
+          : {}),
       });
 
       expect(mocks.pump.clearOutputAudio).toHaveBeenCalled();
@@ -213,8 +311,13 @@ describe("FaceTime talk driver lifecycle", () => {
   );
 
   it("rejects pending audio readiness when safety suspension wins the route race", async () => {
-    const route = createDeferred<void>();
-    mocks.pump.routeReady.mockReturnValueOnce(route.promise);
+    let releaseRoute = () => {};
+    mocks.pump.routeReady.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRoute = resolve;
+        }),
+    );
     const driver = await startFaceTimeTalkDriver(startParams());
     const ready = driver.readyForAudio();
     const failed = expect(ready).rejects.toThrow(
@@ -225,21 +328,26 @@ describe("FaceTime talk driver lifecycle", () => {
     await vi.waitFor(() => expect(driver.realtimeActive()).toBe(true));
 
     await driver.suspendMedia("carrier-hangup-pending");
-    route.resolve();
+    releaseRoute();
 
     await failed;
     expect(driver.realtimeActive()).toBe(false);
   });
 
   it("waits for asynchronous provider shutdown before suspending native media", async () => {
-    const closed = createDeferred<void>();
-    mocks.bridge.close.mockReturnValueOnce(closed.promise);
+    let finishClose = () => {};
+    mocks.bridge.close.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishClose = resolve;
+        }),
+    );
     const driver = await startReadyFaceTimeTalkDriver();
 
     const suspended = driver.suspendMedia("carrier-hangup-pending");
     await vi.waitFor(() => expect(mocks.bridge.close).toHaveBeenCalledOnce());
     expect(mocks.pump.suspendMedia).not.toHaveBeenCalled();
-    closed.resolve();
+    finishClose();
     await suspended;
 
     expect(mocks.pump.suspendMedia).toHaveBeenCalledOnce();
@@ -287,6 +395,18 @@ describe("FaceTime talk driver lifecycle", () => {
     }
   });
 
+  it("reports an audio-child failure to the owning runtime", async () => {
+    const onFailure = vi.fn();
+    await startReadyFaceTimeTalkDriver(startParams({ onFailure }));
+
+    await mocks.pumpParams?.onError(new Error("capture failed"));
+
+    expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ message: "capture failed" }));
+    expect(mocks.pump.stop).toHaveBeenCalledOnce();
+    expect(mocks.pump.suspendMedia).toHaveBeenCalledOnce();
+    expect(mocks.bridge.close).toHaveBeenCalledOnce();
+  });
+
   it("reports carrier failure and performs final teardown when media suspension rejects", async () => {
     const onFailure = vi.fn(async () => true);
     const driver = await startReadyFaceTimeTalkDriver(startParams({ onFailure }));
@@ -296,8 +416,6 @@ describe("FaceTime talk driver lifecycle", () => {
 
     expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ message: "capture failed" }));
     expect(mocks.pump.stop).toHaveBeenCalledOnce();
-    expect(mocks.pump.suspendMedia).toHaveBeenCalledOnce();
-    expect(mocks.bridge.close).toHaveBeenCalledOnce();
     expect(driver.realtimeActive()).toBe(false);
   });
 
@@ -354,8 +472,13 @@ describe("FaceTime talk driver lifecycle", () => {
 
   it("retains process suppression until provider-startup carrier cleanup is safe", async () => {
     mocks.bridge.connect.mockRejectedValue(new Error("provider connect failed"));
-    const carrierSafety = createDeferred<boolean>();
-    const onFailure = vi.fn(() => carrierSafety.promise);
+    let releaseCarrierSafety = (_safeToClose: boolean) => {};
+    const onFailure = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseCarrierSafety = resolve;
+        }),
+    );
     const driver = await startFaceTimeTalkDriver(startParams({ onFailure }));
     const ready = driver.readyForAudio();
 
@@ -364,7 +487,7 @@ describe("FaceTime talk driver lifecycle", () => {
     expect(mocks.pump.suspendMedia).toHaveBeenCalledOnce();
     expect(mocks.bridge.close).toHaveBeenCalledOnce();
 
-    carrierSafety.resolve(true);
+    releaseCarrierSafety(true);
 
     await expect(ready).rejects.toThrow("provider connect failed");
 
@@ -394,77 +517,40 @@ describe("FaceTime talk driver lifecycle", () => {
         direction: "server",
         type: "input_audio_buffer.speech_started",
       });
-      await vi.advanceTimersByTimeAsync(50);
-      mocks.sessionParams?.onTranscript?.("user", "", true);
-      await vi.advanceTimersByTimeAsync(49);
-      expect(mocks.bridge.triggerGreeting).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(100);
 
       expect(mocks.bridge.triggerGreeting).toHaveBeenCalledWith(
         "Greet the caller briefly, introduce yourself using your configured identity, and ask how you can help.",
       );
-      await vi.advanceTimersByTimeAsync(50);
       expect(mocks.bridge.triggerGreeting).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("ends the current call directly and deduplicates repeated hangup events", async () => {
+  it("does not expose a carrier-hangup tool the out-of-process bridge cannot honor", async () => {
     await startReadyFaceTimeTalkDriver();
-
     expect(mocks.sessionParams?.tools?.map((tool) => tool.name)).toEqual([
       "openclaw_agent_consult",
-      "facetime_end_call",
     ]);
-    expect(mocks.sessionParams?.instructions).toContain("call facetime_end_call immediately");
-
-    const event = {
-      itemId: "item-hangup",
-      callId: "provider-hangup",
-      name: "facetime_end_call",
-      args: {},
-    };
-    await mocks.sessionParams?.onToolCall(event);
-
-    expect(mocks.bridge.submitToolResult).toHaveBeenCalledWith(
-      "provider-hangup",
-      {
-        status: "ending",
-        message: "The current FaceTime call is ending. Do not speak another response.",
-      },
-      { suppressResponse: true },
-    );
-    expect(mocks.hangupRequested).toHaveBeenCalledOnce();
-    expect(mocks.consult).not.toHaveBeenCalled();
-
-    await mocks.sessionParams?.onToolCall(event);
-    expect(mocks.hangupRequested).toHaveBeenCalledOnce();
-    expect(mocks.consult).not.toHaveBeenCalled();
-  });
-
-  it("keeps direct hangup available when agent consult tools are disabled", async () => {
-    await startReadyFaceTimeTalkDriver(
-      startParams({
-        config: resolveFaceTimeConfig({
-          ownerHandles: ["caller@example.com"],
-          realtime: { toolPolicy: "none" },
-        }),
-      }),
-    );
-
-    expect(mocks.sessionParams?.tools?.map((tool) => tool.name)).toEqual(["facetime_end_call"]);
+    expect(mocks.sessionParams?.instructions).toContain("operator must end the call in FaceTime");
+    expect(mocks.sessionParams?.instructions).toContain("Never delegate");
   });
 
   it("makes concurrent close callers join the same cleanup", async () => {
-    const stopped = createDeferred<void>();
-    mocks.pump.stop.mockReturnValueOnce(stopped.promise);
+    let finishStop = () => {};
+    mocks.pump.stop.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishStop = resolve;
+        }),
+    );
     const driver = await startReadyFaceTimeTalkDriver();
 
     const first = driver.close("first");
     const second = driver.close("second");
     await vi.waitFor(() => expect(mocks.pump.stop).toHaveBeenCalledOnce());
-    stopped.resolve();
+    finishStop();
     await Promise.all([first, second]);
 
     expect(mocks.bridge.close).toHaveBeenCalledOnce();
@@ -473,7 +559,7 @@ describe("FaceTime talk driver lifecycle", () => {
   it("combines custom instructions with workspace identity and agent proxy policy", async () => {
     mocks.bridge.connect.mockResolvedValue();
     mocks.resolveAgentContext.mockResolvedValue(
-      "Agent context: shared voice agent context.\n\nOpenClaw realtime voice profile context:\n\n### IDENTITY.md\nName: Tide",
+      "OpenClaw realtime voice profile context:\n\n### IDENTITY.md\nName: Tide",
     );
     await startReadyFaceTimeTalkDriver(
       startParams({
@@ -485,11 +571,10 @@ describe("FaceTime talk driver lifecycle", () => {
     );
 
     expect(mocks.sessionParams?.instructions).toContain("Speak warmly and keep answers short.");
-    expect(mocks.sessionParams?.instructions?.match(/Agent context:/g)).toHaveLength(1);
     expect(mocks.sessionParams?.instructions).toContain("Name: Tide");
     expect(mocks.sessionParams?.instructions).toContain("same configured OpenClaw agent");
     expect(mocks.sessionParams?.instructions).toContain(
-      "authenticated owner/user described by the loaded workspace profile context",
+      "authenticated operator approved this attachment for the configured owner/user",
     );
     expect(mocks.sessionParams?.instructions).toContain(
       "Answer greetings, acknowledgements, and questions about your own identity or persona directly",

@@ -1,13 +1,43 @@
 # OpenClaw FaceTime
 
-Experimental FaceTime carrier plugin for a dedicated Apple Silicon
-Mac. The public setup, security, operation, and removal guides are:
+Operator-assisted FaceTime voice and video bridge for Apple Silicon Macs.
 
-- <https://docs.openclaw.ai/plugins/facetime>
-- <https://docs.openclaw.ai/plugins/facetime-recovery>
+The plugin deliberately does **not** inject code into FaceTime or Phone. Those
+apps are Apple platform binaries and reject third-party dylibs under macOS
+library validation. Normal users do not need to change SIP, enable developer
+tools, install Xcode, or reboot for this plugin.
 
-Install the plugin from npm. Its signed and notarized native helpers are released
-separately from `openclaw/openclaw-facetime`:
+## Call flow
+
+1. A configured owner places or receives a FaceTime call.
+2. The operator answers or confirms it in FaceTime.
+3. An authenticated OpenClaw operator grants one-shot approval to
+   `attach_current_call`, naming that configured owner handle.
+4. `facetime-audio-capture` verifies there is exactly one active Apple-signed
+   FaceTime media owner and that the call input is `OpenClaw-Mic`.
+5. OpenClaw starts Realtime audio and, when configured, the live visual/OBS
+   bridge.
+
+The handle is an operator assertion used for owner authorization; macOS does
+not expose a supported out-of-process caller-identity API. The plugin therefore
+never auto-answers inbound calls and never claims UI text authenticated a
+caller. `end_call` detaches OpenClaw media and reports
+`manualHangupRequired: true`; the operator ends the carrier call in FaceTime.
+
+## Components
+
+- `src/audio-pump.ts`: bounded process capture, SoX playback, route proof, and
+  child teardown.
+- `src/runtime-call-control.ts`: one attached call, media activation, failure
+  cleanup, and detach.
+- `src/talk-driver.ts`: OpenAI Realtime/other registered realtime provider,
+  barge-in, consult tools, and exact PCM clocking.
+- `src/video-bridge.ts`: authenticated live-visual surface, OBS scene/source,
+  and Virtual Camera lease lifecycle.
+- `openclaw/openclaw-facetime`: signed out-of-process capture executable. It no
+  longer ships or requires an injected helper dylib.
+
+## Installation
 
 ```bash
 openclaw plugins install @openclaw/facetime
@@ -15,50 +45,18 @@ brew install openclaw/tap/openclaw-facetime
 openclaw gateway restart
 ```
 
-## Ownership boundaries
+Run `facetime.setup` to inspect the paired audio driver, Screen & System Audio
+Recording permission, physical output, realtime provider, and FaceTime process.
+Install/update the paired driver only through the explicit admin RPC.
 
-- `src/call-lifecycle.ts` owns the closed carrier/model state machine,
-  generation fencing, serialized native commands, and the complete alias index.
-- `src/pending-dial-store.ts` persists the one exact approved pending dial in
-  plugin-owned SQLite state. Current hosts execute these operations in the
-  shared-state worker, preserving write order and conditional dial-ID cleanup.
-  Runtime startup, helper dispatch, and shutdown await the required publications.
-  Pending outbound calls reserve admission while persistence waits, preserving the
-  same incoming-call policy before and after durable publication.
-- `src/helper-rpc.ts` owns bounded loopback IPC with mutual authentication,
-  connection-epoch message MACs, replay sequencing, and typed native
-  postcondition projection.
-- `src/helper-supervisor.ts` owns generation-bound LLDB injection and joins
-  in-flight work on stop.
-- `src/audio-pump.ts` owns bounded native capture, SoX playback, and child
-  teardown.
-- `openclaw/openclaw-facetime` owns the native process tap and injected helper.
-  This plugin validates native protocol version 1, the exact OpenClaw
-  Foundation Developer ID identity, and Apple notarization before activation.
-- `src/talk-driver.ts` owns provider response/tool generations and exact agent
-  consult cancellation.
+## Optional video
 
-Carrier hangup is terminal only after a native ended event or stable complete
-topology absence. A helper reply only acknowledges the request. Capture death,
-Gateway handoff, and unproven shutdown escalate before local suppression is
-released.
+OBS Studio, its Camera Extension, and a registered live-visual provider are
+required. Enable OBS WebSocket authentication, set Virtual Camera output to
+**Program**, and select **OBS Virtual Camera** once in FaceTime. The bridge owns
+only its uniquely named scene/source and only stops a camera lease it started.
 
-## Configuration
-
-`ownerHandles` is the only caller list. Every accepted identity receives owner
-authority. `realtime.toolPolicy` is one of `safe-read-only`, `owner`, or `none`;
-invalid explicit values fail validation.
-`realtime.provider`, `realtime.model`, and `realtime.voice` are optional
-session overrides. Registered realtime providers own auto-selection,
-authentication, and their model and voice defaults.
-
-The helper endpoint is not configurable. Node and the native helper consume
-`helper-endpoint.json`, bind loopback only, and derive the port from the user ID.
-The helper creates each connection epoch and authenticates the Gateway before
-accepting commands; every command, response, and event is direction-bound and
-strictly sequenced within that epoch.
-
-## Development checks
+## Development
 
 ```bash
 node scripts/run-vitest.mjs extensions/facetime
@@ -66,19 +64,5 @@ sh -n extensions/facetime/scripts/*.sh
 (cd extensions/facetime && npm pack --dry-run)
 ```
 
-Do not run live calls, install/uninstall the driver, change SIP, enable developer
-tools, or modify TCC during automated validation.
-
-## Native and licensing boundary
-
-The privileged driver script pins BlackHole v0.7.1 and its SHA-256, builds the
-renamed `OpenClawBridge.driver` in a root-only temporary directory, and accepts
-no caller-built artifact, digest, or compiler path. Before compilation it
-requires the canonical Xcode bundle and its selected build tools to be
-Apple-signed, root-owned, and not group/world writable, then performs a
-transactional swap. Generated BlackHole/driver artifacts are GPL-3.0 and are
-excluded from the package. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-The separately released Objective-C and Swift native sources, their adapted
-third-party notices, and their signing pipeline live in
-`openclaw/openclaw-facetime`.
+Automated validation must not place calls, install drivers, grant permissions,
+or touch a live Gateway.

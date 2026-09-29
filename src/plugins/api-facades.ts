@@ -25,6 +25,7 @@ const identitySensitiveRegistrations = new Set([
   "registerMediaUnderstandingProvider",
   "registerMigrationProvider",
   "registerMusicGenerationProvider",
+  "registerLiveVisualProvider",
   "registerRealtimeTranscriptionProvider",
   "registerRealtimeVoiceProvider",
   "registerSpeechProvider",

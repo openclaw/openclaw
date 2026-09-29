@@ -39,6 +39,7 @@ import type {
   OpenClawPluginApi,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  LiveVisualProvider,
   TranscriptSourceProvider,
   MigrationProviderPlugin,
   MusicGenerationProviderPlugin,
@@ -78,6 +79,7 @@ export type CapturedPluginRegistration = {
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   transcriptSourceProviders: TranscriptSourceProvider[];
+  liveVisualProviders: LiveVisualProvider[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
   videoGenerationProviders: VideoGenerationProviderPlugin[];
   musicGenerationProviders: MusicGenerationProviderPlugin[];
@@ -126,6 +128,7 @@ export function createCapturedPluginRegistration(params?: {
     realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
     transcriptSourceProviders: [],
+    liveVisualProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],
@@ -275,6 +278,7 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerMediaUnderstandingProvider: captureInto(captured.mediaUnderstandingProviders),
         registerTranscriptSourceProvider: captureInto(captured.transcriptSourceProviders),
+        registerLiveVisualProvider: captureInto(captured.liveVisualProviders),
         registerImageGenerationProvider: captureInto(captured.imageGenerationProviders),
         registerVideoGenerationProvider: captureInto(captured.videoGenerationProviders),
         registerMusicGenerationProvider: captureInto(captured.musicGenerationProviders),

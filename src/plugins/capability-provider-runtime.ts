@@ -38,6 +38,7 @@ type CapabilityProviderRegistryKey =
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "transcriptSourceProviders"
+  | "liveVisualProviders"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders";

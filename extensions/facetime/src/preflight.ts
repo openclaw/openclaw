@@ -55,7 +55,7 @@ export type FaceTimePreflightCheck = {
 
 export type FaceTimePreflightResult = {
   ok: boolean;
-  helperConnected: boolean;
+  controlMode: "operator-assisted";
   currentAudioDefaults?: DefaultAudioDevices;
   currentAudioError?: string;
   checks: FaceTimePreflightCheck[];
@@ -157,18 +157,15 @@ export async function runFaceTimePreflight(params: {
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
   logger?: RuntimeLogger;
-  helperConnected: boolean;
   captureBinary: string;
 }): Promise<FaceTimePreflightResult> {
   const runCommandWithTimeout = params.runtime.system.runCommandWithTimeout;
   const checks: FaceTimePreflightCheck[] = [];
   pushCheck(checks, {
-    id: "helper-connected",
-    label: "FaceTime helper socket",
-    ok: params.helperConnected,
-    message: params.helperConnected
-      ? "helper connected"
-      : "no authenticated helper connected on the local UID-derived endpoint",
+    id: "operator-assisted-control",
+    label: "Supported FaceTime control mode",
+    ok: true,
+    message: "Operator answers or confirms the call, then explicitly attaches OpenClaw",
   });
 
   const executable = await runCommandWithTimeout(["/bin/test", "-x", params.captureBinary], {
@@ -287,7 +284,7 @@ export async function runFaceTimePreflight(params: {
 
   return {
     ok: checks.every((check) => check.ok || !check.required),
-    helperConnected: params.helperConnected,
+    controlMode: "operator-assisted",
     currentAudioDefaults,
     currentAudioError,
     checks,

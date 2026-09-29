@@ -30,7 +30,7 @@ const faceTimeConfigSchema = {
 const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
   id: "facetime",
   name: "FaceTime",
-  description: "Experimental private FaceTime realtime voice carrier for OpenClaw agents",
+  description: "Operator-assisted FaceTime realtime voice and video bridge for OpenClaw agents",
   configSchema: faceTimeConfigSchema,
   register(api: OpenClawPluginApi) {
     const config = resolveFaceTimeConfig(api.pluginConfig);
@@ -210,6 +210,12 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
       const handle = "handle" in record ? record.handle : undefined;
       const mode = "mode" in record ? record.mode : undefined;
       return { ok: true, ...(await (await ensureRuntime()).dial({ handle, mode })) };
+    });
+    registerGateway("facetime.attach", "operator.write", async ({ params }) => {
+      const record = params && typeof params === "object" ? params : {};
+      const handle = "handle" in record ? record.handle : undefined;
+      const mode = "mode" in record ? record.mode : undefined;
+      return { ok: true, ...(await (await ensureRuntime()).attach({ handle, mode })) };
     });
     registerGateway("facetime.hangup", "operator.write", async ({ params }) => {
       const callUUID =

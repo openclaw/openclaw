@@ -6,15 +6,14 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
   resolveConfiguredRealtimeVoiceProvider,
-  type RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import type { FaceTimeConfig } from "./config.js";
 
 export const CONSULT_SYSTEM_PROMPT = [
-  "You are the configured OpenClaw agent receiving a delegated request from an authenticated owner in a private 1:1 FaceTime call.",
-  "The authenticated caller is the configured owner/user described by this agent's workspace context, including USER.md. When asked who is speaking, identify them from that workspace context without asking them to reconfirm.",
+  "You are the configured OpenClaw agent receiving a delegated request from a configured owner in an operator-confirmed private 1:1 FaceTime call.",
+  "An authenticated operator explicitly authorized this attachment for the configured owner/user described by this agent's workspace context, including USER.md. Do not claim macOS independently authenticated the remote caller.",
   "Use the normal workspace, memory, tools, and approval policies for this agent.",
   "Prefer registered OpenClaw tools over exec.",
   "When a direct tool returns usable data that answers the caller, answer immediately from that result.",
@@ -27,17 +26,6 @@ export const REALTIME_READY_TIMEOUT_MS = 15_000;
 export const MAX_TRANSCRIPT_ENTRY_CHARS = 2_000;
 export const MAX_TRANSCRIPT_CHARS = 12_000;
 export const AGENT_CONSULT_MESSAGE_PROVIDER = "voice";
-export const FACETIME_END_CALL_TOOL_NAME = "facetime_end_call";
-export const FACETIME_END_CALL_TOOL: RealtimeVoiceTool = {
-  type: "function",
-  name: FACETIME_END_CALL_TOOL_NAME,
-  description:
-    "Immediately end the current FaceTime call when the caller clearly asks to hang up, end, leave, or disconnect this call. Do not use this to cancel background work.",
-  parameters: {
-    type: "object",
-    properties: {},
-  },
-};
 
 export function assertAuthenticatedSenderConsultSupport(): void {
   if (REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION !== 1) {
@@ -61,8 +49,8 @@ export function buildRealtimeInstructions(params: {
 }): string {
   const callControlInstructions = [
     "Call control:",
-    `- When the caller asks you to hang up, end, leave, or disconnect the current FaceTime call, call ${FACETIME_END_CALL_TOOL_NAME} immediately.`,
-    `- Never delegate a current-call hangup request to ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}, ask for confirmation, or say that you will check.`,
+    "- You cannot end the Apple FaceTime carrier call. If the caller asks to hang up, say briefly that the operator must end the call in FaceTime.",
+    `- Never delegate a current-call hangup request to ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} or claim the carrier ended.`,
   ].join("\n");
   const proxyInstructions =
     params.toolPolicy === "none"
@@ -70,7 +58,7 @@ export function buildRealtimeInstructions(params: {
       : [
           "Mode: OpenClaw agent proxy.",
           "You are the realtime voice surface for the same configured OpenClaw agent the owner can message directly.",
-          "The FaceTime caller is the authenticated owner/user described by the loaded workspace profile context. Recognize them from that context without asking them to reconfirm.",
+          "An authenticated operator approved this attachment for the configured owner/user described by the loaded workspace profile context. Do not claim FaceTime exposed independently verified remote identity.",
           "Answer greetings, acknowledgements, and questions about your own identity or persona directly from the loaded realtime profile context.",
           "Do not mention a backend, supervisor, helper, or separate system. Present the result as your own work.",
           `Delegate actions, tool work, current facts, memory, workspace context not already loaded above, and user-specific context with ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}.`,

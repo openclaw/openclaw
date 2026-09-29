@@ -291,6 +291,11 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       registrations: registry.transcriptSourceProviders,
       ownedIds: (record) => record.transcriptSourceProviderIds,
     }),
+    registerLiveVisualProvider: createProviderLikeRegistrar({
+      kindLabel: "live visual provider",
+      registrations: registry.liveVisualProviders,
+      ownedIds: (record) => record.liveVisualProviderIds,
+    }),
     registerImageGenerationProvider: createProviderLikeRegistrar({
       kindLabel: "image-generation provider",
       registrations: registry.imageGenerationProviders,

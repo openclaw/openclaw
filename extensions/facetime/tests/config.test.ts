@@ -39,4 +39,41 @@ describe("facetime config", () => {
       }),
     ).toThrow("must not exceed 4000 characters");
   });
+
+  it("keeps video opt-in and resolves a loopback OBS bridge", () => {
+    expect(resolveFaceTimeConfig({}).video.enabled).toBe(false);
+
+    const video = resolveFaceTimeConfig({
+      video: {
+        enabled: true,
+        provider: "lobster",
+        width: 960,
+        height: 540,
+        frameRate: 24,
+        obs: {
+          url: "ws://localhost:4455",
+          password: { source: "env", provider: "default", id: "OBS_WEBSOCKET_PASSWORD" },
+        },
+      },
+    }).video;
+
+    expect(video).toMatchObject({
+      enabled: true,
+      provider: "lobster",
+      width: 960,
+      height: 540,
+      frameRate: 24,
+      obs: {
+        url: "ws://localhost:4455/",
+        password: { source: "env", provider: "default", id: "OBS_WEBSOCKET_PASSWORD" },
+      },
+    });
+  });
+
+  it.each(["wss://localhost:4455", "ws://192.0.2.10:4455", "not-a-url"])(
+    "rejects unsafe OBS WebSocket URL %s",
+    (url) => {
+      expect(() => resolveFaceTimeConfig({ video: { obs: { url } } })).toThrow(/video\.obs\.url/);
+    },
+  );
 });

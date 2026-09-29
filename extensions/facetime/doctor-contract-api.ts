@@ -19,7 +19,7 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
   ...RETIRED_CONFIG_KEYS.map((key) => ({
     path: [...CONFIG_PATH, key],
-    message: `${[...CONFIG_PATH, key].join(".")} is retired; FaceTime now uses its local authenticated helper endpoint. Run "openclaw doctor --fix".`,
+    message: `${[...CONFIG_PATH, key].join(".")} is retired; FaceTime now uses operator-assisted out-of-process capture. Run "openclaw doctor --fix".`,
   })),
   {
     path: [...CONFIG_PATH, "realtime", "brain"],

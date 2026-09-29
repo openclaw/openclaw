@@ -8,7 +8,13 @@ import type { FaceTimeStaticStatus } from "./static-status.js";
 
 const FaceTimeCallToolSchema = Type.Object(
   {
-    action: stringEnum(["get_status", "check_readiness", "initiate_call", "end_call"] as const),
+    action: stringEnum([
+      "get_status",
+      "check_readiness",
+      "initiate_call",
+      "attach_current_call",
+      "end_call",
+    ] as const),
     handle: Type.Optional(
       Type.String({
         description: "Authorized owner FaceTime email or phone number",
@@ -23,11 +29,14 @@ const FaceTimeCallToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type FaceTimeToolRuntime = Pick<FaceTimeRuntime, "status" | "preflight" | "dial" | "hangup">;
+type FaceTimeToolRuntime = Pick<
+  FaceTimeRuntime,
+  "status" | "preflight" | "dial" | "attach" | "hangup"
+>;
 
 export function resolveFaceTimeToolApproval(input: unknown) {
   const raw = asRecord(input);
-  if (raw.action !== "initiate_call") {
+  if (raw.action !== "initiate_call" && raw.action !== "attach_current_call") {
     return undefined;
   }
   const handle = normalizeOptionalString(raw.handle);
@@ -38,8 +47,11 @@ export function resolveFaceTimeToolApproval(input: unknown) {
   const allowedDecisions: Array<"allow-once" | "deny"> = ["allow-once", "deny"];
   return {
     requireApproval: {
-      title: "Place FaceTime call",
-      description: `Place a ${mode} FaceTime call to ${handle}.`,
+      title: raw.action === "initiate_call" ? "Open FaceTime call" : "Attach to FaceTime call",
+      description:
+        raw.action === "initiate_call"
+          ? `Open a ${mode} FaceTime call to ${handle} for operator confirmation.`
+          : `Authorize OpenClaw media for the active ${mode} FaceTime call with configured owner ${handle}.`,
       severity: "warning" as const,
       // A phone call is never safe to approve durably. Bind consent to this invocation.
       allowedDecisions,
@@ -52,30 +64,25 @@ function summarizeStatus(status: FaceTimeRuntimeStatus) {
   return {
     stageMeaning: "Internal carrier/model/native stages only; remote audibility is not measured.",
     enabled: status.enabled,
-    helperConnected: status.helperConnected,
-    helperProtocol: status.helperProtocol,
-    helperTargets: status.helperTargets.map((target) => ({
-      target: target.target,
-      connected: target.connected,
-      stale: target.stale,
-      retryScheduled: target.retryScheduled,
-    })),
+    controlMode: status.controlMode,
+    admissionModel: status.admissionModel,
+    carrierHangupSupported: status.carrierHangupSupported,
     driverInstallPending: status.driverInstallPending,
     driverInstall: status.driverInstall,
     processOutputSuppressed: status.processOutputSuppressed,
-    outboundCallPending: status.outboundCallPending,
     calls: status.calls.map((call) => ({
       callUUID: call.callUUID,
       phase: call.phase,
       carrierMode: call.carrierMode,
       modelMediaMode: call.modelMediaMode,
       handle: call.handle,
+      mode: call.mode,
+      admission: call.admission,
       realtimeActive: call.realtimeActive,
       audioReady: call.audioReady,
       processInputVerified: call.audioTransport?.processInputVerified === true,
       processOutputSuppressed: call.audioTransport?.processOutputSuppressed === true,
       lastRoutingError: call.lastRoutingError,
-      carrierHangupPending: call.carrierHangupPending,
     })),
   };
 }
@@ -119,22 +126,31 @@ export function createFaceTimeCallTool(params: {
               throw new Error("handle is required");
             }
             const status = await runtime.status();
-            if (!status.helperConnected) {
-              throw new Error("FaceTime helper is not connected");
-            }
             if (status.driverInstallPending) {
               throw new Error("FaceTime audio driver installation is pending");
             }
-            if (status.calls.length > 0 || status.outboundCallPending) {
-              throw new Error("another FaceTime call is active or pending");
+            if (status.calls.length > 0) {
+              throw new Error("OpenClaw is already attached to a FaceTime call");
             }
             const mode = raw.mode === "audio" || raw.mode === "video" ? raw.mode : undefined;
             const result = await runtime.dial({
               handle,
               mode,
             });
-            const { helper: _helper, ...publicResult } = result;
-            return json({ ok: true, action, ...publicResult });
+            return json({ ok: true, action, ...result });
+          }
+          case "attach_current_call": {
+            const runtime = await params.ensureRuntime();
+            const handle = normalizeOptionalString(raw.handle);
+            if (!handle) {
+              throw new Error("handle is required");
+            }
+            const mode = raw.mode === "audio" || raw.mode === "video" ? raw.mode : undefined;
+            return json({
+              ok: true,
+              action,
+              ...(await runtime.attach({ handle, mode })),
+            });
           }
           case "end_call": {
             const runtime = await params.ensureRuntime();
@@ -145,7 +161,7 @@ export function createFaceTimeCallTool(params: {
           }
           default:
             throw new Error(
-              "action must be get_status, check_readiness, initiate_call, or end_call",
+              "action must be get_status, check_readiness, initiate_call, attach_current_call, or end_call",
             );
         }
       } catch (error) {

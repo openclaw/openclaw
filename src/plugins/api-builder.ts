@@ -52,6 +52,7 @@ const noops = {
   registerRealtimeVoiceProvider: () => {},
   registerMediaUnderstandingProvider: () => {},
   registerTranscriptSourceProvider: () => {},
+  registerLiveVisualProvider: () => {},
   registerImageGenerationProvider: () => {},
   registerVideoGenerationProvider: () => {},
   registerMusicGenerationProvider: () => {},

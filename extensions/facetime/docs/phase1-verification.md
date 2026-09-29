@@ -1,37 +1,36 @@
-# FaceTime verification contract
+# Operator-assisted live verification
+
+Run this only in an isolated OCM environment. Do not point a branch build at a
+personal Gateway, config, state, secrets store, port, or process supervisor.
 
 ## Automated proof
 
 ```bash
 node scripts/run-vitest.mjs extensions/facetime
-for script in extensions/facetime/scripts/*.sh; do sh -n "$script"; done
-sh extensions/facetime/scripts/test-driver-transaction.sh
-sh extensions/facetime/scripts/test-uninstall-inventory.sh
 (cd extensions/facetime && npm pack --dry-run)
 ```
 
-The automated boundary proves state/generation fencing, exact pending-dial
-persistence, helper authentication and bounds, typed native outcomes,
-closure-bound consult cancellation, provider response ownership, native
-protocol compatibility, driver rollback, and uninstall inventory. Package
-inspection must show no native source, generated driver, dylib, `.build`, or
-BlackHole artifact.
+This proves owner-handle validation, separate one-shot open/attach approvals,
+capture startup and teardown, realtime PCM/barge-in, live-visual sample clocks,
+OBS ownership cleanup, and honest detach semantics. It does not prove a remote
+iPhone saw or heard anything.
 
-The package test resolves the source runtime using only files selected by npm.
-The publication workflow separately builds and selects the compiled plugin
-runtime; source-package proof does not replace that release check. Provider
-boundary tests use the real realtime adapter with synthetic credentials and
-WebSocket traffic, while intercepting native audio before process execution.
+## Live proof
 
-The playback-drain signal estimates when PCM handed to the separate SoX process
-should have reached `OpenClaw-Feed`. It does not prove Core Audio consumption or
-remote audibility.
+1. Run `facetime.setup`; confirm there are no SIP, Xcode, debugger, injection,
+   or reboot actions.
+2. Manually select `OpenClaw-Mic` and `OBS Virtual Camera` in FaceTime.
+3. Have the configured owner call, or approve `initiate_call` and confirm the
+   outbound call in FaceTime.
+4. Answer/confirm in FaceTime, then separately approve
+   `attach_current_call` with the configured owner handle.
+5. Verify status reports one `operator-confirmed-owner` attachment, native
+   input proof, output suppression, Realtime active, and video healthy.
+6. From the iPhone verify contextual speech, audible reply, lobster animation,
+   barge-in, second response recovery, and no duplicate local output.
+7. Run `end_call`; verify OpenClaw media, renderer, OBS scene/source, and any
+   bridge-owned Virtual Camera lease are removed. Confirm the result says
+   `manualHangupRequired: true`, then end the carrier call in FaceTime.
 
-## Live proof gap
-
-A consensual inbound and outbound round trip is still required separately for
-FaceTime video and Phone-owned FaceTime Audio. Live proof must confirm remote
-input/output, barge-in, agent consultation, direct hangup, physical-speaker
-suppression, and child-process teardown. Automated validation must not place
-calls, change SIP, enable developer tools, install the driver, restart the
-operator Gateway, or modify operator configuration.
+Record external observations separately from internal status. Never infer
+remote audibility or caller identity from process/route readiness.

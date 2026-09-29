@@ -36,6 +36,6 @@ export async function inspectFaceTimeStaticStatus(params: {
     artifacts,
     driverStatus: "status" in driver ? driver.status : undefined,
     driverError: "error" in driver ? driver.error : undefined,
-    note: "Static inspection only; helper, carrier, model media, and remote audibility were not activated or tested.",
+    note: "Static inspection only; no call was attached and model media or remote audibility were not tested.",
   };
 }

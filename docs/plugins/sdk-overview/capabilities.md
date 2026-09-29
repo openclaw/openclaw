@@ -28,6 +28,7 @@ worker or embedding provider must satisfy. Part of the
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                    |
 | `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                        |
 | `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source                                        |
+| `api.registerLiveVisualProvider(...)`            | Realtime visual surface driven by caller-owned timed media                        |
 | `api.registerImageGenerationProvider(...)`       | Image generation                                                                  |
 | `api.registerMusicGenerationProvider(...)`       | Music generation                                                                  |
 | `api.registerVideoGenerationProvider(...)`       | Video generation                                                                  |

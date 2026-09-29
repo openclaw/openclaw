@@ -63,6 +63,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       realtimeVoiceProviderIds: [...entry.realtimeVoiceProviderIds],
       mediaUnderstandingProviderIds: [...entry.mediaUnderstandingProviderIds],
       transcriptSourceProviderIds: [...entry.transcriptSourceProviderIds],
+      liveVisualProviderIds: [...entry.liveVisualProviderIds],
       documentExtractorIds: [...entry.documentExtractorIds],
       imageGenerationProviderIds: [...entry.imageGenerationProviderIds],
       videoGenerationProviderIds: [...entry.videoGenerationProviderIds],
@@ -87,6 +88,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
           (plugin.contracts?.realtimeVoiceProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.mediaUnderstandingProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.transcriptSourceProviders?.length ?? 0) > 0 ||
+          (plugin.contracts?.liveVisualProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.documentExtractors?.length ?? 0) > 0 ||
           (plugin.contracts?.imageGenerationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.videoGenerationProviders?.length ?? 0) > 0 ||
@@ -118,6 +120,9 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       ),
       transcriptSourceProviderIds: normalizeContractStringValues(
         plugin.contracts?.transcriptSourceProviders ?? [],
+      ),
+      liveVisualProviderIds: normalizeContractStringValues(
+        plugin.contracts?.liveVisualProviders ?? [],
       ),
       documentExtractorIds: normalizeContractStringValues(
         plugin.contracts?.documentExtractors ?? [],

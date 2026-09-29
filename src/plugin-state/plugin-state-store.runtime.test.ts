@@ -45,6 +45,7 @@ function createPluginRecord(
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     transcriptSourceProviderIds: [],
+    liveVisualProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
     musicGenerationProviderIds: [],

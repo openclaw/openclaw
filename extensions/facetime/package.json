@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/facetime",
   "version": "2026.9.6",
-  "description": "Experimental FaceTime realtime voice carrier for OpenClaw agents",
+  "description": "Operator-assisted FaceTime realtime voice and video bridge for OpenClaw agents",
   "license": "MIT",
   "author": "OpenClaw contributors",
   "homepage": "https://docs.openclaw.ai/plugins/facetime",
@@ -27,17 +27,11 @@
     "runtime-api.ts",
     "src",
     "docs/phase1-verification.md",
-    "helper-endpoint.json",
     "scripts/commit-driver-transaction.sh",
-    "scripts/ensure-helper-ipc-key.sh",
-    "scripts/inject-helper-terminal.sh",
-    "scripts/inject-helper.sh",
     "scripts/install-driver-root.sh",
     "scripts/install-driver.applescript",
     "scripts/install-driver.sh",
     "scripts/remove-user-artifacts.sh",
-    "scripts/stage-helper.sh",
-    "scripts/verify-native-helper.sh",
     "scripts/verify-xcode-trust.sh",
     "skills/facetime/SKILL.md",
     "skills/facetime/agents/openai.yaml",
@@ -55,12 +49,10 @@
   "type": "module",
   "scripts": {
     "install:driver": "bash scripts/install-driver.sh",
-    "uninstall:driver": "bash scripts/install-driver.sh --uninstall",
-    "inject:helper": "bash scripts/inject-helper.sh",
-    "inject:helper:phone": "bash scripts/inject-helper.sh --app Phone",
-    "inject:helper:terminal": "bash scripts/inject-helper-terminal.sh"
+    "uninstall:driver": "bash scripts/install-driver.sh --uninstall"
   },
   "dependencies": {
+    "obs-websocket-js": "5.0.8",
     "typebox": "1.3.34"
   },
   "devDependencies": {

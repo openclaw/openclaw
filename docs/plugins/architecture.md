@@ -43,6 +43,7 @@ Capabilities are the public **native plugin** model inside OpenClaw. Native plug
 | Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `google`, `openai`                                          |
 | Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | `google`, `openai`                                          |
 | Transcripts source     | `api.registerTranscriptSourceProvider(...)`      | `discord`, `google-meet`, `teams-meetings`, `zoom-meetings` |
+| Live visual            | `api.registerLiveVisualProvider(...)`            | External avatar and realtime renderer plugins               |
 | Image generation       | `api.registerImageGenerationProvider(...)`       | `fal`, `google`, `openai`                                   |
 | Music generation       | `api.registerMusicGenerationProvider(...)`       | `fal`, `google`, `minimax`                                  |
 | Video generation       | `api.registerVideoGenerationProvider(...)`       | `fal`, `google`, `qwen`                                     |

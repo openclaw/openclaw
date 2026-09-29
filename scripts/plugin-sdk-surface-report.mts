@@ -190,17 +190,20 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      158,
+      // +1: generic live-visual provider discovery and timed browser-source sessions.
+      159,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4591,
+      // +10: generic live-visual provider resolver and timed media/session contracts.
+      4601,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2695,
+      // +1: generic live-visual provider resolver.
+      2696,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
