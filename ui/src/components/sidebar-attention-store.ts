@@ -4,6 +4,7 @@ import type {
   SidebarAttentionStoreController as StoreController,
   SidebarAttentionStoreSources,
 } from "../app/sidebar-attention-store.ts";
+import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
@@ -11,6 +12,7 @@ import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
 import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { pluginPermissionLocation } from "../pages/plugins/permission-diagnostics.ts";
 import {
   dismissSidebarAttention,
   isSidebarAttentionDismissed,
@@ -49,6 +51,7 @@ export class SidebarAttentionStoreController implements StoreController {
   private healthRefreshTimer?: ReturnType<typeof globalThis.setTimeout>;
   private loadedOwner: SidebarAttentionOwner | null = null;
   private loadedClient = this.sources.gateway.snapshot.client;
+  private pluginCapabilities = this.sources.gateway.snapshot.pluginCapabilities;
   private loadedAgentScope = { ...this.sources.agentSelection.state };
   private dismissalKey: string | null = null;
   private dismissed: SidebarAttentionDismissals = {};
@@ -252,6 +255,31 @@ export class SidebarAttentionStoreController implements StoreController {
       modelAuthAgentId: this.modelAuthAgentId,
       now: Date.now(),
     }).toSorted(compareSidebarAttentionEntries);
+    const blocked = gateway.pluginCapabilities?.blockedHooks ?? [];
+    for (const pluginId of new Set(blocked.map((hook) => hook.pluginId))) {
+      const hooks = blocked.filter((hook) => hook.pluginId === pluginId);
+      const first = hooks[0]!;
+      attention.push({
+        type: "attention",
+        kind: "pluginAccessBlocked",
+        category: "system",
+        severity: "warning",
+        dismissal: null,
+        requiresAction: hooks.some((hook) => hook.reason === "conversation-access-missing"),
+        icon: "plug",
+        label: first.pluginName,
+        detail:
+          t("pluginsPage.permissions.blocked") +
+          ": " +
+          [...new Set(hooks.map((hook) => hook.hookName))].join(", "),
+        signature: JSON.stringify(hooks),
+        action: {
+          kind: "navigate",
+          routeId: "plugin-settings",
+          options: pluginPermissionLocation(pluginId, first.configPath, this.sources.basePath),
+        },
+      });
+    }
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
       attention,
@@ -429,6 +457,8 @@ export class SidebarAttentionStoreController implements StoreController {
 
   private synchronizeGateway(): void {
     const snapshot = this.sources.gateway.snapshot;
+    const capabilitiesChanged = this.pluginCapabilities !== snapshot.pluginCapabilities;
+    this.pluginCapabilities = snapshot.pluginCapabilities;
     const key = resolveSidebarAttentionKey(this.sources.gateway);
     if (key !== this.dismissalKey) {
       this.dismissalKey = key;
@@ -455,6 +485,9 @@ export class SidebarAttentionStoreController implements StoreController {
       agentScope.selectedId === this.loadedAgentScope.selectedId &&
       agentScope.scopeId === this.loadedAgentScope.scopeId
     ) {
+      if (capabilitiesChanged) {
+        this.onChange();
+      }
       return;
     }
     let scopeChanged = false;
@@ -475,6 +508,9 @@ export class SidebarAttentionStoreController implements StoreController {
     this.cronRetryAt = undefined;
     this.scheduleHealthRefresh();
     this.load();
+    if (capabilitiesChanged) {
+      this.onChange();
+    }
   }
 
   private readonly refreshDeferred = () => {

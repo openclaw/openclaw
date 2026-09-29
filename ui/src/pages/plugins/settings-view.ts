@@ -29,6 +29,7 @@ import {
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.ts";
+import { renderPluginPermissionNotice } from "./permission-diagnostics.ts";
 import { renderPluginStateStatus } from "./plugin-card.ts";
 import {
   pluginRowKey,
@@ -63,6 +64,7 @@ type SharedProps = Omit<
   onIconError: (pluginId: string) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onUninstall: (pluginId: string, rowKey: string) => void;
+  onReviewPermissions?: (pluginId: string, configPath: string) => void;
   onConfigReload: () => void;
   onRefresh: () => void;
 };
@@ -211,6 +213,7 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
             }
             <span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </div>
+          ${props.onReviewPermissions ? renderPluginPermissionNotice(plugin, props.onReviewPermissions, props.canEditConfig ? null : props.mutationBlockedReason) : nothing}
           ${renderPluginRowMessage(props.messages[key])}
         </article>
       `;
@@ -382,6 +385,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
   const notices = html`${props.error ? renderRetryError(props.error, props.onRefresh) : nothing}
   ${props.inspectionError ? renderRetryError(props.inspectionError, props.onRetryInspection) : nothing}
   ${plugin.error ? html`<div class="callout danger oc-banner oc-banner-error" role="alert">${formatUiExternalText(plugin.error)}</div>` : nothing}
+  ${props.onReviewPermissions ? renderPluginPermissionNotice(plugin, props.onReviewPermissions, props.canEditConfig ? null : props.mutationBlockedReason) : nothing}
   ${renderPluginRowMessage(props.messages[key])}`;
   if (settings) {
     return renderSettingsPage(

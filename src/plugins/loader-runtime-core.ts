@@ -360,6 +360,9 @@ export function loadOpenClawPluginsCore(
       }
     }
     if (options.previousRegistry) {
+      registry.blockedHooks.push(
+        ...options.previousRegistry.blockedHooks.filter((entry) => retained.has(entry.pluginId)),
+      );
       registry.diagnostics.push(
         ...options.previousRegistry.diagnostics.filter(
           (entry) => entry.pluginId && retained.has(entry.pluginId),

@@ -3,7 +3,7 @@
 // consumes the global configuration controllers used by Settings.
 import { consume } from "@lit/context";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, type PropertyValues, type TemplateResult } from "lit";
+import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
@@ -33,6 +33,10 @@ import {
   type DreamingConfigPathSupport,
 } from "../agents/memory/dreaming.ts";
 import "../agents/memory/memory-panel.ts";
+import {
+  pluginPermissionLocation,
+  renderPluginPermissionNotice,
+} from "../plugins/permission-diagnostics.ts";
 import "./memory-memories.ts";
 import { dreamingConfigPath, resolveDreamingTimezoneDefault } from "./memory-defaults.ts";
 import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.ts";
@@ -634,6 +638,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     const agentId = this.selectedAgentId;
     const agentError = agentId ? null : this.context.agents.state.agentsError;
     const engineState = this.engineState(engineSelection);
+    const enginePlugin = findMemoryPlugin(this.catalog, selectedEngineId(engineSelection));
     return renderMemory({
       activeTab,
       onTabChange: (tab) => this.navigateTab(tab),
@@ -658,20 +663,22 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
       canImportMemory: readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin,
-      overview: renderMemoryOverview({
-        agentId,
-        engineSelection,
-        engineDisabled: engineState === "disabled",
-        status: agentError ? { kind: "error", message: agentError } : this.overviewStatus,
-        probingEmbeddings: this.probingEmbeddings,
-        onRefresh: () =>
-          agentId
-            ? void this.loadOverviewStatus({ force: true })
-            : void this.context.agents.ensureList(),
-        onProbeEmbeddings: () =>
-          void this.loadOverviewStatus({ force: true, probeEmbeddings: true }),
-        onNavigate: (tab) => this.navigateTab(tab),
-      }),
+      overview: html`${enginePlugin ? renderPluginPermissionNotice(enginePlugin, (pluginId, configPath) => this.context.navigate("plugin-settings", pluginPermissionLocation(pluginId, configPath, this.context.basePath))) : nothing}${renderMemoryOverview(
+        {
+          agentId,
+          engineSelection,
+          engineDisabled: engineState === "disabled",
+          status: agentError ? { kind: "error", message: agentError } : this.overviewStatus,
+          probingEmbeddings: this.probingEmbeddings,
+          onRefresh: () =>
+            agentId
+              ? void this.loadOverviewStatus({ force: true })
+              : void this.context.agents.ensureList(),
+          onProbeEmbeddings: () =>
+            void this.loadOverviewStatus({ force: true, probeEmbeddings: true }),
+          onNavigate: (tab) => this.navigateTab(tab),
+        },
+      )}`,
       memories: html`
         <openclaw-memory-memories
           .client=${this.context.gateway.snapshot.client}

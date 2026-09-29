@@ -44,6 +44,8 @@ type UpdatesChannel = (typeof UPDATES_CHANNELS)[number];
 
 type UpdatesViewProps = {
   update: ApplicationUpdateOverlaySnapshot;
+  blockedHooks?: import("../../../../packages/gateway-protocol/src/schema/plugins.ts").PluginsUiDescriptorsResult["blockedHooks"];
+  basePath?: string;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   configObject: Record<string, unknown>;
   gatewayVersion: string | null;
@@ -125,6 +127,8 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
           <openclaw-update-run-view
             .run=${run}
             .connected=${props.connected}
+            .blockedHooks=${props.blockedHooks}
+            .basePath=${props.basePath ?? ""}
           ></openclaw-update-run-view>
         </div>`
       : props.update.updateStatusBanner &&

@@ -27,6 +27,7 @@ import {
 } from "./registry-state.js";
 import type {
   PluginAgentToolResultMiddlewareRegistration,
+  PluginBlockedHookReason,
   PluginRecord,
 } from "./registry-types.js";
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
@@ -71,6 +72,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     createRegistration,
     registryParams,
     pluginsWithChannelRegistrationConflict,
+    pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,
   } = state;
@@ -374,9 +376,28 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       reportRegistrationWarning(record, `unknown typed hook "${String(hookName)}" ignored`);
       return;
     }
+    const blockTypedHook = (reason: PluginBlockedHookReason, key: string, message: string) => {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        code: "hook-registration-blocked",
+        message,
+      });
+      registry.blockedHooks.push({
+        pluginId: record.id,
+        hookName,
+        reason,
+        severity: "warn",
+        configPath: `plugins.entries.${record.id}.hooks.${key}`,
+        message,
+        source: record.source,
+      });
+    };
     if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
-      reportRegistrationWarning(
-        record,
+      blockTypedHook(
+        "prompt-injection-denied",
+        "allowPromptInjection",
         `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
       );
       return;
@@ -385,16 +406,18 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       isConversationHookName(hookName) &&
       !resolveConversationAccessAllowed(record.origin, policy)
     ) {
-      if (record.origin !== "bundled") {
-        reportRegistrationWarning(
-          record,
+      if (policy?.allowConversationAccess !== false) {
+        blockTypedHook(
+          "conversation-access-missing",
+          "allowConversationAccess",
           `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
             `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
         );
         return;
       }
-      reportRegistrationWarning(
-        record,
+      blockTypedHook(
+        "conversation-access-denied",
+        "allowConversationAccess",
         `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
       );
       return;

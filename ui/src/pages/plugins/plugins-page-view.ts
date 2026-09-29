@@ -52,6 +52,7 @@ import {
 
 type PluginsPageViewActions = {
   startMcpLogin: (serverName: string) => void;
+  reviewPermissions: (pluginId: string, configPath: string) => void;
   openTool: (name: string) => void;
   openSkill: (request: PluginsSkillsReadParams) => void;
   selectHubTab: (tab: PluginsHubTab) => void;
@@ -69,6 +70,7 @@ type PluginsPageViewActions = {
   reloadConfig: () => void;
   retryConfigRead: () => void;
   retryConfigWrite: () => void;
+  applyConfig: () => void;
   closeSettingsDetail: (parentRoute: "plugins" | "plugin-settings") => void;
   retrySettingsDetail: (pluginId: string) => void;
   selectInstalledDetailTab: (tab: InstalledPluginDetailTab) => void;
@@ -148,7 +150,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     iconLoading: model.iconLoading,
     canMutate: model.canMutate,
     mutationBlockedReason: model.mutationBlockedReason,
-    configBusy: configState.configLoading,
+    configBusy: configState.configLoading || configState.configApplying,
     configError: configState.lastError,
     canEditConfig: model.canEditConfig,
     configValue: configState.configForm,
@@ -161,6 +163,18 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     onConfigPatch: actions.patchConfig,
     onConfigRemove: actions.removeConfig,
     onConfigReload: actions.reloadConfig,
+    onReviewPermissions: actions.reviewPermissions,
+    configSaveStatus: configState.configAutoSaveStatus,
+    configNeedsApply: configState.configNeedsApply,
+    configApplying: configState.configApplying,
+    canApplyConfig: context.runtimeConfig.canApply === true,
+    onConfigApply: actions.applyConfig,
+    configRevisionApplied: Boolean(
+      configState.configSnapshot?.appliedConfigHash &&
+      configState.configSnapshot.appliedConfigHash ===
+        (configState.configSnapshot.configRevisionHash ?? configState.configSnapshot.hash),
+    ),
+    configDirty: configState.configFormDirty,
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: actions.retryConfigWrite,
     onRefresh: actions.refreshCatalog,
@@ -181,6 +195,8 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     return renderPluginSettingsDetail({
       ...settingsShared,
       pluginId,
+      highlightedPermission:
+        new URLSearchParams(model.routeData?.location.search).get("permission") ?? undefined,
       installProgress: consentController.getActiveInstall(pluginRowKey(pluginId)),
       inspection: detail?.inspection ?? null,
       mcpLoginBusy: model.mcpLoginBusy,

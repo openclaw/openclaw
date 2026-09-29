@@ -10273,6 +10273,44 @@ public struct PluginApprovalResolveParams: Codable, Sendable {
     }
 }
 
+public struct PluginBlockedHook: Codable, Sendable {
+    public let pluginid: String
+    public let pluginname: String
+    public let hookname: String
+    public let reason: AnyCodable
+    public let severity: AnyCodable
+    public let configpath: String
+    public let message: String
+
+    public init(
+        pluginid: String,
+        pluginname: String,
+        hookname: String,
+        reason: AnyCodable,
+        severity: AnyCodable,
+        configpath: String,
+        message: String)
+    {
+        self.pluginid = pluginid
+        self.pluginname = pluginname
+        self.hookname = hookname
+        self.reason = reason
+        self.severity = severity
+        self.configpath = configpath
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case pluginname = "pluginName"
+        case hookname = "hookName"
+        case reason
+        case severity
+        case configpath = "configPath"
+        case message
+    }
+}
+
 public struct PluginCatalogClawHubInstall: Codable, Sendable {
     public let source: String
     public let packagename: String
@@ -11047,13 +11085,22 @@ public struct PluginRuntimeApplication: Codable, Sendable {
 public struct PluginRuntimeStatus: Codable, Sendable {
     public let state: AnyCodable
     public let error: String?
+    public let blockedhooks: [PluginBlockedHook]?
 
     public init(
         state: AnyCodable,
-        error: String? = nil)
+        error: String? = nil,
+        blockedhooks: [PluginBlockedHook]? = nil)
     {
         self.state = state
         self.error = error
+        self.blockedhooks = blockedhooks
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case error
+        case blockedhooks = "blockedHooks"
     }
 }
 
@@ -11798,6 +11845,7 @@ public struct PluginsUiDescriptorsParams: Codable, Sendable {}
 public struct PluginsUiDescriptorsResult: Codable, Sendable {
     public let ok: Bool
     public let descriptors: [PluginControlUiDescriptor]
+    public let blockedhooks: [PluginBlockedHook]?
     public let generation: Int?
     public let methods: [String]?
     public let controluitabs: [ControlUiPluginTab]?
@@ -11808,6 +11856,7 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
     public init(
         ok: Bool,
         descriptors: [PluginControlUiDescriptor],
+        blockedhooks: [PluginBlockedHook]? = nil,
         generation: Int? = nil,
         methods: [String]? = nil,
         controluitabs: [ControlUiPluginTab]? = nil,
@@ -11817,6 +11866,7 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
     {
         self.ok = ok
         self.descriptors = descriptors
+        self.blockedhooks = blockedhooks
         self.generation = generation
         self.methods = methods
         self.controluitabs = controluitabs
@@ -11828,6 +11878,7 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case ok
         case descriptors
+        case blockedhooks = "blockedHooks"
         case generation
         case methods
         case controluitabs = "controlUiTabs"

@@ -3,6 +3,21 @@ import { closedObject } from "./closed-object.js";
 import type { PluginDeclaredSurfaceGroup } from "./plugin-declared-surface-groups.js";
 import { NonEmptyString } from "./primitives.js";
 
+/** Host policy refusals; not plugin-authored health or evidence of hook execution. */
+export const PluginBlockedHookSchema = closedObject({
+  pluginId: NonEmptyString,
+  pluginName: NonEmptyString,
+  hookName: NonEmptyString,
+  reason: Type.Union([
+    Type.Literal("conversation-access-missing"),
+    Type.Literal("conversation-access-denied"),
+    Type.Literal("prompt-injection-denied"),
+  ]),
+  severity: Type.Union([Type.Literal("warn"), Type.Literal("error")]),
+  configPath: NonEmptyString,
+  message: Type.String(),
+});
+
 /** Effective operator hook-policy grant with optional explicit config value. */
 export const PluginHookGrantSchema = closedObject({
   /** Effective policy after origin defaults and operator config. */

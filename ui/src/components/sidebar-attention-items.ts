@@ -16,6 +16,7 @@ const SIDEBAR_ATTENTION_PRIORITY: Record<SidebarAttentionItem["kind"], number> =
   modelAuthExpired: 0,
   cronFailed: 1,
   cronOverdue: 2,
+  pluginAccessBlocked: 3,
 };
 
 export type CronAttentionJob = Pick<

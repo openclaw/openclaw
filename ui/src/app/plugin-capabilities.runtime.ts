@@ -7,7 +7,7 @@ const requests = new WeakMap<GatewayBrowserClient, object>();
 
 /** Load a complete published surface while preserving the current connection and session. */
 export async function refreshPluginCapabilities(
-  event: Pick<GatewayEventFrame, "event" | "payload">,
+  event: Pick<GatewayEventFrame, "event" | "payload"> | null,
   client: GatewayBrowserClient,
   readCurrent: () => ApplicationGatewaySnapshot | null,
   publish: (snapshot: ApplicationGatewaySnapshot) => void,
@@ -17,9 +17,12 @@ export async function refreshPluginCapabilities(
   if (!current) {
     return;
   }
-  const payload = isRecord(event.payload) ? event.payload : undefined;
+  const payload = isRecord(event?.payload) ? event.payload : undefined;
   let generation: number;
-  if (event.event === "plugins.controlUi.changed") {
+  if (event === null) {
+    // Initial diagnostics use the same authenticated, generation-fenced reader as reloads.
+    generation = current.pluginCapabilities?.generation ?? 0;
+  } else if (event.event === "plugins.controlUi.changed") {
     if (typeof payload?.revision !== "string" || !payload.revision) {
       return;
     }

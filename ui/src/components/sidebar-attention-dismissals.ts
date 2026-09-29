@@ -15,6 +15,7 @@ const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "modelAuthExpired",
   "scopeUpgrade",
   "updateAvailable",
+  "pluginAccessBlocked",
 ] as const;
 
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];

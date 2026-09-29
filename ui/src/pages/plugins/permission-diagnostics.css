@@ -1,0 +1,14 @@
+.plugins-permission-notice.oc-banner {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+
+.plugins-permission-notice p {
+  margin: 0;
+}
+
+.plugins-permission-notice button {
+  display: block;
+  margin-block: 0.5rem;
+}

@@ -26,6 +26,8 @@ export function renderUpdatesPage({
   const canAdmin = hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
   return renderUpdates({
     update: overlaySnapshot,
+    blockedHooks: gatewaySnapshot.pluginCapabilities?.blockedHooks,
+    basePath: context.basePath,
     nativeDeviceSettings: context.nativeDeviceSettings,
     configObject,
     gatewayVersion:

@@ -203,6 +203,8 @@ export async function confirmAndStartUpdateRuntime(
                   ? html`<openclaw-update-run-view
                       .run=${current.run}
                       .connected=${!disconnected}
+                      .blockedHooks=${latestProgress?.blockedHooks}
+                      .basePath=${latestProgress?.basePath ?? ""}
                     ></openclaw-update-run-view>`
                   : nothing
               }

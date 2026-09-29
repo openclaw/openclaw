@@ -4,6 +4,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
+import type { PluginSettingsEditor } from "./settings-editor.ts";
 import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.ts";
 
 beforeEach(() => i18n.setLocale("en"));
@@ -220,3 +221,178 @@ it.each([false, true])(
     expect(container.textContent).not.toContain("Video generation");
   },
 );
+
+it("keeps observed blockers actionable for a read-only operator", () => {
+  const onReviewPermissions = vi.fn();
+  const configPath = "plugins.entries.workboard.hooks.allowConversationAccess";
+  const container = mount({
+    onReviewPermissions,
+    canEditConfig: false,
+    mutationBlockedReason: "Plugin changes require operator.admin access.",
+    result: createResult(
+      createPlugin({
+        enabled: true,
+        state: "enabled",
+        runtime: {
+          state: "active",
+          blockedHooks: [
+            {
+              pluginId: "workboard",
+              pluginName: "Workboard",
+              hookName: "before_prompt_build",
+              configPath,
+              reason: "conversation-access-missing",
+              severity: "warn",
+              message: "Host refused registration",
+            },
+          ],
+        },
+      }),
+    ),
+  });
+  expect(container.textContent).toContain("Limited functionality");
+  expect(container.textContent).toContain("before_prompt_build");
+  expect(container.textContent).toContain(configPath);
+  expect(container.textContent).toContain("operator.admin");
+  const review = Array.from(container.querySelectorAll("button")).find((button) =>
+    button.textContent?.includes("Review permissions"),
+  );
+  expect(review?.disabled).toBe(false);
+  review!.click();
+  expect(onReviewPermissions).toHaveBeenCalledExactlyOnceWith("workboard", configPath);
+});
+
+it.each([
+  {
+    configSaveStatus: "saving" as const,
+    configNeedsApply: true,
+    configRevisionApplied: false,
+    expected: "applying",
+  },
+  {
+    configSaveStatus: "idle" as const,
+    configNeedsApply: false,
+    configRevisionApplied: true,
+    expected: "applied",
+  },
+  {
+    configSaveStatus: "error" as const,
+    configApplying: true,
+    expected: "applying",
+  },
+  {
+    configSaveStatus: "saved" as const,
+    configNeedsApply: true,
+    configRevisionApplied: false,
+    expected: "saved",
+  },
+  {
+    configSaveStatus: "saved" as const,
+    configNeedsApply: false,
+    configRevisionApplied: false,
+    expected: "saved",
+  },
+  {
+    configSaveStatus: "error" as const,
+    configNeedsApply: true,
+    configRevisionApplied: false,
+    expected: "failed",
+  },
+  {
+    configSaveStatus: "conflict" as const,
+    configNeedsApply: false,
+    configRevisionApplied: true,
+    expected: "failed",
+  },
+  {
+    configSaveStatus: "saved" as const,
+    configNeedsApply: false,
+    configRevisionApplied: true,
+    expected: "applied",
+  },
+  {
+    configSaveStatus: "saved" as const,
+    configNeedsApply: false,
+    configRevisionApplied: true,
+    configDirty: true,
+    expected: "saved",
+  },
+])(
+  "does not confuse persistence or supersession with application: $expected $configSaveStatus",
+  async ({ expected, ...state }) => {
+    const container = mount({ tab: "configuration", inspection: createInspectResult(), ...state });
+    const editor = container.querySelector<PluginSettingsEditor>(
+      "openclaw-plugin-settings-editor",
+    )!;
+    await editor.updateComplete;
+    expect(editor.querySelector("[data-apply-state]")?.getAttribute("data-apply-state")).toBe(
+      expected,
+    );
+  },
+);
+
+it.each([
+  { name: "saved failure", props: {}, enabled: true },
+  { name: "read-only", props: { canApplyConfig: false }, enabled: false },
+  { name: "applying", props: { configBusy: true }, enabled: false },
+])(
+  "uses explicit application rather than replaying a saved patch: $name",
+  async ({ props, enabled }) => {
+    const onConfigApply = vi.fn();
+    const onConfigWriteRetry = vi.fn();
+    const container = mount({
+      tab: "configuration",
+      inspection: createInspectResult(),
+      configError: "The permission was saved, but plugin activation failed.",
+      configSaveStatus: "error",
+      configNeedsApply: true,
+      configDirty: false,
+      canApplyConfig: true,
+      onConfigApply,
+      onConfigWriteRetry,
+      ...props,
+    });
+    const editor = container.querySelector<PluginSettingsEditor>(
+      "openclaw-plugin-settings-editor",
+    )!;
+    await editor.updateComplete;
+    const button = editor.querySelector<HTMLButtonElement>('[role="alert"] button')!;
+    expect(button.textContent).toBe("Apply saved settings");
+    expect(button.disabled).toBe(!enabled);
+    button.click();
+    expect(onConfigApply).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    expect(onConfigWriteRetry).not.toHaveBeenCalled();
+  },
+);
+
+it("does not describe a policy inspection as the applied runtime after a saved failure", async () => {
+  const inspection = createInspectResult();
+  inspection.grants.hooks.allowConversationAccess.effective = false;
+  const container = mount({
+    tab: "configuration",
+    inspection,
+    configValue: {
+      plugins: { entries: { workboard: { hooks: { allowConversationAccess: true } } } },
+    },
+    hostControlsSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        hooks: {
+          type: "object",
+          additionalProperties: false,
+          properties: { allowConversationAccess: { type: "boolean" } },
+        },
+      },
+    },
+    configSaveStatus: "error",
+    configNeedsApply: true,
+    configError: "Plugin activation failed after saving.",
+  });
+  const editor = container.querySelector<PluginSettingsEditor>("openclaw-plugin-settings-editor")!;
+  await editor.updateComplete;
+  expect(editor.textContent).toContain("Configured: Allow");
+  expect(editor.textContent).toContain("Last inspected policy: Deny");
+  expect(editor.textContent).not.toContain("Active runtime:");
+  expect(editor.querySelector('[data-apply-state="failed"]')).not.toBeNull();
+});

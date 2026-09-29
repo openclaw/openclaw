@@ -25,6 +25,7 @@ import { t } from "../i18n/index.ts";
 import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
@@ -52,7 +53,10 @@ import { readSuspensionPhase } from "./gateway-readiness.ts";
 import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
 import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
 import { createGatewaySelfProfile } from "./gateway-store.self-profile.ts";
-import { readHelloPluginCapabilities } from "./plugin-capabilities.ts";
+import {
+  loadAndRefreshPluginCapabilities,
+  readHelloPluginCapabilities,
+} from "./plugin-capabilities.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -202,31 +206,30 @@ export function createApplicationGateway(
     persistConnectionSettings = true;
     settings = patchSettings(patch, { selectGateway });
   };
+  const refreshPluginSurface = (event: Parameters<GatewayEventListener>[0] | null) => {
+    const eventClient = client;
+    if (!eventClient) {
+      return;
+    }
+    // Capability updates keep hello identity; reconnects replace it.
+    const eventHello = snapshot.hello;
+    const readCurrent = () =>
+      isCurrentClient(eventClient) &&
+      snapshot.hello === eventHello &&
+      snapshot.phase === "connected"
+        ? snapshot
+        : null;
+    void loadAndRefreshPluginCapabilities(event, eventClient, readCurrent, setSnapshot, (url) =>
+      canvasSurface.start(eventClient, canvasSurface.generation, url),
+    );
+  };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
     if (
       (event.event === "plugins.changed" || event.event === "plugins.controlUi.changed") &&
       eventClient
     ) {
-      // Capability updates keep hello identity; reconnects replace it.
-      const eventHello = snapshot.hello;
-      const readCurrent = () =>
-        isCurrentClient(eventClient) &&
-        snapshot.hello === eventHello &&
-        snapshot.phase === "connected"
-          ? snapshot
-          : null;
-      void import("./plugin-capabilities.runtime.ts")
-        .then(({ refreshPluginCapabilities }) =>
-          refreshPluginCapabilities(event, eventClient, readCurrent, setSnapshot, (url) =>
-            canvasSurface.start(eventClient, canvasSurface.generation, url),
-          ),
-        )
-        .catch((error: unknown) => {
-          if (readCurrent()) {
-            setSnapshot({ lastError: formatUiError(error) });
-          }
-        });
+      refreshPluginSurface(event);
     } else if (event.event === "chat.metadata.changed") {
       const publication = asOptionalRecord(event.payload);
       const agentId = publication?.agentId;
@@ -507,6 +510,12 @@ export function createApplicationGateway(
           refreshSelfProfile();
         }
         canvasSurface.start(nextClient, canvasLeaseGeneration, canvasPluginSurfaceUrl ?? undefined);
+        if (
+          isCurrentClient(nextClient) &&
+          canCallGatewayMethod(snapshot, "plugins.uiDescriptors", "operator.read")
+        ) {
+          refreshPluginSurface(null);
+        }
       },
       onRecoveryScopeChange: () => {
         if (client !== nextClient || snapshot.phase !== "connected") {

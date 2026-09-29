@@ -304,6 +304,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       void openUpdateFailureTriage(context, failure, admission),
   });
   const sidebarAttention = createSidebarAttentionStore({
+    basePath,
     gateway,
     agentSelection,
     agents,

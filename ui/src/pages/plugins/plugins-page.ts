@@ -31,6 +31,7 @@ import {
   installedPluginDetailTabFromHash,
   type InstalledPluginDetailTab,
 } from "./detail-tabs.ts";
+import { pluginPermissionLocation } from "./permission-diagnostics.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginHelpController } from "./plugin-help-controller.ts";
 import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
@@ -654,6 +655,11 @@ class PluginsPage extends OpenClawLightDomElement {
       skillPreview: this.skillPreview,
       actions: {
         startMcpLogin: (serverName) => void this.mcpLogin.start(serverName),
+        reviewPermissions: (pluginId, configPath) =>
+          this.context.navigate(
+            "plugin-settings",
+            pluginPermissionLocation(pluginId, configPath, this.context.basePath),
+          ),
         selectHubTab: (tab) => this.selectHubTab(tab),
         closeCatalogDetail: () => this.closeCatalogDetail(),
         retryCatalogDetail: () => void this.showCatalogDetail(this.catalogDetail?.id ?? null),
@@ -698,6 +704,9 @@ class PluginsPage extends OpenClawLightDomElement {
         },
         retryConfigWrite: () => {
           void this.context.runtimeConfig.retry();
+        },
+        applyConfig: () => {
+          void this.context.runtimeConfig.apply();
         },
         closeSettingsDetail: (parentRoute) => {
           this.detail = null;

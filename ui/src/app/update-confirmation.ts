@@ -8,6 +8,8 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 
 /** The live server-owned run and request state shown by the update dialog. */
 export type UpdateProgress = {
+  blockedHooks?: import("../../../packages/gateway-protocol/src/schema/plugins.ts").PluginsUiDescriptorsResult["blockedHooks"];
+  basePath?: string;
   run: UpdateRunRecord | null;
   /** The install is accepted and unfinished, across the restart. */
   busy: boolean;
@@ -20,8 +22,14 @@ export type UpdateProgress = {
 
 // Keep the lazy confirmation entry independent of the application context.
 type UpdateProgressSources = {
+  basePath?: string;
   gateway: {
-    snapshot: { phase: string };
+    snapshot: {
+      phase: string;
+      pluginCapabilities?:
+        | import("../../../packages/gateway-protocol/src/schema/plugins.ts").PluginsUiDescriptorsResult
+        | null;
+    };
     subscribe: (listener: () => void) => () => void;
   };
   overlays: {
@@ -45,6 +53,11 @@ export function createUpdateProgressWatcher(
       const banner = update.updateStatusBanner;
       listener({
         run: update.updateRun,
+        blockedHooks:
+          context.gateway.snapshot.phase === "connected"
+            ? context.gateway.snapshot.pluginCapabilities?.blockedHooks
+            : undefined,
+        basePath: context.basePath,
         busy: update.updateRunning || update.updateReconciliationPending,
         connected: context.gateway.snapshot.phase === "connected",
         failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,

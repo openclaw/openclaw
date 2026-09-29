@@ -14,6 +14,7 @@ import type { MentionsCapability } from "./mentions.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 
 export type SidebarAttentionStoreSources = {
+  basePath?: string;
   gateway: ApplicationGateway;
   agentSelection: AgentSelectionCapability;
   agents: AgentCapability;

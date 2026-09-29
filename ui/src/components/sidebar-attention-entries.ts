@@ -34,7 +34,11 @@ export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system
   detail: string;
   meta?: { context?: string; status: string; time: string };
   action:
-    | { kind: "navigate"; routeId: NavigationRouteId }
+    | {
+        kind: "navigate";
+        routeId: NavigationRouteId;
+        options?: Parameters<import("../app/context.ts").ApplicationContext["navigate"]>[1];
+      }
     | { kind: "askCustodian"; alert: CustodianAlert };
   inlineAction?: { label: string; routeId: NavigationRouteId };
   signature: string;

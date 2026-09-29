@@ -9,6 +9,7 @@ import {
 } from "./control-ui-link-reader.js";
 import { PluginCredentialDescriptorSchema } from "./plugin-credentials.js";
 import {
+  PluginBlockedHookSchema,
   PluginDecisionProviderStatusSchema,
   PluginDeclaredSurfaceSchema,
   PluginHookGrantSchema,
@@ -33,6 +34,7 @@ export {
 } from "./plugin-install-progress.js";
 
 export {
+  PluginBlockedHookSchema,
   PluginDecisionProviderStatusSchema,
   PluginDeclaredSurfaceSchema,
   PluginHookGrantSchema,
@@ -109,6 +111,7 @@ export const ControlUiPluginWidgetKindSchema = closedObject({
 export const PluginsUiDescriptorsResultSchema = closedObject({
   ok: Type.Literal(true),
   descriptors: Type.Array(PluginControlUiDescriptorSchema),
+  blockedHooks: Type.Optional(Type.Array(PluginBlockedHookSchema)),
   generation: Type.Optional(Type.Integer({ minimum: 0 })),
   methods: Type.Optional(Type.Array(NonEmptyString)),
   controlUiTabs: Type.Optional(Type.Array(ControlUiPluginTabSchema)),
@@ -228,6 +231,7 @@ export const PluginRuntimeStatusSchema = closedObject({
     Type.Literal("service-failed"),
   ]),
   error: Type.Optional(Type.String()),
+  blockedHooks: Type.Optional(Type.Array(PluginBlockedHookSchema)),
 });
 
 /** Catalog metadata and desired enablement, with optional observed runtime state. */

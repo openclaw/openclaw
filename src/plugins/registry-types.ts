@@ -236,6 +236,22 @@ type PluginHookRegistration = {
   rootDir?: string;
 };
 
+/** Host-observed refusals, shared with the blocked-hook health work in #136474. */
+export type PluginBlockedHookReason =
+  | "conversation-access-missing"
+  | "conversation-access-denied"
+  | "prompt-injection-denied";
+
+type PluginBlockedHookRegistration = {
+  pluginId: string;
+  hookName: import("./types.js").PluginHookName;
+  reason: PluginBlockedHookReason;
+  severity: "warn" | "error";
+  configPath: string;
+  message: string;
+  source: string;
+};
+
 export type PluginServiceRegistration = PluginRegistrationOwner & {
   readonly id: string;
   service: OpenClawPluginService;
@@ -479,6 +495,8 @@ export type PluginRegistry = {
   sessionActions: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
+  /** Refusals belong to this registry generation, not its registered capabilities. */
+  blockedHooks: PluginBlockedHookRegistration[];
 };
 
 export type PluginRegistryParams = {

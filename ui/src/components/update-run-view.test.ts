@@ -9,6 +9,8 @@ import "./update-run-view.ts";
 type RunViewElement = HTMLElement & {
   run: UpdateRunRecord | null;
   connected: boolean;
+  blockedHooks?: import("../../../packages/gateway-protocol/src/schema/plugins.ts").PluginsUiDescriptorsResult["blockedHooks"];
+  basePath: string;
   updateComplete: Promise<boolean>;
 };
 
@@ -388,4 +390,36 @@ describe("update run view", () => {
       "Building OpenClaw: Failed",
     );
   });
+});
+
+it("shows current permission blockers beside a successful update without rewriting its receipt", async () => {
+  const record = run({ status: "succeeded", phase: "finished" });
+  const element = await mount(record);
+  element.basePath = "/claw";
+  element.blockedHooks = [
+    {
+      pluginId: "notes",
+      pluginName: "Notes",
+      hookName: "before_prompt_build",
+      reason: "conversation-access-missing",
+      severity: "warn",
+      configPath: "plugins.entries.notes.hooks.allowConversationAccess",
+      message: "Host refusal",
+    },
+  ];
+  await element.updateComplete;
+  const warning = element.querySelector('[aria-label="Current plugin permission warnings"]');
+  expect(warning?.textContent).toContain("before_prompt_build");
+  expect(warning?.querySelector("a")?.getAttribute("href")).toBe(
+    "/claw/settings/plugins/notes?view=settings&permission=hooks.allowConversationAccess",
+  );
+  expect(element.run).toBe(record);
+  expect(record.status).toBe("succeeded");
+  element.connected = false;
+  await element.updateComplete;
+  expect(element.querySelector('[aria-label="Current plugin permission warnings"]')).toBeNull();
+  element.connected = true;
+  element.blockedHooks = [];
+  await element.updateComplete;
+  expect(element.querySelector('[aria-label="Current plugin permission warnings"]')).toBeNull();
 });

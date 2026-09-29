@@ -5,6 +5,14 @@ import type { PluginListResult } from "../../lib/plugins/index.ts";
 
 export type PluginSettingsEditorModel = {
   pluginId: string;
+  highlightedPermission?: string;
+  configSaveStatus?: import("../../lib/config/config-state-model.ts").ConfigAutoSaveStatus;
+  configNeedsApply?: boolean;
+  configApplying?: boolean;
+  canApplyConfig?: boolean;
+  onConfigApply?: () => void;
+  configRevisionApplied?: boolean;
+  configDirty?: boolean;
   result: PluginListResult | null;
   connected: boolean;
   configValue: Record<string, unknown> | null;

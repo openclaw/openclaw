@@ -79,7 +79,12 @@ export function registryContainsRuntimePluginIds(
     return false;
   }
   for (const [key, value] of Object.entries(registry)) {
-    if (key === "diagnostics" || key === "channelSetups" || !Array.isArray(value)) {
+    if (
+      key === "diagnostics" ||
+      key === "blockedHooks" ||
+      key === "channelSetups" ||
+      !Array.isArray(value)
+    ) {
       continue;
     }
     for (const entry of value) {

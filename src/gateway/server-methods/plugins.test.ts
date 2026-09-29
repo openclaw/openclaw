@@ -104,7 +104,11 @@ describe("plugin management Gateway handlers", () => {
       ok: true,
       response: {
         plugins: [
-          { ...workboard, catalogId: "local_d29ya2JvYXJk", runtime: { state: "unloaded" } },
+          {
+            ...workboard,
+            catalogId: "local_d29ya2JvYXJk",
+            runtime: { state: "unloaded", blockedHooks: [] },
+          },
         ],
         diagnostics: [],
         mutationAllowed: true,

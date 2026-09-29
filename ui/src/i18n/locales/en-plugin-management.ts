@@ -18,6 +18,29 @@ const enPluginManagement = {
     pluginHelpValue: "Current value: {value}",
   },
   pluginsPage: {
+    permissions: {
+      blocked: "Limited functionality",
+      review: "Review permissions",
+      afterUpgrade: "Current plugin permission warnings",
+      upgradeSeparate:
+        "Installation and plugin access are separate. These operations are blocked in the active Gateway. They remain available for review in Plugins and the Inbox after this report is dismissed.",
+      registrationOnly:
+        "The Gateway blocked these hook registrations. Loaded does not mean every operation is available; registration does not prove execution.",
+      missing:
+        "Conversation access is not granted. Review its scope before choosing whether to allow it.",
+      denied:
+        "Access is denied by your configured policy. You can keep this decision or review it.",
+      configured: "Configured: {value}",
+      effective: "Last inspected policy: {value}",
+      inherit: "Inherit default",
+      allow: "Allow",
+      deny: "Deny",
+      applying: "Saving and applying settings…",
+      applySaved: "Apply saved settings",
+      saved: "Saved. Waiting for the active Gateway to confirm application.",
+      applied: "Applied to the active Gateway. This confirms settings, not hook execution.",
+      failed: "Settings were not confirmed applied. Review the error before trying again.",
+    },
     installProgress: {
       title: "Installation progress",
       stopped: "Installation stopped",

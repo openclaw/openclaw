@@ -52,7 +52,18 @@ it.each(
       catalogRead.mockReturnValueOnce(release.promise);
       const previous = captureActivePluginRegistrySnapshot();
       const requestRegistry = createEmptyPluginRegistry();
-      requestRegistry.plugins.push(createPluginRecord({ id: "colliding-plugin" }));
+      const record = createPluginRecord({ id: "colliding-plugin" });
+      requestRegistry.plugins.push(record);
+      const blockedHook = {
+        pluginId: record.id,
+        hookName: "before_prompt_build" as const,
+        reason: "conversation-access-missing" as const,
+        severity: "warn" as const,
+        configPath: "plugins.entries.colliding-plugin.hooks.allowConversationAccess",
+        message: "Request-owner refusal",
+        source: record.source,
+      };
+      requestRegistry.blockedHooks.push(blockedHook);
       const service = {
         pluginId: "colliding-plugin",
         source: "fixture",
@@ -117,6 +128,17 @@ it.each(
                 id: "colliding-plugin",
                 runtime: {
                   state: "service-failed",
+                  blockedHooks: [
+                    {
+                      pluginId: record.id,
+                      pluginName: record.name,
+                      hookName: blockedHook.hookName,
+                      reason: blockedHook.reason,
+                      severity: "warn",
+                      configPath: blockedHook.configPath,
+                      message: blockedHook.message,
+                    },
+                  ],
                   error: "request-service: late request-owner service failure",
                 },
               }),

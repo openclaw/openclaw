@@ -25,6 +25,27 @@ export class PluginSettingsController {
     }
     this.options.onEdit();
     const runtime = this.options.getContext().runtimeConfig;
+    if (
+      path.length === 5 &&
+      path[0] === "plugins" &&
+      path[1] === "entries" &&
+      path[3] === "hooks" &&
+      (path[4] === "allowConversationAccess" || path[4] === "allowPromptInjection")
+    ) {
+      const scope = this.options.gateway.capture();
+      if (!scope || typeof path[2] !== "string" || runtime.canPatch === false) {
+        return false;
+      }
+      const pluginId = path[2];
+      // The config owner serializes this exact leaf with other writes, preserves
+      // unrelated settings and awaits runtime settlement (including persisted failures).
+      this.write = runtime.patch({
+        note: "Update plugin hook permission",
+        raw: { plugins: { entries: { [pluginId]: { hooks: { [path[4]]: value ?? null } } } } },
+        canDispatch: () => this.options.gateway.isCurrent(scope),
+      });
+      return true;
+    }
     if (value === undefined) {
       runtime.removeFormValue(path);
     } else {

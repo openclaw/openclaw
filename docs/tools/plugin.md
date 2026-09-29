@@ -294,6 +294,30 @@ mode, hook policy changes hot-reload the plugin runtime. Inspect registration wi
 the running process. See [Plugin hooks](/plugins/hooks#quick-start) for a complete
 example.
 
+### Review blocked hook permissions
+
+The Control UI marks installed plugins with host-refused hooks as **Limited
+functionality**. **Review permissions** opens and highlights the existing setting
+for the named operation. Configured overrides and the last inspected policy are
+shown separately; an inspection is not confirmation of runtime application. You
+can allow access, keep an explicit denial, or reset to the default; read-only
+operators can inspect the explanation but cannot change grants.
+
+Permission edits use the normal config write and runtime-application path. Saved
+settings are not reported as applied until the Gateway confirms the active
+revision. Failed or superseded applications keep their error and the active
+registry's blockers; successful application removes only blockers absent from
+the newly published runtime. If saving succeeds but activation fails, fix the
+reported problem and choose **Apply saved settings**. Neither loading nor
+registration proves a hook ran.
+
+After upgrades, current permission warnings appear alongside the update result
+and remain discoverable in the Inbox and plugin settings after dismissing the
+report. They describe current runtime facts, not historical proof that the
+upgrade introduced a denial. Upgrades never grant access automatically or raise
+existing hook-denial warnings to errors. No new manifest declaration is required
+for these host-observed diagnostics.
+
 ## Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,

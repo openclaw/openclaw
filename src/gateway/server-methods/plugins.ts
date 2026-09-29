@@ -19,6 +19,7 @@ import {
 } from "../../infra/clawhub-plugin-catalog.js";
 import { fetchClawHubPluginSkill } from "../../infra/clawhub-plugin-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { projectBlockedHookDiagnostics } from "../../plugins/blocked-hook-diagnostics.js";
 import {
   encodePluginDiscoveryId,
   encodeLocalPluginDiscoveryId,
@@ -105,6 +106,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     try {
       const catalog = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const registry = getPluginRegistryForContext();
+      const blockedHooks = projectBlockedHookDiagnostics(registry);
       // The first loaded record owns shadowed IDs; read runtime facts after catalog I/O.
       const records = new Map(registry?.plugins.toReversed().map((record) => [record.id, record]));
       const failures = new Map(
@@ -126,6 +128,8 @@ export const pluginsHandlers: GatewayRequestHandlers = {
                 ? encodePluginDiscoveryId(plugin.clawhubPackage)
                 : encodeLocalPluginDiscoveryId(plugin.id),
               runtime: {
+                // Never substitute a fresh inspection for the request's published runtime.
+                blockedHooks: blockedHooks.filter((entry) => entry.pluginId === plugin.id),
                 state:
                   record?.status === "loaded"
                     ? failure

@@ -215,7 +215,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   private async open(item: SidebarAttentionItem) {
     this.closePanel(false);
     if (item.action.kind === "navigate") {
-      this.onNavigate?.(item.action.routeId);
+      (this.onNavigate ?? this.context?.navigate)?.(item.action.routeId, item.action.options);
       return;
     }
     const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");

@@ -29,6 +29,17 @@ it("refreshes plugin methods and surfaces on the existing connection", async () 
   });
   const capabilities = {
     ok: true,
+    blockedHooks: [
+      {
+        pluginId: "notes",
+        pluginName: "Notes",
+        hookName: "before_prompt_build",
+        reason: "conversation-access-missing",
+        severity: "warn",
+        configPath: "plugins.entries.notes.hooks.allowConversationAccess",
+        message: "Host refusal",
+      },
+    ],
     generation: 7,
     descriptors: [],
     methods: ["plugins.reload", "plugin.notes.read"],
@@ -47,12 +58,14 @@ it("refreshes plugin methods and surfaces on the existing connection", async () 
   current().request.mockResolvedValue({
     ...capabilities,
     generation: 8,
+    blockedHooks: [],
     methods: ["plugins.reload"],
     controlUiTabs: [],
     controlUiWidgetKinds: [],
   });
   current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 8 }));
   await vi.waitFor(() => expect(gateway.snapshot.hello?.controlUiTabs).toEqual([]));
+  expect(gateway.snapshot.pluginCapabilities?.blockedHooks).toEqual([]);
   expect(gateway.snapshot).not.toBe(before);
   expect(gateway.snapshot.hello).toBe(before.hello);
   expect(gateway.snapshot.hello?.auth).toBe(before.hello?.auth);
@@ -233,4 +246,42 @@ it("preserves an in-flight Inbox read across capability publication", async () =
     inbox.dispose();
     gateway.stop();
   }
+});
+
+it("loads host diagnostics at connection admission without inferring them from hello", async () => {
+  const { gateway, current } = createGatewayStoreTestStore();
+  gateway.start();
+  const blockedHooks = [
+    {
+      pluginId: "notes",
+      pluginName: "Notes",
+      hookName: "before_prompt_build",
+      reason: "conversation-access-missing",
+      severity: "warn",
+      configPath: "plugins.entries.notes.hooks.allowConversationAccess",
+      message: "Host refusal",
+    },
+  ];
+  current().request.mockResolvedValue({
+    ok: true,
+    generation: 2,
+    blockedHooks,
+    descriptors: [],
+    methods: ["plugins.uiDescriptors"],
+    controlUiTabs: [],
+    controlUiWidgetKinds: [],
+    controlUiLinkReaders: [],
+    pluginSurfaceUrls: {},
+  });
+  current().opts.onHello?.({
+    ...GATEWAY_STORE_TEST_HELLO,
+    features: { methods: ["plugins.uiDescriptors"] },
+    auth: { role: "operator", scopes: ["operator.read"] },
+  });
+  await vi.dynamicImportSettled();
+  expect(current().request).toHaveBeenCalledWith("plugins.uiDescriptors", {});
+  expect(gateway.snapshot.pluginCapabilities).toMatchObject({ generation: 2, blockedHooks });
+  current().opts.onClose?.({ code: 1006, reason: "disconnected", willRetry: true });
+  expect(gateway.snapshot.pluginCapabilities).toBeNull();
+  gateway.stop();
 });

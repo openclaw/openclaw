@@ -75,10 +75,33 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
     field: PluginSettingsField,
   ) => TemplateResult | undefined;
   @state() private query = "";
+  private focusedPermission = "";
 
   override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("model") && changed.get("model")?.pluginId !== this.model?.pluginId) {
       this.query = "";
+      this.focusedPermission = "";
+    }
+    if (
+      changed.has("model") &&
+      changed.get("model")?.highlightedPermission !== this.model?.highlightedPermission
+    ) {
+      this.query = "";
+      this.focusedPermission = "";
+    }
+  }
+
+  override updated(): void {
+    const field = this.model?.highlightedPermission;
+    const target = this.model?.pluginId + ":" + field;
+    if (!field || target === this.focusedPermission) {
+      return;
+    }
+    const row = this.querySelector<HTMLElement>('[data-setting="' + CSS.escape(field) + '"]');
+    if (row) {
+      this.focusedPermission = target;
+      row.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
+      row.focus({ preventScroll: true });
     }
   }
 
@@ -109,7 +132,8 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
         hints: { ...field.hints, [pathKey(path)]: { ...hintForPath(path, field.hints), label } },
       });
     return html`<div
-      class="plugin-editor__row"
+      class="plugin-editor__row ${this.model?.highlightedPermission === path.slice(3).join(".") ? "plugin-editor__row--highlighted" : ""}"
+      tabindex="-1"
       data-setting=${path.slice(path[3] === "config" ? 4 : 3).join(".")}
       @click=${(event: MouseEvent) => {
         if (!isBoolean || disabled || getSelection()?.toString()) {
@@ -161,6 +185,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
       <div class="plugin-editor__copy">
         <span class="plugin-editor__title">${label}</span
         >${help ? html`<p id=${descriptionId}>${help}</p>` : nothing}
+        ${typeof field.effectiveValue === "boolean" ? html`<p class="plugin-editor__permission-values">${t("pluginsPage.permissions.configured", { value: t(field.value === undefined ? "pluginsPage.permissions.inherit" : field.value ? "pluginsPage.permissions.allow" : "pluginsPage.permissions.deny") })} · ${t("pluginsPage.permissions.effective", { value: t(field.effectiveValue ? "pluginsPage.permissions.allow" : "pluginsPage.permissions.deny") })}</p>` : nothing}
       </div>
       <div class="plugin-editor__control">${control}</div>
     </div>`;
@@ -344,6 +369,18 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
         : params
           ? this.renderGroups(params, permissions)
           : nothing;
+    const applicationState =
+      props.configApplying || props.configSaveStatus === "saving"
+        ? "applying"
+        : props.configSaveStatus === "saved" || props.configSaveStatus === "idle"
+          ? !props.configDirty && !props.configNeedsApply && props.configRevisionApplied
+            ? "applied"
+            : props.configSaveStatus === "saved"
+              ? "saved"
+              : null
+          : props.configSaveStatus
+            ? "failed"
+            : null;
     return html`<section class="plugin-editor">
       <header class="plugin-editor__header">
         ${renderPluginDetailBreadcrumb({
@@ -353,6 +390,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
           onBack: props.onBack,
         })}
       </header>
+      ${applicationState ? html`<p role="status" class="plugin-editor__apply-status" data-apply-state=${applicationState}>${t(`pluginsPage.permissions.${applicationState}`)}</p>` : nothing}
       <label class="plugin-editor__search"
         >${icons.search}<input
           type="search"
@@ -365,7 +403,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
             this.query = (event.currentTarget as HTMLInputElement).value;
           }}
       /></label>
-      ${props.configError ? html`<div class="callout danger" role="alert">${props.configError}<button class="btn btn--sm" @click=${props.configValue && props.configSchema ? props.onConfigWriteRetry : props.onConfigReadRetry}>${t("common.retry")}</button></div>` : nothing}
+      ${props.configError ? html`<div class="callout danger" role="alert">${props.configError}${props.configNeedsApply && !props.configDirty ? html`<button class="btn btn--sm" ?disabled=${!props.connected || !props.canApplyConfig || props.configBusy} @click=${props.onConfigApply}>${t("pluginsPage.permissions.applySaved")}</button>` : html`<button class="btn btn--sm" ?disabled=${props.configBusy} @click=${props.configValue && props.configSchema ? props.onConfigWriteRetry : props.onConfigReadRetry}>${t("common.retry")}</button>`}</div>` : nothing}
       ${props.configSchemaLoading || !props.configValue ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : fields}
       ${
         hasPermissions && !params

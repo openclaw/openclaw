@@ -1,5 +1,6 @@
 import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
+import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun, updateRunStepOwner } from "../app/update-run-projection.ts";
@@ -7,6 +8,7 @@ import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { StreamAutoFollowController } from "../lit/stream-auto-follow-controller.ts";
+import { pluginPermissionLocation } from "../pages/plugins/permission-diagnostics.ts";
 import "../styles/update-run-view.css";
 
 registerUpdateActionsEnglish();
@@ -50,6 +52,8 @@ const ORACLE_MARKS = { pass: "✓", warn: "!", fail: "×", pending: "○" } as c
 class UpdateRunView extends OpenClawLightDomElement {
   @property({ attribute: false }) run: UpdateRunRecord | null = null;
   @property({ type: Boolean }) connected = true;
+  @property({ attribute: false }) blockedHooks: PluginsUiDescriptorsResult["blockedHooks"];
+  @property() basePath = "";
 
   private readonly streamFollow = new StreamAutoFollowController(this, {
     selector: ".update-run-view__details",
@@ -174,6 +178,32 @@ ${view.details || t(view.detailStep === "updater-runtime-retention" ? "updates.r
           ? html`<ul class="update-run-view__oracles" aria-label=${t("updates.run.verification")}>
               ${view.oracles.map((oracle) => html`<li data-oracle=${oracle.name} data-state=${oracle.state} class="update-run-view__oracle update-run-view__oracle--${oracle.state}"><span aria-hidden="true">${ORACLE_MARKS[oracle.state]}</span><span>${t(`updates.run.oracle.${oracle.name}`)}</span><small>${t(`updates.run.oracleState.${oracle.state}`)}</small></li>`)}
             </ul>`
+          : nothing
+      }
+      ${
+        view.terminal && this.connected && this.blockedHooks?.length
+          ? html`<section
+              class="callout warning"
+              aria-label=${t("pluginsPage.permissions.afterUpgrade")}
+            >
+              <h4>${t("pluginsPage.permissions.afterUpgrade")}</h4>
+              <p>${t("pluginsPage.permissions.upgradeSeparate")}</p>
+              <ul>
+                ${this.blockedHooks.map((hook) => {
+                  const target = pluginPermissionLocation(
+                    hook.pluginId,
+                    hook.configPath,
+                    this.basePath,
+                  );
+                  return html`<li>
+                    ${hook.pluginName}: <code>${hook.hookName}</code> —
+                    <a href=${target.pathname + target.search}
+                      >${t("pluginsPage.permissions.review")}</a
+                    >
+                  </li>`;
+                })}
+              </ul>
+            </section>`
           : nothing
       }
       ${

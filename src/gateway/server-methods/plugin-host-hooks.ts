@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { projectBlockedHookDiagnostics } from "../../plugins/blocked-hook-diagnostics.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
@@ -67,6 +68,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       const result = {
         ok: true,
         generation: getPluginRegistryVersion(getPluginRegistryForContext()),
+        blockedHooks: projectBlockedHookDiagnostics(getPluginRegistryForContext()),
         descriptors: listControlUiPluginDescriptors(scopes),
         methods: methods.listAdvertisedMethods(),
         controlUiTabs: listControlUiPluginTabs(scopes, {
