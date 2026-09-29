@@ -129,13 +129,23 @@ export async function stopSupervisedPredecessorGateway(
     if (recorded) {
       return;
     }
-    recorded = true;
     const stoppedAtMs = state.stoppedAtMs ?? Date.now();
-    recordUpdateRunStep(input.runId, {
-      step: encodeReceipt(serviceIdentity(state, stoppedAtMs)),
+    const step = encodeReceipt(serviceIdentity(state, stoppedAtMs));
+    const result = recordUpdateRunStep(input.runId, {
+      step,
       status: "completed",
       endedAtMs: stoppedAtMs,
     });
+    if (
+      result.runId !== input.runId ||
+      result.status !== "running" ||
+      !result.steps.some((receipt) => receipt.step === step && receipt.status === "completed")
+    ) {
+      throw new UpdateCommandRecoveryPendingError(
+        "The predecessor Gateway stopped, but its update receipt was not recorded; recovery remains pending.",
+      );
+    }
+    recorded = true;
   };
   try {
     // The native stop reports its mutation before later checks can still throw;
@@ -158,10 +168,10 @@ export async function stopSupervisedPredecessorGateway(
       record(state);
     }
   } catch (error) {
-    if (!recorded) {
+    if (!recorded || hasCommandProcessCleanupError(error)) {
       throw error;
     }
-    // The stop already happened; Doctor decides whether the lock is free now.
+    // The joined stop already happened; Doctor decides whether the lock is free now.
     params.warn(
       `Predecessor Gateway stop reported an error after its native mutation: ${String(error)}`,
     );

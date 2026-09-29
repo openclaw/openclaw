@@ -249,7 +249,9 @@ describe("queued collector native admission", () => {
         releasePublication.resolve();
         await stopping;
         await dispatched.promise;
-        await vi.waitFor(() => expect(entry.collectorCompletion?.status).toBe("killed"));
+        // This unadopted launch still owns its provisional session; join its real cleanup.
+        await closeSwarmScheduler();
+        expect(entry.collectorCompletion?.status).toBe("killed");
         expect(respond).toHaveBeenCalledOnce();
         if (publicationFailure) {
           expect(respond.mock.calls[0]?.[0]).toBe(false);
@@ -266,8 +268,6 @@ describe("queued collector native admission", () => {
         expect.soft(entry.execution.startedAt).toBeUndefined();
         expect.soft(entry.sessionStartedAt).toBeUndefined();
         expect(context.chatAbortControllers.has(entry.runId)).toBe(false);
-        // This unadopted launch still owns its provisional session; join its real cleanup.
-        await closeSwarmScheduler();
         expect(order[0]).toBe(publicationFailure ? "deleting" : "published");
         expect(order).toContain("deleted");
         if (!exact && !publicationFailure) {

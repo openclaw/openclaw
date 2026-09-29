@@ -29,7 +29,11 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  resolveGatewayToolOperatorSelection,
+  wrapGatewayPersonalToolExecution,
+} from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   getInProcessGatewayToolContext,
@@ -51,6 +55,12 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
+  user: Type.Optional(
+    Type.String({
+      description:
+        "The person's requester_profile.id, required when several people have steered this turn.",
+    }),
+  ),
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: SessionsListParamsSchema.properties.limit,
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
@@ -145,10 +155,10 @@ export function createSessionsListTool(opts?: {
         ? Type.Omit(SessionsListToolSchema, ["activeOnly"])
         : SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
-    execute: async (_toolCallId, args, signal) => {
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) => {
+      const params = args as Record<string, unknown>;
       const assertCallerCurrent = captureGatewayToolCallerAssertion();
       const gatewayContext = getInProcessGatewayToolContext();
-      const params = args as Record<string, unknown>;
       if (params.activeOnly === true && opts?.supportsActiveOnly === false) {
         throw new Error("activeOnly requires a Gateway-backed inventory with live run state");
       }
@@ -190,7 +200,9 @@ export function createSessionsListTool(opts?: {
       if (relationship && !["owned", "created", "involving"].includes(relationship)) {
         throw new Error("relationship must be owned, created, or involving");
       }
-      const profileId = opts?.requesterProfileId?.trim();
+      const profileId =
+        resolveGatewayToolOperatorSelection().operatorAuthority?.profileId ??
+        opts?.requesterProfileId?.trim();
       if (relationship && !profileId) {
         throw new Error(
           "relationship requires an authenticated requesting user; use an explicit ownerId or creatorId instead",
@@ -709,6 +721,6 @@ export function createSessionsListTool(opts?: {
         finalize,
         requireSessionReadOwner,
       );
-    },
+    }),
   };
 }

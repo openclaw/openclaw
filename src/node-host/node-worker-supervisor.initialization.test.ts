@@ -1,7 +1,7 @@
 import childProcess from "node:child_process";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_CAPACITY_MAX } from "../infra/node-runner-inventory.js";
+import { NODE_WORKER_CAPACITY_MAX } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,

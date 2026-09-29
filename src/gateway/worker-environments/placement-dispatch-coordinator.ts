@@ -7,6 +7,7 @@ import type {
 } from "./placement-dispatch-failure.js";
 import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
+import type { WorkerPlacementRecoveryAdmission } from "./placement-recovery-contract.js";
 import type {
   WorkerPlacementDispatchAdmission,
   WorkerPlacementCancellationTarget,
@@ -52,6 +53,8 @@ export function coordinateWorkerPlacementDispatch(
   recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
   reportReconciliation?: (operation: () => Promise<void>) => Promise<void>,
 ): WorkerPlacementDispatchService & {
+  /** Lend admission while interrupting session work and waiting for its turn claim. */
+  awaitTurnClaimRelease(sessionId: string, wait: () => Promise<void>): Promise<void>;
   isPlacementOperationInFlight(sessionId: string): boolean;
   hasPendingPlacementLifecycleOperation(sessionId: string): boolean;
   getPendingDeviceDispatchCount(deviceId: string, excludeSessionId?: string): number;
@@ -62,6 +65,17 @@ export function coordinateWorkerPlacementDispatch(
   ): Promise<WorkerDispatchPlacement>;
 } {
   const sessionTails = new Map<string, Promise<void>>();
+  type ClaimWait = { settled: Promise<void> };
+  const claimWaits = new Map<string, ClaimWait>();
+  const pendingTargetedRecoveries = new Map<string, Set<(loan?: ClaimWait) => void>>();
+  const lendRecovery = (loan: ClaimWait, run: Parameters<WorkerPlacementRecoveryAdmission>[1]) => {
+    const recovery = loan.settled.then(() => run("results-only"));
+    loan.settled = recovery.then(
+      () => undefined,
+      () => undefined,
+    );
+    return recovery;
+  };
   const reserveSessions = (sessionIds: readonly string[]) => {
     const keys = [...new Set(sessionIds)];
     const ready = Promise.all(keys.map((key) => sessionTails.get(key) ?? Promise.resolve())).then(
@@ -93,12 +107,42 @@ export function coordinateWorkerPlacementDispatch(
     };
   };
   const recoveryAdmission =
-    (wait: boolean) =>
-    async (sessionIds: readonly string[], run: () => Promise<void>): Promise<boolean> => {
+    (wait: boolean): WorkerPlacementRecoveryAdmission =>
+    async (sessionIds, run) => {
+      const targetedSession = wait && sessionIds.length === 1 ? sessionIds[0] : undefined;
+      const claimWait = targetedSession === undefined ? undefined : claimWaits.get(targetedSession);
+      if (claimWait) {
+        await lendRecovery(claimWait, run);
+        return true;
+      }
       if (!wait && sessionIds.some((key) => sessionTails.has(key) || operationsInFlight.has(key))) {
         return false;
       }
       const admission = reserveSessions(sessionIds);
+      if (targetedSession !== undefined) {
+        const completion = createDeferredCore();
+        const pending = pendingTargetedRecoveries.get(targetedSession) ?? new Set();
+        let started = false;
+        const start = (loan?: ClaimWait) => {
+          if (started) {
+            return;
+          }
+          started = true;
+          pending.delete(start);
+          if (pending.size === 0) {
+            pendingTargetedRecoveries.delete(targetedSession);
+          }
+          const recovery = loan ? lendRecovery(loan, run) : Promise.resolve().then(() => run());
+          void recovery.then(completion.resolve, completion.reject);
+        };
+        pending.add(start);
+        pendingTargetedRecoveries.set(targetedSession, pending);
+        void admission.ready.then(() => start());
+        // A loan settles the callback, not its queue position: successors still wait
+        // for the original holder through this reservation's captured predecessor.
+        await admission.hold(completion.promise);
+        return true;
+      }
       // Only recovery units enter here. Environment reconciliation stays outside admission
       // because its recovery guard can re-enter this session.
       await admission.hold(
@@ -173,6 +217,20 @@ export function coordinateWorkerPlacementDispatch(
     return result;
   };
   return {
+    async awaitTurnClaimRelease(sessionId, wait) {
+      const claimWait = { settled: Promise.resolve() };
+      claimWaits.set(sessionId, claimWait);
+      try {
+        for (const start of pendingTargetedRecoveries.get(sessionId) ?? []) {
+          start(claimWait);
+        }
+        await wait();
+      } finally {
+        // Close before joining: later units must queue behind the original holder.
+        claimWaits.delete(sessionId);
+        await claimWait.settled;
+      }
+    },
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
     hasPendingPlacementLifecycleOperation: (sessionId) =>
       pendingOperations(sessionId).some((operation) => operation.kind !== "recovery"),

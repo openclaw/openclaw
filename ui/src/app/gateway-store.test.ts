@@ -268,13 +268,21 @@ describe("createApplicationGateway connection phase", () => {
     const { gateway, current } = createStore();
     gateway.start();
     const first = current();
-    first.request.mockReturnValueOnce(firstRefresh);
+    first.request.mockImplementation((method) =>
+      method === "plugin.surface.refresh"
+        ? firstRefresh
+        : Promise.resolve({ profile: { id: "reader", emails: [] } }),
+    );
     first.opts.onHello?.({
       ...HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/first" },
     });
     await vi.dynamicImportSettled();
-    expect(first.request).toHaveBeenCalledOnce();
+    expect(first.request).toHaveBeenCalledWith("plugin.surface.refresh", {
+      surface: "canvas",
+      observedUrl: "https://canvas.test/__openclaw__/cap/first",
+    });
 
     gateway.connect();
     current().opts.onHello?.({

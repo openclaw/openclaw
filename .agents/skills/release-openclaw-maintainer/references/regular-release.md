@@ -2,13 +2,14 @@
 
 ## Orchestrated stable release
 
-Use the [manual publication flow](#publish-and-verify) when activation must wait for the
-selected publisher's gates. The current orchestrator activates GitHub as soon
-as npm is visible; it does not enforce that finalizer ordering. Do not use it
-without explicit operator approval for that early activation.
+Stable policy (Peter, 2026-09-28): the GitHub release becomes public and Latest
+as soon as core npm is verified. It never waits for ClawHub, Docker, or native
+apps. The orchestrator does this in `flip-github`; the manual direct publisher
+passes `finalize_release_before_docker=true`. The prepared button activates only
+after public ClawHub downloads verify, so stable releases use the direct route.
 
 `pnpm release:stable YYYY.M.PATCH` runs strict stable qualification and publication as one resumable state
-machine with the phases `cut → validate → publish → sync-beta → flip-github →
+machine with the phases `cut → validate → publish → flip-github → sync-beta →
 macos → closeout`. State lives in `.artifacts/release-YYYY.M.PATCH/state.json`;
 rerunning the command continues from the first incomplete phase, `--from <phase>`
 restarts from that phase, `--status` prints the table, and `--dry-run` prints
@@ -31,8 +32,8 @@ preflight lanes from the tag, dispatches `OpenClaw Release Publish` once with
 completes when `openclaw@YYYY.M.PATCH` is visible on npm; it never approves or
 cancels a child run (the API cannot prove which parent dispatched one), so
 when those capabilities are absent it prints the exact child-approval and
-stale-child sweep commands for the operator instead; `sync-beta` advances the
-beta dist-tag to the already-published stable version; `flip-github` un-drafts the release and marks it latest;
+stale-child sweep commands for the operator instead; `flip-github` un-drafts the release and marks it latest; `sync-beta` advances the
+beta dist-tag to the already-published stable version;
 `macos` waits for the preflight, dispatches the real publish, and requires the
 appcast on `main`; `closeout` waits for the publish parent, requires the exact
 shipped version and changelog on `main`, and dispatches the closeout run unless
@@ -54,10 +55,11 @@ changes, and `--from macos --macos-preflight-run-id <id>` /
 directory is bound to one cut and one tooling SHA; selecting another needs a
 fresh `--state-dir`, which the refusal prints.
 
-The current orchestrator directly activates GitHub in `flip-github`. This
-differs from the publisher finalizer ordering described below; it does not
-prove that the publisher's activation or Docker gates passed. For the manual
-flow, let the selected publisher complete those gates.
+`flip-github` activates GitHub directly, before Docker; the publisher's later
+finalizer verifies the already-public release. It does not prove that Docker
+passed, so the parent must still succeed before closeout. The orchestrator can
+only adopt a Full Release Validation that its own `validate` phase dispatched;
+after an externally dispatched parent, use the manual flow.
 
 ## Freeze and validate code
 
@@ -331,13 +333,16 @@ floors through [registry selectors](publication-recovery.md#registry-selectors),
 preserving newer beta versions. Resume incomplete stages through the selected
 route; never republish successful immutable versions.
 
-Normal publication finalizes GitHub after npm and Docker verification. The
-prepared button also verifies public ClawHub downloads before activation. Let
-the selected finalizer make the draft public; do not manually bypass failed
-gates. The explicitly approved `finalize_release_before_docker=true` direct
-route changes ordering only; it retains activation approval and still requires
-Docker for parent success. It does not apply to prepared publication or waive
-stable validation.
+Stable direct publication passes `finalize_release_before_docker=true` (the
+standing policy above) and `wait_for_clawhub=false`; the candidate and
+publish-preflight commands emit both for final versions on `latest`. Approve the activation
+gate (`Approve GitHub release before Docker`, `npm-release`) as soon as the
+`publish` job succeeds; that job has already verified core npm. Activation
+keeps the Linux updater carry, and Docker is still required for parent success.
+Without the input, the publisher finalizes after Docker. The prepared button
+verifies public ClawHub downloads before activation. Do not make a release
+public while npm verification is failing; that bypasses a gate. Early
+activation does not waive stable validation.
 
 Native applications use [platform publication](platform-publication.md) as
 independent tasks; beta runs them only if requested. Their approval, build,

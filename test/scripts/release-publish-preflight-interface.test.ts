@@ -73,11 +73,32 @@ describe("release publish preflight operator interface", () => {
         expect(args).toContain("full_release_validation_run_attempt=2");
         expect(args).toContain("openclaw_npm_resume_run_id=456");
         expect(args).toContain("release-publish/aaaaaaaaaaaa-123");
+        expect(args).toContain("finalize_release_before_docker=true");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
     },
   );
+
+  it.each([
+    { tag: "v2026.9.5-beta.1", npmDistTag: "beta" },
+    { tag: "v2026.9.5", npmDistTag: "beta" },
+    { tag: "v2026.8.33", npmDistTag: "extended-stable" },
+  ])("keeps $tag on $npmDistTag behind Docker before GitHub activation", (input) => {
+    const command = buildReleasePublishDispatchCommand(
+      {
+        repo: "openclaw/openclaw",
+        workflowRef: "main",
+        fullReleaseValidationRunId: "123",
+        pluginPublishScope: "all-publishable",
+        ...input,
+      },
+      "1",
+      "release-publish/aaaaaaaaaaaa-123",
+      "",
+    );
+    expect(command).not.toContain("finalize_release_before_docker");
+  });
 
   it.each(["--stable-soak-waiver", "--lane-waiver"])(
     "rejects removed publication bypass %s",

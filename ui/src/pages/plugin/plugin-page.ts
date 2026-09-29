@@ -46,7 +46,7 @@ type BundledPluginTabView = {
 
 type BundledPluginTabViewState =
   | { status: "idle" }
-  | { status: "loading"; id: string; token: object }
+  | { status: "loading"; id: string }
   | { status: "error"; id: string; error: unknown }
   | { status: "ready"; id: string; view: BundledPluginTabView };
 
@@ -175,14 +175,10 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   private startBundledViewLoad(key: string) {
-    const loading = { status: "loading", id: key, token: {} } as const;
+    const loading = { status: "loading", id: key } as const;
     this.bundledViewState = loading;
     const settle = (nextState: BundledPluginTabViewState) => {
-      if (
-        this.bundledViewState.status !== "loading" ||
-        this.bundledViewState.token !== loading.token ||
-        !this.hasCurrentBundledDescriptor(key)
-      ) {
+      if (this.bundledViewState !== loading || !this.hasCurrentBundledDescriptor(key)) {
         return;
       }
       this.bundledViewState = nextState;

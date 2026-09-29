@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
@@ -520,6 +521,13 @@ it.each([
     name: "stops a live supervised predecessor",
     owner: { state: "live", mode: "supervised" },
     stops: true,
+    uncertain: false,
+  },
+  {
+    name: "does not enter Doctor after an uncertain native stop",
+    owner: { state: "live", mode: "supervised" },
+    stops: true,
+    uncertain: true,
   },
   {
     name: "leaves a foreground owner to Doctor's own wait",
@@ -527,10 +535,15 @@ it.each([
     stops: false,
   },
   { name: "does nothing without an owner", owner: undefined, stops: false },
-])("delegated Doctor $name before entering maintenance", async ({ owner, stops }) => {
+])("delegated Doctor $name before entering maintenance", async ({ owner, stops, uncertain }) => {
   const doctor = vi.fn();
   vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
   fixture.ownerLease.mockReturnValue(owner);
+  fixture.recordStep.mockImplementation((runId: string, step: unknown) => ({
+    runId,
+    status: "running",
+    steps: [step],
+  }));
   const stoppedState = {
     stopped: true,
     stoppedAtMs: 7,
@@ -543,7 +556,9 @@ it.each([
   };
   fixture.stopService.mockImplementation(async (params: { onStopped?: (s: unknown) => void }) => {
     params.onStopped?.(stoppedState);
-    throw new Error("port still bound after bootout");
+    throw uncertain
+      ? new CommandProcessCleanupError()
+      : new Error("port still bound after bootout");
   });
   const settled = createDeferredCore();
   fixture.close.mockImplementation(async () => settled.resolve());
@@ -568,12 +583,15 @@ it.each([
     vi.doUnmock("../flows/doctor-health.js");
   }
 
-  expect(doctor).toHaveBeenCalledOnce();
-  expect(doctor).toHaveBeenCalledWith(
-    expect.anything(),
-    expect.anything(),
-    expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
-  );
+  if (uncertain) {
+    expect(doctor).not.toHaveBeenCalled();
+  } else {
+    expect(doctor).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
+    );
+  }
   if (stops) {
     expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),
@@ -585,9 +603,11 @@ it.each([
       status: "completed",
       endedAtMs: 7,
     });
-    expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
-      doctor.mock.invocationCallOrder[0] ?? 0,
-    );
+    if (!uncertain) {
+      expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
+        doctor.mock.invocationCallOrder[0] ?? 0,
+      );
+    }
   } else {
     expect(fixture.stopService).not.toHaveBeenCalled();
   }

@@ -47,6 +47,19 @@ vi.mock("node:module", async (importOriginal) => {
   });
 });
 
+// Bun is simulated through process metadata, but these SQLite workers are real
+// Node workers: keep Node's TypeScript loader for their source carriers.
+vi.mock("./runtime-worker-url.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-worker-url.js")>();
+  return {
+    ...actual,
+    runtimeNeedsTypeScriptLoader: (modulePath: string) =>
+      actual.runtimeNeedsTypeScriptLoader(modulePath, "node"),
+    resolveRuntimeWorkerThreadExecArgv: (url: URL) =>
+      actual.resolveRuntimeWorkerThreadExecArgv(url, "node"),
+  };
+});
+
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   return {

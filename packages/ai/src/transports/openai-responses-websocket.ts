@@ -11,6 +11,7 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import type { StreamOptions, UserMessage } from "../types.js";
 import {
+  recordResponsesContinuationState,
   resolveResponsesContinuationRequest,
   type ResponsesContinuationRequest,
   type ResponsesContinuationState,
@@ -386,6 +387,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
   }
   let prepared: Omit<ReturnType<typeof resolveResponsesContinuationRequest>, "continuationStatus"> &
     Pick<OpenAIResponsesWebSocketStream, "continuationStatus">;
+  let previousContinuation: ResponsesContinuationState | undefined;
   const resumedSteering = lease.steeringContinuation;
   const steeringMode = resumedSteering
     ? resumedSteering.requiresInput
@@ -393,7 +395,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
       : "automatic"
     : undefined;
   try {
-    const continuation = lease.entry?.continuation;
+    const continuation = (previousContinuation = lease.entry?.continuation);
     if (continuation && lease.entry) {
       // Consume before dispatch so incomplete/error terminals cannot reuse stale state.
       lease.entry.continuation = undefined;
@@ -488,11 +490,12 @@ export function createOpenAIResponsesWebSocketStream(params: {
     }
     released = true;
     if (keep && lease.entry && terminalResponse) {
-      lease.entry.continuation = {
-        lastRequest: prepared.fullRequest ?? fullRequest,
-        lastResponseId: terminalResponse.id,
-        lastResponseItems: terminalResponse.output,
-      };
+      lease.entry.continuation = recordResponsesContinuationState(
+        previousContinuation,
+        prepared.fullRequest ?? fullRequest,
+        terminalResponse,
+        previousContinuation?.lastResponseId === prepared.request.previous_response_id,
+      );
     }
     lease.release({ keep });
   };

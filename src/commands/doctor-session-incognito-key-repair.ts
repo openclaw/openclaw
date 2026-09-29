@@ -5,6 +5,10 @@ import {
   rewriteDoctorSessionEntries,
 } from "../config/sessions/session-accessor.js";
 import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import {
+  attachSessionEntrySnapshots,
+  sessionEntrySnapshotColumns,
+} from "../config/sessions/session-entry-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeSqliteQuerySync,
@@ -277,10 +281,13 @@ function collectOccupiedSessionKeys(database: DatabaseSync): Set<string> {
   );
   for (const row of iterateSqliteQuerySync(
     database,
-    db.selectFrom("session_nodes").select("entry_json"),
+    db.selectFrom("session_nodes").select("entry_json").select(sessionEntrySnapshotColumns),
   )) {
     try {
-      collectSessionEntryKeyFields(JSON.parse(row.entry_json), keys);
+      const entry: unknown = JSON.parse(row.entry_json);
+      if (isRecord(entry)) {
+        collectSessionEntryKeyFields(attachSessionEntrySnapshots(entry, row), keys);
+      }
     } catch {
       // Canonical rows are valid JSON; a malformed row is reported by the existing integrity pass.
     }
@@ -311,6 +318,7 @@ function updateSessionKeyColumns(database: DatabaseSync, rename: ReservedKeyRena
     ["session_windows", "parent_session_key"],
     ["session_windows", "spawned_by"],
     ["session_nodes", "session_key"],
+    ["session_entry_snapshots", "session_key"],
     ["session_nodes", "parent_session_key"],
     ["session_nodes", "spawned_by"],
     ["session_nodes", "fork_source_session_key"],

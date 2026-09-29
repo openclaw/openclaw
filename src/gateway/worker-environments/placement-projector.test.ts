@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createWorkerPlacementRunnerAvailabilityReader,
+  createWorkerPlacementRuntimeInstallReader,
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
   readWorkerPlacementIdentity,
@@ -118,6 +119,63 @@ describe("worker placement projection", () => {
 
     expect(projectWorkerSessionPlacement(active, diskSpace)).toMatchObject({ diskSpace });
     expect(projectWorkerSessionPlacement(active)).not.toHaveProperty("diskSpace");
+  });
+
+  it("projects provisioning transfers before node assignment and active transfers by stale node build", () => {
+    const record = {
+      ...RECORD_BASE,
+      state: "provisioning" as const,
+      environmentId: "environment-1",
+      activeOwnerEpoch: null,
+    };
+    const observation = {
+      nodeId: "device-1",
+      environmentIds: [record.environmentId],
+      bundleHash: BUNDLE_HASH,
+      phase: "transferring" as const,
+      transferredBytes: 0,
+      totalBytes: 1_000,
+      startedAtMs: 250,
+      updatedAtMs: 250,
+    };
+    const reader = createWorkerPlacementRuntimeInstallReader({
+      environments: { get: () => undefined },
+      installer: {
+        readInstall: (nodeId) => (nodeId === observation.nodeId ? observation : undefined),
+        readInstallForEnvironment: (id) => (id === record.environmentId ? observation : undefined),
+        version: () => 1,
+      },
+    });
+    const active = { ...activePlacement(), workerBundleHash: "c".repeat(64) };
+    const environment = { nodeDeviceId: "device-1" };
+    expect(reader.read(record, environment)).toBeUndefined();
+    expect(reader.read(active, environment)).toBeUndefined();
+    observation.transferredBytes = 100;
+    expect(reader.read(active, environment)).toMatchObject({ transferredBytes: 100 });
+    const projected = projectWorkerSessionPlacement(
+      record,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      false,
+      { workerRuntimeInstall: reader.read(record, { nodeDeviceId: null }) },
+    );
+    expect(projected).toHaveProperty("workerRuntimeInstall", {
+      phase: "transferring",
+      transferredBytes: 100,
+      totalBytes: 1_000,
+      startedAtMs: 250,
+      updatedAtMs: 250,
+    });
+    expect(Value.Check(SessionPlacementSchema, projected)).toBe(true);
+    expect(reader.read(record, null)).toMatchObject({ transferredBytes: 100 });
+    expect(reader.read({ ...record, environmentId: "unrelated" }, environment)).toBeUndefined();
+    expect(reader.read(active, null)).toBeUndefined();
+    expect(reader.read(active, { nodeDeviceId: "other-device" })).toBeUndefined();
+    expect(reader.read(activePlacement(), environment)).toBeUndefined();
+    expect(reader.read({ ...activePlacement(), state: "draining" })).toBeUndefined();
   });
 
   it.each(["active", "draining"] as const)(

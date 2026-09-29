@@ -71,7 +71,8 @@ vi.mock("../../infra/install-source-utils.js", async (importOriginal) => ({
   resolveNpmSpecMetadata: mocks.npmMetadata,
 }));
 
-vi.mock("../../infra/update-runner-git-recovery.js", () => ({
+vi.mock("../../infra/update-runner-git-recovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-runner-git-recovery.js")>()),
   readCurrentGitUpdateRecovery: mocks.readGitRecovery,
 }));
 

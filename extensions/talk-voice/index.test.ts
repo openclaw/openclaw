@@ -1,6 +1,6 @@
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import type { AnyAgentTool, OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "./api.js";
 import register from "./index.js";
@@ -49,8 +49,15 @@ function createHarness(initialConfig: Record<string, unknown>) {
     registerCommand: vi.fn((definition: OpenClawPluginCommandDefinition) => {
       command = definition;
     }),
-    registerTool: vi.fn((definition: AnyAgentTool) => {
-      tool = definition;
+    registerTool: vi.fn((definition: AnyAgentTool | OpenClawPluginToolFactory) => {
+      const created =
+        typeof definition === "function"
+          ? definition({ sessionKey: "agent:main:main" })
+          : definition;
+      if (!created || Array.isArray(created)) {
+        throw new Error("talk-voice requires one tool");
+      }
+      tool = created;
     }),
   };
   register.register(api as never);
@@ -136,11 +143,15 @@ describe("talk-voice plugin", () => {
     { action: "list", method: "talk.voice.get", request: {} },
     { action: "set", method: "talk.voice.set", request: { voice: "marin" } },
   ])(
-    "executes $action with trusted identity and waits for the Gateway result",
+    "executes $action for the host session despite model targets and waits for the Gateway result",
     async ({ action, method, request }) => {
       const { tool, runtime } = createHarness({});
       const rpc = createDeferred<Record<string, unknown>>();
-      gatewayMocks.callGatewayTool.mockReturnValue(rpc.promise);
+      const started = createDeferred<void>();
+      gatewayMocks.callGatewayTool.mockImplementation(() => {
+        started.resolve();
+        return rpc.promise;
+      });
       const controller = new AbortController();
       const completed = vi.fn();
       const pending = tool
@@ -161,11 +172,12 @@ describe("talk-voice plugin", () => {
           return result;
         });
 
-      await vi.waitFor(() => expect(gatewayMocks.callGatewayTool).toHaveBeenCalledOnce());
+      await started.promise;
+      expect(gatewayMocks.callGatewayTool).toHaveBeenCalledOnce();
       expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
         method,
         { timeoutMs: 65_000 },
-        request,
+        { ...request, sessionKey: "agent:main:main" },
         { requireAgentRuntimeIdentity: true, signal: controller.signal },
       );
       expect(completed).not.toHaveBeenCalled();

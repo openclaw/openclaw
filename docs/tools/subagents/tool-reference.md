@@ -24,6 +24,12 @@ replacement for writing a clear task prompt.
 
 ## Tool: `sessions_spawn`
 
+Pass `user` (the requester's verified `requester_profile.id`) to act for a participant. It is required after several
+people have steered the turn, across native, visible, and ACP spawns. The child
+retains that person's authority independently of the parent turn; later revocation
+still stops it. Codex native `spawn_agent` rejects multi-person turns; use
+`sessions_spawn` with `user` instead.
+
 Starts a sub-agent run on the spawning session's sub-agent queue, with
 [per-session concurrency](/tools/subagents/operations#concurrency). Ordinary one-shot runs
 use `deliver: false` and return through an announce step; collectors, quiet

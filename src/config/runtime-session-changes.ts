@@ -14,11 +14,14 @@ function projectionConfig({
   channels,
   ui,
   gateway,
+  talk,
   ...config
 }: OpenClawConfig) {
   const { prefs: _prefs, ...uiConfig } = ui ?? {};
   const { auth, ...gatewayConfig } = gateway ?? {};
   const { identityScopes: _identityScopes, ...authConfig } = auth ?? {};
+  const { realtime, ...talkConfig } = talk ?? {};
+  const { model: _realtimeModel, ...realtimeConfig } = realtime ?? {};
   // Channel transport settings do not affect resident rows. Keep their catalog
   // inputs, including activation that can admit bundled plugin capabilities.
   return {
@@ -29,6 +32,7 @@ function projectionConfig({
     },
     ui: uiConfig,
     gateway: { ...gatewayConfig, auth: authConfig },
+    talk: { ...talkConfig, realtime: realtimeConfig },
   };
 }
 

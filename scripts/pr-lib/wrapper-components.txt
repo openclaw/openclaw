@@ -33,6 +33,7 @@ packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
 packages/gateway-protocol/src/update-run-vocabulary.ts
+packages/gateway-protocol/src/worker-capacity.ts
 packages/llm-core/package.json
 packages/llm-core/src/model-data.ts
 packages/media-core/src/constants.ts
@@ -374,6 +375,7 @@ src/config/channel-configured.ts
 src/config/channel-schema-selection.ts
 src/config/cloud-worker-project-profiles.ts
 src/config/codex-plugin-diagnostics.ts
+src/config/config-env-values.ts
 src/config/config-env-vars.ts
 src/config/config-journal-snapshot.kernel.ts
 src/config/config-journal-snapshot.ts
@@ -806,6 +808,7 @@ src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-filesystem.ts
 src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
 src/infra/sqlite-wal-write-admission.ts
@@ -1102,6 +1105,7 @@ src/plugins/plugin-native-reference.ts
 src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
+src/plugins/plugin-provider-request-policy.ts
 src/plugins/plugin-registry-comparison.ts
 src/plugins/plugin-registry-contributions.ts
 src/plugins/plugin-registry-id-normalizer.ts
@@ -1122,6 +1126,7 @@ src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
+src/plugins/plugin-source-capture-state-dir.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
 src/plugins/plugin-source-verification.ts
@@ -1396,6 +1401,8 @@ src/utils/timer-delay.ts
 src/utils/utf8-truncate.ts
 src/utils/zod-parse.ts
 src/version.ts
+src/worker/protocol-record.ts
+src/worker/tool-authority.ts
 test/helpers/temp-dir.ts
 test/test-home-context.mts
 test/test-home-policy.mts

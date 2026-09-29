@@ -1,5 +1,5 @@
 // Slack plugin module implements slash harness behavior.
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { installSlackTestRuntime } from "../test-runtime.test-support.js";
 
 type AsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
@@ -133,4 +133,27 @@ export function resetSlackSlashMocks() {
       delivery.onReplySettled?.({ replyIndex, visibleReplySent: true }),
     );
   });
+}
+
+type MockCallSource = {
+  mock: {
+    calls: ArrayLike<ReadonlyArray<unknown>>;
+  };
+};
+
+export function firstMockArg(mock: MockCallSource, argIndex: number, label: string) {
+  expect(mock).toHaveBeenCalled();
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[argIndex];
+}
+
+export function firstCallPayload(mock: MockCallSource, label: string): Record<string, unknown> {
+  const payload = firstMockArg(mock, 0, label);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`expected ${label} payload`);
+  }
+  return payload as Record<string, unknown>;
 }

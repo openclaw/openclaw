@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
 
 export type SandboxHostCsp = {
   connectDomains?: string[];
@@ -316,6 +317,12 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
         return;
       }
       if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) return;
+      // A frame whose root color-scheme differs from its embedding element gets
+      // an opaque UA canvas. Follow the host's widget theme mode so this shell
+      // and the themed widget document both stay transparent.
+      if (event.data?.type === ${JSON.stringify(WIDGET_THEME_MESSAGE_TYPE)} && (event.data.mode === "light" || event.data.mode === "dark")) {
+        document.documentElement.style.colorScheme = event.data.mode;
+      }
       inner.contentWindow?.postMessage(event.data, "*");
       return;
     }

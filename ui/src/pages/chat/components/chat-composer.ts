@@ -458,11 +458,12 @@ export function renderChatComposer(props: ChatComposerProps) {
   const devicePicker = state.microphonePicker;
   devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected);
   const startRealtimeTalk = () => {
-    if (props.submitDisabledReason) {
-      return;
-    }
+    // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
       devicePicker.handleOpen();
+      return;
+    }
+    if (props.submitDisabledReason) {
       return;
     }
     props.onToggleRealtimeTalk?.();

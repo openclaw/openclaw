@@ -1,8 +1,3 @@
-/**
- * Built-in write session tool.
- *
- * Writes files through queued local or injected operations with readback/idempotency metadata.
- */
 import {
   mkdir as fsMkdir,
   readFile as fsReadFile,
@@ -15,7 +10,7 @@ import { isMissingPathError } from "../../../infra/errors.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { WRITE_DIFF_MAX_BYTES } from "./file-diff.js";
@@ -219,18 +214,11 @@ function formatWriteCall(
 }
 
 function formatWriteResult(
-  result: {
-    content: Array<{
-      type: string;
-      text?: string;
-      data?: string;
-      mimeType?: string;
-    }>;
-    isError?: boolean;
-  },
+  result: AgentToolResult<WriteToolDetails>,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
+  isError: boolean,
 ): string | undefined {
-  if (!result.isError) {
+  if (!isError) {
     return undefined;
   }
   const output = result.content
@@ -498,19 +486,12 @@ export function createWriteToolDefinition(
       } else {
         component.cache = undefined;
       }
-      component.setText(
-        formatWriteCall(
-          renderArgs,
-          { expanded: context.expanded, isPartial: context.isPartial },
-          theme,
-          component.cache,
-        ),
-      );
+      component.setText(formatWriteCall(renderArgs, context, theme, component.cache));
       return component;
     },
     renderResult(result, optionsLocal, theme, context) {
       void optionsLocal;
-      const output = formatWriteResult({ ...result, isError: context.isError }, theme);
+      const output = formatWriteResult(result, theme, context.isError);
       if (!output) {
         const component = (context.lastComponent as Container | undefined) ?? new Container();
         component.clear();

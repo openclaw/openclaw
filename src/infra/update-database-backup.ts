@@ -45,7 +45,12 @@ const UpdateDatabaseBackupSchema = z.object({
   warnings: z.array(z.string()),
 });
 export type UpdateDatabaseBackup = z.infer<typeof UpdateDatabaseBackupSchema> & {
-  postMigrationGenerations?: Record<string, string | null>;
+  migration?: {
+    name: string;
+    backup: string;
+    from: Record<string, string | null>;
+    to: Record<string, string | null>;
+  };
   restoreRefusal?: string;
 };
 

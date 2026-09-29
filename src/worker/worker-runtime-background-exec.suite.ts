@@ -31,7 +31,7 @@ import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
-import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import { parseWorkerProcessMessage, type WorkerProcessResult } from "./worker-process-protocol.js";
 import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
 
 const workerProcessUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.worker);
@@ -374,8 +374,8 @@ export function registerWorkerBackgroundExecLifecycleTests({
     const output = new PassThrough();
     const result = createDeferred<WorkerProcessResult>();
     output.on("data", (chunk: Buffer) => {
-      const parsed = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-      if (parsed) {
+      const parsed = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+      if (parsed?.type === "result") {
         result.resolve(parsed);
       }
     });

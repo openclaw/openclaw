@@ -63,6 +63,7 @@ import {
 } from "./shared.js";
 import {
   createUpdateConfigSnapshot,
+  captureUpdateConfigSnapshot,
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
@@ -80,6 +81,7 @@ export async function readPackageUpdateIdentity(root: string) {
 type PackageDoctorOptions = {
   root: string;
   timeoutMs?: number;
+  /** Null leaves forward work unbounded; omission retains the caller's timeout. */
   workTimeoutMs?: number | null;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   results?: UpdateStepResult[];
@@ -176,7 +178,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   };
   params.progress?.onStepStart?.(doctorProgressInfo);
   const configSnapshot = params.onConfigSnapshot
-    ? await readUpdateConfigSnapshot(resolveConfigPath(doctorEnv))
+    ? await captureUpdateConfigSnapshot(resolveConfigPath(doctorEnv), doctorEnv)
     : undefined;
   const completeDoctorStep = async (
     doctorStep: UpdateStepResult,
@@ -228,6 +230,12 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
           doctorResult,
         ),
       );
+      if (configSnapshot?.doctorOwned === false) {
+        doctorStep.warnings = [
+          ...(doctorStep.warnings ?? []),
+          "The config include graph could not be captured before Doctor; automatic config rollback is unavailable for this update.",
+        ];
+      }
       if (configWriteRefusal) {
         doctorStep.failureFacts = normalizeUpdateFailureFacts([
           createUpdateFailureFact({
@@ -244,14 +252,40 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         const { hash } = await readUpdateConfigSnapshot(configSnapshot.path);
         const doctorHash = doctorResult?.configHash;
         const doctorInputHash = doctorResult?.configInputHash;
+        const capturedPaths = new Set([
+          configSnapshot.pathSnapshot?.targetPath ?? configSnapshot.path,
+          ...(configSnapshot.includedFiles ?? []).map(
+            (file) => file.pathSnapshot?.targetPath ?? file.path,
+          ),
+        ]);
+        const writesCaptured = Object.keys(doctorResult?.configFileWrites ?? {}).every((file) =>
+          capturedPaths.has(file),
+        );
+        const includedFiles: NonNullable<UpdateConfigSnapshot["includedFiles"]> = [];
+        for (const file of configSnapshot.includedFiles ?? []) {
+          const current = await readUpdateConfigSnapshot(file.path);
+          const receipt =
+            doctorResult?.configFileWrites?.[file.pathSnapshot?.targetPath ?? file.path];
+          includedFiles.push({
+            ...file,
+            hash: current.hash,
+            doctorOwned:
+              receipt?.inputHash === undefined
+                ? current.hash === file.hash
+                : receipt.inputHash === file.hash && current.hash === receipt.hash,
+          });
+        }
         params.onConfigSnapshot?.({
           ...configSnapshot,
           hash,
+          ...(configSnapshot.includedFiles ? { includedFiles } : {}),
           doctorOwned:
-            doctorInputHash === undefined
+            configSnapshot.doctorOwned !== false &&
+            writesCaptured &&
+            (doctorInputHash === undefined
               ? hash === configSnapshot.hash
               : doctorInputHash === configSnapshot.hash &&
-                hash === (doctorHash === "unchanged" ? doctorInputHash : doctorHash),
+                hash === (doctorHash === "unchanged" ? doctorInputHash : doctorHash)),
         });
       }
     } catch (error) {
@@ -427,22 +461,15 @@ export async function prepareGitPackageExposure(
   };
 }
 
-export type PackageInstallUpdateParams = {
+export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> & {
   reapplyLocalOverrides?: boolean;
   requirePackageReplacement?: boolean;
-  root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
   installSpec?: string;
   timeoutMs: number;
-  /** Null leaves forward work unbounded; omission retains the caller's timeout. */
-  workTimeoutMs?: number | null;
   startedAt: number;
-  progress: ReturnType<typeof createUpdateProgress>["progress"];
-  managedServiceEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
   honorPackageRoot?: boolean;
-  nodeRunner?: string;
   resolveLifecycleNodeRunner?: () => string | undefined;
   installEnv?: NodeJS.ProcessEnv;
   installTarget?: ResolvedGlobalInstallTarget;
@@ -452,8 +479,6 @@ export type PackageInstallUpdateParams = {
   assertCurrent?: () => void;
   reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
-  onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
-  getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
   getActivation?: () => PackageActivationOptions | undefined;
 };
 

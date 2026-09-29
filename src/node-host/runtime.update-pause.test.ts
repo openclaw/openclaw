@@ -12,6 +12,29 @@ import {
 } from "./runtime.test-support.js";
 
 describe("node-host update pause", () => {
+  it("retires idle workers before update admission while holding new invokes", async () => {
+    const retirement = createDeferred();
+    const entered = createDeferred();
+    mocks.retireIdleWorkers.mockImplementationOnce(async () => {
+      entered.resolve();
+      await retirement.promise;
+    });
+    const runtime = await startRuntime();
+    const pausing = runtime.tryPauseForUpdate();
+    try {
+      await entered.promise;
+      await runtime.invoke(frame);
+      expect(mocks.handleInvoke).not.toHaveBeenCalled();
+      retirement.resolve();
+      expect(await pausing).toBe(true);
+      expect(mocks.retireIdleWorkers).toHaveBeenCalledOnce();
+    } finally {
+      retirement.resolve();
+      await pausing;
+      await runtime.close();
+    }
+  });
+
   it.each(["idle", "busy", "error", "plugin", "disconnect", "close"] as const)(
     "holds invoke admission through a delayed worker idle read ending in %s",
     async (outcome) => {
@@ -25,6 +48,7 @@ describe("node-host update pause", () => {
         outcome === "error"
           ? expect(pausing).rejects.toThrow("journal unavailable")
           : expect(pausing).resolves.toBe(outcome === "idle");
+      let disconnecting: Promise<void> | undefined;
       try {
         await runtime.invoke(frame);
         expect(mocks.handleInvoke).not.toHaveBeenCalled();
@@ -38,7 +62,7 @@ describe("node-host update pause", () => {
           mocks.pluginHasActiveWork.mockReturnValue(true);
         } else if (outcome === "disconnect") {
           mocks.disconnectPlugins.mockImplementationOnce(async () => await cleanup.promise);
-          runtime.cancelAll();
+          disconnecting = runtime.cancelAll();
         } else if (outcome === "close") {
           await runtime.close();
         }
@@ -49,6 +73,7 @@ describe("node-host update pause", () => {
         }
         await result;
         cleanup.resolve();
+        await disconnecting;
         if (outcome === "idle") {
           await runtime.invoke({ ...frame, id: "paused" });
           expect(mocks.handleInvoke).not.toHaveBeenCalled();
@@ -59,7 +84,7 @@ describe("node-host update pause", () => {
       } finally {
         idle.resolve(false);
         cleanup.resolve();
-        await Promise.allSettled([pausing]);
+        await Promise.allSettled([pausing, disconnecting]);
         await runtime.close();
       }
     },
@@ -169,7 +194,7 @@ describe("node-host update pause", () => {
       try {
         expect(await runtime.tryPauseForUpdate()).toBe(false);
         await vi.waitFor(() => expect(held.signal).toBeDefined());
-        runtime.cancelAll();
+        await runtime.cancelAll();
         expect(held.signal?.aborted).toBe(true);
         expect(await runtime.tryPauseForUpdate()).toBe(false);
 
@@ -233,13 +258,16 @@ describe("node-host update pause", () => {
     mocks.disconnectPlugins.mockImplementationOnce(async () => await cleanup.promise);
     const runtime = await startRuntime();
     try {
-      runtime.cancelAll();
+      const disconnecting = expect(runtime.cancelAll()).rejects.toThrow(
+        "plugin process tree did not terminate",
+      );
       expect(await runtime.tryPauseForUpdate()).toBe(false);
       cleanup.reject(new Error("plugin process tree did not terminate"));
+      await disconnecting;
       await runtime.invoke(frame);
       expect(await runtime.tryPauseForUpdate()).toBe(false);
 
-      runtime.cancelAll();
+      await runtime.cancelAll();
       await runtime.invoke(frame);
       expect(await runtime.tryPauseForUpdate()).toBe(true);
     } finally {

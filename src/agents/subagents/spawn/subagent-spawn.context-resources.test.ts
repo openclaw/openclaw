@@ -260,13 +260,19 @@ describe("spawn context-engine resource custody", () => {
       canRetireReservation: () => false,
       settleFailedLaunch,
     } satisfies SubagentRegistrationScope;
+    const reservationReleases: Promise<void>[] = [];
     registerRun.mockImplementation(
       async (
         { runId }: { runId: string },
         options: { retainOwnership?: (scope: SubagentRegistrationScope) => void },
       ) => {
         options.retainOwnership?.(cancelledScope);
-        expect(scheduler.removeQueuedSwarmRun(runId)).toBe(true);
+        const hold = scheduler.holdQueuedSwarmRun(runId);
+        const withdrawn = hold?.withdraw();
+        if (hold) {
+          reservationReleases.push(hold.release());
+        }
+        expect(withdrawn).toBe(true);
       },
     );
     try {
@@ -284,6 +290,7 @@ describe("spawn context-engine resource custody", () => {
       expect(fixture.retired).toHaveBeenCalledTimes(1);
       expect(fixture.database.isOpen).toBe(false);
     } finally {
+      await Promise.all(reservationReleases);
       await fixture.cleanup();
     }
   });
@@ -451,7 +458,12 @@ describe("spawn context-engine resource custody", () => {
       disposalGate.resolve();
       await closing?.catch(() => {});
       if (queuedRunId) {
-        scheduler.removeQueuedSwarmRun(queuedRunId);
+        const hold = scheduler.holdQueuedSwarmRun(queuedRunId);
+        try {
+          hold?.withdraw();
+        } finally {
+          await hold?.release();
+        }
       }
       await fixture.cleanup();
       await launchWork.drain();

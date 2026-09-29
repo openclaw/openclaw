@@ -4,11 +4,14 @@ import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { sanitizeRunStatusText } from "../run-status-text.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import {
   ensureSubagentControllerOwnsRun,
   listControlledSubagentRunFacts,
+  resolveSubagentControllerIdentity,
+  type ResolvedSubagentController,
 } from "../subagents/registry/subagent-control-scope.js";
 import {
   DEFAULT_RECENT_MINUTES,
@@ -17,12 +20,14 @@ import {
   MAX_RECENT_MINUTES,
   resolveSubagentController,
 } from "../subagents/registry/subagent-control.js";
+import { createSubagentControllerRead } from "../subagents/registry/subagent-controller-read.js";
 import { observeSubagentExecution } from "../subagents/registry/subagent-execution-observation.js";
 import {
   buildSubagentList,
   readSubagentListSessionEntries,
 } from "../subagents/registry/subagent-list.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
+import { assertSubagentRegistryWriteSourceCurrent } from "../subagents/registry/subagent-registry-persistence.js";
 import type { SubagentRunReadRecord } from "../subagents/registry/subagent-registry-read.types.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
@@ -220,13 +225,15 @@ function waitForSelectedRuns(params: {
 }
 
 export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
-  const readScope = () => {
+  const readScope = (readController?: ReturnType<typeof createSubagentControllerRead>["read"]) => {
     const cfg = opts.config ?? getRuntimeConfig();
-    const controller = resolveSubagentController({
-      cfg,
-      agentSessionKey: opts.agentSessionKey,
-      agentId: opts.agentId,
-    });
+    const controller = readController
+      ? readController()
+      : resolveSubagentController({
+          cfg,
+          agentSessionKey: opts.agentSessionKey,
+          agentId: opts.agentId,
+        });
     if (!controller.controllerAgentId) {
       throw new ToolInputError("Subagent controller agent required");
     }
@@ -237,7 +244,10 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     );
     const readable = new Map<string, SubagentRunReadRecord>();
     const controlled = new Set<string>();
-    const pending = [{ owner: controller, entries: runs }];
+    const pending: Array<{
+      owner: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
+      entries: SubagentRunReadRecord[];
+    }> = [{ owner: controller, entries: runs }];
     const visited = new Set<string>();
     while (pending.length) {
       const current = pending.shift()!;
@@ -255,7 +265,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           continue;
         }
         controlled.add(entry.runId);
-        const childController = resolveSubagentController({
+        const childController = resolveSubagentControllerIdentity({
           cfg,
           agentSessionKey: entry.childSessionKey,
         });
@@ -280,100 +290,160 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action") ?? "list";
-      while (!getSubagentSessionListReadSnapshotIdentity()) {
-        await prepareSubagentSessionListReadCache();
-      }
-      signal?.throwIfAborted();
-      if (action === "wait") {
-        const runIds = [...new Set(readStringArrayParam(params, "runIds", { required: true }))];
-        if (runIds.length > 32) {
-          throw new ToolInputError("At most 32 runIds may be waited for");
+      const requestedRunId =
+        action === "cancel" ? readToolStringParam(params, "runId", { required: true }) : undefined;
+      const source = action === "cancel" ? captureOpenClawStateWorkerContext() : undefined;
+      let selection:
+        | {
+            entry: SubagentRunRecord;
+            generation: SubagentRunRecord["generation"];
+            createdAt: number;
+            ownership: ReturnType<typeof subagentRuns.captureRegistrationOwnership>;
+          }
+        | undefined;
+      const assertSelection = () => {
+        if (!source || !requestedRunId) {
+          return;
         }
-        return jsonResult({
-          status: "ok",
-          action,
-          ...(await waitForSelectedRuns({
-            runIds,
-            readRuns: (snapshot) => {
-              const visible = new Set(readScope().readable.map((entry) => entry.runId));
-              return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
-            },
-            timeoutMs:
-              Math.min(60, readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30) * 1000,
-            signal,
-          })),
-        });
-      }
-      const { cfg, controller, readable, controlled } = readScope();
-      if (action === "list") {
-        const readContext = await buildControlledSubagentRunsReadContext(
-          controller.controllerSessionKey,
-          controller.controllerAgentId,
-          cfg,
-          Math.min(
-            MAX_RECENT_MINUTES,
-            readPositiveIntegerParam(params, "recentMinutes") ?? DEFAULT_RECENT_MINUTES,
-          ),
-        );
-        const list = buildSubagentList({
-          context: readContext.list,
-          sessionEntries: await readSubagentListSessionEntries(cfg, readContext.list),
-        });
-        return jsonResult({
-          status: "ok",
-          action,
-          requesterSessionKey: controller.controllerSessionKey,
-          callerSessionKey: controller.callerSessionKey,
-          callerIsSubagent: controller.callerIsSubagent,
-          total: list.total,
-          active: list.active.map(({ line: _line, ...view }) => view),
-          recent: list.recent.map(({ line: _line, ...view }) => view),
-          text: list.text,
-        });
-      }
-      if (action === "cancel") {
-        const runId = readToolStringParam(params, "runId", { required: true });
-        const target = readable.find((run) => run.runId === runId);
-        if (!target || !controlled.has(runId)) {
+        signal?.throwIfAborted();
+        assertSubagentRegistryWriteSourceCurrent(source);
+        // A missing live row may still be hydrating. Only the native owner can establish it.
+        const entry = subagentRuns.get(requestedRunId);
+        if (!selection && entry) {
+          selection = {
+            entry,
+            generation: entry.generation,
+            createdAt: entry.createdAt,
+            ownership: subagentRuns.captureRegistrationOwnership(entry.childSessionKey, entry),
+          };
+        }
+        if (selection) {
+          selection.ownership.assertCurrent();
+          if (
+            entry !== selection.entry ||
+            entry.generation !== selection.generation ||
+            entry.createdAt !== selection.createdAt
+          ) {
+            throw new Error("Subagent cancellation selection changed during preparation");
+          }
+        }
+      };
+      const controllerRead =
+        action === "cancel"
+          ? createSubagentControllerRead({
+              config: () => opts.config ?? getRuntimeConfig(),
+              agentSessionKey: opts.agentSessionKey,
+              agentId: opts.agentId,
+              assertCurrent: assertSelection,
+            })
+          : undefined;
+      const readCurrentScope = () => readScope(controllerRead?.read);
+      const prepareRead = () => {
+        assertSelection();
+        if (!getSubagentSessionListReadSnapshotIdentity()) {
+          return prepareSubagentSessionListReadCache();
+        }
+        return controllerRead?.prepare();
+      };
+      try {
+        for (let pending = prepareRead(); pending; pending = prepareRead()) {
+          await pending;
+        }
+        signal?.throwIfAborted();
+        if (action === "wait") {
+          const runIds = [...new Set(readStringArrayParam(params, "runIds", { required: true }))];
+          if (runIds.length > 32) {
+            throw new ToolInputError("At most 32 runIds may be waited for");
+          }
           return jsonResult({
-            status: "forbidden",
-            error: "Run outside the controlled session tree.",
+            status: "ok",
+            action,
+            ...(await waitForSelectedRuns({
+              runIds,
+              readRuns: (snapshot) => {
+                const visible = new Set(readScope().readable.map((entry) => entry.runId));
+                return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
+              },
+              timeoutMs:
+                Math.min(60, readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30) * 1000,
+              signal,
+            })),
           });
         }
-        const result = await killSubagentRunAdmin(
-          {
+        const { cfg, controller, readable, controlled } = readCurrentScope();
+        if (action === "list") {
+          const readContext = await buildControlledSubagentRunsReadContext(
+            controller.controllerSessionKey,
+            controller.controllerAgentId,
             cfg,
-            sessionKey: target.childSessionKey,
-            agentId: target.requesterAgentId,
-            expectedRunId: target.runId,
-            expectedTaskRunId: target.taskRunId ?? target.runId,
-            expectedGeneration: target.generation,
-            expectedOwnerKey: target.requesterSessionKey,
-          },
-          {
-            prepareRead: () =>
-              getSubagentSessionListReadSnapshotIdentity()
-                ? undefined
-                : prepareSubagentSessionListReadCache(),
-            assertCurrent: () => {
-              signal?.throwIfAborted();
-              const current = readScope();
-              if (
-                current.controller.controllerSessionKey !== controller.controllerSessionKey ||
-                current.controller.controllerAgentId !== controller.controllerAgentId ||
-                !current.controlled.has(target.runId) ||
-                !current.readable.some(
-                  (run) => run.runId === target.runId && run.generation === target.generation,
-                )
-              ) {
-                throw new Error("Subagent cancellation owner changed");
-              }
+            Math.min(
+              MAX_RECENT_MINUTES,
+              readPositiveIntegerParam(params, "recentMinutes") ?? DEFAULT_RECENT_MINUTES,
+            ),
+          );
+          const list = buildSubagentList({
+            context: readContext.list,
+            sessionEntries: await readSubagentListSessionEntries(cfg, readContext.list),
+          });
+          return jsonResult({
+            status: "ok",
+            action,
+            requesterSessionKey: controller.controllerSessionKey,
+            callerSessionKey: controller.callerSessionKey,
+            callerIsSubagent: controller.callerIsSubagent,
+            total: list.total,
+            active: list.active.map(({ line: _line, ...view }) => view),
+            recent: list.recent.map(({ line: _line, ...view }) => view),
+            text: list.text,
+          });
+        }
+        if (action === "cancel") {
+          const runId = requestedRunId;
+          if (!runId) {
+            throw new ToolInputError("Subagent runId required");
+          }
+          const target = readable.find((run) => run.runId === runId);
+          if (!target || !controlled.has(runId)) {
+            return jsonResult({
+              status: "forbidden",
+              error: "Run outside the controlled session tree.",
+            });
+          }
+          const result = await killSubagentRunAdmin(
+            {
+              cfg,
+              sessionKey: target.childSessionKey,
+              agentId: target.requesterAgentId,
+              expectedRunId: target.runId,
+              expectedTaskRunId: target.taskRunId ?? target.runId,
+              expectedGeneration: target.generation,
+              expectedOwnerKey: target.requesterSessionKey,
             },
-          },
-        );
-        return jsonResult({ ...result, action, runId });
+            {
+              prepareRead,
+              assertCurrent: () => {
+                signal?.throwIfAborted();
+                const current = readCurrentScope();
+                if (
+                  current.controller.controllerSessionKey !== controller.controllerSessionKey ||
+                  current.controller.controllerAgentId !== controller.controllerAgentId ||
+                  !current.controlled.has(target.runId) ||
+                  !current.readable.some(
+                    (run) => run.runId === target.runId && run.generation === target.generation,
+                  )
+                ) {
+                  throw new Error("Subagent cancellation owner changed");
+                }
+              },
+            },
+          );
+          return jsonResult({ ...result, action, runId });
+        }
+        throw new ToolInputError("Unsupported subagents action");
+      } finally {
+        controllerRead?.release();
+        selection?.ownership.release();
       }
-      throw new ToolInputError("Unsupported subagents action");
     },
   };
 }

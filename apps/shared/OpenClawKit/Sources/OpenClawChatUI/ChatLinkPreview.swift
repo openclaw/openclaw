@@ -718,6 +718,8 @@ final class ChatLinkPreviewModel {
     private(set) var imageResult: ChatLinkPreviewImageResult?
     private let metadataFetch: MetadataFetch
     private let imageFetch: ImageFetch
+    private(set) var sourceURL: URL?
+    private var loadGeneration: UInt64 = 0
 
     init(metadataFetch: @escaping MetadataFetch, imageFetch: @escaping ImageFetch) {
         self.metadataFetch = metadataFetch
@@ -730,8 +732,17 @@ final class ChatLinkPreviewModel {
     }
 
     func loadMetadata(_ url: URL) async {
+        if self.sourceURL != url {
+            self.sourceURL = url
+            self.loadGeneration &+= 1
+            self.result = nil
+            self.imageResult = nil
+        }
         guard self.expanded, self.result == nil else { return }
-        self.result = await self.metadataFetch(url)
+        let generation = self.loadGeneration
+        let result = await self.metadataFetch(url)
+        guard !Task.isCancelled, self.loadGeneration == generation else { return }
+        self.result = result
     }
 
     func loadImage() async {
@@ -739,15 +750,15 @@ final class ChatLinkPreviewModel {
               self.imageResult == nil,
               let imageURL = self.imageURL
         else { return }
+        let generation = self.loadGeneration
         let result = await self.imageFetch(imageURL)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, self.loadGeneration == generation else { return }
         self.imageResult = result
     }
 }
 
 @MainActor
 struct ChatLinkPreview: View {
-    @Environment(\.openURL) private var openURL
     let url: URL
     @State private var model: ChatLinkPreviewModel
 
@@ -759,14 +770,31 @@ struct ChatLinkPreview: View {
     }
 
     var body: some View {
-        if self.model.expanded {
-            self.expandedCard
-                .task(id: self.url) {
-                    await self.model.loadMetadata(self.url)
-                }
-                .task(id: self.model.imageURL) {
+        ChatLinkPreviewContent(url: self.url, model: self.model)
+            .task(id: self.model.expanded ? self.url : nil) {
+                await self.model.loadMetadata(self.url)
+            }
+            .task(id: self.model.expanded ? self.model.imageURL : nil) {
+                if self.model.sourceURL == self.url {
                     await self.model.loadImage()
                 }
+            }
+    }
+}
+
+@MainActor
+struct ChatLinkPreviewContent: View {
+    @Environment(\.openURL) private var openURL
+    let url: URL
+    let model: ChatLinkPreviewModel
+
+    private var currentModel: ChatLinkPreviewModel? {
+        self.model.sourceURL == self.url ? self.model : nil
+    }
+
+    var body: some View {
+        if self.model.expanded {
+            self.expandedCard
         } else {
             self.collapsedChip
         }
@@ -808,7 +836,7 @@ struct ChatLinkPreview: View {
             self.openURL(self.url)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
-                if case let .loaded(thumbnail) = self.model.imageResult {
+                if case let .loaded(thumbnail) = self.currentModel?.imageResult {
                     Image(decorative: thumbnail.image, scale: 1)
                         .resizable()
                         .scaledToFill()
@@ -821,7 +849,7 @@ struct ChatLinkPreview: View {
                     .font(OpenClawChatTypography.caption2)
                     .foregroundStyle(OpenClawChatTheme.assistantText.opacity(0.65))
                     .lineLimit(1)
-                switch self.model.result {
+                switch self.currentModel?.result {
                 case nil:
                     Text("Loading preview…")
                         .font(OpenClawChatTypography.caption)

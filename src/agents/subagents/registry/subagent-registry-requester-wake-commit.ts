@@ -110,74 +110,64 @@ export function commitRequesterWake(
   retainOnFailure: boolean,
   retryWholeBatch = false,
 ): Promise<void> {
-  const owners = entries.map((entry) => ({
-    entry,
-    runId: entry.runId,
-    createdAt: entry.createdAt,
-    taskRunId: entry.taskRunId,
-    wake: entry.requesterSettleWake,
-    wakeJson: JSON.stringify(entry.requesterSettleWake),
-    deliveryGeneration: entry.delivery?.generation,
-    generation: entry.generation,
-    execution: entry.execution,
-    cancellation: entry.killReconciliation,
-    suppressed: entry.suppressCompletionDelivery,
-  }));
+  const owners = new Map(
+    entries.map((entry) => [
+      entry,
+      {
+        runId: entry.runId,
+        createdAt: entry.createdAt,
+        taskRunId: entry.taskRunId,
+        wake: entry.requesterSettleWake,
+        wakeJson: JSON.stringify(entry.requesterSettleWake),
+        deliveryGeneration: entry.delivery?.generation,
+        generation: entry.generation,
+        execution: entry.execution,
+        cancellation: entry.killReconciliation,
+        suppressed: entry.suppressCompletionDelivery,
+      },
+    ]),
+  );
   const pending: PendingRequesterSettleWakeCommit = {
     entries: [...entries],
     commit,
     retryWholeBatch,
     failures: 0,
     nextAttemptAt: 0,
-    isCurrent: (current) =>
-      owners.some(
-        ({
-          entry,
-          runId,
-          createdAt,
-          taskRunId,
-          wake,
-          wakeJson,
-          deliveryGeneration,
-          generation: runGeneration,
-          execution,
-          cancellation,
-          suppressed,
-        }) => {
-          if (
-            entry !== current ||
-            context.options.runs.get(runId) !== entry ||
-            entry.runId !== runId ||
-            entry.createdAt !== createdAt ||
-            entry.taskRunId !== taskRunId ||
-            entry.generation !== runGeneration ||
-            !entry.requesterSettleWake ||
-            entry.requesterSettleWake.rearmGeneration !== generation ||
-            context.newerGenerationOwnsSession(entry)
-          ) {
-            return false;
-          }
-          if (
-            entry.requesterSettleWake === wake &&
-            entry.execution === execution &&
-            entry.killReconciliation === cancellation &&
-            entry.suppressCompletionDelivery === suppressed
-          ) {
-            return true;
-          }
-          // Independent blocking republishes the row but does not consume its wake.
-          // Keep that exact closed member in settlement: the store must validate its
-          // durable state and consume the obsolete wake without rewriting its failure.
-          return (
-            entry.execution.status === "terminal" &&
-            entry.pauseReason !== "sessions_yield" &&
-            entry.suppressCompletionDelivery === true &&
-            entry.delivery?.status === "failed" &&
-            entry.delivery.generation === deliveryGeneration &&
-            JSON.stringify(entry.requesterSettleWake) === wakeJson
-          );
-        },
-      ),
+    isCurrent: (entry) => {
+      const owner = owners.get(entry);
+      if (
+        !owner ||
+        context.options.runs.get(owner.runId) !== entry ||
+        entry.runId !== owner.runId ||
+        entry.createdAt !== owner.createdAt ||
+        entry.taskRunId !== owner.taskRunId ||
+        entry.generation !== owner.generation ||
+        !entry.requesterSettleWake ||
+        entry.requesterSettleWake.rearmGeneration !== generation ||
+        context.newerGenerationOwnsSession(entry)
+      ) {
+        return false;
+      }
+      if (
+        entry.requesterSettleWake === owner.wake &&
+        entry.execution === owner.execution &&
+        entry.killReconciliation === owner.cancellation &&
+        entry.suppressCompletionDelivery === owner.suppressed
+      ) {
+        return true;
+      }
+      // Independent blocking republishes the row but does not consume its wake.
+      // Keep that exact closed member in settlement: the store must validate its
+      // durable state and consume the obsolete wake without rewriting its failure.
+      return (
+        entry.execution.status === "terminal" &&
+        entry.pauseReason !== "sessions_yield" &&
+        entry.suppressCompletionDelivery === true &&
+        entry.delivery?.status === "failed" &&
+        entry.delivery.generation === owner.deliveryGeneration &&
+        JSON.stringify(entry.requesterSettleWake) === owner.wakeJson
+      );
+    },
   };
   // Sibling wakes must observe the same fence while the first worker write is
   // still settling, before a failure has established its retry deadline.

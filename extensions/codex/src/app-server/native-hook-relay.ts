@@ -46,11 +46,12 @@ const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 const MAX_PENDING_DIRECT_CHILD_ADMISSIONS = 32;
+const CODEX_NATIVE_SPAWN_HOOK_NAMES: readonly string[] = ["spawn_agent", "Agent"];
 
 const CODEX_HOOK_MATCHER_NAMES_BY_TOOL_ID: Readonly<Record<string, readonly string[]>> = {
   exec: ["Bash", "exec", "exec_command"],
   apply_patch: ["apply_patch", "Write", "Edit"],
-  spawn_agent: ["spawn_agent", "Agent"],
+  spawn_agent: CODEX_NATIVE_SPAWN_HOOK_NAMES,
 };
 
 type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop";
@@ -283,12 +284,26 @@ export function createCodexNativeHookRelay(params: {
             ],
             admit: async (invocation, assertAdmissionCurrent, preparation) => {
               const payload = invocation.rawPayload;
-              if (
-                params.nativeModelAdmission &&
-                invocation.toolName &&
-                modelInputTools.includes(invocation.toolName)
-              ) {
+              const toolName = CODEX_NATIVE_SPAWN_HOOK_NAMES.includes(invocation.toolName ?? "")
+                ? "spawn_agent"
+                : invocation.toolName;
+              if (params.nativeModelAdmission && toolName && modelInputTools.includes(toolName)) {
                 const admission = params.nativeModelAdmission;
+                if (toolName.endsWith("spawn_agent")) {
+                  const assertSpawnAllowed = () => {
+                    assertAdmissionCurrent();
+                    // An admitted child's inherited relay has its own source custody.
+                    if (!readCodexNativeChildThreadId(payload)) {
+                      try {
+                        params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();
+                      } catch (error) {
+                        return `${toErrorObject(error, "Native spawn participant selection failed").message} Use sessions_spawn with the requester's requester_profile.id as user.`;
+                      }
+                    }
+                    return undefined;
+                  };
+                  return assertSpawnAllowed;
+                }
                 const input = isJsonObject(payload) ? payload.tool_input : undefined;
                 const targetThreadId =
                   isJsonObject(input) && typeof input.target === "string"
@@ -315,7 +330,7 @@ export function createCodexNativeHookRelay(params: {
                   assertCurrent: preparation.assertCurrent,
                 });
                 assertAdmissionCurrent();
-                return;
+                return undefined;
               }
               const rootThreadId =
                 isJsonObject(payload) && typeof payload.session_id === "string"
@@ -334,6 +349,7 @@ export function createCodexNativeHookRelay(params: {
                 assertAdmissionCurrent,
                 childThreadId ? rootThreadId : undefined,
               );
+              return undefined;
             },
           }
         : undefined,

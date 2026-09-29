@@ -13,12 +13,7 @@ enum GatewayDiscoveryHelpers {
 
     static func sshTarget(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
         guard let host = gateway.serviceHost?.nonEmpty else { return nil }
-        let user = NSUserName()
-        var target = "\(user)@\(host)"
-        if gateway.sshPort != 22 {
-            target += ":\(gateway.sshPort)"
-        }
-        return target
+        return GatewayDiscoveryModel.buildSSHTarget(user: NSUserName(), host: host, port: gateway.sshPort)
     }
 
     static func directUrl(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {

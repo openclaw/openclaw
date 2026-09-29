@@ -1,8 +1,3 @@
-/**
- * Read-only subagent registry accessors.
- *
- * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
- */
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
@@ -14,7 +9,6 @@ import {
   getLatestSubagentRunByChildSessionKeyFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
-  listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
   listRunsForRequesterFromRuns,
   resolveRequesterForChildSessionFromRuns,
@@ -27,7 +21,6 @@ import {
   getSubagentSessionListRunsSnapshotForChildSessions,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
-  getSubagentRunsSnapshotForRead,
   getSubagentRunsSnapshotForSessions,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
@@ -84,7 +77,6 @@ export function buildLatestSubagentSessionListReadIndex(
   );
 }
 
-/** Lists runs controlled by a session key. */
 export function listSubagentRunsForController(
   controllerSessionKey: string,
   controllerAgentId?: string,
@@ -96,7 +88,6 @@ export function listSubagentRunsForController(
   );
 }
 
-/** Counts active descendant runs for a requester/session tree. */
 export function countActiveDescendantRuns(
   rootSessionKey: string,
   requesterAgentId?: string,
@@ -112,15 +103,6 @@ export function countActiveDescendantRuns(
   );
 }
 
-/** Lists descendant runs under a requester/session tree. */
-export function listDescendantRunsForRequester(rootSessionKey: string): SubagentRunRecord[] {
-  return listDescendantRunsForRequesterFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    rootSessionKey,
-  );
-}
-
-/** Counts pending descendant runs below a requester/session tree. */
 export function countPendingDescendantRuns(rootSessionKey: string): number {
   return countPendingDescendantRunsFromRuns(
     getSubagentRunsSnapshotForSessions(subagentRuns, [rootSessionKey]),
@@ -168,7 +150,6 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
   };
 }
 
-/** True when post-completion announce should be skipped for a child session. */
 export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
   return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
     getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),

@@ -295,26 +295,6 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) 
           : merged;
       },
     ),
-    applyDefaultModel: vi.fn((cfg: OpenClawConfig, model: string) => ({
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models: {
-            ...cfg.agents?.defaults?.models,
-            [model]: cfg.agents?.defaults?.models?.[model] ?? {},
-          },
-          model: {
-            ...(typeof cfg.agents?.defaults?.model === "object" &&
-            "fallbacks" in cfg.agents.defaults.model
-              ? { fallbacks: cfg.agents.defaults.model.fallbacks }
-              : undefined),
-            primary: model,
-          },
-        },
-      },
-    })),
   };
 });
 

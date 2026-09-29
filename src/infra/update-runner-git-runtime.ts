@@ -296,12 +296,13 @@ export async function prepareGitRuntimePromotion(
       for (const entry of promoted.toReversed()) {
         assertCurrent();
         await fs.rm(entry.destination, { recursive: true, force: true });
-        assertCurrent();
         if (entry.previous) {
-          await fs.rename(path.join(entry.temporary, "previous"), entry.destination);
           assertCurrent();
+          await fs.rename(path.join(entry.temporary, "previous"), entry.destination);
         }
+        // Completed filesystem effects must not be replayed if the post-check revokes authority.
         promoted.pop();
+        assertCurrent();
       }
     },
     cleanup,

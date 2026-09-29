@@ -14,7 +14,6 @@ extensions/browser/src/browser/chrome-mcp.test.ts
 extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
-extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
 extensions/browser/src/browser/routes/agent.snapshot.ts
 extensions/codex/doctor-contract-api.test.ts
 extensions/codex/src/app-server/approval-bridge.test.ts
@@ -237,7 +236,6 @@ packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/tool-call-repair/src/stream-normalizer.ts
-src/acp/control-plane/manager.test.ts
 src/acp/control-plane/manager.turn-results.test.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
@@ -448,7 +446,6 @@ src/commands/models/list.status.test.ts
 src/commands/onboard-channels.e2e.test.ts
 src/commands/onboarding-plugin-install.test.ts
 src/commands/onboarding-plugin-install.ts
-src/commands/status.test.ts
 src/config/config-misc.test.ts
 src/config/config.plugin-validation.test.ts
 src/config/io.write-config.test.ts
@@ -463,7 +460,6 @@ src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
-src/config/sessions/transcript.ts
 src/config/zod-schema.core.ts
 src/context-engine/context-engine.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
@@ -547,8 +543,6 @@ src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts
 src/gateway/server.cron.test.ts
-src/gateway/server.sessions.compaction.test.ts
-src/gateway/server.sessions.list-changed.test.ts
 src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts
 src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
@@ -570,7 +564,6 @@ src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allow-always.test.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
-src/infra/heartbeat-runner.returns-default-unset.test.ts
 src/infra/host-env-security.test.ts
 src/infra/infra-runtime.test.ts
 src/infra/net/fetch-guard.ssrf.test.ts

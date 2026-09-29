@@ -31,14 +31,8 @@ export async function backupCreateCommand(
     );
     archivePath = result.archivePath;
     if (opts.verify && !opts.dryRun) {
-      const { backupVerifyCommand } = await loadBackupVerifyRuntime();
-      await backupVerifyCommand(
-        {
-          ...runtime,
-          log: () => {},
-        },
-        { archive: result.archivePath, json: false },
-      );
+      const { verifyBackupArchive } = await loadBackupVerifyRuntime();
+      await verifyBackupArchive(result.archivePath);
       result.verified = true;
     }
     if (!opts.dryRun) {

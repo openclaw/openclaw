@@ -16,10 +16,34 @@ import {
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { type RetainUpdateRuntime, withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
-afterEach(() => vi.restoreAllMocks());
+const inspectionFixture = vi.hoisted(() => ({ moduleUrl: "" }));
+vi.mock("./runtime-process-entrypoints.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-process-entrypoints.js")>();
+  return {
+    ...actual,
+    runtimeProcessEntrypoints: {
+      ...actual.runtimeProcessEntrypoints,
+      updateCandidateState: {
+        ...actual.runtimeProcessEntrypoints.updateCandidateState,
+        get currentModuleUrl() {
+          return (
+            inspectionFixture.moduleUrl ||
+            actual.runtimeProcessEntrypoints.updateCandidateState.currentModuleUrl
+          );
+        },
+      },
+    },
+  };
+});
+
+afterEach(() => {
+  inspectionFixture.moduleUrl = "";
+  vi.restoreAllMocks();
+});
 
 type Operations = { append: { input: string; output: string[] } };
 const stores = new Set<SqliteWorkerStore<Operations>>();
@@ -256,6 +280,45 @@ it.each([false, true])(
     expect((await stat(journal)).nlink).toBe(1);
   },
 );
+
+it("runs default inspection from the retained updater and explicit inspection from the target", async () => {
+  const base = await fs.realpath(tempDirs.make("retained-inspection-transport-"));
+  const root = await fixture(base, "npm");
+  const worker = path.join(root, "dist/infra/update-candidate-state.worker.js");
+  await mkdir(path.dirname(worker));
+  const transport = `
+let input = "";
+for await (const chunk of process.stdin) input += chunk;
+process.stdout.write(JSON.stringify({ generation, mode: JSON.parse(input).mode }));
+`;
+  await writeFile(worker, `import { generation } from "../shared-old-hash.mjs";\n${transport}`);
+  inspectionFixture.moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
+  await withRetainedUpdateRuntime(inspectionFixture.moduleUrl, async (retain) => {
+    await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
+    await rename(root, `${root}.previous`);
+    await mkdir(path.dirname(worker), { recursive: true });
+    await writeFile(path.join(root, "package.json"), '{"name":"openclaw","type":"module"}');
+    await writeFile(worker, `const generation = "candidate";\n${transport}`);
+
+    const inspect = (selectedRoot?: string) =>
+      runUpdateStateInspectionWorker({
+        input: { mode: "database-restore-preparation", stateDir: base, config: {} },
+        nodeRunner: process.execPath,
+        root: selectedRoot,
+        sourceEnv: { ...process.env, HOME: base, USERPROFILE: base },
+        stagingRoot: base,
+        databases: [],
+      });
+    const original = await inspect();
+    const target = await inspect(root);
+    expect(original).toMatchObject({ code: 0, termination: "exit" });
+    expect(target).toMatchObject({ code: 0, termination: "exit" });
+    expect([JSON.parse(original.stdout), JSON.parse(target.stdout)]).toEqual([
+      { generation: "retained", mode: "database-restore-preparation" },
+      { generation: "candidate", mode: "database-restore-preparation" },
+    ]);
+  });
+});
 
 it.each([".git", "extensions/retired", "extensions/linked-residue"])(
   "refuses unrelated host files reached through a hoist link to %s",

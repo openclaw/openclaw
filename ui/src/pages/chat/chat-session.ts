@@ -247,14 +247,7 @@ export function switchChatFastMode(
   return applyChatSetting(host, targetSessionKey, captured, { fastMode: next ?? null }, "speed");
 }
 
-type ChatModelSelection = {
-  owner: AbortController;
-  ownsSelection: (sessionId?: string) => boolean;
-  agentScope: { agentId?: string };
-  expectedSessionId?: string;
-  activeRow?: GatewaySessionRow;
-  adoptCreatedSession: (sessionId: string) => boolean;
-};
+type ChatModelSelection = ReturnType<typeof claimChatModelSelection>;
 
 function claimChatModelSelection(host: ChatModelSettingsHost, targetSessionKey: string) {
   modelSelectionOwners.get(host)?.abort();

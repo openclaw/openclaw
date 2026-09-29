@@ -20,10 +20,7 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
     filter: "all",
     browserPath: "",
     browserSearch: "",
-    dock: "right",
-    narrowLayout: false,
     onToggleCollapsed: vi.fn(),
-    onSetDock: vi.fn(),
     onRefresh: vi.fn(),
     onBrowsePath: vi.fn(),
     onOpenFile: vi.fn(),
@@ -56,7 +53,7 @@ describe("session workspace path actions", () => {
       onBrowsePath,
     });
     const mount = document.body.appendChild(document.createElement("div"));
-    render(renderSessionWorkspaceRail(workspace, { embedded: true }), mount);
+    render(renderSessionWorkspaceRail(workspace), mount);
     const parent = mount.querySelector<HTMLButtonElement>('button[aria-label=".."]');
     if (scenario.parent === null) {
       expect(parent).toBeNull();
