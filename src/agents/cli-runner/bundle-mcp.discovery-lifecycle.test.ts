@@ -56,7 +56,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
           .filter(Boolean)
           .map((line) => {
             const child = JSON.parse(line) as { server: string; pids: number[] };
-            return { ...child, pids: child.pids.filter((pid) => !hosts.has(pid)) };
+            child.pids = child.pids.filter((pid) => !hosts.has(pid));
+            return child;
           });
       };
       const sessions: string[] = [];
