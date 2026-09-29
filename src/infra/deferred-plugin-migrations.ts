@@ -210,12 +210,13 @@ export function readDeferredPluginMigrations(
 
 /** Prime resolution in this module before the updater replaces its package. */
 export async function prepareDeferredPluginMigrationRuntime(): Promise<void> {
-  const [leaseStorage] = await Promise.all([
-    import("../state/openclaw-state-lease-worker-storage.js"),
+  const { prepareOpenClawStateLeaseWorkerRuntime } =
+    await import("../state/openclaw-state-lease-worker-storage.js");
+  await Promise.all([
     import("../state/openclaw-state-worker-store.js"),
     import("../plugins/plugin-lifecycle-lease.js"),
+    prepareOpenClawStateLeaseWorkerRuntime(),
   ]);
-  await leaseStorage.prepareOpenClawStateLeaseWorkerRuntime();
 }
 
 /** Keep asynchronous config inspection off the main thread without creating state. */
