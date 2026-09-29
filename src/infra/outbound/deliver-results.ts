@@ -76,7 +76,7 @@ export function createDeliveryResultRecorder(params: {
     try {
       const recorded: boolean[] = [];
       const availableReported = options?.finalResultIsLastReported
-        ? new Map([...reportedResults].reverse())
+        ? new Map([...reportedResults].toReversed())
         : reportedResults;
       const takeReported = (
         matches: (resultIndex: number, identityKey: string) => boolean,
