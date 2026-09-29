@@ -25,7 +25,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
-import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
+import { createPromptBuildToolPolicy } from "./embedded-agent-runner/run/attempt-prompt-support.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
@@ -726,14 +726,23 @@ describe("Tool Search", () => {
       "Call it directly by its declared name",
     );
     expect(computer.execute).not.toHaveBeenCalled();
-    const policy = createAgentHarnessPromptToolPolicy({
+    let activeToolNames = compacted.tools.map((tool) => tool.name);
+    const policy = createPromptBuildToolPolicy({
+      session: {
+        getActiveToolNames: () => activeToolNames,
+        setActiveToolsByName: (names) => {
+          activeToolNames = names;
+        },
+      },
+      effectiveTools: compacted.tools,
+      uncompactedEffectiveTools: [computer, lookup],
       tools: compacted.tools,
       catalogRef,
       codeModeControlsEnabled: false,
     });
-    policy.apply({ toolsAllow: ["fake_lookup"] });
+    policy.apply(["fake_lookup"]);
     await expect(call.execute("hidden", { id: "computer" })).rejects.toThrow("Use tool_search");
-    policy.apply();
+    policy.apply(undefined);
     await expect(call.execute("restored", { id: "computer" })).rejects.toThrow(
       "Call it directly by its declared name",
     );

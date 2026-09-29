@@ -48,7 +48,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       ? {
           ref: params.catalogRef,
           entries: [...(params.catalogEntries ?? currentCatalog.entries)],
-          directOnlyToolNames: params.catalogRef.directOnlyToolNames,
+          directOnlyToolNames: params.catalogRef.baselineDirectOnlyToolNames,
           controlNames: params.codeModeControlsEnabled
             ? new Set([CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME])
             : TOOL_SEARCH_CONTROL_TOOL_NAMES,

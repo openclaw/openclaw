@@ -131,6 +131,7 @@ export type ToolSearchCatalogTelemetry = Omit<ToolSearchCatalogSession, "entries
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
   directOnlyToolNames?: ReadonlySet<string>;
+  baselineDirectOnlyToolNames?: ReadonlySet<string>;
   closedTelemetry?: ToolSearchCatalogTelemetry;
   onChange?: () => void;
   disposeObserver?: () => void;
