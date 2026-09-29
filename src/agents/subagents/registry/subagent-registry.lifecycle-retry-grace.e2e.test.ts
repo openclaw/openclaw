@@ -637,6 +637,7 @@ describe("subagent registry lifecycle error grace", () => {
     }
     expect(
       await maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         settledEntry: liveChild,
         transitionBatch: noop,

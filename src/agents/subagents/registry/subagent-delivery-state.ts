@@ -1,4 +1,5 @@
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import type { RequesterSettleWakeBatchState } from "../announce/subagent-announce.requester-settle-state.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
@@ -322,3 +323,34 @@ export const loadPendingFinalDeliveryPayload = (
     terminalReply: entry.completion?.terminalReply ?? entry.delivery?.payload?.terminalReply,
   };
 };
+
+export function transitionRequesterSettleWakeState(
+  entry: SubagentRunRecord,
+  state: RequesterSettleWakeBatchState,
+): void {
+  entry.requesterSettleWake = {
+    ...state,
+    ...(entry.requesterSettleWake?.progressOperationId
+      ? { progressOperationId: entry.requesterSettleWake.progressOperationId }
+      : {}),
+    ...(entry.requesterSettleWake?.retireAfterSettle === true ? { retireAfterSettle: true } : {}),
+  };
+}
+
+/** Clear this wake and return its existing row-retirement decision. */
+export function completeRequesterSettleWakeState(entry: SubagentRunRecord): boolean {
+  let retire = false;
+  if (entry.pauseReason !== "sessions_yield") {
+    if (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) {
+      entry.retireAfterRequesterTurn =
+        entry.retireAfterRequesterTurn === true ||
+        entry.requesterSettleWake?.retireAfterSettle === true
+          ? true
+          : undefined;
+    } else {
+      retire = entry.requesterSettleWake?.retireAfterSettle === true;
+    }
+  }
+  entry.requesterSettleWake = undefined;
+  return retire;
+}

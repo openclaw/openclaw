@@ -200,9 +200,9 @@ export class SubagentLifecycleController {
   runRequesterSettleWake = (
     entry: SubagentRunRecord,
     run: () => Promise<unknown>,
+    isCurrent: () => boolean,
   ): Promise<unknown> => {
-    const runCurrent = async () =>
-      this.options.runs.get(entry.runId) === entry ? run() : undefined;
+    const runCurrent = async () => (isCurrent() ? run() : undefined);
     // Retry timers can outlive their original async scope. Reserve a detached
     // Gateway root before the limiter, then revalidate row ownership when the
     // execution slot opens; the queued wait still counts during restart drain.
@@ -228,7 +228,10 @@ export class SubagentLifecycleController {
     this.scheduledRequesterSettleWakeRuns.delete(entry);
     // Retryable durable wakes remain startup recovery. Once settlement retires
     // that state, the same run id must return to the ordinary live path.
-    if (!this.options.runs.get(entry.runId)?.requesterSettleWake) {
+    if (
+      !this.options.runs.get(entry.runId)?.requesterSettleWake &&
+      !this.pendingRequesterSettleWakeCommits.get(entry)?.isCurrent(entry)
+    ) {
       this.restoredRequesterSettleWakeRuns.delete(entry.runId);
     }
   };

@@ -4,7 +4,6 @@ import type { Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import type { BoundSubagentRunRecord } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
@@ -86,12 +85,12 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
 }
 
 /** Canonically serializes a run before an outer transaction acquires the write lock. */
-export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRunRecord {
+export function bindSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
   return bindMutableSubagentRunRecord(structuredClone(entry));
 }
 
 /** Binds an isolated registry capture without copying its complete payload again. */
-export function bindCapturedSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRunRecord {
+export function bindCapturedSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
   assertCanonicalSubagentRunRecord(entry);
   const completion = entry.completion;
   const hadTerminalReply = Object.hasOwn(completion, "terminalReply");
@@ -109,7 +108,7 @@ export function bindCapturedSubagentRunRecord(entry: SubagentRunRecord): BoundSu
   }
 }
 
-function bindMutableSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRunRecord {
+function bindMutableSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
   const normalized = normalizeSubagentRunState(entry);
   assertCanonicalSubagentRunRecord(normalized);
   return {
