@@ -73,7 +73,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseSettingsScreenshot() {
-        self.captureReleaseScreenshot(Self.settingsScreenshotTarget)
+        self.captureReleaseScreenshot(Self.settingsScreenshotTarget) { app in
+            // The connected fixture must not also render the first-run pairing hero.
+            XCTAssertTrue(app.buttons["Reconnect"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.buttons["Scan QR to Pair"].exists)
+        }
     }
 
     func testWatchMessageDeliveryIsReachableFromSettings() throws {

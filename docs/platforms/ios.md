@@ -635,6 +635,7 @@ The app keeps a registry of every Gateway it has paired with, so you can switch 
 - Credentials, TLS trust decisions, per-gateway preferences, and cached chat history are stored per Gateway. Switching never mixes state between Gateways, and push registration follows the active Gateway.
 - Swipe a paired Gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
 - Discovered Gateways must be visible on the network to switch to them; manual Gateways reconnect by saved host and port.
+- Demo and screenshot mode hide saved Gateways: the sidebar picker and **Settings → Gateway** show only the fixture connection, without the **Paired Gateways** list.
 
 ## Computer Use relationship
 

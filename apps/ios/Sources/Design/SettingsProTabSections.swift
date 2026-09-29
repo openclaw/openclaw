@@ -139,7 +139,10 @@ extension SettingsProTab {
             }
 
             self.gatewaySetupCard
-            self.pairedGatewaysCard
+            // Fixtures hide saved gateways, so an empty list would read as unpaired.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.pairedGatewaysCard
+            }
 
             Section {
                 SettingsDetailRow("Address", value: .verbatim(self.gatewayAddress))
