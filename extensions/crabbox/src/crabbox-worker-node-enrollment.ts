@@ -31,6 +31,7 @@ export type CrabboxWorkerNodeRuntimePreparation = Awaited<
 >;
 
 export function createCrabboxNodeRuntimeSetup(params: {
+  bootstrapTimeoutMs?: number;
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
   workerBundle: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
   leaseId: string;
@@ -39,6 +40,7 @@ export function createCrabboxNodeRuntimeSetup(params: {
 }
 
 function createCrabboxNodeSetup(params: {
+  bootstrapTimeoutMs?: number;
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
   leaseId: string;
   enrollment?: CrabboxWorkerNodeEnrollment;
@@ -181,7 +183,7 @@ setPhase("preparation");
     if (pin && !/^[a-f0-9]{64}$/.test(pin)) throw new Error("Cloud worker bootstrap TLS fingerprint is invalid");
     const transport = url.protocol === "https:" ? https : http;
     const request = transport.request(url, {
-      agent: false, headers: { authorization: "Bearer " + token, ...(offset ? { range: "bytes=" + offset + "-" } : {}) }, signal: AbortSignal.any([downloadAbort.signal, AbortSignal.timeout(600000)]),
+      agent: false, headers: { authorization: "Bearer " + token, ...(offset ? { range: "bytes=" + offset + "-" } : {}) }, signal: AbortSignal.any([downloadAbort.signal, AbortSignal.timeout(${params.bootstrapTimeoutMs ?? enrollment?.bootstrapTimeoutMs ?? 600_000})]),
       ...(pin ? { rejectUnauthorized: false, session: Buffer.alloc(0) } : {}),
     });
     // The response/body readers still reject; keep errors observed between their awaits.

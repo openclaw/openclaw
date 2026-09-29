@@ -46,6 +46,7 @@ async function download(
   outcomes: DownloadOutcome[] | ((elapsedMs: number) => DownloadOutcome),
   freshRuntime = false,
   install = { durationMs: 0, exitCode: 0 },
+  bootstrapTimeoutMs?: number,
 ) {
   const sha256 = createHash("sha256").update(archive).digest("hex");
   const workerBundle = {
@@ -61,6 +62,7 @@ async function download(
   });
   const setup = createCrabboxNodeRuntimeSetup({
     leaseId: "cbx_download_fixture",
+    bootstrapTimeoutMs,
     nodeBootstrap,
     workerBundle,
   });
@@ -78,9 +80,12 @@ async function download(
   const grants = new Map<string, AbortSignal>(
     [nodeBootstrap, workerBundle].map((artifact) => {
       const controller = new AbortController();
-      setTimeout(() => {
-        controller.abort(Object.assign(new Error("capability expired"), { code: "ECONNRESET" }));
-      }, 10 * 60_000);
+      setTimeout(
+        () => {
+          controller.abort(Object.assign(new Error("capability expired"), { code: "ECONNRESET" }));
+        },
+        bootstrapTimeoutMs ?? 10 * 60_000,
+      );
       return [`Bearer ${artifact.token}`, controller.signal] as const;
     }),
   );
@@ -274,7 +279,13 @@ async function download(
       any: (signals: AbortSignal[]) => AbortSignal.any(signals),
       timeout: (ms: number) => {
         const controller = new AbortController();
-        setTimeout(() => controller.abort(new Error("request deadline exceeded")), ms);
+        setTimeout(
+          () =>
+            controller.abort(
+              Object.assign(new Error("request deadline exceeded"), { code: "ABORT_ERR" }),
+            ),
+          ms,
+        );
         return controller.signal;
       },
     },
@@ -339,19 +350,25 @@ async function download(
 
 describe("bootstrap artifact download retries", () => {
   it.each([
-    [9, 8],
-    [8, 9],
+    { runtimeMinutes: 9, workerMinutes: 8, bootstrapTimeoutMs: undefined },
+    { runtimeMinutes: 8, workerMinutes: 9, bootstrapTimeoutMs: undefined },
+    { runtimeMinutes: 34, workerMinutes: 33, bootstrapTimeoutMs: 45 * 60_000 },
   ])(
-    "completes %i/%i-minute downloads before both grants expire",
-    async (runtimeMinutes, workerMinutes) => {
+    "completes $runtimeMinutes/$workerMinutes-minute downloads before both grants expire",
+    async ({ runtimeMinutes, workerMinutes, bootstrapTimeoutMs }) => {
       const result = await download(
         [{ durationMs: runtimeMinutes * 60_000 }, { durationMs: workerMinutes * 60_000 }],
         true,
         { durationMs: 2 * 60_000, exitCode: 0 },
+        bootstrapTimeoutMs,
       );
       expect(result.code, result.output).toBe(0);
       expect(result.elapsedMs).toBe(Math.max(runtimeMinutes + 2, workerMinutes) * 60_000);
-      expect(result.completedAt).toEqual([8 * 60_000, 9 * 60_000]);
+      expect(result.completedAt).toEqual(
+        [runtimeMinutes, workerMinutes]
+          .toSorted((left, right) => left - right)
+          .map((minutes) => minutes * 60_000),
+      );
       expect(result.aborted).toEqual([]);
       expect(result.requests).toEqual([
         "Bearer synthetic-bootstrap-token",

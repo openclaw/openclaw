@@ -4,7 +4,7 @@ import {
   createArtifactTransferService,
   type ArtifactTransferOptions,
 } from "./artifact-transfer-service.js";
-import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
