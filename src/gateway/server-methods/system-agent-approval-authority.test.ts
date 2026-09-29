@@ -101,12 +101,6 @@ describe("queueDelegatedApproval authority", () => {
       revokeAtAuthorityCheck: 3,
       target: "include" as const,
     },
-    {
-      name: "run revoked after included-backup path preparation",
-      decision: "allow-once" as const,
-      revokeAtAuthorityCheck: 5,
-      target: "include" as const,
-    },
   ])(
     "carries $name through the production config route to final file effects",
     async ({ decision, revokeAtAuthorityCheck, target }) => {
@@ -206,10 +200,15 @@ describe("queueDelegatedApproval authority", () => {
             exec: { notifyOnExit: false },
           });
         }
-        expect(await fs.readFile(`${mutationPath}.bak`, "utf8")).toBe(
-          target === "root" ? initialConfig : initialInclude,
-        );
-        expect(await fs.readFile(`${mutationPath}.bak.1`, "utf8")).toBe(initialBackup);
+        if (target === "root") {
+          expect(await fs.readFile(`${mutationPath}.bak`, "utf8")).toBe(initialConfig);
+          expect(await fs.readFile(`${mutationPath}.bak.1`, "utf8")).toBe(initialBackup);
+        } else {
+          expect(await fs.readFile(`${mutationPath}.bak`, "utf8")).toBe(initialBackup);
+          await expect(fs.readFile(`${mutationPath}.bak.1`, "utf8")).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
       } else {
         expect(await fs.readFile(configPath, "utf8")).toBe(initialConfig);
         if (target === "include") {

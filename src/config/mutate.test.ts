@@ -1822,6 +1822,74 @@ describe("config mutate helpers", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "keeps delegated include effects inside the approved root after an ancestor swap",
+    async () => {
+      const home = await suiteRootTracker.make("delegated-include-ancestor-swap");
+      const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+      const includeDirectory = path.dirname(pluginsPath);
+      const displacedDirectory = path.join(path.dirname(includeDirectory), "config-original");
+      const outsideDirectory = path.join(home, "outside");
+      const outsidePluginsPath = path.join(outsideDirectory, path.basename(pluginsPath));
+      const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+      const initialBackupRaw = "approved-root-backup\n";
+      const outsidePluginsRaw = "outside-include\n";
+      const outsideBackupRaw = "outside-backup\n";
+      await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+      await fs.writeFile(`${pluginsPath}.bak`, initialBackupRaw, "utf-8");
+      await fs.mkdir(outsideDirectory, { recursive: true });
+      await fs.writeFile(outsidePluginsPath, outsidePluginsRaw, "utf-8");
+      await fs.writeFile(`${outsidePluginsPath}.bak`, outsideBackupRaw, "utf-8");
+      const snapshot = createSnapshot({
+        hash: "hash-delegated-include-ancestor-swap",
+        path: configPath,
+        parsed: { plugins: { $include: "./config/plugins.json5" } },
+        sourceConfig: { plugins: { entries: {} } },
+      });
+      let ancestorSwapped = false;
+
+      try {
+        await expect(
+          replaceConfigFile({
+            baseHash: snapshot.hash,
+            snapshot,
+            writeOptions: {
+              expectedConfigPath: snapshot.path,
+              assertConfigPathForWrite: allowConfigPathWrite,
+              assertConfigMutationAuthority: () => {},
+              includeFileTargetsForWrite: {
+                [pluginsPath]: await resolveIncludeTarget(pluginsPath),
+              },
+              preCommitRuntimePreflight: async () => {
+                await fs.rename(includeDirectory, displacedDirectory);
+                await fs.symlink(outsideDirectory, includeDirectory, "dir");
+                ancestorSwapped = true;
+              },
+            },
+            nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
+          }),
+        ).rejects.toThrow();
+
+        await expect(
+          fs.readFile(path.join(displacedDirectory, path.basename(pluginsPath)), "utf-8"),
+        ).resolves.toBe(initialPluginsRaw);
+        await expect(
+          fs.readFile(path.join(displacedDirectory, `${path.basename(pluginsPath)}.bak`), "utf-8"),
+        ).resolves.toBe(initialBackupRaw);
+        await expect(fs.readFile(outsidePluginsPath, "utf-8")).resolves.toBe(outsidePluginsRaw);
+        await expect(fs.readFile(`${outsidePluginsPath}.bak`, "utf-8")).resolves.toBe(
+          outsideBackupRaw,
+        );
+        expect(backupMocks.maintainConfigBackups).not.toHaveBeenCalled();
+      } finally {
+        if (ancestorSwapped) {
+          await fs.unlink(includeDirectory);
+          await fs.rename(displacedDirectory, includeDirectory);
+        }
+      }
+    },
+  );
+
   it("does not write an include after the active config path changes during preflight", async () => {
     const home = await suiteRootTracker.make("include-active-path-preflight-concurrent");
     const firstConfigPath = path.join(home, "first", "openclaw.json");
