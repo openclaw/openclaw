@@ -18,7 +18,7 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
-import { panesOf, visiblePanesOf } from "./split-layout.ts";
+import { visiblePanesOf } from "./split-layout.ts";
 
 export type ChatAttachmentGatewayOwner = ApplicationContext["gateway"]["snapshot"]["client"];
 
@@ -339,8 +339,6 @@ export function replacePaneStagedAttachmentGatewayOwner(
 
 type StagedAttachmentPane = Element & {
   paneId: string;
-  sessionKey: string;
-  discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
 };
 
@@ -355,23 +353,4 @@ export function resumeStagedPanes(
       pane.resumeStagedAttachments?.();
     }
   }
-}
-
-export function closeStagedPane(
-  context: ApplicationContext,
-  root: ParentNode,
-  layout: ChatSplitLayout,
-  paneId: string,
-) {
-  const survivingPane = panesOf(layout).find((candidate) => candidate.id !== paneId);
-  const mounted = [...root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")].filter(
-    (candidate) => candidate.paneId === paneId,
-  );
-  // Clear every retained presentation first so their disconnects cannot
-  // restage a package under a later reused logical pane id.
-  for (const pane of mounted) {
-    pane.discardStagedAttachments?.();
-  }
-  context.chatAttachmentHandoff.clearPane(paneId);
-  return survivingPane;
 }
