@@ -4,6 +4,10 @@ import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { existsSync } from "node:fs";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../../../test/helpers/sqlite-parent-observer.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
@@ -430,9 +434,10 @@ it.each([
     }
     await fixture.settle();
     registryState.clearSubagentRunsReadCacheForTest();
-    const sql = observeMainThreadSql();
-    sql.calibrate();
-    let counts: number[];
+    // Warm initialization ends here. Count all eight host APIs through Stop and
+    // its owned settlement; independent durable readbacks begin after restore.
+    const sql = observeParentSqlite();
+    let counts: ReturnType<typeof emptySqliteCounts>;
     let unexpectedHold: ReturnType<typeof holdQueuedSwarmRun>;
     let cancellation: ReturnType<typeof tool.execute> | undefined;
     try {
@@ -467,14 +472,9 @@ it.each([
       terminalRelease.resolve();
       admission?.release();
       await Promise.allSettled([runnerSettlement, cancellation]);
-      counts = sql.calls.map((probe) => probe.mock.calls.length);
+      counts = { ...sql.counts };
       sql.restore();
       if (earlierSuccess) {
-        // Ordinary success cleanup shares this observed window; its composed proof owns
-        // the whole-window zero-SQL assertion after the separate owner cutover.
-        console.info("Earlier-success Stop SQL, including ordinary cleanup", {
-          counts,
-        });
         resetGlobalHookRunner();
       }
       for (const { id, sessionId, handle } of handles) {
@@ -534,9 +534,8 @@ it.each([
           loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry
             .abortedLastRun,
         ).not.toBe(true);
-      } else {
-        expect(counts).toEqual(counts.map(() => 0));
       }
+      expect(counts).toEqual(emptySqliteCounts());
     } finally {
       await unexpectedHold?.release();
     }

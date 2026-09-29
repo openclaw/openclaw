@@ -67,6 +67,21 @@ policy read obtains current rows; it does not retain migration exclusions across
 later operations. The updater's synchronous effect guards retain their existing
 fresh-read contract in their CLI or child-process owners.
 
+Candidate update validation records snapshot, startup, and temporary-copy cleanup
+progress through the shared-state worker. The updater retains the original
+database and executor authority, awaits accepted receipts before advancing, and
+drains them before signal cleanup releases the executor. The worker uses the
+existing synchronous step mutation and checks recovery policy inside its
+transaction. An uncertain write keeps its cleanup error and prevents further
+rehearsal cleanup; it does not become an ordinary validation failure. Signal
+cleanup leaves history pending when an accepted write's outcome is unknown; a
+later successful receipt does not clear that uncertainty. Stored formats,
+schemas, and path-redaction rules are unchanged.
+
+The installed updater still owns its first upgrade hop. Shipped synchronous
+ledger APIs, effect guards, general command progress, and finalization writes
+remain with their existing owners until their separate worker cutovers.
+
 Plugin requirement batches prepare their final installed index through the existing
 metadata worker after installation and compensation settle. Preparation seals
 collection, reads an uncached row from the captured database, and retains the

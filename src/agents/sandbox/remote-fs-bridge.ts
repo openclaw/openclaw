@@ -192,7 +192,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     await this.ensureRemoteWritable(destination, "copy files", params.signal);
     await this.assertNoHardlinkedFile({
       containerPath: destination.containerPath,
-      action: "copy files",
       signal: params.signal,
     });
     const sourcePinned = await this.resolvePinnedTarget({
@@ -265,7 +264,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     if (kind === "write") {
       await this.assertNoHardlinkedFile({
         containerPath: target.containerPath,
-        action,
         signal: params.signal,
       });
     }
@@ -399,7 +397,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
     await this.assertNoHardlinkedFile({
       containerPath: canonicalPath,
-      action: "stat files",
       signal: params.signal,
     });
     const result = await this.runtime.runRemoteShellScript({
@@ -616,7 +613,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
 
   private async assertNoHardlinkedFile(params: {
     containerPath: string;
-    action: string;
     signal?: AbortSignal;
   }): Promise<void> {
     // Remote mutation helpers pin by parent path. Rejecting hardlinked regular

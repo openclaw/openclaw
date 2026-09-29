@@ -111,7 +111,7 @@ describe("cron one-shot removal", () => {
         true,
       );
       expect(
-        writeCronJobScratch({
+        await writeCronJobScratch({
           storePath,
           jobId: job.id,
           content: "original scratch",
@@ -157,7 +157,7 @@ describe("cron one-shot removal", () => {
     "restores %s wake state when the final deletion write fails",
     async (path) => {
       const { storePath, nowMs, job, events, state } = await createFixture(path);
-      writeCronJobScratch({
+      await writeCronJobScratch({
         storePath,
         jobId: job.id,
         content: "scratch must survive rollback",

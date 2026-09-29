@@ -1,3 +1,4 @@
+import type { CronJobScratchWriteOutcome } from "../scratch-contract.js";
 import type { DeferredCronNotifications } from "../service/state.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import type { CronRunReceiptHandle, PreparedCronRunReceiptClaim } from "./run-receipt.types.js";
@@ -11,6 +12,12 @@ type CronScheduleOwnershipFacts = {
 };
 
 export type CronRuntimeMutationContracts = {
+  "cron.writeScratch": {
+    input: CronRuntimeMutationInputs["cron.writeScratch"];
+    facts: { configRevision?: string };
+    preparation: Record<string, never>;
+    outcome: CronJobScratchWriteOutcome;
+  };
   "cron.mutateJobs": {
     input: CronRuntimeMutationInputs["cron.mutateJobs"];
     facts: { deletionBlocked: boolean };

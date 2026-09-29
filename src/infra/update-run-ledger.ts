@@ -43,6 +43,7 @@ import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { readRecoveries } from "./update-run-recovery-store.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
+  applyUpdateRunStep,
   mutateRun,
   mutateRunInTransaction,
   persistRun,
@@ -344,18 +345,7 @@ export function recordUpdateRunStep(
   { reason, ...step }: UpdateRunStep & { reason?: string },
   options: LedgerOptions = {},
 ): UpdateRunRecord {
-  return mutateRun(
-    runId,
-    (record) => {
-      if (record.status === "running") {
-        upsertStep(record, step);
-        if (reason !== undefined) {
-          record.reason = reason;
-        }
-      }
-    },
-    options,
-  );
+  return mutateRun(runId, (record) => applyUpdateRunStep(record, { ...step, reason }), options);
 }
 
 export function recordUpdateRunRepairContinuation(

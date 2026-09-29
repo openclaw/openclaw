@@ -211,7 +211,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
     const monitor = "job" in added ? added.job : added;
     if (options.scratch !== undefined) {
       expect(
-        writeCronJobScratch({ storePath, jobId: monitor.id, content: options.scratch }).ok,
+        (await writeCronJobScratch({ storePath, jobId: monitor.id, content: options.scratch })).ok,
       ).toBe(true);
     }
     async function holdLane(lane: string) {

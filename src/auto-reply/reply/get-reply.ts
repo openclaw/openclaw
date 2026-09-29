@@ -670,9 +670,6 @@ export async function getReplyFromConfig(
       if (heartbeatPending.shouldClear) {
         Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         sessionEntryHandle.replaceCurrent(sessionEntry);
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
-        }
         if (sessionKey && storePath) {
           const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
           await updateSessionEntry(

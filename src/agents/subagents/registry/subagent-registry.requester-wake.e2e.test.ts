@@ -32,6 +32,8 @@ import { announceTesting as subagentAnnounceTesting } from "../announce/subagent
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { countActiveDescendantRunsFromRuns } from "./subagent-registry-queries.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type {
   GatewayRequest,
@@ -815,9 +817,9 @@ describe("requester settle wake product flow", () => {
             expect(visibleFinals).toBe(0);
             expect(append).not.toHaveBeenCalled();
             if (acceptNextChild) {
-              expect(registry.countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY, "main")).toBe(
-                1,
-              );
+              expect(
+                countActiveDescendantRunsFromRuns(subagentRuns, MAIN_REQUESTER_SESSION_KEY, "main"),
+              ).toBe(1);
               expect(registry.getSubagentRunByRunId(beta.runId)).toMatchObject({
                 requesterTurnRunId: undefined,
                 requesterSettleWake: {
@@ -868,7 +870,9 @@ describe("requester settle wake product flow", () => {
             ]);
             expect(visibleFinals).toBe(1);
             expect(sendMessageMock).not.toHaveBeenCalled();
-            expect(registry.countActiveDescendantRuns(MAIN_REQUESTER_SESSION_KEY, "main")).toBe(0);
+            expect(
+              countActiveDescendantRunsFromRuns(subagentRuns, MAIN_REQUESTER_SESSION_KEY, "main"),
+            ).toBe(0);
             if (attachRequesterFinal) {
               expect(append).toHaveBeenCalledExactlyOnceWith("completion delivered");
             }

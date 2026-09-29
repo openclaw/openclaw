@@ -200,57 +200,61 @@ async function runAdmittedUpdate(
     await initialization?.registerRun(run);
     const presentation = createUpdateProgress(!opts.json, run);
     disposePresentation = presentation.dispose;
-    const executeWith = async (executor: UpdateCommandExecutor) => {
-      await admitUpdateRequesterContinuation(
-        run,
-        executor,
-        resolveUpdateCommandAdmissionRoot(prepared),
-        serviceRoot,
-      );
-      const execute = () => {
-        executionStarted = true;
-        if (refusal) {
-          assertInitializationCurrent?.();
-          throw refusal;
-        }
-        return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
-          updateCommandInternal(
-            opts,
-            recoveryState,
-            invocationCwd,
-            prepared,
-            presentation,
-            executor,
-            retainRuntime,
-            initialization,
-          ),
+    const executeWith = (executor: UpdateCommandExecutor) =>
+      withUpdatePreviewSignals(opts, async () => {
+        await admitUpdateRequesterContinuation(
+          run,
+          executor,
+          resolveUpdateCommandAdmissionRoot(prepared),
+          serviceRoot,
         );
-      };
-      if (inputOpts.dryRun || !prepared.controlPlaneUpdateSentinelMeta?.handoffId) {
-        return execute();
-      }
-      // The admitted helper owns native stop and recovery for this invocation.
-      // A handoff tuple alone never grants authority to an ordinary service caller.
-      const fence =
-        run.executorFence ??
-        (await executor.enter(prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot, {
-          preflight: true,
-          serviceRoot: prepared.servicePlan?.serviceRoot,
-        }));
-      run.executorFence = fence;
-      const runId = run.runId;
-      const assertCurrent = () => {
-        if (opts.run !== run || run.runId !== runId || run.executorFence !== fence) {
-          throw new UpdateCommandRecoveryPendingError(
-            "Managed updater lost its admitted executor.",
+        const execute = () => {
+          executionStarted = true;
+          if (refusal) {
+            assertInitializationCurrent?.();
+            throw refusal;
+          }
+          return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
+            updateCommandInternal(
+              opts,
+              recoveryState,
+              invocationCwd,
+              prepared,
+              presentation,
+              executor,
+              retainRuntime,
+              initialization,
+            ),
           );
+        };
+        if (inputOpts.dryRun || !prepared.controlPlaneUpdateSentinelMeta?.handoffId) {
+          return execute();
         }
-        captureUpdateCommandExecutorAuthority(fence, runId);
-      };
-      return withGatewayServiceUpdateAuthority(assertCurrent, execute, {
-        originalRoot: captureUpdateCommandExecutorAuthority(fence, runId).installKey,
+        // The admitted helper owns native stop and recovery for this invocation.
+        // A handoff tuple alone never grants authority to an ordinary service caller.
+        const fence =
+          run.executorFence ??
+          (await executor.enter(
+            prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
+            {
+              preflight: true,
+              serviceRoot: prepared.servicePlan?.serviceRoot,
+            },
+          ));
+        run.executorFence = fence;
+        const runId = run.runId;
+        const assertCurrent = () => {
+          if (opts.run !== run || run.runId !== runId || run.executorFence !== fence) {
+            throw new UpdateCommandRecoveryPendingError(
+              "Managed updater lost its admitted executor.",
+            );
+          }
+          captureUpdateCommandExecutorAuthority(fence, runId);
+        };
+        return withGatewayServiceUpdateAuthority(assertCurrent, execute, {
+          originalRoot: captureUpdateCommandExecutorAuthority(fence, runId).installKey,
+        });
       });
-    };
     const execute = initialization
       ? () => executeWith(initialization.executor)
       : () =>
@@ -262,7 +266,7 @@ async function runAdmittedUpdate(
               }, opts),
             ),
           );
-    await withUpdatePreviewSignals(opts, execute);
+    await execute();
   } catch (error) {
     // Execution owns recovery; only failures before execution starts are terminalized here.
     if (!executionStarted) {
@@ -284,10 +288,9 @@ async function updateCommandInternal(
   retainRuntime: RetainUpdateRuntime,
   initialization?: InitializedUpdate,
 ): Promise<void> {
-  const { timeoutMs } = prepared;
   const run = opts.run!;
   const updateStepTimeoutMs =
-    timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
+    prepared.timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   const target =
     initialization?.target ??
@@ -445,6 +448,7 @@ async function runResolvedUpdate(
   }
 
   const currentCoreFinalization = {
+    opts,
     legacyConfigPlan,
     root,
     previousInstallRoot: discoveredRoot,
@@ -484,7 +488,6 @@ async function runResolvedUpdate(
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
     return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
-      opts,
       result: {
         status: "skipped",
         mode: packageInstallTarget?.manager ?? "unknown",
@@ -633,7 +636,6 @@ async function runResolvedUpdate(
     return await finishAlreadyCurrentUpdate({
       ...currentCoreFinalization,
       root: result.root ?? root,
-      opts,
       result,
       ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
       packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,

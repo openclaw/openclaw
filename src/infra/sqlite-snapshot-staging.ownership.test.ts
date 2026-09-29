@@ -89,6 +89,9 @@ it("shares one token process across concurrent and nested async snapshot lifetim
       let tokenPid: number;
       try {
         await Promise.all(allocations);
+        await expect(
+          createSqliteSnapshotStagingDirectory(path.join(cache, "missing"), false, undefined, true),
+        ).rejects.toThrow("snapshot staging root");
         const nested = await createSqliteSnapshotStagingDirectory(
           directories[0],
           false,

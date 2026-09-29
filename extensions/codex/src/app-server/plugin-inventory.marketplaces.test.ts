@@ -96,7 +96,6 @@ describe("Codex marketplace-qualified plugin inventory", () => {
         },
       },
       configCwd: "/repo/company",
-      readPluginDetails: false,
       request: async (method, params) => {
         expect(params).toEqual({ cwds: ["/repo/company"] });
         if (method === "plugin/installed" || method === "plugin/list") {
@@ -186,7 +185,6 @@ describe("Codex marketplace-qualified plugin inventory", () => {
         },
       },
       configCwd: "/repo/company",
-      readPluginDetails: false,
       request: async (method, params) => {
         calls.push({ method, params });
         if (method === "plugin/installed") {
@@ -204,6 +202,12 @@ describe("Codex marketplace-qualified plugin inventory", () => {
             },
           );
         }
+        if (method === "plugin/read") {
+          return pluginDetail("security-review", [], {
+            marketplaceName: "company-tools",
+            marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+          });
+        }
         throw new Error(`unexpected request ${method}`);
       },
     });
@@ -211,6 +215,13 @@ describe("Codex marketplace-qualified plugin inventory", () => {
     expect(calls).toEqual([
       { method: "plugin/installed", params: { cwds: ["/repo/company"] } },
       { method: "plugin/list", params: { cwds: ["/repo/company"] } },
+      {
+        method: "plugin/read",
+        params: {
+          marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+          pluginName: "security-review",
+        },
+      },
     ]);
     expect(inventory.records[0]).toMatchObject({
       policy: { marketplaceName: "company-tools" },
@@ -285,7 +296,6 @@ describe("Codex marketplace-qualified plugin inventory", () => {
       appCacheKey: "runtime",
       configCwd: "/repo/company",
       metadataCache,
-      readPluginDetails: false,
       request: async (method) => {
         if (method === "plugin/installed") {
           return { marketplaces: [], marketplaceLoadErrors: [] };
@@ -301,6 +311,9 @@ describe("Codex marketplace-qualified plugin inventory", () => {
                 name: "openai-curated",
                 path: "/managed/openai-curated/marketplace.json",
               });
+        }
+        if (method === "plugin/read") {
+          return pluginDetail(catalogCalls === 1 ? "security-review" : "calendar", []);
         }
         throw new Error(`unexpected request ${method}`);
       },

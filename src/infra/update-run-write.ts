@@ -46,6 +46,18 @@ export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void 
   }
 }
 
+export function applyUpdateRunStep(
+  record: UpdateRunRecord,
+  { reason, ...step }: UpdateRunStep & { reason?: string },
+): void {
+  if (record.status === "running") {
+    upsertStep(record, step);
+    if (reason !== undefined) {
+      record.reason = reason;
+    }
+  }
+}
+
 export function persistRun(
   db: DatabaseSync,
   record: UpdateRunRecord,

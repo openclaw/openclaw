@@ -106,6 +106,7 @@ export async function executeMutableUpdate(
     assertBoundChildCurrent,
     onStateHandoff,
     admitExecutor,
+    captureWriteOptions,
   } = createUpdateCommandExecutionGuards(opts, params.root);
   let retentionInstallTarget = params.packageInstallTarget;
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
@@ -436,7 +437,13 @@ export async function executeMutableUpdate(
       validatedConfigSnapshot ??
       (await readUpdateCandidateSource(env, params.legacyConfigPlan, { configValidation }));
     const validation = await validateUpdateCandidateWithProgress(
-      { root, config: snapshot.config, env, assertCurrent: assertExecutionCurrent },
+      {
+        root,
+        config: snapshot.config,
+        env,
+        assertCurrent: assertExecutionCurrent,
+        writeOptions: captureWriteOptions(),
+      },
       params,
       originalRun,
     );

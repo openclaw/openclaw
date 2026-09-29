@@ -580,11 +580,23 @@ become visible only after confirmed native commit and settlement; a missing repl
 does not replay the mutation. One-use creator grants retain their original
 issuer and scope for repeated live checks without redeeming the token again.
 Effectful caller preconditions execute once, and their observed target is checked
-again by the native transaction. Ordinary removal deletes scratch in that same
-transaction. Agent-roster compensation retains its separate scratch-cleanup
+again by the native transaction. A refused job or receipt mutation invalidates
+the scheduler's cached observation before another edit; a foreign receipt owner
+can finish without publishing a local revision. Unchanged declaration validation
+does not mark a user mutation as committed. Ordinary removal deletes scratch in
+that same transaction. Agent-roster compensation retains its separate scratch-cleanup
 boundary until the roster outcome is known. Doctor metadata callbacks, synchronous
 diagnostic reads, and full creator-session/harness currentness predicates retain
 their existing owners and remain separate caller-migration work.
+
+Ordinary scratch and heartbeat-proposal writes use that same Cron worker. Job
+existence and scratch revision are checked in one transaction; guarded service
+writes also bind the current job definition and retain live caller authority at
+transaction and commit admission. Only an actual scratch write marks its business
+completion receipt. Unset tombstones, byte limits, source provenance and uncertain
+outcome handling are unchanged. Doctor's migration and compensation keep the same
+synchronous kernel; ordinary scratch reads remain separate migration work. This
+changes no schema, retention policy, public API or installed-updater contract.
 
 Cron recovery observes each batch in one shared-state read-worker snapshot. Healthy
 live receipts need no writer admission. A missing receipt table uses its existing

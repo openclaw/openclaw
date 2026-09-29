@@ -454,38 +454,42 @@ describe.runIf(supportsChmodDenial)("chmod-denied cleanup failure", () => {
   });
 });
 
-it("does not emit a warning when cleanup succeeds", async () => {
-  const ownedRoot = path.join(root, "healthy");
-  const location = path.join(ownedRoot, "database.sqlite");
-  await fs.promises.mkdir(ownedRoot, { recursive: true, mode: 0o700 });
-  await fs.promises.writeFile(location, "snapshot bytes");
+it.each(["idle", "pending"] as const)(
+  "preserves replacement bytes when stale async cleanup is %s",
+  async (asyncState) => {
+    const ownedRoot = path.join(root, "healthy");
+    const location = path.join(ownedRoot, "database.sqlite");
+    await fs.promises.mkdir(ownedRoot, { recursive: true, mode: 0o700 });
+    await fs.promises.writeFile(location, "snapshot bytes");
 
-  const reports: CleanupFailureReport[] = [];
-  const prepared = adoptPreparedLocation(location, ownedRoot, false, (report) =>
-    reports.push(report),
-  );
+    const reports: CleanupFailureReport[] = [];
+    const prepared = adoptPreparedLocation(location, ownedRoot, false, (report) =>
+      reports.push(report),
+    );
 
-  const staleSync = adoptPreparedLocation(location, ownedRoot);
-  const staleAsync = adoptPreparedLocation(location, ownedRoot);
+    const staleSync = adoptPreparedLocation(location, ownedRoot);
+    const staleAsync = adoptPreparedLocation(location, ownedRoot);
+    const asyncCleanup = asyncState === "pending" ? staleAsync.cleanupAsync() : undefined;
 
-  expect(prepared.cleanup()).toBe(true);
-  expect(reports).toHaveLength(0);
-  expect(fs.existsSync(ownedRoot)).toBe(false);
-  // A second cleanup is a no-op once the owner has removed its directory.
-  expect(prepared.cleanup()).toBe(true);
-  expect(reports).toHaveLength(0);
+    expect(prepared.cleanup()).toBe(true);
+    expect(reports).toHaveLength(0);
+    expect(fs.existsSync(ownedRoot)).toBe(false);
+    // A second cleanup is a no-op once the owner has removed its directory.
+    expect(prepared.cleanup()).toBe(true);
+    expect(reports).toHaveLength(0);
 
-  await fs.promises.mkdir(ownedRoot);
-  await fs.promises.writeFile(location, "replacement snapshot");
-  const replacement = adoptPreparedLocation(location, ownedRoot);
-  try {
-    expect(staleSync.cleanup()).toBe(true);
-    expect(await staleAsync.cleanupAsync()).toBe(true);
-    expect(fs.readFileSync(location, "utf8")).toBe("replacement snapshot");
-  } finally {
-    expect(await replacement.cleanupAsync()).toBe(true);
-  }
-});
+    fs.mkdirSync(ownedRoot);
+    fs.writeFileSync(location, "replacement snapshot");
+    const replacement = adoptPreparedLocation(location, ownedRoot);
+    try {
+      expect(staleSync.cleanup()).toBe(true);
+      expect(await (asyncCleanup ?? staleAsync.cleanupAsync())).toBe(true);
+      expect(fs.readFileSync(location, "utf8")).toBe("replacement snapshot");
+    } finally {
+      expect(await replacement.cleanupAsync()).toBe(true);
+    }
+  },
+);
 
 describe.runIf(supportsChmodDenial)("chmod-denied default sink", () => {
   it("uses the structured log as the default sink when no callback is supplied", async () => {

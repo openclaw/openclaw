@@ -1,3 +1,4 @@
+import type { CronJobScratchWriteInput } from "../scratch-contract.js";
 import type { CronFailureNotificationDelivery, CronJob, CronStoreFile } from "../types.js";
 import type { CronJobFamilyIdentity } from "./row-codec.js";
 import type {
@@ -35,6 +36,7 @@ export type CronJobMutationRefusal =
   | { kind: "receipt-conflict"; receipt: CronRunReceipt };
 
 export type CronRuntimeMutationInputs = {
+  "cron.writeScratch": CronJobScratchWriteInput;
   "cron.mutateJobs": {
     storeKey: string;
     changes: PreparedCronStoreChanges;

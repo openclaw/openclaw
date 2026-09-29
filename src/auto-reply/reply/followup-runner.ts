@@ -1,4 +1,3 @@
-/** Composes queued admission, canonical execution, accounting, and delivery. */
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -80,7 +79,6 @@ function resolveFollowupCompletion(
   return { kind: "completed", ...stopReason };
 }
 
-/** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(
   initialDefaults: FollowupRunnerParams,
 ): (queued: FollowupRun) => Promise<void> {
