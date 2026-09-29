@@ -10,6 +10,15 @@ import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 
 const QR_DATA_URL_MAX_LENGTH = 16_384;
 
+class WhatsAppToolInputError extends Error {
+  readonly status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolInputError";
+  }
+}
+
 function readLoginStringPreservingWhitespace(value: unknown): string | undefined {
   return hasNonEmptyString(value) ? value : undefined;
 }
@@ -66,7 +75,13 @@ export function createWhatsAppLoginTool(
         };
       };
 
-      const action = (args as { action?: string })?.action ?? "start";
+      const rawAction = (args as { action?: unknown })?.action;
+      const action = rawAction === undefined ? "start" : rawAction;
+      if (action !== "start" && action !== "wait") {
+        const printableAction =
+          typeof action === "string" ? action : (JSON.stringify(action) ?? "unknown");
+        throw new WhatsAppToolInputError(`Unknown WhatsApp login action: ${printableAction}`);
+      }
       const accountId = readLoginStringPreservingWhitespace(
         (args as { accountId?: unknown }).accountId,
       );

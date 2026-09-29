@@ -181,6 +181,24 @@ describe("createWhatsAppLoginTool", () => {
     });
   });
 
+  it.each([
+    { action: "bogus", rendered: "bogus" },
+    { action: null, rendered: "null" },
+    { action: 42, rendered: "42" },
+  ])("rejects malformed action $rendered before login", async ({ action, rendered }) => {
+    const tool = createOwnerLoginTool();
+    startWebLoginWithQrMock.mockResolvedValueOnce({ message: "login started" });
+    const signal = new AbortController().signal;
+
+    await expect(tool.execute("tool-call-unknown", { action }, signal)).rejects.toMatchObject({
+      name: "ToolInputError",
+      status: 400,
+      message: `Unknown WhatsApp login action: ${rendered}`,
+    });
+    expect(startWebLoginWithQrMock).not.toHaveBeenCalled();
+    expect(waitForWebLoginMock).not.toHaveBeenCalled();
+  });
+
   it("rejects fractional timeoutMs before login actions", async () => {
     const tool = createOwnerLoginTool();
 
