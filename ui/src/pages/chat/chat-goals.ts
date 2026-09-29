@@ -29,8 +29,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatSendSubmitOptions } from "./chat-send-submit.ts";
+import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 

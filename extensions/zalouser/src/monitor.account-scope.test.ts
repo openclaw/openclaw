@@ -12,7 +12,7 @@ import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
 import {
   createRawZalouserMessageFromNormalized,
-  waitForZalouserIngressVerdict,
+  observeZalouserIngressVerdict,
   withZalouserIngressTestQueue,
 } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
@@ -124,8 +124,9 @@ describe("zalouser monitor pairing account scoping", () => {
       });
       try {
         const listenerParams = await listenerReady;
+        const terminal = observeZalouserIngressVerdict(ingressQueue, "msg-1", "completed");
         await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
-        await waitForZalouserIngressVerdict(ingressQueue, "msg-1", "completed");
+        await terminal;
       } finally {
         abortController.abort();
         await run;

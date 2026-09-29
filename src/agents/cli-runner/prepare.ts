@@ -1187,7 +1187,7 @@ async function prepareCliRunContextWithinReadFence(
     mcpContextBase,
     restrictedLoopbackToolsAllow,
     Boolean(projectNativeToolAuthority),
-    params.assertCurrent,
+    params,
   );
   const toolBoundExtraSystemPromptHash = params.cliToolAvailability
     ? hashCliSessionText(
@@ -1212,9 +1212,6 @@ async function prepareCliRunContextWithinReadFence(
         ? prepareDeps.mintMcpLoopbackClientGrant({
             ...mcpGrant,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-            admittedRunContext: params.admittedRunContext,
-            messageActionTurnCapability: params.messageActionTurnCapability,
-            abortSignal: params.abortSignal,
             bindQuestionAnswerAuthority: (assertActive) =>
               bindQuestionAnswerAuthorityForSession(mcpGrant.context.sessionKey, assertActive),
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),

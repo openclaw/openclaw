@@ -130,7 +130,12 @@ describe("automations output contract", () => {
         expect(cron.getJob(activeJob.id)).toBeUndefined();
         expect(result, JSON.stringify(result)).toMatchObject({
           status: "completed",
-          value: { ok: true, removed: true, sessionCleanup: "pending" },
+          value: {
+            ok: true,
+            removed: true,
+            activeRunCancellationRequested: true,
+            sessionCleanup: "pending",
+          },
         });
       } finally {
         clearCronJobActive(activeJob.id, marker);
@@ -214,6 +219,7 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
   listed.jobs[0].invoiceTotal;
   const removed = await automations({ action: "remove", jobId: "invoice-check" });
   if (removed.ok) {
+    const cancellation: true | undefined = removed.activeRunCancellationRequested;
     const cleanup: "pending" | undefined = removed.sessionCleanup;
   }
   const added = await automations({ action: "add", job: ${JSON.stringify(createJob)} });

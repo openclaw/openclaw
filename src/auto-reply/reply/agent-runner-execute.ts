@@ -81,10 +81,10 @@ export async function executePreparedReplyAgentRun(
   const context = { ...input };
   const {
     activeSessionStore,
-    admitUserTurn: admitUserTurnWithRecovery,
-    beginBeforeAgentReply: beginBeforeAgentReplyWithRecovery,
+    admitUserTurn,
+    beginBeforeAgentReply,
     cfg,
-    checkpointBeforeAgentReply: checkpointBeforeAgentReplyWithRecovery,
+    checkpointBeforeAgentReply,
     defaultModel,
     followupRun,
     getActiveSessionEntry,
@@ -107,27 +107,6 @@ export async function executePreparedReplyAgentRun(
     typingSignals,
   } = context;
   let activeSessionEntry = getActiveSessionEntry();
-  const admitUserTurn = async (
-    ...args: Parameters<typeof admitUserTurnWithRecovery>
-  ): ReturnType<typeof admitUserTurnWithRecovery> => {
-    const result = await admitUserTurnWithRecovery(...args);
-    activeSessionEntry = getActiveSessionEntry();
-    return result;
-  };
-  const beginBeforeAgentReply = async (
-    ...args: Parameters<typeof beginBeforeAgentReplyWithRecovery>
-  ): ReturnType<typeof beginBeforeAgentReplyWithRecovery> => {
-    const result = await beginBeforeAgentReplyWithRecovery(...args);
-    activeSessionEntry = getActiveSessionEntry();
-    return result;
-  };
-  const checkpointBeforeAgentReply = async (
-    ...args: Parameters<typeof checkpointBeforeAgentReplyWithRecovery>
-  ): ReturnType<typeof checkpointBeforeAgentReplyWithRecovery> => {
-    const result = await checkpointBeforeAgentReplyWithRecovery(...args);
-    activeSessionEntry = getActiveSessionEntry();
-    return result;
-  };
 
   await typingSignals.signalRunStart();
 
@@ -188,6 +167,7 @@ export async function executePreparedReplyAgentRun(
   replyOperation.setPhase("running");
   const runStartedAt = Date.now();
   const userTurnAdmission = await admitUserTurn(followupRun.userTurnTranscriptRecorder);
+  activeSessionEntry = getActiveSessionEntry();
   if (userTurnAdmission === "duplicate-source") {
     return returnWithQueuedFollowupDrain(undefined);
   }
@@ -198,11 +178,14 @@ export async function executePreparedReplyAgentRun(
   const runOutcome = await withBeforeAgentReplyObserver(
     {
       beforeDispatch: async () => {
-        return await beginBeforeAgentReply();
+        const result = await beginBeforeAgentReply();
+        activeSessionEntry = getActiveSessionEntry();
+        return result;
       },
       afterDispatch: async (hookResult) => {
         if (!hookResult?.handled) {
           await checkpointBeforeAgentReply({ state: undefined });
+          activeSessionEntry = getActiveSessionEntry();
           return hookResult;
         }
         const hookReply = hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
@@ -259,6 +242,7 @@ export async function executePreparedReplyAgentRun(
           }
         }
         await checkpointBeforeAgentReply(hookCheckpoint);
+        activeSessionEntry = getActiveSessionEntry();
         return { ...hookResult, reply: hookReply };
       },
     },

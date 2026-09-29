@@ -12,7 +12,12 @@ import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import "../../../styles/dreams.css";
-import type { DreamingEntry, WikiImportInsights, WikiOverview } from "./dreaming.ts";
+import type {
+  DreamingEntry,
+  WikiImportInsights,
+  WikiOverview,
+  WikiPagePreview,
+} from "./dreaming.ts";
 
 registerSettingsEnglish();
 registerDreamingEnglish();
@@ -126,14 +131,7 @@ type DreamingProps = {
   onRefreshImports: () => void;
   onRefreshWikiOverview: () => void;
   onOpenConfig: () => void;
-  onOpenWikiPage: (lookup: string) => Promise<{
-    title: string;
-    path: string;
-    content: string;
-    totalLines?: number;
-    truncated?: boolean;
-    updatedAt?: string;
-  } | null>;
+  onOpenWikiPage: (lookup: string) => Promise<WikiPagePreview | null>;
   onBackfillDiary: () => void;
   onCopyDreamingArchivePath: () => void;
   onDedupeDreamDiary: () => void;

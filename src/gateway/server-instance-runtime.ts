@@ -1,5 +1,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import {
   GATEWAY_NATIVE_APPROVAL_METHODS,
@@ -117,15 +118,18 @@ export function createGatewayInstanceRuntime(
       params.assertCurrent?.();
     };
     assertCurrent();
-    const result = await dispatchGatewayRequestInProcess<T>(params.method, params.payload, {
-      client: params.client,
-      context,
-      methodRegistry: options.getMethodRegistry(),
-      requestIdPrefix: "gateway-internal",
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-      sessionMutationCommitGuard: assertCurrent,
-    });
+    // These closed principals own accepted lifecycle/approval work independently of a turn.
+    const result = await withoutGatewayToolCallerIdentity(() =>
+      dispatchGatewayRequestInProcess<T>(params.method, params.payload, {
+        client: params.client,
+        context,
+        methodRegistry: options.getMethodRegistry(),
+        requestIdPrefix: "gateway-internal",
+        timeoutMs: params.timeoutMs,
+        signal: params.signal,
+        sessionMutationCommitGuard: assertCurrent,
+      }),
+    );
     assertCurrent();
     return result;
   };

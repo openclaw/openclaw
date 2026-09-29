@@ -204,6 +204,10 @@ The Inbox works without browser notification permission. For optional alerts whi
 
 ## Agent-spawned sessions
 
+In a turn steered by several people, `sessions_spawn` requires `user` (the requester's verified `requester_profile.id`)
+and the child acts with that person's retained authority. This selection does not
+change the session's model account or the creator and owner rules below.
+
 Sessions an agent creates with `sessions_spawn` (`visible: true`) normally retain the requesting agent as their immutable creator. A required sandbox instead preserves the parent's creator provenance as an isolation policy. If the active human requester matches the requesting session's verified human owner, a new visible child assigns that person as its initial owner. A different owner, an unlinked requester, or a system-triggered spawn explicitly assigns the requesting agent as owner, even when sandbox policy retained human creator provenance. The sidebar shows the current owner's profile or configured agent identity rather than an internal session key. This assignment changes responsibility and display only; sharing and visibility authority remains anchored on the creator.
 
 The accepted spawn result doubles as a receipt. It includes the child session key, the run id, a direct Control UI `sessionUrl`, and an `owner` record naming the stored owner. The `sessionUrl` is omitted when the Control UI is disabled. When an agent acknowledges the spawn in a chat channel, it puts the session URL on the first line and `Owner: <label>` on the second. You can then open the session and see who is responsible at a glance. Use **Assign to me** or the `sessions` tool only when responsibility should move again. See [Sub-agents](/tools/subagents) for the spawn lifecycle.

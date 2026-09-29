@@ -576,29 +576,17 @@ function renderSessionsCard(
           }
         }
       }
-      let sortValue: number;
-      switch (sessionSort) {
-        case "recent":
-          sortValue = session.updatedAt ?? 0;
-          break;
-        case "messages":
-          sortValue = usage?.messageCounts?.total ?? 0;
-          break;
-        case "errors":
-          sortValue = usage?.messageCounts?.errors ?? 0;
-          break;
-        case "cost":
-          sortValue = cost;
-          break;
-        case "tokens":
-          sortValue = tokens;
-          break;
-      }
       return {
         session,
         displayLabel: formatSessionListLabel(session),
         value: isTokenMode ? tokens : cost,
-        sortValue,
+        sortValue: {
+          recent: session.updatedAt ?? 0,
+          messages: usage?.messageCounts?.total ?? 0,
+          errors: usage?.messageCounts?.errors ?? 0,
+          cost,
+          tokens,
+        }[sessionSort],
       };
     })
     .toSorted((a, b) => {

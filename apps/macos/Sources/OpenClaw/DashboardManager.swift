@@ -334,7 +334,7 @@ final class DashboardManager {
             let key = ObjectIdentifier(controller)
             let previousRoute = self.displayedPrimaryRoutes[key]
             let revisionChanged = (previousRoute?.revision).map { $0 != routeRevision } ?? (routeRevision > 0)
-            let routeChanged = revisionChanged || !controller.hasTLSParams(configuration.tlsParams) ||
+            let routeChanged = revisionChanged || controller.tlsParams != configuration.tlsParams ||
                 controller.auth.gatewayUrl != auth.gatewayUrl
             let credentialChanged = controller.auth != auth
             if routeChanged || credentialChanged {

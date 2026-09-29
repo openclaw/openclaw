@@ -1,5 +1,6 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  assertBrowserSessionTabAuthority,
   captureBrowserSessionTabAuthority,
   getOptionalBrowserStateRuntime,
   type BrowserDashboardRegistration,
@@ -33,7 +34,6 @@ import {
 } from "./session-tab-process-state.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 import {
-  assertBrowserSessionTabAuthority,
   browserSessionTabNativeIdentity,
   browserSessionTabStorageKey,
   compareBrowserSessionTabProfileAliases,

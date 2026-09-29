@@ -74,14 +74,16 @@ export const finalizeResumedAnnounceGiveUp = async (
     cleanup: cleanup ?? entry.cleanup,
     completedAt: completedAt ?? Date.now(),
   });
-  if (!context.shouldSuppressSessionEffects(entry)) {
+  if (!(await context.shouldSuppressSessionEffects(entry))) {
     await emitCompletionEndedHookIfNeeded(
       params,
       entry,
       completionReason,
       () =>
-        context.isEndedHookOwnerCurrent(runId, entry) &&
-        !context.shouldSuppressSessionEffects(entry),
+        context.isEndedHookOwnerCurrent(runId, entry) && context.sessionEffectsHostCurrent(entry),
+      async () =>
+        !(await context.shouldSuppressSessionEffects(entry)) &&
+        context.isEndedHookOwnerCurrent(runId, entry),
     );
   }
 };
