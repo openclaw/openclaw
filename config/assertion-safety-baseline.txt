@@ -3163,7 +3163,7 @@ ui/src/local-storage.ts	2
 ui/src/main.ts	1
 ui/src/pages/activity/view.ts	2
 ui/src/pages/agents/agents-page.ts	1
-ui/src/pages/agents/memory/memory-panel.ts	2
+ui/src/pages/agents/memory/memory-panel.ts	1
 ui/src/pages/agents/memory/view.ts	1
 ui/src/pages/agents/model-config.ts	2
 ui/src/pages/agents/panels-overview.ts	3
@@ -3173,7 +3173,6 @@ ui/src/pages/channels/view.nostr-profile-form.ts	4
 ui/src/pages/channels/view.nostr.ts	5
 ui/src/pages/channels/view.ts	9
 ui/src/pages/chat/chat-avatar.ts	1
-ui/src/pages/chat/chat-composer-capability-host.ts	4
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
@@ -3184,7 +3183,7 @@ ui/src/pages/chat/chat-send-ack.ts	2
 ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-send-timing.ts	1
 ui/src/pages/chat/chat-state-events.ts	6
-ui/src/pages/chat/chat-state-page.ts	4
+ui/src/pages/chat/chat-state-page.ts	2
 ui/src/pages/chat/chat-thread-items.ts	2
 ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
@@ -3194,7 +3193,7 @@ ui/src/pages/chat/components/chat-effort-picker.ts	6
 ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	1
-ui/src/pages/chat/components/chat-message-confirmation.ts	2
+ui/src/pages/chat/components/chat-message-confirmation.ts	1
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker.ts	4
 ui/src/pages/chat/components/chat-pane-header.ts	2
@@ -3222,7 +3221,7 @@ ui/src/pages/chat/stream-reconciliation.ts	3
 ui/src/pages/chat/talk/gateway-relay.ts	1
 ui/src/pages/chat/talk/google-live.ts	1
 ui/src/pages/chat/talk/session.ts	1
-ui/src/pages/chat/talk/shared.ts	7
+ui/src/pages/chat/talk/shared.ts	3
 ui/src/pages/chat/talk/webrtc.ts	1
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/config-page.ts	1
@@ -3245,10 +3244,9 @@ ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3
 ui/src/pages/devices/devices-page.ts	1
-ui/src/pages/devices/view-exec-approvals.ts	7
+ui/src/pages/devices/view-exec-approvals.ts	4
 ui/src/pages/devices/view.ts	5
 ui/src/pages/labs/labs-registry.ts	4
-ui/src/pages/logs/log-lines.ts	1
 ui/src/pages/logs/view.ts	2
 ui/src/pages/memory-import/view.ts	2
 ui/src/pages/model-providers/view.ts	3
@@ -3266,7 +3264,6 @@ ui/src/pages/sessions/view.ts	7
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/view.ts	1
 ui/src/pages/skills/view.ts	2
-ui/src/pages/usage/heatmap.ts	1
 ui/src/pages/usage/view-details.ts	5
 ui/src/pages/usage/view-overview.ts	2
 ui/src/pages/usage/view.ts	5

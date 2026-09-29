@@ -274,10 +274,10 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     view.fill(0);
     expect(lifecycle.enqueuePendingAudio(Buffer.alloc(512 * 1024, 0x02))).toBe(true);
     expect(lifecycle.enqueuePendingAudio(Buffer.from([0x03]))).toBe(false);
-    expect(lifecycle.drainPendingAudio()).toEqual([
-      Buffer.alloc(512 * 1024, 0x01),
-      Buffer.alloc(512 * 1024, 0x02),
-    ]);
+    const pending = lifecycle.drainPendingAudio();
+    expect(pending).toHaveLength(2);
+    expect(pending[0]?.equals(Buffer.alloc(512 * 1024, 0x01)), "first copied chunk").toBe(true);
+    expect(pending[1]?.equals(Buffer.alloc(512 * 1024, 0x02)), "second copied chunk").toBe(true);
 
     lifecycle.enqueuePendingAudio(Buffer.from([0x04]));
     lifecycle.cancel();
@@ -382,9 +382,12 @@ describe("createRealtimeVoiceAudioQueue", () => {
     expect(queue.enqueue(first)).toBe(true);
     expect(queue.enqueue(second)).toBe(true);
     expect(queue.enqueue(Buffer.from([0x03]))).toBe(false);
-    expect(queue.dequeue()).toEqual(first);
+    expect(queue.dequeue()?.equals(first), "dequeued first chunk").toBe(true);
     expect(queue.enqueue(Buffer.from([0x03]))).toBe(true);
-    expect(queue.drain()).toEqual([second, Buffer.from([0x03])]);
+    const drained = queue.drain();
+    expect(drained).toHaveLength(2);
+    expect(drained[0]?.equals(second), "remaining second chunk").toBe(true);
+    expect(drained[1]).toEqual(Buffer.from([0x03]));
   });
 
   it("drops the oldest audio and resets accounting on clear", () => {

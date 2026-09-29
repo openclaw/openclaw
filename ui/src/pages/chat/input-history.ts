@@ -118,16 +118,6 @@ export function handleChatDraftChange(
   resetChatInputHistoryNavigation(state);
 }
 
-function hasStaleActiveHistorySelection(state: ChatInputHistoryState): boolean {
-  if (state.chatInputHistoryIndex === -1) {
-    return false;
-  }
-  return (
-    state.chatInputHistorySessionKey !== state.sessionKey ||
-    state.chatInputHistoryItems?.[state.chatInputHistoryIndex] !== state.chatMessage
-  );
-}
-
 function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] {
   if (
     state.chatInputHistoryItems !== null &&
@@ -173,7 +163,11 @@ export function handleChatInputHistoryKey(
 ): ChatInputHistoryKeyResult {
   // Programmatic draft updates can bypass handleChatDraftChange(); if the current
   // draft no longer matches the active recalled item, drop back to editing mode.
-  if (hasStaleActiveHistorySelection(state)) {
+  if (
+    state.chatInputHistoryIndex !== -1 &&
+    (state.chatInputHistorySessionKey !== state.sessionKey ||
+      state.chatInputHistoryItems?.[state.chatInputHistoryIndex] !== state.chatMessage)
+  ) {
     resetChatInputHistoryNavigation(state);
   }
   const historyNavigationActiveBefore = state.chatInputHistoryIndex !== -1;
