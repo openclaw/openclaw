@@ -1,8 +1,9 @@
 import type { proto, WAMessage } from "baileys";
-import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
+import type { SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { identitiesOverlap } from "../identity.js";
 import type { createWaSocket } from "../session.js";
 import { extractContextInfo } from "./extract.js";
+import { saveInboundMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
@@ -37,10 +38,9 @@ export async function downloadInboundMedia(
       logger: sock.logger,
     },
   );
-  const saved = await saveMediaStream(
+  const saved = await saveInboundMediaStreamWithIdleTimeout(
     stream as AsyncIterable<unknown>,
     mimetype,
-    "inbound",
     maxBytes,
     fileName,
   );
