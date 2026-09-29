@@ -1,3 +1,5 @@
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type {
   PendingFinalDeliveryPayload,
@@ -95,21 +97,14 @@ export function projectSubagentRunForMaintenance(
 }
 
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
-  const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
-  entry.taskRunId = taskRunId || undefined;
-  const requesterTurnRunId =
-    typeof entry.requesterTurnRunId === "string" ? entry.requesterTurnRunId.trim() : "";
-  entry.requesterTurnRunId = requesterTurnRunId || undefined;
+  entry.taskRunId = normalizeOptionalString(entry.taskRunId);
+  const requesterTurnRunId = normalizeOptionalString(entry.requesterTurnRunId);
+  entry.requesterTurnRunId = requesterTurnRunId;
   entry.requesterTurnYielded =
     requesterTurnRunId && entry.requesterTurnYielded === true ? true : undefined;
   entry.retireAfterRequesterTurn =
     requesterTurnRunId && entry.retireAfterRequesterTurn === true ? true : undefined;
-  entry.generation =
-    typeof entry.generation === "number" &&
-    Number.isSafeInteger(entry.generation) &&
-    entry.generation > 0
-      ? entry.generation
-      : undefined;
+  entry.generation = asPositiveSafeInteger(entry.generation);
   entry.deleteCleanupDispatchedAt = Number.isFinite(entry.deleteCleanupDispatchedAt)
     ? entry.deleteCleanupDispatchedAt
     : undefined;
@@ -158,19 +153,9 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     entry.killIntent = {
       requestedAt: killIntent.requestedAt,
       reason: killIntent.reason.trim(),
-      lifecycleGeneration:
-        typeof killIntent.lifecycleGeneration === "string" && killIntent.lifecycleGeneration.trim()
-          ? killIntent.lifecycleGeneration.trim()
-          : undefined,
-      sessionId:
-        typeof killIntent.sessionId === "string" && killIntent.sessionId.trim()
-          ? killIntent.sessionId.trim()
-          : undefined,
-      sessionLifecycleRevision:
-        typeof killIntent.sessionLifecycleRevision === "string" &&
-        killIntent.sessionLifecycleRevision.trim()
-          ? killIntent.sessionLifecycleRevision.trim()
-          : undefined,
+      lifecycleGeneration: normalizeOptionalString(killIntent.lifecycleGeneration),
+      sessionId: normalizeOptionalString(killIntent.sessionId),
+      sessionLifecycleRevision: normalizeOptionalString(killIntent.sessionLifecycleRevision),
       suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
     };
   }
@@ -186,7 +171,6 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
   return entry;
 }
 
-/** Ensures a run has a nested completion state object. */
 export function ensureCompletionState(entry: SubagentRunRecord): SubagentCompletionState {
   entry.completion ??= {
     required: entry.expectsCompletionMessage === true,
@@ -194,7 +178,6 @@ export function ensureCompletionState(entry: SubagentRunRecord): SubagentComplet
   return entry.completion;
 }
 
-/** Ensures a run has a nested delivery state object. */
 export function ensureDeliveryState(entry: SubagentRunRecord): SubagentCompletionDeliveryState {
   entry.delivery ??= {
     status: entry.expectsCompletionMessage === false ? "not_required" : "pending",
@@ -256,12 +239,10 @@ export function hasRetainedRequiredCompletionDelivery(
   );
 }
 
-/** Reads the current delivery attempt count. */
 export function getDeliveryAttemptCount(entry: SubagentRunRecord): number {
   return entry.delivery?.attemptCount ?? 0;
 }
 
-/** Reads the non-empty last delivery error. */
 export function getDeliveryLastError(entry: SubagentRunRecord): string | undefined {
   const error = entry.delivery?.lastError;
   return typeof error === "string" && error.trim() ? error : undefined;

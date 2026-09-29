@@ -226,15 +226,11 @@ async function fetchWithMatrixGuardedRedirects(params: {
 
       const location = response.headers.get("location");
       if (!location) {
-        cleanup();
-        await closeDispatcher(dispatcher);
         throw new Error(`Matrix redirect missing location header (${currentUrl.toString()})`);
       }
 
       const nextUrl = new URL(location, currentUrl);
       if (nextUrl.protocol !== currentUrl.protocol) {
-        cleanup();
-        await closeDispatcher(dispatcher);
         throw new Error(
           `Blocked cross-protocol redirect (${currentUrl.protocol} -> ${nextUrl.protocol})`,
         );
@@ -242,8 +238,6 @@ async function fetchWithMatrixGuardedRedirects(params: {
 
       const nextUrlString = nextUrl.toString();
       if (visited.has(nextUrlString)) {
-        cleanup();
-        await closeDispatcher(dispatcher);
         throw new Error("Redirect loop detected");
       }
       visited.add(nextUrlString);

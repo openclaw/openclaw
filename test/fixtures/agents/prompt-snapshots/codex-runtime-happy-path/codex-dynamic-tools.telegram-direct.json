@@ -327,6 +327,10 @@
           "description": "Thinking override; unavailable with visible=true.",
           "type": "string"
         },
+        "user": {
+          "description": "The person's requester_profile.id, required when several people have steered this turn.",
+          "type": "string"
+        },
         "visible": {
           "description": "Persistent sidebar session only when the user requests a separate session or needs to revisit and steer it independently. Internal QA/coding/review/test workers: omit or false. Subagent runtime only; default run mode and empty attachments accepted; no thread/thinking/lightContext or attachment staging.",
           "type": "boolean"
@@ -1145,6 +1149,10 @@
             },
             "sessionKey": {
               "type": "string"
+            },
+            "user": {
+              "description": "The person's requester_profile.id, required when several people have steered this turn.",
+              "type": "string"
             }
           },
           "type": "object"
@@ -1186,6 +1194,10 @@
             },
             "sessionKey": {
               "minLength": 1,
+              "type": "string"
+            },
+            "user": {
+              "description": "The person's requester_profile.id, required when several people have steered this turn.",
               "type": "string"
             }
           },
@@ -1283,6 +1295,10 @@
               "minLength": 1,
               "type": "string"
             },
+            "user": {
+              "description": "The person's requester_profile.id, required when several people have steered this turn.",
+              "type": "string"
+            },
             "workspaceDir": {
               "minLength": 1,
               "type": "string"
@@ -1309,6 +1325,10 @@
               "type": "string"
             },
             "sessionKey": {
+              "type": "string"
+            },
+            "user": {
+              "description": "The person's requester_profile.id, required when several people have steered this turn.",
               "type": "string"
             }
           },
@@ -1362,6 +1382,10 @@
             "timeoutSeconds": {
               "minimum": 0,
               "type": "integer"
+            },
+            "user": {
+              "description": "The person's requester_profile.id, required when several people have steered this turn.",
+              "type": "string"
             },
             "watch": {
               "type": "boolean"

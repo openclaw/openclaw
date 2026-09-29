@@ -313,7 +313,6 @@ describe("monitorSingleAccount VC event registration", () => {
       botOpenIdSource: {
         kind: "prefetched",
         botOpenId: "ou_bot",
-        botName: "OpenClaw Bot",
       },
       fireAndForget: false,
       channelRuntime: buildChannelRuntime(),
@@ -348,7 +347,7 @@ describe("monitorSingleAccount VC event registration", () => {
     const monitor = monitorSingleAccount({
       cfg: buildConfig(),
       account: buildAccount({ vcAutoJoin: true }),
-      botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot", botName: "OpenClaw Bot" },
+      botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
       fireAndForget: false,
       channelRuntime: buildChannelRuntime(),
     });

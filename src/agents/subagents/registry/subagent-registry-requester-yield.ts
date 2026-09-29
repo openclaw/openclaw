@@ -343,13 +343,8 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       Object.assign(requester, requesterSnapshot);
     }
     entries.forEach((entry, index) => {
-      const previous = previousStates[index];
       params.runs.set(entry.runId, entry);
-      entry.delivery = previous?.delivery;
-      entry.requesterSettleWake = previous?.requesterSettleWake;
-      entry.requesterTurnRunId = previous?.requesterTurnRunId;
-      entry.requesterTurnYielded = previous?.requesterTurnYielded;
-      entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
+      Object.assign(entry, previousStates[index]);
     });
     throw error;
   }

@@ -174,13 +174,16 @@ it.each([
     async (operation) => {
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
       expect(target).toBeDefined();
+      const onQueueSettled = vi.fn();
       const result = await beginReplyMessageInjectionTarget(target!, "Green", {
         isInboundUserMessage: true,
         toolAuthorityFingerprint: testCase.fingerprint,
         pendingInputAuthorityFingerprint: testCase.pending,
+        onQueueSettled,
       }).outcome;
       const authorized = testCase.fingerprint === "same-owner" || testCase.pending === "same-owner";
       expect(result.status).toBe(authorized && testCase.claimed ? "accepted" : "rejected");
+      expect(onQueueSettled).toHaveBeenCalledTimes(authorized && testCase.claimed ? 1 : 0);
       expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(authorized ? 1 : 0);
       expect(queueMessage).not.toHaveBeenCalled();
     },

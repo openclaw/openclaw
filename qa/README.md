@@ -22,6 +22,9 @@ Operator workflows:
 
 Keep this folder in git. Add new scenarios here before wiring them into automation.
 
+Generated-media scenarios count attachment deliveries separately from text
+progress and check the saved bytes plus the persisted completion reply.
+
 ## Confined repository checkpoint commands
 
 `scripts/qa/repository-checkpoint-admission.ts` adapts the product-owned checkpoint
