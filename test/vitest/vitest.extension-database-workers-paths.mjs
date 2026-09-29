@@ -154,6 +154,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/event-projector.output-fidelity.native.test.ts",
   "extensions/codex/src/app-server/inference-proxy.native.test.ts",
   "extensions/codex/src/app-server/settled-turn-finalizer.native.test.ts",
+  "extensions/codex/src/app-server/thread-lifecycle.assignment-rotation.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.native.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.binding.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.native-config.test.ts",
