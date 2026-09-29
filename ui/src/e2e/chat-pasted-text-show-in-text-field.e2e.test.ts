@@ -68,8 +68,8 @@ suite.define(() => {
           await page.screenshot({ path: `${proofDir}/card-${width}.png` });
           await expect.poll(() => remove.count()).toBe(1);
           const placement = await remove.evaluate((button) => {
-            const card = button.closest(".chat-attachment-thumb")!;
-            const rect = card.getBoundingClientRect();
+            const tile = button.closest(".chat-attachment-thumb")!;
+            const rect = tile.getBoundingClientRect();
             const buttonRect = button.getBoundingClientRect();
             return {
               visible: getComputedStyle(button).opacity === "1",
