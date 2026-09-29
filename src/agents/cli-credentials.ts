@@ -12,6 +12,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
+import { readClaudeNativeAuthIdentity } from "../plugin-sdk/provider-auth-claude-compat.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
 
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
@@ -528,4 +529,34 @@ export function readGeminiCliCredentialsCached(options?: {
     },
     readSourceFingerprint: () => readFileMtimeMs(credPath),
   });
+}
+
+/** Non-secret owner identity for a CLI backend's native login. */
+export type NativeCliAuthIdentity = {
+  /** Declared native auth profile id that this identity belongs to. */
+  profileId: string;
+  /** Stable account reference; never token material. */
+  accountRef: string;
+  /** Optional non-secret plan discriminator; never token material. */
+  planRef?: string;
+};
+
+/**
+ * Resolves the non-secret account identity that owns a CLI backend's native
+ * login. Returns undefined when the backend declares no readable native
+ * identity or the local login cannot be identified; callers must fail closed
+ * (treat history as unknown) in that case.
+ */
+export function resolveNativeCliAuthIdentity(params: {
+  backendId: string;
+  profileId: string;
+  homeDir?: string;
+}): NativeCliAuthIdentity | undefined {
+  if (params.backendId !== "claude-cli") {
+    return undefined;
+  }
+  const identity = readClaudeNativeAuthIdentity(
+    params.homeDir !== undefined ? { homeDir: params.homeDir } : {},
+  );
+  return identity ? { profileId: params.profileId, ...identity } : undefined;
 }

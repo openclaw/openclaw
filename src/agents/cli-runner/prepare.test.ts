@@ -102,11 +102,13 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
+  createJsonlStdinBackendConfig,
   createCliRepositorySkillFixture,
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServer,
   createTestMcpLoopbackServerConfig,
   createWeatherSkillFixture,
+  setRawCliBackendForPrepareTest,
   wrappedPluginSystemContext,
   type TestCliBackendParams,
 } from "../cli-runner.test-helpers.js";
@@ -323,23 +325,6 @@ function setCliBackendForPrepareTest(
         },
       },
     ],
-  });
-}
-
-function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
-  return {
-    command,
-    args: ["--print"],
-    output: "jsonl",
-    input: "stdin",
-    sessionMode: "existing",
-  };
-}
-
-function setRawCliBackendForPrepareTest(backend: CliBackendPlugin & { pluginId: string }) {
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupCliBackend: () => undefined,
-    resolveRuntimeCliBackends: () => [backend],
   });
 }
 
@@ -1428,11 +1413,16 @@ describe("prepareCliRunContext", () => {
       );
       setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
       const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () => null);
+      const resolveNativeCliAuthIdentity = vi.fn(() => ({
+        profileId: authProfileId,
+        accountRef: "native-owner@example.com",
+      }));
       setCliRunnerPrepareTestDeps({
         resolveApiKeyForProfile,
+        resolveNativeCliAuthIdentity,
       });
 
-      await fixture.prepare({
+      const context = await fixture.prepare({
         sessionKey: "agent:main:main",
         agentDir,
         provider: "claude-cli",
@@ -1441,6 +1431,11 @@ describe("prepareCliRunContext", () => {
         config: {},
       });
 
+      expect(resolveNativeCliAuthIdentity).toHaveBeenCalledWith({
+        backendId: "claude-cli",
+        profileId: authProfileId,
+      });
+      expect(context.cliHistoryWriter).toBeDefined();
       expect(prepareExecution).toHaveBeenCalledTimes(1);
       expect(prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({ authProfileId: undefined, authCredential: undefined }),

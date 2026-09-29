@@ -36,7 +36,6 @@ import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-s
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
-  CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
@@ -85,6 +84,7 @@ import {
   resolveCliAuthEpoch,
 } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
+import { resolveNativeCliAuthIdentity } from "../cli-credentials.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
@@ -137,7 +137,8 @@ import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { runCliCleanup } from "./cleanup.js";
 import {
   resolveBundledCliBackendAuthPolicy,
-  type BundledCliBackendAuthPolicy,
+  shouldResolveAuthProfileForExecution,
+  shouldSkipLocalCliCredentialEpoch,
 } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
@@ -223,6 +224,7 @@ const defaultPrepareDeps = {
   claudeCliSessionTranscriptHasOrphanedToolUse,
   getCliLiveSessionGeneration,
   resolveApiKeyForProfile,
+  resolveNativeCliAuthIdentity,
   loadManifestModelCatalog,
 };
 const prepareDeps = { ...defaultPrepareDeps };
@@ -235,20 +237,6 @@ function resetCliRunnerPrepareTestDeps(): void {
   Object.assign(prepareDeps, defaultPrepareDeps);
 }
 
-function shouldSkipLocalCliCredentialEpoch(params: {
-  authEpochMode?: CliBackendAuthEpochMode;
-  authProfileId?: string;
-  authCredential?: AuthProfileCredential;
-  preparedExecution?: CliBackendPreparedExecution | null;
-}): boolean {
-  return Boolean(
-    params.authEpochMode === "profile-only" &&
-    params.authProfileId &&
-    params.authCredential &&
-    params.preparedExecution,
-  );
-}
-
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerPrepareTestApi")] = {
     resetCliRunnerPrepareTestDeps,
@@ -258,22 +246,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-function shouldResolveAuthProfileForExecution(params: {
-  policy?: BundledCliBackendAuthPolicy;
-  authCredential?: AuthProfileCredential;
-}): boolean {
-  if (!params.policy) {
-    return false;
-  }
-  if (!params.authCredential) {
-    return params.policy.strictSelectedProfile;
-  }
-  if (params.authCredential.type === "oauth") {
-    return params.policy.oauthRefreshOwner === "core";
-  }
-  return params.authCredential.type === "api_key" || params.authCredential.type === "token";
-}
-
+/** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
@@ -619,6 +592,7 @@ async function prepareCliRunContextWithinReadFence(
     backendAuthPolicy?.nativeAuthProfileIds !== undefined &&
     effectiveAuthProfileId !== undefined &&
     backendAuthPolicy.nativeAuthProfileIds.includes(effectiveAuthProfileId);
+  const nativeAuthProfileId = usesNativeAuthProfile ? effectiveAuthProfileId : undefined;
   if (usesNativeAuthProfile) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
@@ -1789,8 +1763,17 @@ async function prepareCliRunContextWithinReadFence(
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
+    const nativeAuthIdentity = nativeAuthProfileId
+      ? prepareDeps.resolveNativeCliAuthIdentity({
+          backendId: backendResolved.id,
+          profileId: nativeAuthProfileId,
+        })
+      : undefined;
     const cliHistoryWriter = !isSideQuestion
-      ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
+      ? await prepareCliHistoryBoundary(historyParams, {
+          credential: authCredential,
+          ...(nativeAuthIdentity ? { nativeAuth: nativeAuthIdentity } : {}),
+        })
       : undefined;
     // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
     const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
