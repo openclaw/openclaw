@@ -244,6 +244,7 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
 
 function resolveOllamaTopLevelParams(
   model: ProviderRuntimeModel,
+  reasoning: OllamaStreamOptions["reasoning"],
 ): Record<string, unknown> | undefined {
   const requestParams: Record<string, unknown> = {};
   const params = model.params;
@@ -254,7 +255,12 @@ function resolveOllamaTopLevelParams(
       }
     }
   }
-  const think = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model));
+  const configuredThink = resolveOllamaThinkParamValue(params, supportsNativeOllamaMax(model));
+  // Direct simple completions (plugin `runtime.llm.complete()`) reach this
+  // transport without the agent compat wrapper, so a per-call `reasoning: "off"`
+  // has to disable thinking here. Keep the wrapper's precedence: "off" is also
+  // the implicit agent default, so it never overrides a configured think value.
+  const think = configuredThink === undefined && reasoning === "off" ? false : configuredThink;
   if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
   }
@@ -940,7 +946,7 @@ function createRawOllamaStreamFn(
           !isOllamaCloudOrigin(baseUrl)
             ? { truncate: false, shift: false }
             : {}),
-          ...resolveOllamaTopLevelParams(model),
+          ...resolveOllamaTopLevelParams(model, options?.reasoning),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
 

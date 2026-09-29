@@ -3027,6 +3027,40 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it.each([
+    {
+      name: "serializes a direct per-call reasoning=off as top-level think=false",
+      params: undefined,
+      options: { reasoning: "off", maxTokens: 24 },
+      expectedThink: false,
+    },
+    {
+      name: "keeps the model default when a direct call omits reasoning",
+      params: undefined,
+      options: { maxTokens: 24 },
+      expectedThink: undefined,
+    },
+    {
+      name: "does not let a direct per-call reasoning=off override configured params.thinking",
+      params: { thinking: "medium" },
+      options: { reasoning: "off", maxTokens: 24 },
+      expectedThink: "medium",
+    },
+  ] as const)("$name", async ({ params, options, expectedThink }) => {
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "http://ollama-host:11434",
+        model: params ? { params } : {},
+        options: { ...options },
+      },
+      ({ body }) => {
+        expect(body.think).toBe(expectedThink);
+        expect(requireOptionalRecord(body.options)?.think).toBeUndefined();
+        expect(requireOptionalRecord(body.options)?.num_predict).toBe(24);
+      },
+    );
+  });
+
   it("preserves configured Ollama Cloud params.thinking=max", async () => {
     await expectSuccessfulOllamaRequest(
       {

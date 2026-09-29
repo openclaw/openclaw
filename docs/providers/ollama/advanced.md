@@ -263,10 +263,11 @@ sidebarTitle: "Advanced"
     Ollama uses the **native API** (`/api/chat`) by default, which supports
     streaming and tool calling together — no special config needed.
 
-    For native requests, thinking control is forwarded directly: `/think off`
-    and `openclaw agent --thinking off` send top-level `think: false` unless
-    an explicit `params.think`/`params.thinking` is configured; `/think
-    low|medium|high` send the matching effort string. Verified full-effort
+    For native requests, thinking control is forwarded directly: `/think off`,
+    `openclaw agent --thinking off`, and plugin
+    `api.runtime.llm.complete({ reasoning: "off" })` calls send top-level
+    `think: false` unless an explicit `params.think`/`params.thinking` is
+    configured; `/think low|medium|high` send the matching effort string. Verified full-effort
     Ollama Cloud families such as GLM 5.2 and DeepSeek V4 also send native
     `think: "max"` for `/think max`; other models and local servers keep the
     compatible `think: "high"` mapping.
