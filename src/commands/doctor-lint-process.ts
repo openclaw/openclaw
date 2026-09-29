@@ -110,8 +110,22 @@ export async function runUpdateDoctorLintProcess(
       result.outputLimitExceeded ||
       result.cleanup === "uncertain"
     ) {
+      // Fixed labels keep every observed refusal inside the update fact's 200-character cap.
+      const reasons = [
+        callerAborted && "signal-barrier",
+        callerSignal?.aborted && "caller-signal",
+        outputError && "output-error",
+        result.outputErrorStream && "worker-output",
+        result.outputLimitExceeded && "output-limit",
+        result.cleanup === "uncertain" && "cleanup-uncertain",
+      ].filter(Boolean);
+      const context = [
+        disposalTerminationRequested && "disposal-requested",
+        result.killIssuedByAbort && "kill-issued-by-abort",
+        `termination=${result.termination}`,
+      ].filter(Boolean);
       throw new Error(
-        "Doctor lint worker did not complete with confirmed output and process cleanup.",
+        `Doctor lint settlement refused: ${reasons.join(",")}; ${context.join(",")}.`,
       );
     }
     if (!report || reportedAt === undefined) {
@@ -134,7 +148,12 @@ export async function runUpdateDoctorLintProcess(
         drainProcessOutput(resolve);
       });
       if (outputError || callerAborted || callerSignal?.aborted) {
-        throw new Error("Doctor lint output delivery or its caller failed after checks completed.");
+        const reasons = [
+          callerAborted && "signal-barrier",
+          callerSignal?.aborted && "caller-signal",
+          outputError && "output-error",
+        ].filter(Boolean);
+        throw new Error(`Doctor lint output-drain refused: ${reasons.join(",")}.`);
       }
       return exitCode;
     }
@@ -146,7 +165,7 @@ export async function runUpdateDoctorLintProcess(
       throw error;
     }
     // The readiness envelope has already been published; failures must not append another JSON.
-    process.stderr.write(`Doctor lint worker failed: ${scrubDoctorErrorMessage(error)}\n`);
+    process.stderr.write(`[openclaw] Reason: ${scrubDoctorErrorMessage(error)}\n`);
     return 2;
   } finally {
     cancelDisposalDeadline?.();

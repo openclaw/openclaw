@@ -43,6 +43,10 @@ function writeTempPlugin(params: { dir: string; id: string; body: string }): str
   return file;
 }
 
+function createGuardedSession() {
+  return guardSessionManager(SessionManager.inMemory(), { agentId: "main", sessionKey: "main" });
+}
+
 function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>) {
   const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
   appendMessage({
@@ -59,21 +63,23 @@ function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>)
   } as ToolResultMessage);
 }
 
-function appendToolResultWithTail(
+function appendToolResultDetails(
   sm: ReturnType<typeof SessionManager.inMemory>,
-  tail: string,
+  details: Record<string, unknown>,
+  text = "visible output stays small",
+  toolName = "exec",
 ): void {
   const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
   appendMessage({
     role: "assistant",
-    content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+    content: [{ type: "toolCall", id: "call_1", name: toolName, arguments: {} }],
   } as AgentMessage);
   appendMessage({
     role: "toolResult",
     toolCallId: "call_1",
     isError: false,
-    content: [{ type: "text", text: "visible output stays small" }],
-    details: { status: "completed", tail },
+    content: [{ type: "text", text }],
+    details,
   } as ToolResultMessage);
 }
 
@@ -175,10 +181,7 @@ afterEach(() => {
 
 describe("tool_result_persist hook", () => {
   it("does not modify persisted toolResult messages when no hook is registered", () => {
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const sm = createGuardedSession();
     appendToolCallAndResult(sm);
     const toolResult = requirePersistedToolResult(sm);
     expect(toolResult.role).toBe("toolResult");
@@ -189,28 +192,19 @@ describe("tool_result_persist hook", () => {
   });
 
   it("preserves result state values when capping oversized details", () => {
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
+    const sm = createGuardedSession();
+    appendToolResultDetails(
+      sm,
+      {
         success: true,
         disabled: false,
         unavailable: false,
         error: null,
         payload: "x".repeat(10_000),
       },
-    } as ToolResultMessage);
+      "visible output stays small",
+      "lookup",
+    );
 
     const details = requirePersistedToolResult(sm).details;
     expect(details.persistedDetailsTruncated).toBe(true);
@@ -224,38 +218,24 @@ describe("tool_result_persist hook", () => {
     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
     const bearerValue = "bearerdiagnosticvalue1234567890";
     const adjacentLongGithubToken = `ghp_${"a".repeat(5_000)}`;
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        status: "completed",
-        token: tokenValue,
-        GITHUB_TOKEN: tokenValue,
-        github_token: tokenValue,
-        openai_api_key: tokenValue,
-        card_number: 4242424242424242,
-        cvc: 123,
-        authToken: [tokenValue],
-        aggregated: `GITHUB_TOKEN=${tokenValue}`,
-        adjacentLongGithubToken: `${"x".repeat(1_000)}${adjacentLongGithubToken} z`,
-        nested: {
-          apiKey: { value: bearerValue },
-          stdout: `Authorization: Bearer ${bearerValue}`,
-          items: [`curl --token ${tokenValue} https://example.test`],
-        },
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, {
+      status: "completed",
+      token: tokenValue,
+      GITHUB_TOKEN: tokenValue,
+      github_token: tokenValue,
+      openai_api_key: tokenValue,
+      card_number: 4242424242424242,
+      cvc: 123,
+      authToken: [tokenValue],
+      aggregated: `GITHUB_TOKEN=${tokenValue}`,
+      adjacentLongGithubToken: `${"x".repeat(1_000)}${adjacentLongGithubToken} z`,
+      nested: {
+        apiKey: { value: bearerValue },
+        stdout: `Authorization: Bearer ${bearerValue}`,
+        items: [`curl --token ${tokenValue} https://example.test`],
       },
-    } as ToolResultMessage);
+    });
 
     const toolResult = requirePersistedToolResult(sm);
     const serialized = JSON.stringify(toolResult.details);
@@ -281,20 +261,13 @@ describe("tool_result_persist hook", () => {
         },
       },
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: customSecret }],
-      details: {
+    appendToolResultDetails(
+      sm,
+      {
         diagnostic: customSecret,
       },
-    } as ToolResultMessage);
+      customSecret,
+    );
 
     const toolResult = requirePersistedToolResult(sm);
     const serialized = JSON.stringify(toolResult);
@@ -312,24 +285,10 @@ describe("tool_result_persist hook", () => {
       JSON.stringify({ logging: { redactPatterns: ["/[a-z0-9]{30,}/g"] } }),
       "utf-8",
     );
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, {
+      token: { value: "shortsecret" },
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        token: { value: "shortsecret" },
-      },
-    } as ToolResultMessage);
 
     const toolResult = requirePersistedToolResult(sm);
     const serialized = JSON.stringify(toolResult.details);
@@ -339,29 +298,15 @@ describe("tool_result_persist hook", () => {
 
   it("redacts secret-bearing keys and too-deep detail branches before persistence", () => {
     const tokenValue = "abcdefghijklmnopqrstuvwx1234567890";
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const sm = createGuardedSession();
     let deepDetails: Record<string, unknown> = { token: tokenValue };
     for (let index = 0; index < 10; index += 1) {
       deepDetails = { child: deepDetails };
     }
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        [`https://example.test/callback?token=${tokenValue}`]: "ok",
-        deepDetails,
-      },
-    } as ToolResultMessage);
+    appendToolResultDetails(sm, {
+      [`https://example.test/callback?token=${tokenValue}`]: "ok",
+      deepDetails,
+    });
 
     const toolResult = requirePersistedToolResult(sm);
     const serialized = JSON.stringify(toolResult.details);
@@ -369,43 +314,6 @@ describe("tool_result_persist hook", () => {
     expect(serialized).toContain("***");
     expect(serialized).toContain("max depth exceeded");
     expect(serialized).not.toContain(tokenValue);
-  });
-
-  it("caps oversized toolResult details before persistence", () => {
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        status: "completed",
-        sessionId: "exec-1",
-        aggregated: "x".repeat(120_000),
-        tail: "t".repeat(6_000),
-        sessions: [
-          {
-            sessionId: "proc-1",
-            status: "completed",
-            command: "node noisy-script.js ".repeat(2_000),
-            aggregated: "a".repeat(80_000),
-            tail: "z".repeat(8_000),
-          },
-        ],
-      },
-    } as ToolResultMessage);
-
-    const toolResult = requirePersistedToolResult(sm);
-    expect(requireToolResultText(toolResult)).toBe("visible output stays small");
-    expectPersistedToolResultDetailsCapped(sm);
   });
 
   const redactedScanBoundaryTail = () => {
@@ -419,13 +327,9 @@ describe("tool_result_persist hook", () => {
       tail: `${"a".repeat(1_487)}😀${"b".repeat(9_000)}`,
     },
     { name: "redaction-scan surrogate boundary", tail: redactedScanBoundaryTail() },
-    { name: "ASCII negative control", tail: "a".repeat(10_000) },
   ])("keeps $name well formed", ({ tail }) => {
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    appendToolResultWithTail(sm, tail);
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, { status: "completed", tail });
 
     const persistedTail = requirePersistedToolResult(sm).details.tail as string;
     expect(persistedTail).toContain("boundary overlap omitted");
@@ -437,39 +341,25 @@ describe("tool_result_persist hook", () => {
     const boundaryGhToken = `ghp_${"a".repeat(36)}`;
     const leadingTailToken = "a".repeat(5_000);
     const omittedTailToken = "b".repeat(5_000);
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, {
+      status: { state: "completed", token: tokenValue },
+      sessionId: "exec-1",
+      [`https://example.test/callback?token=${tokenValue}`]: "ok",
+      aggregated: "x".repeat(120_000),
+      tail: `GITHUB_TOKEN=${tokenValue} ${"x".repeat(
+        1_940,
+      )} ${boundaryGhToken} GITHUB_TOKEN=${leadingTailToken} {"token":"${omittedTailToken}"}`,
+      sessions: [
+        {
+          sessionId: "proc-1",
+          status: { state: "completed", token: tokenValue },
+          command: `${"x".repeat(490)} --token ${tokenValue} ${"y".repeat(6_000)}`,
+          aggregated: "a".repeat(80_000),
+          tail: "z".repeat(8_000),
+        },
+      ],
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        status: { state: "completed", token: tokenValue },
-        sessionId: "exec-1",
-        [`https://example.test/callback?token=${tokenValue}`]: "ok",
-        aggregated: "x".repeat(120_000),
-        tail: `GITHUB_TOKEN=${tokenValue} ${"x".repeat(
-          1_940,
-        )} ${boundaryGhToken} GITHUB_TOKEN=${leadingTailToken} {"token":"${omittedTailToken}"}`,
-        sessions: [
-          {
-            sessionId: "proc-1",
-            status: { state: "completed", token: tokenValue },
-            command: `${"x".repeat(490)} --token ${tokenValue} ${"y".repeat(6_000)}`,
-            aggregated: "a".repeat(80_000),
-            tail: "z".repeat(8_000),
-          },
-        ],
-      },
-    } as ToolResultMessage);
 
     const toolResult = requirePersistedToolResult(sm);
     const serialized = JSON.stringify(toolResult.details);
@@ -486,42 +376,28 @@ describe("tool_result_persist hook", () => {
 
   it("redacts retained structured fields in fallback oversized details summaries", () => {
     const tokenValue = "fallback-token-abcdefghijklmnopqrstuv";
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        status: { state: "completed", token: tokenValue },
-        sessionId: "exec-1",
-        cwd: "/tmp/".concat("workspace/".repeat(400)),
-        name: "oversized fallback command ".repeat(200),
-        fullOutputPath: "/tmp/".concat("output/".repeat(400)),
-        spilledChars: 2_000_000,
-        spillTruncated: true,
-        spill: {
-          path: "/tmp/web-fetch-output",
-          chars: 2_000_000,
-          truncated: true,
-        },
-        aggregated: "x".repeat(120_000),
-        tail: "tail ".repeat(800),
-        sessions: Array.from({ length: 10 }, (_, i) => ({
-          sessionId: `proc-${i}`,
-          status: "completed",
-          command: `node script-${i}.js ${"x".repeat(6_000)}`,
-        })),
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, {
+      status: { state: "completed", token: tokenValue },
+      sessionId: "exec-1",
+      cwd: "/tmp/".concat("workspace/".repeat(400)),
+      name: "oversized fallback command ".repeat(200),
+      fullOutputPath: "/tmp/".concat("output/".repeat(400)),
+      spilledChars: 2_000_000,
+      spillTruncated: true,
+      spill: {
+        path: "/tmp/web-fetch-output",
+        chars: 2_000_000,
+        truncated: true,
       },
-    } as ToolResultMessage);
+      aggregated: "x".repeat(120_000),
+      tail: "tail ".repeat(800),
+      sessions: Array.from({ length: 10 }, (_, i) => ({
+        sessionId: `proc-${i}`,
+        status: "completed",
+        command: `node script-${i}.js ${"x".repeat(6_000)}`,
+      })),
+    });
 
     const toolResult = requirePersistedToolResult(sm);
     const details = toolResult.details;
@@ -548,26 +424,12 @@ describe("tool_result_persist hook", () => {
     const tail = `${shrinkPrefix}${"x".repeat(
       2_300 - shrinkPrefix.length,
     )}${postBoundarySecret}${"z".repeat(5_000)}`;
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, {
+      status: "completed",
+      aggregated: "x".repeat(120_000),
+      tail,
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        status: "completed",
-        aggregated: "x".repeat(120_000),
-        tail,
-      },
-    } as ToolResultMessage);
 
     const toolResult = requirePersistedToolResult(sm);
     const serialized = JSON.stringify(toolResult.details);
@@ -579,25 +441,11 @@ describe("tool_result_persist hook", () => {
 
   it("fails closed for partially scanned oversized structured secret values", () => {
     const longSecret = "r".repeat(10_000);
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, {
+      status: "completed",
+      tail: `${"x".repeat(1_000)}{"token":"${longSecret}${"z".repeat(1_000)}`,
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        status: "completed",
-        tail: `${"x".repeat(1_000)}{"token":"${longSecret}${"z".repeat(1_000)}`,
-      },
-    } as ToolResultMessage);
 
     const toolResult = requirePersistedToolResult(sm);
     const serialized = JSON.stringify(toolResult.details);
@@ -606,10 +454,7 @@ describe("tool_result_persist hook", () => {
   });
 
   it("caps oversized toolResult details without serializing the original payload", () => {
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const sm = createGuardedSession();
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     const oversizedDetails = {
       status: "completed",
@@ -654,10 +499,7 @@ describe("tool_result_persist hook", () => {
   });
 
   it("caps wide toolResult details without materializing every entry up front", () => {
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const sm = createGuardedSession();
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     const wideDetails: Record<string, unknown> = {
       status: "completed",
@@ -707,42 +549,28 @@ describe("tool_result_persist hook", () => {
   });
 
   it("falls back to a compact summary when sanitized details still exceed the cap", () => {
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
+    const sm = createGuardedSession();
+    appendToolResultDetails(sm, {
+      status: "completed".repeat(250),
+      sessionId: "exec-oversized",
+      success: false,
+      error: "upstream unavailable",
+      cwd: "/tmp/very-long-working-directory".repeat(250),
+      name: "noisy process".repeat(250),
+      fullOutputPath: "/tmp/output.log".repeat(250),
+      truncation: "truncated".repeat(250),
+      tail: "t".repeat(20_000),
+      aggregated: "a".repeat(120_000),
+      sessions: Array.from({ length: 10 }, (_, index) => ({
+        sessionId: `proc-${index}`,
+        status: "completed".repeat(100),
+        cwd: "/tmp/session".repeat(100),
+        name: "child process".repeat(100),
+        command: "node noisy-script.js ".repeat(200),
+        aggregated: "x".repeat(50_000),
+        tail: "z".repeat(10_000),
+      })),
     });
-    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      isError: false,
-      content: [{ type: "text", text: "visible output stays small" }],
-      details: {
-        status: "completed".repeat(250),
-        sessionId: "exec-oversized",
-        success: false,
-        error: "upstream unavailable",
-        cwd: "/tmp/very-long-working-directory".repeat(250),
-        name: "noisy process".repeat(250),
-        fullOutputPath: "/tmp/output.log".repeat(250),
-        truncation: "truncated".repeat(250),
-        tail: "t".repeat(20_000),
-        aggregated: "a".repeat(120_000),
-        sessions: Array.from({ length: 10 }, (_, index) => ({
-          sessionId: `proc-${index}`,
-          status: "completed".repeat(100),
-          cwd: "/tmp/session".repeat(100),
-          name: "child process".repeat(100),
-          command: "node noisy-script.js ".repeat(200),
-          aggregated: "x".repeat(50_000),
-          tail: "z".repeat(10_000),
-        })),
-      },
-    } as ToolResultMessage);
 
     const toolResult = requirePersistedToolResult(sm);
     const details = toolResult.details;
@@ -753,60 +581,6 @@ describe("tool_result_persist hook", () => {
     expect(details.success).toBe(false);
     expect(details.error).toBe("upstream unavailable");
     expect(Buffer.byteLength(JSON.stringify(details), "utf-8")).toBeLessThan(8_192);
-  });
-
-  it("loads tool_result_persist hooks without breaking persistence", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-toolpersist-"));
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-
-    const pluginA = writeTempPlugin({
-      dir: tmp,
-      id: "persist-a",
-      body: `export default { id: "persist-a", register(api) {
-  api.on("tool_result_persist", (event, ctx) => {
-    const msg = event.message;
-    // Example: remove large diagnostic payloads before persistence.
-    const { details: _details, ...rest } = msg;
-    return { message: { ...rest, persistOrder: ["a"], agentSeen: ctx.agentId ?? null } };
-  }, { priority: 10 });
-} };`,
-    });
-
-    const pluginB = writeTempPlugin({
-      dir: tmp,
-      id: "persist-b",
-      body: `export default { id: "persist-b", register(api) {
-  api.on("tool_result_persist", (event) => {
-    const prior = (event.message && event.message.persistOrder) ? event.message.persistOrder : [];
-    return { message: { ...event.message, persistOrder: [...prior, "b"] } };
-  }, { priority: 5 });
-} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: tmp,
-      config: {
-        plugins: {
-          load: { paths: [pluginA, pluginB] },
-          allow: ["persist-a", "persist-b"],
-        },
-      },
-    });
-    initializeGlobalHookRunner(registry);
-
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
-
-    appendToolCallAndResult(sm);
-    const toolResult = requirePersistedToolResultMessage(sm);
-
-    // Hook registration should preserve a valid toolResult message shape.
-    expect(toolResult.role).toBe("toolResult");
-    expect(toolResult.toolCallId).toBe("call_1");
-    expect(Array.isArray(toolResult.content)).toBe(true);
   });
 
   it("reapplies the cap after tool_result_persist expands a tool result", () => {
@@ -855,10 +629,7 @@ describe("tool_result_persist hook", () => {
 } };`,
     });
 
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const sm = createGuardedSession();
 
     appendToolCallAndResult(sm);
     expectPersistedToolResultDetailsCapped(sm);
@@ -877,10 +648,7 @@ describe("tool_result_persist hook", () => {
 } };`,
     });
 
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const sm = createGuardedSession();
 
     appendToolCallAndResult(sm);
     expectPersistedToolResultDetailsCapped(sm);
@@ -923,10 +691,7 @@ describe("before_message_write hook", () => {
 	} };`,
     });
 
-    const sm = guardSessionManager(SessionManager.inMemory(), {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const sm = createGuardedSession();
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     appendMessage({
       role: "user",

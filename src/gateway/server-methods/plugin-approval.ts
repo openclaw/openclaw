@@ -30,6 +30,7 @@ import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
+import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
@@ -39,7 +40,6 @@ import {
   registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
-import { handlePendingPluginApprovalRequest } from "./plugin-approval-request-delivery.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -104,6 +104,18 @@ export function createPluginApprovalHandlers(
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, "signed plugin approval owner is unavailable"),
+        );
+        return;
+      }
+
+      if (p.policySubject && !trustedAgentRuntime) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "plugin approval policy subject requires agent runtime authority",
+          ),
         );
         return;
       }
@@ -175,6 +187,9 @@ export function createPluginApprovalHandlers(
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
+        ...(trustedAgentRuntime && p.policySubject
+          ? { policySubject: { ...p.policySubject } }
+          : {}),
         ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
         ...(Array.isArray(p.allowedDecisions)
           ? {
@@ -241,7 +256,8 @@ export function createPluginApprovalHandlers(
         return;
       }
 
-      await handlePendingPluginApprovalRequest({
+      await handlePendingApprovalRequestWithDelivery({
+        approvalKind: "plugin",
         manager,
         record,
         respond,

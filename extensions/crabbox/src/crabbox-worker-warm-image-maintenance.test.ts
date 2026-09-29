@@ -1,11 +1,11 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { openWarmImageStore } from "./crabbox-state.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
-  commandResult,
   createWarmProvider,
   managedBinary,
-  openWarmImageStore,
   provisionWarmProfile,
   PROFILE,
 } from "./crabbox-worker-warm-image.test-support.js";
@@ -46,7 +46,7 @@ describe("Crabbox idle image maintenance", () => {
       if (params?.binary === "/opt/b/crabbox") {
         throw new Error("fixture binary acquisition unavailable");
       }
-      return { binary: params?.binary ?? "crabbox", version: "0.55.0" };
+      return { binary: params?.binary ?? "crabbox", version: "999.0.0" };
     });
     const store = openWarmImageStore();
     store.register("expired", expiredImage("chk_expired"));
@@ -154,6 +154,62 @@ describe("Crabbox idle image maintenance", () => {
     fails = false;
     await provider.maintain!(context());
     expect(store.lookup("expired")).toBeUndefined();
+  });
+
+  it("reports paused captures once per ownership snapshot without attempting capture", async () => {
+    const { provider, calls, warn } = createWarmProvider();
+    const store = openWarmImageStore();
+    const records = Array.from({ length: 4 }, (_, index): WarmProfileRecord => ({
+      version: 3,
+      allocations: {},
+      operation: {
+        type: "capture",
+        id: `capture-${index}`,
+        phase: "uncertain",
+        startedAtMs: Date.now() - 1_200_000,
+      },
+    }));
+    records.forEach((record, index) => store.register(`profile-${index}`, record));
+
+    await provider.maintain!(context());
+    await provider.maintain!(context());
+
+    expect(warn).toHaveBeenCalledOnce();
+    const warning = warn.mock.calls[0]?.[0];
+    expect(warning).toContain("4");
+    expect(warning).toContain("paused");
+    expect(warning).not.toContain("failed");
+    expect(warning).toContain("Stop the owning Gateway");
+    expect(warning).toContain("--acknowledge-provider-cleanup");
+    for (const [index, record] of records.entries()) {
+      expect(warning).toContain(`capture-${index}`);
+      expect(store.lookup(`profile-${index}`)).toEqual(record);
+    }
+    expect(calls).toEqual([]);
+
+    store.register("profile-0", {
+      version: 3,
+      allocations: {},
+      operation: {
+        type: "capture",
+        id: "replacement-capture",
+        phase: "uncertain",
+        startedAtMs: Date.now(),
+      },
+    });
+    await provider.maintain!(context());
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[0]).toContain("replacement-capture");
+    records.forEach((_, index) =>
+      store.register(`profile-${index}`, { version: 3, allocations: {} }),
+    );
+    await provider.maintain!(context());
+    expect(warn).toHaveBeenCalledTimes(2);
+    records.forEach((record, index) => store.register(`profile-${index}`, record));
+    await provider.maintain!(context());
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn.mock.calls[2]?.[0]).toBe(warning);
+    expect(calls).toEqual([]);
   });
 
   it.each(["dispose", "authority", "operator delete"] as const)(

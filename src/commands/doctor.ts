@@ -7,6 +7,8 @@ import type { DoctorOptions } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
+export { runDoctorProcess } from "./doctor-process.js";
+
 async function resolveExplicitSessionSqliteMaintenancePaths(
   options: DoctorOptions,
 ): Promise<string[]> {
@@ -185,10 +187,33 @@ async function maybeCreateSessionSqliteGithubIssue(
   const supportIssue = report.supportIssue;
   if (!supportIssue) {
     if (shouldLog) {
-      runtime.log("session-sqlite recover: no support issue payload was generated");
+      runtime.log(
+        report.totals.issues === 0 &&
+          report.totals.importedEntries === 0 &&
+          report.totals.archivedTranscriptFiles === 0 &&
+          report.totals.archivedUnreferencedJsonlFiles === 0 &&
+          report.targets.every(
+            (target) =>
+              !target.restore?.restoredFiles.length && !target.corruptRecovery?.movedFiles.length,
+          )
+          ? "session-sqlite recover: nothing to recover; no report filed"
+          : "session-sqlite recover: no support issue payload was generated",
+      );
     }
     return;
   }
+  const recordFailure = (message: string) => {
+    supportIssue.github = { message, status: "failed" };
+    if (shouldLog) {
+      runtime.log(`session-sqlite recover: ${message}`);
+    }
+  };
+  const recordCreated = (url: string) => {
+    supportIssue.github = { status: "created", url };
+    if (shouldLog) {
+      runtime.log(`session-sqlite recover: created GitHub issue ${url}`);
+    }
+  };
   const { resolveDoctorRepairMode } = await import("./doctor-repair-mode.js");
   const canPrompt = options.json !== true && resolveDoctorRepairMode(options).canPrompt;
   let approved = options.yes === true;
@@ -211,10 +236,7 @@ async function maybeCreateSessionSqliteGithubIssue(
   }
   const manifestPath = report.migrationRun?.manifestPath;
   if (!manifestPath) {
-    setSessionSqliteGithubIssueFailure(
-      runtime,
-      supportIssue,
-      shouldLog,
+    recordFailure(
       "GitHub issue creation is unavailable because its private retry receipt could not be prepared.",
     );
     return;
@@ -237,10 +259,7 @@ async function maybeCreateSessionSqliteGithubIssue(
     claim = undefined;
   }
   if (!claim) {
-    setSessionSqliteGithubIssueFailure(
-      runtime,
-      supportIssue,
-      shouldLog,
+    recordFailure(
       "GitHub issue creation is unavailable because its private retry receipt could not be saved.",
     );
     return;
@@ -248,10 +267,7 @@ async function maybeCreateSessionSqliteGithubIssue(
   supportIssue.title = claim.issue.title;
   const claimedIssue = prepareGithubIssue({ body: supportIssue.body, title: claim.issue.title });
   if (claimedIssue.marker !== claim.issue.marker) {
-    setSessionSqliteGithubIssueFailure(
-      runtime,
-      supportIssue,
-      shouldLog,
+    recordFailure(
       "GitHub issue creation is unavailable because its private retry receipt is inconsistent.",
     );
     return;
@@ -261,13 +277,10 @@ async function maybeCreateSessionSqliteGithubIssue(
       status: "unavailable" as const,
     }));
     if (reconciled.status === "created") {
-      setSessionSqliteGithubIssueCreated(runtime, supportIssue, shouldLog, reconciled.url);
+      recordCreated(reconciled.url);
       return;
     }
-    setSessionSqliteGithubIssueFailure(
-      runtime,
-      supportIssue,
-      shouldLog,
+    recordFailure(
       "A prior GitHub issue handoff may already have created this report; no duplicate was opened.",
     );
     return;
@@ -277,26 +290,18 @@ async function maybeCreateSessionSqliteGithubIssue(
     status: "outcome-unknown" as const,
   }));
   if (created.status === "created") {
-    setSessionSqliteGithubIssueCreated(runtime, supportIssue, shouldLog, created.url);
+    recordCreated(created.url);
     return;
   }
   if (created.status === "outcome-unknown") {
-    setSessionSqliteGithubIssueFailure(
-      runtime,
-      supportIssue,
-      shouldLog,
-      "GitHub issue creation outcome is unknown; no duplicate was opened.",
-    );
+    recordFailure("GitHub issue creation outcome is unknown; no duplicate was opened.");
     return;
   }
   if (created.status === "fallback-unavailable") {
     await withSessionSqliteGithubIssueReceipt(manifestPath, (authority) =>
       clearSessionSqliteMigrationGithubIssueClaim(manifestPath, claimedIssue.marker, authority),
     ).catch(() => false);
-    setSessionSqliteGithubIssueFailure(
-      runtime,
-      supportIssue,
-      shouldLog,
+    recordFailure(
       "GitHub issue creation is unavailable, and this report is too large for a safe browser fallback.",
     );
     return;
@@ -315,9 +320,8 @@ async function maybeCreateSessionSqliteGithubIssue(
       clearSessionSqliteMigrationGithubIssueClaim(manifestPath, claimedIssue.marker, authority),
     ).catch(() => false);
   }
-  supportIssue.github = { message, status: "failed" };
+  recordFailure(message);
   if (shouldLog) {
-    runtime.log(`session-sqlite recover: ${message}`);
     runtime.log(
       opened
         ? "session-sqlite recover: opened the sanitized fallback in your browser"
@@ -337,28 +341,4 @@ async function withSessionSqliteGithubIssueReceipt<T>(
     protectedPaths: [manifestPath],
     run,
   });
-}
-
-function setSessionSqliteGithubIssueCreated(
-  runtime: RuntimeEnv,
-  issue: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
-  shouldLog: boolean,
-  url: string,
-): void {
-  issue.github = { status: "created", url };
-  if (shouldLog) {
-    runtime.log(`session-sqlite recover: created GitHub issue ${url}`);
-  }
-}
-
-function setSessionSqliteGithubIssueFailure(
-  runtime: RuntimeEnv,
-  issue: NonNullable<DoctorSessionSqliteReport["supportIssue"]>,
-  shouldLog: boolean,
-  message: string,
-): void {
-  issue.github = { message, status: "failed" };
-  if (shouldLog) {
-    runtime.log(`session-sqlite recover: ${message}`);
-  }
 }

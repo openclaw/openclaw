@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { describe, expect, it, vi } from "vitest";
-import * as replaceFile from "../infra/replace-file.js";
-import * as sqlitePrivateDirectory from "../infra/sqlite-private-directory.js";
-import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import {
   createSessionSqliteMigrationRun,
   writeSessionSqliteMigrationManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import * as sqlitePrivateDirectory from "../infra/sqlite-private-directory.js";
+import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
+import { runOutsideOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -18,6 +19,10 @@ import {
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
+}));
 
 const { createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
@@ -212,7 +217,8 @@ describe("runDoctorSessionSqlite", () => {
   );
 
   it("refuses retirement while a peer maintenance operation holds the selected state", async () => {
-    const { store } = await createVerifiedRecoveryStore();
+    const { store, archivePath } = await createVerifiedRecoveryStore();
+    const original = fs.readFileSync(archivePath);
     const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
     const confirm = vi.fn(async () => true);
     await withDoctorSqliteMaintenanceLock({
@@ -220,16 +226,19 @@ describe("runDoctorSessionSqlite", () => {
       operation: "fixture import",
       run: async () => {
         await expect(
-          retireSessionSqliteRecovery({
-            env: store.env,
-            preview,
-            readConfig: async () => ({}),
-            confirm,
-          }),
-        ).rejects.toThrow("Gateway or another SQLite maintenance");
+          runOutsideOpenClawDatabaseMaintenanceScope(() =>
+            retireSessionSqliteRecovery({
+              env: store.env,
+              preview,
+              readConfig: async () => ({}),
+              confirm,
+            }),
+          ),
+        ).rejects.toThrow("undergoing offline maintenance");
       },
     });
     expect(confirm).not.toHaveBeenCalled();
+    expect(fs.readFileSync(archivePath)).toEqual(original);
   });
 
   it("protects originals already consumed by restore without reporting unexplained loss", async () => {

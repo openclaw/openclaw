@@ -20,18 +20,18 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     ).trim();
 
   execFileSync("git", ["init", "-q"], { cwd: root });
-  writeManifest({
+  const lifecycleScripts = {
+    "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
+    postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+    preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+    prepare: "node scripts/prepare-git-hooks.mjs",
+  };
+  const manifest = {
     name: "fixture",
-    openclaw: { schemaVersions: { agent: 17, state: 6 } },
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-      test: "vitest run",
-    },
+    scripts: { ...lifecycleScripts, test: "vitest run" },
     devDependencies: { vitest: "1.0.0" },
-  });
+  };
+  writeManifest({ ...manifest, openclaw: { schemaVersions: { agent: 17, state: 6 } } });
   const frozenLock =
     "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/worker: {}\n" +
     "snapshots:\n  example@1.0.0:\n    dependencies:\n      get-caller-file: 2.0.5\n";
@@ -125,6 +125,8 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     ".github/actions/setup-node-env/install-dependencies.sh",
     "scripts/check-install-dependency-ownership.mjs",
     "scripts/prepare-git-hooks.mjs",
+    "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
     "scripts/lib/pnpm-lockfile-documents.mjs",
   ]) {
@@ -151,53 +153,21 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
   });
   expect(fingerprint()).toBe(baseline);
 
-  // Repository-owned package metadata does not affect pnpm's install tree
-  // or any audited install hook, so schema churn must stay warm.
-  writeManifest({
-    name: "fixture",
-    openclaw: { schemaVersions: { agent: 17, state: 7 } },
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-      test: "vitest run",
-    },
-    devDependencies: { vitest: "1.0.0" },
-  });
+  // Repository-owned metadata does not change the dependency tree.
+  writeManifest({ ...manifest, openclaw: { schemaVersions: { agent: 17, state: 7 } } });
   expect(fingerprint()).toBe(baseline);
 
-  writeManifest({
-    name: "fixture",
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-      test: "vitest run",
-    },
-    devDependencies: { vitest: "2.0.0" },
-  });
+  writeManifest({ ...manifest, devDependencies: { vitest: "2.0.0" } });
   expect(fingerprint()).not.toBe(baseline);
 
   writeManifest({
-    name: "fixture",
+    ...manifest,
     scripts: { postinstall: "node install-v2.mjs", test: "vitest run" },
-    devDependencies: { vitest: "1.0.0" },
   });
   expect(() => fingerprint()).toThrow(/unaudited install lifecycle scripts in package\.json/);
 
   mkdirSync(path.join(root, "packages", "worker"), { recursive: true });
-  writeManifest({
-    name: "fixture",
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-    },
-    devDependencies: { vitest: "1.0.0" },
-  });
+  writeManifest({ ...manifest, scripts: lifecycleScripts });
   const workerManifest = path.join(root, "packages", "worker", "package.json");
   writeFileSync(
     workerManifest,
@@ -219,17 +189,7 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     `${JSON.stringify({ name: "worker", scripts: { build: "node build.mjs" } })}\n`,
   );
 
-  writeManifest({
-    name: "fixture",
-    scripts: {
-      "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-      postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-      preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-      prepare: "node scripts/prepare-git-hooks.mjs",
-      test: "vitest run",
-    },
-    devDependencies: { vitest: "1.0.0" },
-  });
+  writeManifest(manifest);
   writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.1'\n");
   expect(fingerprint()).not.toBe(baseline);
   expect(fingerprint(false)).not.toBe(baseline);

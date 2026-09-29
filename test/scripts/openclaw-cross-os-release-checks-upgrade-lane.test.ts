@@ -1,10 +1,20 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
-vi.mock("node:net", { spy: true });
+vi.mock("node:net", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:net")>();
+  // Native socket prototypes outlive a test file in shared workers.
+  return { ...actual, createServer: vi.fn(actual.createServer) };
+});
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, tmpdir: vi.fn(actual.tmpdir) };
+});
 
 const mocks = vi.hoisted(() => ({
   ensureLocalNpmShim: vi.fn(),
@@ -82,6 +92,7 @@ import {
   runFreshLane,
   runUpgradeLane,
 } from "../../scripts/lib/cross-os-release-checks/lanes.ts";
+import { writeSummary } from "../../scripts/lib/cross-os-release-checks/reporting.ts";
 
 const { createTempDir, trackTempDir } = createScriptTestHarness();
 
@@ -147,6 +158,16 @@ function arrangeSuccessfulLane() {
 }
 
 describe("cross-OS manual gateway lane evidence", () => {
+  it("preserves native socket implementations for later shared-worker consumers", () => {
+    const nativeNet = process.getBuiltinModule("node:net");
+    expect(vi.isMockFunction(nativeNet.Socket)).toBe(false);
+    expect(vi.isMockFunction(nativeNet.Server)).toBe(false);
+    expect(nativeNet.Socket.prototype).toHaveProperty(
+      "write",
+      expect.toSatisfy((method) => !vi.isMockFunction(method)),
+    );
+  });
+
   beforeEach(() => {
     logsDir = createTempDir("openclaw-upgrade-lane-test-");
     mocks.ensureLocalNpmShim.mockImplementation(({ rootDir }) => trackTempDir(rootDir));
@@ -154,10 +175,53 @@ describe("cross-OS manual gateway lane evidence", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.mocked(tmpdir).mockRestore();
     for (const mock of Object.values(mocks)) {
       mock.mockReset();
     }
   });
+
+  it.each(["win32", "linux"] as const)(
+    "passes the inherited temp directories to the published updater on %s",
+    async (platform) => {
+      arrangeSuccessfulLane();
+      const shortTemp = String.raw`C:\Users\RUNNER~1\AppData\Local\Temp`;
+      const longTemp = String.raw`C:\Users\runneradmin\AppData\Local\Temp`;
+      vi.mocked(tmpdir).mockReturnValue(logsDir);
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const realpath = vi.spyOn(realpathSync, "native").mockReturnValue(longTemp);
+      for (const key of ["TEMP", "TMP", "TMPDIR", "Temp"]) {
+        vi.stubEnv(key, shortTemp);
+      }
+
+      const result = await runUpgradeLane(upgradeParams());
+
+      expect(result).toMatchObject({ status: "pass" });
+      const expectedTemp = platform === "win32" ? longTemp : shortTemp;
+      const expectedEnv = {
+        TEMP: expectedTemp,
+        TMP: expectedTemp,
+        TMPDIR: expectedTemp,
+        Temp: expectedTemp,
+      };
+      expect(mocks.installPackageSpec).toHaveBeenCalledWith(
+        expect.objectContaining({ env: expect.objectContaining(expectedEnv) }),
+      );
+      expect(mocks.runOpenClaw).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: expect.arrayContaining(["update", "--json"]),
+          env: expect.objectContaining(expectedEnv),
+        }),
+      );
+      expect(process.env.TEMP).toBe(shortTemp);
+      if (platform === "win32") {
+        expect(realpath).toHaveBeenCalledWith(shortTemp);
+      } else {
+        expect(realpath).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   describe.each([
     ["fresh", runFreshLane],
@@ -518,6 +582,102 @@ describe("cross-OS manual gateway lane evidence", () => {
     );
     expect(JSON.stringify(result)).not.toContain("npm-updater-private-fixture");
     expect(JSON.stringify(result)).not.toContain("npm install");
+  });
+
+  it.each([
+    "success",
+    "unsettled-exit",
+    "other failure",
+    "timeout",
+    "swap-cleanup",
+    "switched install",
+  ] as const)("retries the shipped Windows liveness defect once: %s", async (retryOutcome) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    arrangeSuccessfulLane();
+    const params = {
+      ...upgradeParams(),
+      // Recovery must use the installed baseline, even when selected by a moving tag.
+      baselineSpec: "openclaw@latest",
+      build: { ...candidate, candidateVersion: "2026.9.7" },
+    };
+    const unsettledExit = {
+      exitCode: 13,
+      stdout: "",
+      stderr:
+        "Warning: Detected unsettled top-level await at file:///C:/prefix/node_modules/openclaw/openclaw.mjs:757",
+    };
+    mocks.readInstalledVersion
+      .mockReset()
+      .mockReturnValueOnce("2026.9.6")
+      .mockReturnValueOnce("2026.9.6")
+      .mockReturnValueOnce(retryOutcome === "switched install" ? "2026.9.7" : "2026.9.6")
+      .mockReturnValue("2026.9.7");
+    mocks.readInstalledMetadata.mockReturnValue({
+      version: "2026.9.7",
+      commit: candidate.sourceSha,
+    });
+    mocks.runOpenClaw.mockResolvedValueOnce(unsettledExit).mockImplementationOnce(async () => {
+      if (retryOutcome === "timeout") {
+        throw new Error(
+          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
+        );
+      }
+      if (retryOutcome === "success") {
+        return { exitCode: 0, stdout: '{"status":"ok","durationMs":1234}', stderr: "" };
+      }
+      if (retryOutcome === "swap-cleanup") {
+        return {
+          exitCode: 1,
+          stdout: "",
+          stderr: "global install swap EPERM unlink 'C:\\prefix\\.openclaw-1-2\\native.node'",
+        };
+      }
+      return retryOutcome === "other failure"
+        ? { exitCode: 13, stdout: "", stderr: "Different failure" }
+        : unsettledExit;
+    });
+
+    const result = await runUpgradeLane(params);
+
+    const updates = mocks.runOpenClaw.mock.calls
+      .map(([call]) => call)
+      .filter((call) => call.args[0] === "update" && call.args[1] === "--tag");
+    expect(updates).toHaveLength(2);
+    expect(updates[1]).toEqual(updates[0]);
+    const recovered = retryOutcome === "success" || retryOutcome === "unsettled-exit";
+    expect(result.status).toBe(recovered ? "pass" : "fail");
+    expect(mocks.installPackageSpec).toHaveBeenCalledTimes(
+      retryOutcome === "unsettled-exit" ? 2 : 1,
+    );
+    expect(mocks.runOpenClaw.mock.calls.some(([call]) => call.args[1] === "status")).toBe(
+      retryOutcome === "success",
+    );
+    expect(mocks.runAgentTurn).toHaveBeenCalledTimes(recovered ? 1 : 0);
+    if (recovered) {
+      const action = retryOutcome === "success" ? "retry-update" : "direct-candidate-install";
+      expect(result.updateFallback).toEqual({ reason: "unsettled-exit", action });
+      expect(result.updateTimings).toEqual(
+        retryOutcome === "success" ? [{ name: "total", durationMs: 1234 }] : [],
+      );
+      writeSummary(logsDir, {
+        provider: "openai",
+        suite: "packaged-upgrade",
+        mode: "upgrade",
+        baselineSpec: params.baselineSpec,
+        result,
+      });
+      expect(readFileSync(join(logsDir, "summary.md"), "utf8")).toContain(
+        `- Updater fallback: \`unsettled-exit/${action}\``,
+      );
+    } else {
+      expect(result).not.toHaveProperty("updateFallback");
+      expect(result.error).toContain(
+        retryOutcome === "timeout" ? "Command timed out" : "Packaged upgrade failed",
+      );
+    }
+    expect(readFileSync(join(logsDir, "upgrade-update.log"), "utf8")).toContain(
+      "Windows baseline 2026.9.6 updater exited 13 (known shipped liveness defect fixed in 2026.9.7)",
+    );
   });
 });
 

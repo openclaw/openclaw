@@ -23,6 +23,7 @@ type PositionRailViewParams = {
   visibleIds: ReadonlySet<string>;
   rovingId: string;
   previewId: string | null | undefined;
+  hoveredId: string | null;
   bindScroller: (element?: Element) => void;
   bindPreview: (element?: Element) => void;
   onScroll: () => void;
@@ -45,6 +46,7 @@ export function renderChatPositionRailView({
   visibleIds,
   rovingId,
   previewId,
+  hoveredId,
   bindScroller,
   bindPreview,
   onScroll,
@@ -57,20 +59,18 @@ export function renderChatPositionRailView({
   onMarkerSelect,
 }: PositionRailViewParams) {
   const count = candidates.length;
-  const markers = candidates.map(({ id, anchorId, message, role }) => ({
-    id,
-    anchorId,
-    message,
-    label: t(
-      role === "user" ? "chat.thread.positionUserMessage" : "chat.thread.positionAssistantMessage",
-    ),
-  }));
+  const userLabel = t("chat.thread.positionUserMessage");
+  const assistantLabel = t("chat.thread.positionAssistantMessage");
+  const markerLabel = (marker: ChatPositionIndex["markers"][number]) =>
+    marker.role === "user" ? userLabel : assistantLabel;
   const previewMarker =
-    previewId === undefined ? undefined : markers.find((marker) => marker.id === previewId);
+    previewId == null ? undefined : candidates.find((marker) => marker.id === previewId);
   // Parse message content only for the open preview, even in long sessions.
   const previewMessage = previewMarker ? normalizeMessage(previewMarker.message) : undefined;
   const previewSender = previewMessage?.role === "user" ? previewMessage.sender : undefined;
-  const previewLabel = (previewSender ? previewMessage?.senderLabel : null) ?? previewMarker?.label;
+  const previewLabel =
+    (previewSender ? previewMessage?.senderLabel : null) ??
+    (previewMarker ? markerLabel(previewMarker) : undefined);
   const previewText =
     previewMarker && previewMessage
       ? truncateUtf16Safe(
@@ -101,25 +101,27 @@ export function renderChatPositionRailView({
               [
                 transcript,
                 count,
+                hoveredId,
                 ...renderedIndexes.flatMap((index) => [
                   index,
-                  markers[index]!.id,
-                  markers[index]!.label,
-                  markers[index]!.anchorId,
+                  candidates[index]!.id,
+                  markerLabel(candidates[index]!),
+                  candidates[index]!.anchorId,
                 ]),
               ],
               () =>
                 repeat(
                   renderedIndexes,
-                  (index) => markers[index]!.id,
+                  (index) => candidates[index]!.id,
                   (index, renderedIndex) => {
-                    const marker = markers[index]!;
+                    const marker = candidates[index]!;
                     const previous = renderedIndexes[renderedIndex - 1];
                     // Keep distant retained marks outside the local hover wave.
                     return html`
                       ${previous !== undefined && index > previous + 1 ? html`<div aria-hidden="true"></div>` : nothing}
                       <div
                         class="chat-position-rail__item"
+                        ?data-hovered=${marker.id === hoveredId}
                         role="listitem"
                         aria-posinset=${index + 1}
                         aria-setsize=${count}
@@ -130,7 +132,7 @@ export function renderChatPositionRailView({
                           type="button"
                           data-position-marker-id=${marker.id}
                           tabindex=${marker.id === rovingId ? "0" : "-1"}
-                          aria-label=${t("chat.thread.positionMarker", { position: String(index + 1), count: String(count), label: marker.label })}
+                          aria-label=${t("chat.thread.positionMarker", { position: String(index + 1), count: String(count), label: markerLabel(marker) })}
                           aria-description=${t("chat.thread.positionMarkerHint")}
                           aria-current=${String(marker.id === activeId)}
                           ?data-visible=${visibleIds.has(marker.id)}

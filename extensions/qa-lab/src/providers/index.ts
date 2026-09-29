@@ -1,4 +1,3 @@
-// Qa Lab plugin entrypoint registers its OpenClaw integration.
 import { aimockProviderDefinition } from "./aimock/index.js";
 import { liveFrontierProviderDefinition } from "./live-frontier/index.js";
 import { mockOpenAiProviderDefinition } from "./mock-openai/index.js";
@@ -36,12 +35,8 @@ export function getQaProvider(input: QaProviderModeInput): QaProviderDefinition 
   return provider;
 }
 
-function listQaProviderModes() {
-  return PROVIDERS.map((provider) => provider.mode);
-}
-
 export function formatQaProviderModeHelp() {
-  return `Provider mode: ${listQaProviderModes().join(", ")}`;
+  return `Provider mode: ${PROVIDERS.map((provider) => provider.mode).join(", ")}`;
 }
 
 export function listQaStandaloneProviderCommands() {

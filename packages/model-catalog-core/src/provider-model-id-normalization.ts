@@ -49,11 +49,6 @@ export function setCurrentManifestModelIdNormalizationPolicies(
   currentManifestModelIdNormalizationPolicies = policies;
 }
 
-/** Return true when a model id already includes a provider namespace. */
-function hasProviderPrefix(modelId: string): boolean {
-  return modelId.includes("/");
-}
-
 /** Join a provider prefix and model id with exactly one slash. */
 function formatPrefixedModelId(prefix: string, modelId: string): string {
   return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
@@ -96,7 +91,7 @@ export function normalizeProviderModelIdWithPolicies(params: {
 
   modelId = policy.aliases?.[normalizeLowercaseStringOrEmpty(modelId)] ?? modelId;
 
-  if (!hasProviderPrefix(modelId)) {
+  if (!modelId.includes("/")) {
     for (const rule of policy.prefixWhenBareAfterAliasStartsWith ?? []) {
       if (normalizeLowercaseStringOrEmpty(modelId).startsWith(rule.modelPrefix.toLowerCase())) {
         return formatPrefixedModelId(rule.prefix, modelId);
@@ -135,7 +130,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-5.5": "claude-opus-5-5",
       "opus-5-5": "claude-opus-5-5",
       "opus-5": "claude-opus-5",
-      opus: "claude-opus-5",
+      opus: "claude-opus-5-5",
       "opus-4.8": "claude-opus-4-8",
       "opus-4.7": "claude-opus-4-7",
       "opus-4.6": "claude-opus-4-6",

@@ -108,7 +108,7 @@ export function captureWebchatReplyMediaScope(
   };
 }
 
-export async function prepareWebchatReplyMediaForDisplay(params: {
+type WebchatReplyMediaPreparationParams = {
   scope: ReturnType<typeof captureWebchatReplyMediaScope>;
   inputs: readonly ReplyDispatchOperation[];
   storePath?: string;
@@ -119,7 +119,21 @@ export async function prepareWebchatReplyMediaForDisplay(params: {
   onLocalAudioAccessDenied?: (error: LocalMediaAccessError) => void;
   onManagedMediaPrepareError?: (message: string) => void;
   onSensitiveDisplayPrepareError?: (message: string) => void;
-}) {
+};
+
+type WebchatReplyContent = Awaited<ReturnType<typeof buildAssistantReplyContentFromInputs>> & {
+  mediaMessage: Awaited<ReturnType<typeof buildWebchatAssistantMessageFromReplyPayloads>>;
+};
+
+/** Keep normalization and grouped content preparation inside one media custody scope. */
+export async function withPreparedWebchatReplyMedia<T>(
+  params: WebchatReplyMediaPreparationParams,
+  prepare: (media: {
+    payloads: ReplyPayload[];
+    inputsByIndex: ReplyDispatchOperation[][];
+    buildContent: (inputs: readonly ReplyDispatchOperation[]) => Promise<WebchatReplyContent>;
+  }) => Promise<T>,
+): Promise<T> {
   const scope = params.scope;
   const sourcePayloads = params.inputs.map(readChatSendReplyPayload);
   const hasMedia = sourcePayloads.some(
@@ -132,35 +146,53 @@ export async function prepareWebchatReplyMediaForDisplay(params: {
         ...scope,
         payloads: sourcePayloads,
       });
-      const inputs = params.inputs.flatMap((input, index) => {
+      const inputsByIndex = params.inputs.map((input, index) => {
         const payload = payloads[index];
         return payload ? replaceChatSendReplyPayload(input, payload) : [];
       });
       const localRoots = getWebchatReplyMediaLocalRoots({ ...scope, storePath: params.storePath });
-      const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(
-        inputs.map(readChatSendReplyPayload),
-        {
-          localRoots,
-          assertCurrent: captureChannelReadAuthority(),
-          onLocalAudioAccessDenied: params.onLocalAudioAccessDenied,
+      return prepare({
+        payloads,
+        inputsByIndex,
+        buildContent: async (inputs) => {
+          const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(
+            inputs.map(readChatSendReplyPayload),
+            {
+              localRoots,
+              assertCurrent: captureChannelReadAuthority(),
+              onLocalAudioAccessDenied: params.onLocalAudioAccessDenied,
+            },
+          );
+          const content = await buildAssistantReplyContentFromInputs({
+            sessionKey: params.transcriptTarget?.sessionKey ?? scope.sessionKey,
+            agentId: params.transcriptTarget?.agentId ?? scope.agentId,
+            inputs,
+            transcriptMediaMessage: mediaMessage,
+            managedMediaLocalRoots: localRoots,
+            assertCurrent: scope.assertCurrent,
+            abortSignal: params.abortSignal,
+            includeSensitiveMedia: params.includeSensitiveMedia,
+            includeSensitiveDisplay: params.includeSensitiveDisplay,
+            onManagedMediaPrepareError: params.onManagedMediaPrepareError,
+            onSensitiveDisplayPrepareError: params.onSensitiveDisplayPrepareError,
+          });
+          return { ...content, mediaMessage };
         },
-      );
-      const content = await buildAssistantReplyContentFromInputs({
-        sessionKey: params.transcriptTarget?.sessionKey ?? scope.sessionKey,
-        agentId: params.transcriptTarget?.agentId ?? scope.agentId,
-        inputs,
-        transcriptMediaMessage: mediaMessage,
-        managedMediaLocalRoots: localRoots,
-        assertCurrent: scope.assertCurrent,
-        abortSignal: params.abortSignal,
-        includeSensitiveMedia: params.includeSensitiveMedia,
-        includeSensitiveDisplay: params.includeSensitiveDisplay,
-        onManagedMediaPrepareError: params.onManagedMediaPrepareError,
-        onSensitiveDisplayPrepareError: params.onSensitiveDisplayPrepareError,
       });
-      return { ...content, inputs, payloads, mediaMessage };
     },
     hasMedia ? params.abortSignal : undefined,
+  );
+}
+
+export async function prepareWebchatReplyMediaForDisplay(
+  params: WebchatReplyMediaPreparationParams,
+) {
+  return withPreparedWebchatReplyMedia(
+    params,
+    async ({ payloads, inputsByIndex, buildContent }) => {
+      const inputs = inputsByIndex.flat();
+      return { ...(await buildContent(inputs)), inputs, payloads };
+    },
   );
 }
 

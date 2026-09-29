@@ -21,6 +21,11 @@ import {
   submitInputDialog,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import {
+  chooseSidebarMenuOption,
+  closeSidebarMenu,
+  openSidebarMenu,
+} from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -691,45 +696,26 @@ suite.define(() => {
       // global toolbar remains available without revealing a section action.
       const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSortButton.click();
-      const showAutomationSessions = page.getByRole("menuitemcheckbox", {
+      await openSidebarMenu(page);
+      const showAutomationSessions = page.getByRole("switch", {
         name: "Show automation sessions",
+        exact: true,
       });
-      await activateSelfRemovingControl(showAutomationSessions);
-      await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("false");
-
-      await filterAndSortButton.click();
+      await showAutomationSessions.click();
       await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
-      await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
+      await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("true");
+      await openSidebarMenu(page);
+      const groupBy = page.getByRole("button", { name: "Group by: Custom groups", exact: true });
+      await groupBy.waitFor();
       await captureUiProof(suite, page, "sidebar-groupby-sort-menu.png");
-      const groupingCheck = page
-        .getByRole("menuitemradio", { name: "Custom groups" })
-        .locator(".session-menu__check");
-      const nativeAutomationCheck = showAutomationSessions.locator('[part="checkmark"]');
-      await expect.poll(() => nativeAutomationCheck.count()).toBe(1);
-      expect(await nativeAutomationCheck.boundingBox()).toBeNull();
-      const automationCheck = showAutomationSessions.locator(".session-menu__check");
-      await expect.poll(() => automationCheck.count()).toBe(1);
-      await expect
-        .poll(async () => {
-          const [groupingBounds, automationBounds] = await Promise.all([
-            groupingCheck.boundingBox(),
-            automationCheck.boundingBox(),
-          ]);
-          if (!groupingBounds || !automationBounds) {
-            return Number.POSITIVE_INFINITY;
-          }
-          const groupingRight = groupingBounds.x + groupingBounds.width;
-          const automationRight = automationBounds.x + automationBounds.width;
-          return Math.abs(automationRight - groupingRight);
-        })
-        .toBeLessThanOrEqual(1);
       await filterAndSortButton.click();
       await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("false");
-      await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);
+      await expect.poll(() => page.locator(".sidebar-session-sort-menu").count()).toBe(0);
       await captureUiProof(suite, page, "sidebar-groupby-sort-menu-closed.png");
 
       await filterAndSortButton.click();
-      await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
+      await chooseSidebarMenuOption(page, "Group by", "None");
+      await closeSidebarMenu(page);
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
     } finally {
@@ -910,7 +896,9 @@ suite.define(() => {
         .toBe(10);
 
       const alpha = page.locator('[data-session-section="category:Alpha"]');
-      const alphaToggle = alpha.getByRole("button", { name: "Alpha", exact: true });
+      const alphaToggle = alpha
+        .getByRole("button", { name: "Alpha", exact: true })
+        .and(alpha.locator(".sidebar-session-group-toggle"));
       await alphaToggle.click();
       await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
       await captureUiProof(suite, page, "sidebar-session-group-collapsed.png");
@@ -951,7 +939,8 @@ suite.define(() => {
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
       const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSortButton.click();
-      await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
+      await chooseSidebarMenuOption(page, "Group by", "None");
+      await closeSidebarMenu(page);
       const flatSection = page.locator('[data-session-section="ungrouped"]');
       await flatSection
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-1"]')

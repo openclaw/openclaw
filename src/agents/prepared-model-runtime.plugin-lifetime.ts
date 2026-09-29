@@ -26,6 +26,7 @@ import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { PreparedModelRuntimePluginGenerationRetiredError } from "./prepared-model-runtime.errors.js";
 import {
   registerPreparedPluginRetirement,
   retirePreparedModelRuntimeGeneration,
@@ -50,10 +51,7 @@ const { generations, active, retirements, publications } = resolveGlobalSingleto
     generations: new WeakMap<PreparedModelRuntimePluginGeneration, Lifetime>(),
     active: new Set<Lifetime>(),
     retirements: new Set<Promise<void>>(),
-    publications: new WeakMap<
-      object,
-      { generation: PreparedModelRuntimePluginGeneration; release: () => Promise<void> }
-    >(),
+    publications: new WeakMap<object, { release: () => Promise<void> }>(),
   }),
 );
 
@@ -68,7 +66,9 @@ function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () =
     },
     retain(work = false) {
       if (closing) {
-        throw new Error("Prepared plugin generation has retired");
+        throw new PreparedModelRuntimePluginGenerationRetiredError(
+          "Prepared plugin generation has retired",
+        );
       }
       const releaseWork = work ? retainWork?.() : undefined;
       const reference = {};
@@ -141,7 +141,9 @@ export function retainPreparedPluginRegistry(
       return undefined;
     }
     if (isPluginRegistryRetired(registry)) {
-      throw new Error("Prepared plugin registry has retired");
+      throw new PreparedModelRuntimePluginGenerationRetiredError(
+        "Prepared plugin registry has retired",
+      );
     }
     markPluginRegistryActive(registry);
     lifetime = createLifetime(async () => {
@@ -243,7 +245,9 @@ export function publishPreparedPluginGeneration(
   const isCurrent = () =>
     !cacheSignal.aborted && [...instances].every((instance) => instance.acceptingCalls);
   if (!isCurrent()) {
-    throw new Error("Prepared plugin generation retired before publication");
+    throw new PreparedModelRuntimePluginGenerationRetiredError(
+      "Prepared plugin generation retired before publication",
+    );
   }
   const release = ownPreparedPluginGeneration(generation).retain();
   const version = owner.generation;
@@ -283,7 +287,6 @@ export function publishPreparedPluginGeneration(
     signal.addEventListener("abort", observe, { once: true });
   };
   publications.set(owner, {
-    generation,
     release: () => {
       unsubscribe();
       return Promise.resolve(release());

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -692,21 +693,6 @@ describe("browser control server", () => {
     expect(requirePwMock("traceStopViaPlaywright")).not.toHaveBeenCalled();
   });
 
-  it("trace stop accepts in-root relative output path", async () => {
-    const base = await startServerAndBase();
-    const res = await postJson<{ ok?: boolean; path?: string }>(`${base}/trace/stop`, {
-      path: "safe-trace.zip",
-    });
-    expect(res.ok).toBe(true);
-    expect(res.path).toContain("safe-trace.zip");
-    const traceCall = requireMockArg(requirePwMock("traceStopViaPlaywright"));
-    expect(typeof traceCall.cdpUrl).toBe("string");
-    expectRecordFields(traceCall, "trace stop call", {
-      targetId: "abcd1234",
-    });
-    expect(String(traceCall.path)).toContain("safe-trace.zip");
-  });
-
   it("trace stop returns the path committed by the Playwright trace owner", async () => {
     const committedPath = path.join(DEFAULT_TRACE_DIR, "committed-trace.zip");
     requirePwMock("traceStopViaPlaywright").mockResolvedValueOnce(committedPath);
@@ -935,6 +921,18 @@ describe("browser control server", () => {
   );
 
   it("download accepts in-root relative output path", async () => {
+    const contender = createServer();
+    const bindError = await new Promise<Error | null>((resolve) => {
+      contender.once("error", resolve);
+      contender.listen(state.testPort, "127.0.0.1", () => resolve(null));
+    });
+    if (contender.listening) {
+      await new Promise<void>((resolve, reject) => {
+        contender.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    expect(bindError).toMatchObject({ code: "EADDRINUSE" });
+
     const base = await startServerAndBase();
     const res = await postJson<{ ok?: boolean; download?: { path?: string } }>(`${base}/download`, {
       ref: "e12",

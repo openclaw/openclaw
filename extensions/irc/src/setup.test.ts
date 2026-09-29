@@ -22,7 +22,6 @@ import { startIrcGatewayAccount } from "./gateway.js";
 import { setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
-  parsePort,
   setIrcAllowFrom,
   setIrcDmPolicy,
   setIrcGroupAccess,
@@ -63,6 +62,10 @@ const ircSetupPlugin = {
 
 const ircConfigureAdapter = createPluginSetupWizardAdapter(ircSetupPlugin);
 const ircStatus = createPluginSetupWizardStatus(ircSetupPlugin);
+
+function ircConfig(irc: NonNullable<NonNullable<CoreConfig["channels"]>["irc"]>): CoreConfig {
+  return { channels: { irc } };
+}
 
 function buildAccount(): ResolvedIrcAccount {
   return {
@@ -107,52 +110,36 @@ describe("irc setup", () => {
     vi.clearAllMocks();
   });
 
-  it("parses valid ports and falls back for invalid values", () => {
-    expect(parsePort("6697", 6667)).toBe(6697);
-    expect(parsePort(" 7000 ", 6667)).toBe(7000);
-    expect(parsePort("", 6667)).toBe(6667);
-    expect(parsePort("70000", 6667)).toBe(6667);
-    expect(parsePort("abc", 6667)).toBe(6667);
-  });
-
   it("updates top-level dm policy and allowlist", () => {
-    const cfg: CoreConfig = { channels: { irc: {} } };
+    const cfg: CoreConfig = ircConfig({});
 
-    expect(setIrcDmPolicy(cfg, "open")).toStrictEqual({
-      channels: {
-        irc: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-    });
+    expect(setIrcDmPolicy(cfg, "open")).toStrictEqual(
+      ircConfig({
+        dmPolicy: "open",
+        allowFrom: ["*"],
+      }),
+    );
 
-    expect(setIrcAllowFrom(cfg, ["alice", "bob"])).toStrictEqual({
-      channels: {
-        irc: {
-          allowFrom: ["alice", "bob"],
-        },
-      },
-    });
+    expect(setIrcAllowFrom(cfg, ["alice", "bob"])).toStrictEqual(
+      ircConfig({
+        allowFrom: ["alice", "bob"],
+      }),
+    );
   });
 
   it("setup status honors the selected named account", async () => {
     const status = await ircStatus({
-      cfg: {
-        channels: {
-          irc: {
-            accounts: {
-              ops: {
-                host: "irc.example.com",
-                nick: "ops-bot",
-              },
-              work: {
-                host: "irc.example.com",
-              },
-            },
+      cfg: ircConfig({
+        accounts: {
+          ops: {
+            host: "irc.example.com",
+            nick: "ops-bot",
+          },
+          work: {
+            host: "irc.example.com",
           },
         },
-      } as CoreConfig,
+      }),
       accountOverrides: {
         irc: "work",
       },
@@ -164,23 +151,19 @@ describe("irc setup", () => {
 
   it("setup status honors the configured default account", async () => {
     const status = await ircStatus({
-      cfg: {
-        channels: {
-          irc: {
-            defaultAccount: "work",
-            accounts: {
-              ops: {
-                host: "irc.example.com",
-                nick: "ops-bot",
-              },
-              work: {
-                host: "irc.example.com",
-                nick: "",
-              },
-            },
+      cfg: ircConfig({
+        defaultAccount: "work",
+        accounts: {
+          ops: {
+            host: "irc.example.com",
+            nick: "ops-bot",
+          },
+          work: {
+            host: "irc.example.com",
+            nick: "",
           },
         },
-      } as CoreConfig,
+      }),
       accountOverrides: {},
     });
 
@@ -189,49 +172,45 @@ describe("irc setup", () => {
   });
 
   it("stores nickserv and account config patches on the scoped account", () => {
-    const cfg: CoreConfig = { channels: { irc: {} } };
+    const cfg: CoreConfig = ircConfig({});
 
     expect(
       setIrcNickServ(cfg, "work", {
         enabled: true,
         service: "NickServ",
       }),
-    ).toStrictEqual({
-      channels: {
-        irc: {
-          accounts: {
-            work: {
-              nickserv: {
-                enabled: true,
-                service: "NickServ",
-              },
+    ).toStrictEqual(
+      ircConfig({
+        accounts: {
+          work: {
+            nickserv: {
+              enabled: true,
+              service: "NickServ",
             },
           },
         },
-      },
-    });
+      }),
+    );
 
     expect(
       updateIrcAccountConfig(cfg, "work", {
         host: "irc.libera.chat",
         nick: "openclaw-work",
       }),
-    ).toStrictEqual({
-      channels: {
-        irc: {
-          accounts: {
-            work: {
-              host: "irc.libera.chat",
-              nick: "openclaw-work",
-            },
+    ).toStrictEqual(
+      ircConfig({
+        accounts: {
+          work: {
+            host: "irc.libera.chat",
+            nick: "openclaw-work",
           },
         },
-      },
-    });
+      }),
+    );
   });
 
   it("normalizes allowlist groups and handles non-allowlist policies", () => {
-    const cfg: CoreConfig = { channels: { irc: {} } };
+    const cfg: CoreConfig = ircConfig({});
 
     expect(
       setIrcGroupAccess(
@@ -250,28 +229,24 @@ describe("irc setup", () => {
           return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
         },
       ),
-    ).toStrictEqual({
-      channels: {
-        irc: {
-          enabled: true,
-          groupPolicy: "allowlist",
-          groups: {
-            "#openclaw": {},
-            "#ops": {},
-            "*": {},
-          },
+    ).toStrictEqual(
+      ircConfig({
+        enabled: true,
+        groupPolicy: "allowlist",
+        groups: {
+          "#openclaw": {},
+          "#ops": {},
+          "*": {},
         },
-      },
-    });
+      }),
+    );
 
-    expect(setIrcGroupAccess(cfg, "default", "disabled", [], () => null)).toStrictEqual({
-      channels: {
-        irc: {
-          enabled: true,
-          groupPolicy: "disabled",
-        },
-      },
-    });
+    expect(setIrcGroupAccess(cfg, "default", "disabled", [], () => null)).toStrictEqual(
+      ircConfig({
+        enabled: true,
+        groupPolicy: "disabled",
+      }),
+    );
   });
 
   it("validates required input and applies normalized account config", () => {
@@ -321,7 +296,7 @@ describe("irc setup", () => {
 
     expect(
       applyAccountConfig({
-        cfg: { channels: { irc: {} } },
+        cfg: ircConfig({}),
         accountId: "default",
         input: {
           name: "Default",
@@ -335,22 +310,20 @@ describe("irc setup", () => {
           channels: ["#openclaw"],
         },
       } as never),
-    ).toEqual({
-      channels: {
-        irc: {
-          enabled: true,
-          name: "Default",
-          host: "irc.libera.chat",
-          port: 7000,
-          tls: true,
-          nick: "openclaw",
-          username: "claw",
-          realname: "OpenClaw Bot",
-          password: "secret",
-          channels: ["#openclaw"],
-        },
-      },
-    });
+    ).toEqual(
+      ircConfig({
+        enabled: true,
+        name: "Default",
+        host: "irc.libera.chat",
+        port: 7000,
+        tls: true,
+        nick: "openclaw",
+        username: "claw",
+        realname: "OpenClaw Bot",
+        password: "secret",
+        channels: ["#openclaw"],
+      }),
+    );
   });
 
   it("configures host and nick via setup prompts", async () => {
@@ -434,18 +407,14 @@ describe("irc setup", () => {
       throw new Error("promptAllowFrom unavailable");
     }
 
-    const cfg: CoreConfig = {
-      channels: {
-        irc: {
-          accounts: {
-            work: {
-              host: "irc.libera.chat",
-              nick: "openclaw-work",
-            },
-          },
+    const cfg: CoreConfig = ircConfig({
+      accounts: {
+        work: {
+          host: "irc.libera.chat",
+          nick: "openclaw-work",
         },
       },
-    };
+    });
 
     const updated = await promptSetupWizardAllowFrom({
       promptAllowFrom,

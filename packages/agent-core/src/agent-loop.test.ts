@@ -450,6 +450,7 @@ describe("agentLoop continuation guards", () => {
 
 describe("agentLoop streaming updates", () => {
   it("rebuilds assistant message snapshots for text deltas without partial snapshots", async () => {
+    const firstDeltaConsumed = createDeferred();
     const streamFn: StreamFn = async () => {
       const stream = createAssistantMessageEventStream();
       const startMessage: AssistantMessage = {
@@ -458,14 +459,7 @@ describe("agentLoop streaming updates", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: TEST_USAGE,
         stopReason: "stop",
         timestamp: 1,
       };
@@ -475,10 +469,11 @@ describe("agentLoop streaming updates", () => {
         content: [{ type: "text", text: "Hello world" }],
       };
 
-      queueMicrotask(() => {
-        stream.push({ type: "start", partial: startMessage });
-        stream.push({ type: "text_start", contentIndex: 0, partial: textStartMessage });
-        stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello" });
+      stream.push({ type: "start", partial: startMessage });
+      stream.push({ type: "text_start", contentIndex: 0, partial: textStartMessage });
+      stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello" });
+      // Keep two consumed updates so this exercises incremental snapshot reconstruction.
+      void firstDeltaConsumed.promise.then(() => {
         stream.push({ type: "text_delta", contentIndex: 0, delta: " world" });
         stream.push({
           type: "text_end",
@@ -492,14 +487,20 @@ describe("agentLoop streaming updates", () => {
       return stream;
     };
 
-    const run = captureAgentLoop(
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
       [{ role: "user", content: "hello", timestamp: 1 }],
       { systemPrompt: "", messages: [] },
       config,
+      (event) => {
+        events.push(event);
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+          firstDeltaConsumed.resolve();
+        }
+      },
       undefined,
       streamFn,
     );
-    const events = await collectEvents(run);
 
     const deltaUpdates = events.filter(
       (event): event is Extract<AgentEvent, { type: "message_update" }> =>
@@ -2324,21 +2325,16 @@ describe("agentLoop tool termination", () => {
   it("honors outcome-hook termination during the first recovery turn", async () => {
     const executed: string[] = [];
     let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      streamCalls += 1;
-      if (streamCalls > 1) {
-        throw new Error("model was called after outcome-hook termination");
-      }
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message = makeAssistantMessage([
-          { type: "toolCall", id: "loop-1", name: "read", arguments: {} },
-        ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [[{ type: "toolCall", id: "loop-1", name: "read", arguments: {} }]],
+      [],
+      () => {
+        streamCalls += 1;
+        if (streamCalls > 1) {
+          throw new Error("model was called after outcome-hook termination");
+        }
+      },
+    );
     const events = await collectEvents(
       captureAgentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
@@ -2380,23 +2376,22 @@ describe("agentLoop tool termination", () => {
     const executed: string[] = [];
     const resolverCalls: string[] = [];
     let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      streamCalls += 1;
-      if (streamCalls > 1) {
-        throw new Error("model was called after abort");
-      }
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message = makeAssistantMessage([
+    const streamFn = createTurnSequenceStream(
+      [
+        [
           { type: "toolCall", id: "d-first", name: "d_first_tool", arguments: {} },
           { type: "toolCall", id: "d-second", name: "d_second_tool", arguments: {} },
           { type: "toolCall", id: "d-third", name: "d_third_tool", arguments: {} },
-        ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+        ],
+      ],
+      [],
+      () => {
+        streamCalls += 1;
+        if (streamCalls > 1) {
+          throw new Error("model was called after abort");
+        }
+      },
+    );
     const deferredTool = (name: string): AgentTool => ({
       name,
       label: name,
@@ -3379,21 +3374,16 @@ describe("agentLoop tool termination", () => {
   it("does not request another model turn after a tool aborts the run", async () => {
     const controller = new AbortController();
     let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      streamCalls += 1;
-      if (streamCalls > 1) {
-        throw new Error("model was called after abort");
-      }
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message = makeAssistantMessage([
-          { type: "toolCall", id: "call-abort", name: "abort_tool", arguments: {} },
-        ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [[{ type: "toolCall", id: "call-abort", name: "abort_tool", arguments: {} }]],
+      [],
+      () => {
+        streamCalls += 1;
+        if (streamCalls > 1) {
+          throw new Error("model was called after abort");
+        }
+      },
+    );
     const abortTool: AgentTool = {
       name: "abort_tool",
       label: "abort_tool",
@@ -3465,23 +3455,22 @@ describe("agentLoop tool termination", () => {
   it("emits aborted tool results for skipped tool calls on sequential abort (#116379)", async () => {
     const controller = new AbortController();
     let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      streamCalls += 1;
-      if (streamCalls > 1) {
-        throw new Error("model was called after abort");
-      }
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message = makeAssistantMessage([
+    const streamFn = createTurnSequenceStream(
+      [
+        [
           { type: "toolCall", id: "call-first", name: "first_tool", arguments: {} },
           { type: "toolCall", id: "call-second", name: "second_tool", arguments: {} },
           { type: "toolCall", id: "call-third", name: "third_tool", arguments: {} },
-        ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+        ],
+      ],
+      [],
+      () => {
+        streamCalls += 1;
+        if (streamCalls > 1) {
+          throw new Error("model was called after abort");
+        }
+      },
+    );
     const firstTool: AgentTool = {
       name: "first_tool",
       label: "first_tool",
@@ -3596,23 +3585,22 @@ describe("agentLoop tool termination", () => {
   it("emits aborted tool results for skipped tool calls on parallel abort (#116379)", async () => {
     const controller = new AbortController();
     let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      streamCalls += 1;
-      if (streamCalls > 1) {
-        throw new Error("model was called after abort");
-      }
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message = makeAssistantMessage([
+    const streamFn = createTurnSequenceStream(
+      [
+        [
           { type: "toolCall", id: "p-first", name: "p_first_tool", arguments: {} },
           { type: "toolCall", id: "p-second", name: "p_second_tool", arguments: {} },
           { type: "toolCall", id: "p-third", name: "p_third_tool", arguments: {} },
-        ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+        ],
+      ],
+      [],
+      () => {
+        streamCalls += 1;
+        if (streamCalls > 1) {
+          throw new Error("model was called after abort");
+        }
+      },
+    );
     const firstTool: AgentTool = {
       name: "p_first_tool",
       label: "p_first_tool",
@@ -3717,21 +3705,16 @@ describe("agentLoop tool termination", () => {
   it("skips interrupted-turn guidance when the abort reason marks a turn handoff", async () => {
     const controller = new AbortController();
     let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      streamCalls += 1;
-      if (streamCalls > 1) {
-        throw new Error("model was called after abort");
-      }
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message = makeAssistantMessage([
-          { type: "toolCall", id: "call-yield", name: "yield_tool", arguments: {} },
-        ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [[{ type: "toolCall", id: "call-yield", name: "yield_tool", arguments: {} }]],
+      [],
+      () => {
+        streamCalls += 1;
+        if (streamCalls > 1) {
+          throw new Error("model was called after abort");
+        }
+      },
+    );
     const yieldTool: AgentTool = {
       name: "yield_tool",
       label: "yield_tool",
@@ -3849,21 +3832,16 @@ describe("agentLoop tool termination", () => {
   it("does not request another model turn when an async turn hook aborts the run", async () => {
     const controller = new AbortController();
     let streamCalls = 0;
-    const streamFn: StreamFn = () => {
-      streamCalls += 1;
-      if (streamCalls > 1) {
-        throw new Error("model was called after abort");
-      }
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const message = makeAssistantMessage([
-          { type: "toolCall", id: "call-hook-abort", name: "hook_abort", arguments: {} },
-        ]);
-        stream.push({ type: "done", reason: "toolUse", message });
-        stream.end();
-      });
-      return stream;
-    };
+    const streamFn = createTurnSequenceStream(
+      [[{ type: "toolCall", id: "call-hook-abort", name: "hook_abort", arguments: {} }]],
+      [],
+      () => {
+        streamCalls += 1;
+        if (streamCalls > 1) {
+          throw new Error("model was called after abort");
+        }
+      },
+    );
     const events: AgentEvent[] = [];
 
     const messages = await runAgentLoop(

@@ -1,6 +1,8 @@
 // Covers bundling rules encoded in the root tsdown config.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import type { TsdownPluginOption } from "tsdown";
@@ -232,18 +234,27 @@ describe("tsdown config", () => {
     const handoffGraph = configs.find((config) =>
       entryKeys(config).includes("managed-handoff-runtime"),
     );
+    const activationGraph = configs.find((config) =>
+      entryKeys(config).includes("package-update-activation-recovery"),
+    );
     const executableGraphs = new Set([
       unifiedGraph,
       expectDefined(workerGraph, "deploy worker graph"),
+      requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
+      expectDefined(activationGraph, "package activation graph"),
       requireNativeHookRelayGraph(),
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
+      requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-read.worker"),
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("process/supervisor/service-child-relay"),
+      requireStandaloneRuntimeGraph("process/supervisor/service-child-group-anchor"),
+      requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),
     ]);
 
     for (const config of configs) {
@@ -285,7 +296,6 @@ describe("tsdown config", () => {
       "state/openclaw-database-verify.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
-      "task-registry-control.runtime",
       "link-understanding/apply.runtime",
       "media-understanding/apply.runtime",
       "index",
@@ -312,6 +322,11 @@ describe("tsdown config", () => {
       label: "read-only snapshot child",
       entry: "infra/sqlite-readonly-location.worker",
       source: "src/infra/sqlite-readonly-location.worker.ts",
+    },
+    {
+      label: "raw source revision child",
+      entry: "infra/sqlite-source-revision.worker",
+      source: "src/infra/sqlite-source-revision.worker.ts",
     },
     {
       label: "shared-state reader",
@@ -345,6 +360,40 @@ describe("tsdown config", () => {
     const distGraph = requireUnifiedDistGraph();
 
     expect(entrySources(distGraph)["docker-healthcheck"]).toBe("src/docker-healthcheck.ts");
+  });
+
+  it("emits the dist modules referenced by every Docker client", () => {
+    const emittedPaths = new Set(
+      asConfigArray(tsdownConfig)
+        .filter((config) => !(typeof config.dts === "object" && config.dts.emitDtsOnly))
+        .flatMap((config) =>
+          entryKeys(config).map((entry) =>
+            path.resolve(
+              config.outDir ?? "dist",
+              `${entry}${config.outExtensions?.().js ?? ".js"}`,
+            ),
+          ),
+        ),
+    );
+    const clients = ["test/e2e", "scripts/e2e"].flatMap((root) => {
+      const clientRoot = new URL(`../../${root}/`, import.meta.url);
+      return readdirSync(clientRoot, { recursive: true, encoding: "utf8" })
+        .filter((file) => file.endsWith("-docker-client.ts"))
+        .map((file) => new URL(file, clientRoot));
+    });
+    expect(clients.length).toBeGreaterThan(0);
+    for (const clientUrl of clients) {
+      const runtimeSource = stripTypeScriptTypes(readFileSync(clientUrl, "utf8"));
+      // Include literal paths assigned to variables used by dynamic imports, but not erased types.
+      for (const match of runtimeSource.matchAll(
+        /["'`]((?:\.{1,2}\/)+dist\/[^"'`\s]+\.[cm]?js)["'`]/gu,
+      )) {
+        const specifier = expectDefined(match[1], "Docker dist module path");
+        expect(emittedPaths, `${fileURLToPath(clientUrl)}: ${specifier}`).toContain(
+          fileURLToPath(new URL(specifier, clientUrl)),
+        );
+      }
+    }
   });
 
   it("keeps root-package-excluded external plugins out of the root dist graph", () => {

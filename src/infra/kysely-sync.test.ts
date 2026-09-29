@@ -19,7 +19,9 @@ import {
   prepareSqliteQueryTakeFirstSync,
   sqliteStringSet,
 } from "./kysely-sync.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { assertNoActiveSqliteReaders, withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 type SyncHelperTestDatabase = {
   items: {
@@ -865,7 +867,7 @@ function runRetentionScenario(options: {
   statementsCollected: number;
   statementCount: number;
 } {
-  const moduleUrl = new URL("./kysely-sync.ts", import.meta.url).href;
+  const moduleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.kyselySync);
   const cleanup = {
     "clear-and-close": `
         clearNodeSqliteKyselyCacheForDatabase(database);
@@ -882,7 +884,7 @@ function runRetentionScenario(options: {
       enableNodeSqliteKyselyStatementCache,
       executeSqliteQuerySync,
       getNodeSqliteKysely,
-    } from ${JSON.stringify(moduleUrl)};
+    } from ${JSON.stringify(moduleUrl.href)};
 
     const waitForTurn = () => new Promise((resolve) => setImmediate(resolve));
     async function runScenario() {
@@ -925,8 +927,7 @@ function runRetentionScenario(options: {
     [
       "--disable-warning=ExperimentalWarning",
       "--expose-gc",
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(moduleUrl, resolveTestNodeExecPath()).slice(0, -1),
       "--input-type=module",
       "--eval",
       script,

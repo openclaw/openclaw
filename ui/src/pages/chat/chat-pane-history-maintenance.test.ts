@@ -37,6 +37,8 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     const context = createInitializationContext();
     context.config.subscribe = () => () => {};
     const pane = createRenderTestChatPane();
+    // Independent scenarios must not restore the previous case's cached reader.
+    pane.paneId = `maintenance-history-${movement}`;
     pane.initialize(context);
     document.body.append(pane);
     await pane.updateComplete;

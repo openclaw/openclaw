@@ -3,8 +3,7 @@ import {
   type ArtifactTransferOptions,
   type TransferArtifact,
 } from "./artifact-transfer-service.js";
-
-const BOOTSTRAP_TRANSFER_TTL_MS = 10 * 60_000;
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 
 export function createWorkerBootstrapArtifactTransferService(
   options: ArtifactTransferOptions = {},
@@ -20,7 +19,9 @@ export function createWorkerBootstrapArtifactTransferService(
       return transfer.prepare({
         ...params,
         artifactKey: params.artifact.tarballSha256,
-        ttlMs: BOOTSTRAP_TRANSFER_TTL_MS,
+        ttlMs: workerBootstrapOperationTimeoutMs(params.artifact),
+        // Proxies can finish receiving an archive before resetting the node's connection.
+        maxServes: 3,
       });
     },
   };

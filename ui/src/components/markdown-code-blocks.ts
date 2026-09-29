@@ -53,20 +53,6 @@ for (const [language, definition] of Object.entries({
 }
 hljs.registerAliases("shell", { languageName: "bash" });
 
-function codeBlockRenderEnv(env: unknown): Partial<MarkdownRenderEnv> | undefined {
-  // SAFETY: markdown-it types renderer env as unknown; this internal renderer
-  // receives the normalized options object, or undefined from direct calls.
-  return env as Partial<MarkdownRenderEnv> | undefined;
-}
-
-function shouldRenderCodeBlockCopy(env: unknown): boolean {
-  return codeBlockRenderEnv(env)?.codeBlockChrome !== "none";
-}
-
-function shouldRenderCodeBlockInteraction(env: unknown): boolean {
-  return codeBlockRenderEnv(env)?.codeBlockInteraction === "interactive";
-}
-
 function encodeCodeBlockCopyPayload(value: string): string {
   // DOMPurify removes attributes containing XML comment ends or closing tags.
   // JSON escapes survive sanitization and decode only as clipboard text.
@@ -236,15 +222,18 @@ export function renderMarkdownCodeBlock(
     ? ' class="markdown-block-art"'
     : codeClassAttribute(lang, highlighted);
   const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
-  if (!shouldRenderCodeBlockCopy(env) && !shouldRenderCodeBlockInteraction(env)) {
+  // SAFETY: markdown-it types renderer env as unknown; this internal renderer
+  // receives the normalized options object, or undefined from direct calls.
+  const renderEnv = env as Partial<MarkdownRenderEnv> | undefined;
+  const copyEnabled = renderEnv?.codeBlockChrome !== "none";
+  const interactive = renderEnv?.codeBlockInteraction === "interactive";
+  if (!copyEnabled && !interactive) {
     return codeBlock;
   }
-  const copyButton = shouldRenderCodeBlockCopy(env)
-    ? renderCodeBlockCopyButton(options.copyText ?? text)
-    : "";
+  const copyButton = copyEnabled ? renderCodeBlockCopyButton(options.copyText ?? text) : "";
   // Reveal and wrap controls are inert without a host that runs the code-block
   // lifecycle, so only interaction-owning hosts get the collapsible markup.
-  if (!shouldRenderCodeBlockInteraction(env)) {
+  if (!interactive) {
     return `<div class="code-block-wrapper">${renderCodeBlockHeader(lang, copyButton)}${codeBlock}</div>`;
   }
   const jsonSource =

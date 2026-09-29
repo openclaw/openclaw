@@ -171,7 +171,8 @@ vi.mock("./health-format.js", () => ({
   formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure,
 }));
 
-vi.mock("./configure.gateway.js", () => ({
+vi.mock("./configure.gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./configure.gateway.js")>()),
   promptGatewayConfig: wizardTestMocks.promptGatewayConfig,
 }));
 
@@ -195,7 +196,8 @@ vi.mock("./onboard-skills.js", () => ({
   setupSkills: vi.fn(),
 }));
 
-vi.mock("./onboard-channels.js", () => ({
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
   setupChannels: wizardTestMocks.setupChannels,
 }));
 

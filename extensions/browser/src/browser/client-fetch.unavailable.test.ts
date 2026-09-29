@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import "../test-support/browser-security.mock.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn<() => OpenClawConfig>(() => ({})),
@@ -18,11 +18,12 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
 }));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
   getRuntimeConfig: mocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => mocks.sourceConfig,
 }));
-vi.mock("./control-service.js", () => ({
+vi.mock("../control-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../control-service.js")>()),
   createBrowserControlContext: vi.fn(() => ({})),
   startBrowserControlServiceFromConfig: mocks.startBrowserControlServiceFromConfig,
 }));
@@ -100,7 +101,6 @@ describe("browser control availability diagnostics", () => {
     },
   ])("explains $name at the local dispatch boundary", async ({ config, contains }) => {
     mocks.loadConfig.mockReturnValue(config);
-    mocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
       contains,
@@ -112,7 +112,6 @@ describe("browser control availability diagnostics", () => {
   it("explains the source policy that refused startup despite runtime auto-enable", async () => {
     mocks.loadConfig.mockReturnValue({ plugins: { allow: ["browser"] } });
     mocks.sourceConfig = { plugins: { allow: ["telegram"] } };
-    mocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
       contains: ['"browser" is not in plugins.allow', "openclaw plugins enable browser"],
@@ -121,13 +120,11 @@ describe("browser control availability diagnostics", () => {
   });
 
   it.each([
-    { status: "error", failurePhase: "load", error: "Cannot find module browser-driver" },
     { status: "error", failurePhase: "register", error: "registration timed out" },
     { status: "error", error: "plugin not installed: browser" },
     { status: "disabled", activationReason: "capability consent required" },
   ] as const)("preserves recorded $status refusal details", async (record) => {
     mocks.pluginRecord = { id: "browser", ...record };
-    mocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
       contains: [

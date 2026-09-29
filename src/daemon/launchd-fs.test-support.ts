@@ -10,7 +10,7 @@ type LaunchdFileSystemState = {
   dirModes: Map<string, number>;
   files: Map<string, string>;
   fileModes: Map<string, number>;
-  fileWrites: Array<{ path: string; data: string }>;
+  fileWrites: Array<{ path: string }>;
 };
 
 /** Keep the fixture's logical paths while exercising real descriptors and atomic renames. */
@@ -98,7 +98,7 @@ export function createLaunchdFileSystem(actual: typeof promises, state: LaunchdF
   };
   const recordWrite = (file: string) => {
     readState(file);
-    state.fileWrites.push({ path: file, data: state.files.get(file)! });
+    state.fileWrites.push({ path: file });
   };
   const forget = (file: string) => {
     materialized.delete(file);
@@ -107,6 +107,7 @@ export function createLaunchdFileSystem(actual: typeof promises, state: LaunchdF
   };
   return {
     ...actual,
+    resolveFixturePath: resolve,
     access: vi.fn(async (...[file, mode]: Parameters<typeof actual.access>) =>
       actual.access(resolve(file), mode),
     ),

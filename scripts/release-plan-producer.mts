@@ -83,7 +83,7 @@ const TOOLING_MODULE_PATHS = [
 const PROTECTED_TAG_PATTERN = /^release-publish\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
 const MAX_TOOLING_FILE_BYTES = 512 * 1024,
   MAX_TOOLING_BYTES = 2 * 1024 * 1024;
-const YAML_PACKAGE_TREE_SHA256 = "610ccacfe592d226ac1eb04842d1f591c5381f2a68b9f785643101d10db52c27";
+const YAML_PACKAGE_TREE_SHA256 = "0bdabef304b977ea9eea35e0ecb51e85d1450f4c1ed0bb3c93010ccecdde7779";
 const YAML_PACKAGE_MAX_FILES = 512;
 const YAML_PACKAGE_MAX_ENTRIES = 1024;
 const YAML_PACKAGE_MAX_BYTES = 4 * 1024 * 1024;
@@ -203,7 +203,7 @@ try {
   const packageBytes = yamlModules.get("package.json");
   if (!packageBytes) fail("verified yaml retained package.json is missing");
   const yamlPackage = JSON.parse(packageBytes.toString("utf8"));
-  if (yamlPackage.name !== "yaml" || yamlPackage.version !== "2.9.0") fail("verified yaml retained package identity mismatch");
+  if (yamlPackage.name !== "yaml" || yamlPackage.version !== "2.9.1") fail("verified yaml retained package identity mismatch");
   registerHooks({
     resolve(specifier, context, nextResolve) {
       if (isBuiltin(specifier)) return nextResolve(specifier, context);

@@ -22,7 +22,6 @@ import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import {
-  isSameOpenClawAgentDatabasePath,
   listOpenClawRegisteredAgentDatabases,
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
@@ -30,6 +29,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
@@ -48,7 +48,7 @@ function sweepCronRunSessions(
   return sweepCronRunSessionsImpl({ ...params, agentId: "main" });
 }
 
-vi.mock("../tasks/task-status-access.js", () => ({
+vi.mock("../agents/media-generation-activity.js", () => ({
   buildPendingGeneratedMediaSessionKeySet: taskStatusMocks.buildPendingSet,
 }));
 vi.mock("../agents/subagents/registry/subagent-registry-state.js", () => ({

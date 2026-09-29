@@ -38,7 +38,8 @@ account. Enable the plugin in the source-built Gateway configuration:
 }
 ```
 
-Restart the Gateway after enabling the plugin or changing its configuration.
+Enabling the plugin or changing its configuration applies through plugin hot reload;
+no Gateway restart is required.
 Do not retarget `accountId`, `appId`, or `policyName` while grants exist: the
 durable records belong to that policy, and changing targets could leave the old
 policy granting access without expiry sweeps. Revoke grants before retargeting.
@@ -76,6 +77,13 @@ invitation policy. Set `accessPolicyPlugin: "visitor-access"` on that same role.
 This requirement remains in force if the plugin or its manifest is missing,
 disabled, broken, or still starting. Staff roles without this binding and the
 Gateway owner retain their independent access to repair the configuration.
+
+The role must also declare `modelPolicy`: `{}` follows the
+configured source agent's primary and fallback models. Set `sourceAgent` to name
+that agent explicitly, `allow` to replace the permitted set, and `deny` for
+resolved model or family exclusions such as `provider/restricted-*`. Apply those
+exclusions before enabling guest access; an omitted model policy is unrestricted
+and does not qualify as a visitor role. Staff roles may omit it.
 A missing or unsuitable default refuses the invitation before
 writing the grant or adding the email to Cloudflare. Keep existing staff roles
 and their assignments when configuring the guest default.
@@ -99,6 +107,11 @@ Guest admission or restore authority for unfinished work.
 | `visitor_invite` | `github` and/or `email`; optional `days` or `forever` | Adds a grant or refreshes an existing email's expiry.                                      |
 | `visitor_list`   | `{}`                                                  | Shows grant emails, GitHub labels, dates, current Gateway access, and policy/record drift. |
 | `visitor_revoke` | `github` and/or `email`                               | Removes the matching visitor; an unknown email is a clean no-op.                           |
+
+Each tool also returns structured `details`, visible to Code Mode, with the same
+information as its text: invite returns `outcome`, `email`, optional `githubLogin`,
+`expiresAt`, `gatewayAccess`, and `signInUrl`; revoke returns `outcome`, `emails`,
+and optional `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
 
 For example, invite a visitor for seven days:
 

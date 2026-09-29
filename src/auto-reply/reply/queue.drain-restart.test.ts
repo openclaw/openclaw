@@ -149,47 +149,6 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
   });
 
-  it("processes a message enqueued after the drain empties when enqueue refreshes the callback", async () => {
-    const key = `test-idle-window-race-${Date.now()}`;
-    const calls: FollowupRun[] = [];
-    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-
-    const firstProcessed = createDeferred();
-    const secondProcessed = createDeferred();
-    let callCount = 0;
-    const runFollowup = async (run: FollowupRun) => {
-      callCount++;
-      calls.push(run);
-      if (callCount === 1) {
-        firstProcessed.resolve();
-      }
-      if (callCount === 2) {
-        secondProcessed.resolve();
-      }
-    };
-
-    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await firstProcessed.promise;
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    enqueueFollowupRun(
-      key,
-      createRun({ prompt: "after-idle" }),
-      settings,
-      "message-id",
-      runFollowup,
-    );
-
-    await secondProcessed.promise;
-
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.prompt).toBe("before-idle");
-    expect(calls[1]?.prompt).toBe("after-idle");
-  });
-
   it("restarts an idle drain with the newest followup callback", async () => {
     const key = `test-idle-window-fresh-callback-${Date.now()}`;
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };

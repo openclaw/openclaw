@@ -21,6 +21,7 @@ import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
   type ModelSetupWizardResult,
+  type ModelSetupWizardRecovery,
   type ModelSetupWizardState,
   wizardStateFromResult,
 } from "./state.ts";
@@ -119,6 +120,24 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "starting", authChoice: session.authChoice });
   }
 
+  restore(recovery: ModelSetupWizardRecovery, onTerminalResult: WizardTerminalObserver): void {
+    const client = this.options.getClient();
+    if (!client || this.session) {
+      return;
+    }
+    this.session = {
+      ...recovery,
+      client,
+      notes: [],
+      admitted: true,
+      retirementGeneration: this.retirementGeneration,
+      abortController: new AbortController(),
+      startMethod: "openclaw.setup.auth.start",
+      onTerminalResult,
+    };
+    this.setState({ phase: "starting", authChoice: recovery.authChoice });
+  }
+
   async resume(): Promise<ModelSetupWizardCompletion | null> {
     const previous = this.session;
     const client = this.options.getClient();
@@ -198,9 +217,10 @@ export class ModelSetupWizardRunner {
     if (!client || this.currentState.phase !== "idle") {
       return null;
     }
+    const sessionId = generateUUID();
     const session: WizardSession = {
       client,
-      sessionId: generateUUID(),
+      sessionId,
       retirementGeneration: this.retirementGeneration,
       authChoice,
       authKind: this.pendingSignIn?.kind,
@@ -214,7 +234,11 @@ export class ModelSetupWizardRunner {
         "kind" in params
           ? params
           : startMethod === "openclaw.setup.auth.start" && "authChoice" in params
-            ? { ...params, kind: "provider-auth" }
+            ? {
+                ...params,
+                kind: "provider-auth",
+                wizard: { sessionId, authChoice, authKind: this.pendingSignIn?.kind },
+              }
             : undefined,
       ),
     };
@@ -449,12 +473,25 @@ export class ModelSetupWizardRunner {
       acceptsFirstResult = undefined;
       if (
         session === this.session &&
+        !session.suspended &&
+        !this.isRetired(session) &&
         !result.done &&
         result.step?.type === "note" &&
         (session.authKind === "oauth" || session.authKind === "device-code")
       ) {
         if (result.step.message) {
           session.notes.push(result.step.message);
+        }
+        if (result.step.externalUrl || result.step.deviceCode) {
+          // The next request can wait for the browser callback without another
+          // step. Keep its recovery actions visible while acknowledging this note.
+          this.setState({
+            phase: "step",
+            authChoice,
+            step: result.step,
+            busy: true,
+            validationError: null,
+          });
         }
         this.openSignInUrl(session, result.step.externalUrl);
         nextAnswer = { stepId: result.step.id };

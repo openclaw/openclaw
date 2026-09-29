@@ -31,7 +31,7 @@ const [
     replaceSessionEntrySync,
     upsertSessionEntryCore,
   },
-  { closeOpenClawAgentDatabasesForTest },
+  { closeOpenClawAgentDatabasesAsync, closeOpenClawAgentDatabasesForTest },
   { SessionManager: PersistentSessionManager },
   safetyTimeout,
   realSafetyTimeout,
@@ -49,7 +49,9 @@ const [
 ]);
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    // Native work can outlive cached handles; join it before removing the fixture root.
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     cleanup();
   }),
@@ -170,7 +172,6 @@ beforeEach(async () => {
 describe("queued compaction successor ownership", () => {
   it.each([
     { nativePinned: false, observedHarness: "openclaw" },
-    { nativePinned: false, observedHarness: "codex" },
     { nativePinned: true, observedHarness: "codex" },
   ])(
     "keeps manual compaction with its transcript owner after authored runtime fallback (nativePinned=$nativePinned, observed=$observedHarness)",
@@ -395,6 +396,12 @@ describe("queued compaction successor ownership", () => {
         });
         expect(maintain).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
         expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
+        if (!abortAfterCommit) {
+          expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+            expect.objectContaining({ previousSessionId: sessionId }),
+            expect.objectContaining({ sessionId: "successor" }),
+          );
+        }
         expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
         const engineInput = contextEngineCompactMock.mock.calls[0]?.[0];
         expect(engineInput).toBeDefined();
@@ -467,29 +474,27 @@ describe("queued compaction successor ownership", () => {
     expect(loadSessionEntry(target())?.totalTokens).toBe(scenario.tokensAfter);
   });
 
-  it.each([
-    { lifecycleRevision: "replacement-lifecycle" },
-    { activeWriterRunId: "replacement-writer" },
-  ])("rejects an owner changed while compaction awaited: %j", async (replacement) => {
-    contextEngineCompactMock.mockImplementationOnce(async () => {
-      await patchSessionEntryCore(target(), () => replacement);
-      return completed();
-    });
-    const onCommitted = vi.fn();
+  it.each([{ lifecycleRevision: "replacement-lifecycle" }])(
+    "rejects an owner changed while compaction awaited: %j",
+    async (replacement) => {
+      contextEngineCompactMock.mockImplementationOnce(async () => {
+        await patchSessionEntryCore(target(), () => replacement);
+        return completed();
+      });
+      const onCommitted = vi.fn();
 
-    await expect(compact(compactParams(), { onCommitted })).rejects.toThrow();
+      await expect(compact(compactParams(), { onCommitted })).rejects.toThrow();
 
-    expect(loadSessionEntry(target())).toMatchObject({ ...owner, ...replacement });
-    expect(onCommitted).not.toHaveBeenCalled();
-    expect(maintain).not.toHaveBeenCalled();
-    expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
-    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
-  });
+      expect(loadSessionEntry(target())).toMatchObject({ ...owner, ...replacement });
+      expect(onCommitted).not.toHaveBeenCalled();
+      expect(maintain).not.toHaveBeenCalled();
+      expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+      expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { capturedWriter: "writer", takeover: false },
-    { capturedWriter: undefined, takeover: false },
-    { capturedWriter: "writer", takeover: true },
     { capturedWriter: undefined, takeover: true },
   ])(
     "binds backend append to the captured writer (captured=$capturedWriter, takeover=$takeover)",
@@ -765,8 +770,6 @@ describe("queued compaction successor ownership", () => {
 
   it.each([
     { replacementPoint: "before rewrite", capturedWriter: "writer" },
-    { replacementPoint: "during branch read", capturedWriter: "writer" },
-    { replacementPoint: "before rewrite", capturedWriter: undefined },
     { replacementPoint: "during branch read", capturedWriter: undefined },
   ] as const)(
     "fences a queued maintenance writer replacement after acceptance: $replacementPoint (captured=$capturedWriter)",

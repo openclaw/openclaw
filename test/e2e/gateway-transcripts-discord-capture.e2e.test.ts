@@ -43,7 +43,6 @@ type DiscordCaptureFixture = {
   finishLateDelivery(): Promise<void>;
   close(): Promise<void>;
   restore(): void;
-  restoreRuntime(this: void): void;
 };
 type DiscordCaptureTestApi = {
   loadDiscordGatewayCaptureFixture(this: void): Promise<{
@@ -133,7 +132,7 @@ describe("Gateway admitted Discord transcript capture", () => {
         >
       | undefined;
     let fixture: DiscordCaptureFixture | undefined;
-    let restoreDiscordRuntime: (() => void) | undefined;
+    let releaseFixtureRegistry: (() => Promise<void>) | undefined;
     let routedService:
       | ReturnType<
           typeof import("../../src/transcripts/auto-start.js").createTranscriptsAutoStartService
@@ -279,7 +278,7 @@ describe("Gateway admitted Discord transcript capture", () => {
       });
     });
     try {
-      // Both the fixture and selected plugin loaders use the production SDK artifact order.
+      // Production settings retain the source host's SDK graph for fixture and plugin loads.
       // VITEST and the explicit minimal flag retain test lifecycle isolation.
       setTestEnvValue("NODE_ENV", "production");
       for (const key of [
@@ -346,31 +345,40 @@ describe("Gateway admitted Discord transcript capture", () => {
       ]);
       phase("plugin-loader:imported");
       const devSourceRoot = resolveOpenClawDevSourceRoot();
+      const loaderModuleUrl = new URL("../../src/plugins/loader-module-runtime.ts", import.meta.url)
+        .href;
+      const sourceHostRoot = await fs.realpath(
+        devSourceRoot ?? fileURLToPath(new URL("../..", import.meta.url)),
+      );
       const sdkAliases = preparePluginLoaderAliases({
         modulePath: testApiPath,
+        moduleUrl: loaderModuleUrl,
         devSourceRoot,
       });
-      const isBuiltPath = (target: string) => /[/\\]dist(?:-runtime)?[/\\]/.test(target);
       const sdkTargets = ["runtime-store", "extension-shared", "channel-entry-contract"].map(
         (subpath) => {
           const target = sdkAliases.resolveAlias(`openclaw/plugin-sdk/${subpath}`);
           expect(target, `Missing SDK seam: ${subpath}`).toBeDefined();
           expect(
-            isBuiltPath(target!),
-            `The capture proof requires the built ${subpath} SDK; run pnpm build before using skip-build.`,
-          ).toBe(true);
+            path.normalize(target!),
+            `The capture fixture must share the source host's ${subpath} SDK.`,
+          ).toBe(path.join(sourceHostRoot, "src", "plugin-sdk", `${subpath}.ts`));
           return target!;
         },
       );
-      const runtimeModule = resolvePluginRuntimeModulePathWithDiagnostics({ devSourceRoot });
-      expect(runtimeModule.resolvedPath, JSON.stringify(runtimeModule)).toBeDefined();
-      expect(isBuiltPath(runtimeModule.resolvedPath!)).toBe(true);
+      const runtimeModule = resolvePluginRuntimeModulePathWithDiagnostics({
+        moduleUrl: loaderModuleUrl,
+        devSourceRoot,
+      });
+      expect(runtimeModule.resolvedPath, JSON.stringify(runtimeModule)).toBe(
+        path.join(sourceHostRoot, "src", "plugins", "runtime", "index.ts"),
+      );
       await Promise.all(
         [...new Set([...sdkTargets, runtimeModule.resolvedPath!])].map((target) =>
           fs.access(target),
         ),
       );
-      phase("plugin-sdk:built");
+      phase("plugin-sdk:source");
       // Use the runtime entry's loader graph so the fixture manager and model-selected
       // provider share Discord's lifecycle state. Vitest owns only the injected test utilities.
       const loadDiscordModule = createPluginModuleLoader({
@@ -392,6 +400,18 @@ describe("Gateway admitted Discord transcript capture", () => {
       const { createPluginRuntime } = await import("../../src/plugins/runtime/index.js");
       const { createPluginRegistry } = await import("../../src/plugins/registry.js");
       const { createPluginRecord } = await import("../../src/plugins/loader-records.js");
+      const { getPluginInstance, getPluginValueInstance } =
+        await import("../../src/plugins/plugin-instance-scope.js");
+      const { loadPluginMetadataSnapshot } =
+        await import("../../src/plugins/plugin-metadata-snapshot.js");
+      const { bindPluginRuntimeArtifactSelection } =
+        await import("../../src/plugins/plugin-runtime-artifact-binding.js");
+      const { resolvePluginRuntimeArtifactSelection, resolvePluginRuntimeExecutionArtifact } =
+        await import("../../src/plugins/plugin-runtime-artifact-selection.js");
+      const { PluginRegistryInspectionResources } =
+        await import("../../src/plugins/registry-inspection-resources.js");
+      const { retireInspectionInstances } =
+        await import("../../src/plugins/registry-inspection.test-support.js");
       const {
         getActivePluginRegistry,
         setActivePluginRegistry,
@@ -508,23 +528,62 @@ describe("Gateway admitted Discord transcript capture", () => {
       phase("host-runtime:create");
       const runtime = createPluginRuntime();
       phase("host-runtime:created");
-      phase("fixture:create");
-      fixture = createDiscordGatewayCaptureFixture({ cfg, test: { expect, vi } });
-      restoreDiscordRuntime = fixture.restoreRuntime;
-      phase("fixture:created");
       const registration = createPluginRegistry({ runtime, logger: console });
-      const record = createPluginRecord({
-        id: "discord",
+      const registryResources = new PluginRegistryInspectionResources(retireInspectionInstances);
+      registryResources.attach(registration.registry);
+      releaseFixtureRegistry = () => registryResources.release();
+      const registrationMetadata = loadPluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: workspace,
+      });
+      const manifest = registrationMetadata.manifestRegistry.plugins.find(
+        (plugin) => plugin.id === "discord",
+      );
+      if (!manifest) {
+        throw new Error("Discord fixture manifest was not selected");
+      }
+      const runtimeEntry = resolvePluginRuntimeExecutionArtifact(
+        resolvePluginRuntimeArtifactSelection({
+          ...manifest,
+          entryKind: "runtime",
+          preferBuiltPluginArtifacts: true,
+        }),
+      );
+      expect(runtimeEntry).toEqual({
         source: path.join(discordPluginDir, "index.ts"),
         rootDir: discordPluginDir,
-        origin: "bundled",
+      });
+      const record = createPluginRecord({
+        id: "discord",
+        ...runtimeEntry,
+        origin: manifest.origin,
         enabled: true,
         configSchema: true,
       });
+      // Match the loader's artifact identity so publication retains this registration
+      // instead of loading another Discord provider behind the edge spies.
+      const artifactBinding = bindPluginRuntimeArtifactSelection(record, {
+        ...manifest,
+        runtimeEntry,
+        preferBuiltPluginArtifacts: true,
+      });
       registration.registry.plugins.push(record);
-      fixture.register(registration.createApi(record, { config: cfg }));
+      const api = registration.createApi(record, { config: cfg });
+      const pluginInstance = getPluginInstance(record)!;
+      expect(pluginInstance).toBeDefined();
+      phase("fixture:create");
+      fixture = pluginInstance.run(() =>
+        createDiscordGatewayCaptureFixture({ cfg, test: { expect, vi } }),
+      );
+      // Match loader registration: runtime slots belong to the invoking plugin instance.
+      pluginInstance.run(() => fixture!.register(api));
+      phase("fixture:created");
       expect(registration.registry.diagnostics).toEqual([]);
       expect(record.transcriptSourceProviderIds).toEqual(["discord-voice"]);
+      expect(
+        getPluginValueInstance(registration.registry.transcriptSourceProviders[0]!.provider),
+      ).toBe(pluginInstance);
+      artifactBinding.runtimeRegistrationComplete = true;
       // Minimal startup retains this real registration; it skips monitor login/sidecars only.
       // This does not prove full plugin discovery or Discord monitor startup.
       setActivePluginRegistry(registration.registry);
@@ -566,7 +625,8 @@ describe("Gateway admitted Discord transcript capture", () => {
         const inboundProvider = published?.inboundPluginRegistry.transcriptSourceProviders.find(
           (entry) => entry.provider.id === "discord-voice",
         )?.provider;
-        expect(inboundProvider).toBeDefined();
+        expect(inboundProvider).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
+        expect(getPluginValueInstance(inboundProvider!)).toBe(pluginInstance);
         const selectedRegistry = published?.pluginGeneration.pluginRegistry;
         const selectedProvider = selectedRegistry?.transcriptSourceProviders.find(
           (entry) => entry.provider.id === "discord-voice",
@@ -582,8 +642,9 @@ describe("Gateway admitted Discord transcript capture", () => {
             })),
           }),
         ).toBe(inboundProvider);
+        expect(getPluginValueInstance(selectedProvider!)).toBe(pluginInstance);
       }
-      fixture.bindPublishedRuntime();
+      pluginInstance.run(() => fixture!.bindPublishedRuntime());
       phase("model-publication:verified");
       expect(gateway.port).not.toBe(providerPort);
       expect(getActivePluginRegistry()).toBe(registration.registry);
@@ -640,7 +701,7 @@ describe("Gateway admitted Discord transcript capture", () => {
       expect(start).toContain(`Transcripts started: ${sessionId}`);
       const selector = /^Selector: (.+)$/m.exec(start)?.[1];
       expect(selector).toBeDefined();
-      const speaker = await fixture.expectReady();
+      const speaker = await pluginInstance.run(() => fixture!.expectReady());
       const admitted = await store.readSession(selector!);
       expect(admitted).toMatchObject({ sessionId, metadata: { agentId: "main" } });
       expect(admitted?.source).toEqual({
@@ -682,7 +743,7 @@ describe("Gateway admitted Discord transcript capture", () => {
       expect(requests).toHaveLength(2);
       expect(errors).toEqual([]);
 
-      await fixture.beginLateDelivery();
+      await pluginInstance.run(() => fixture!.beginLateDelivery());
       const stop = await runTurn({ action: "stop", selector });
       expect(stop).toContain(`Transcripts stopped: ${sessionId}`);
       expect(stop).toContain(`Selector: ${selector}`);
@@ -728,7 +789,7 @@ describe("Gateway admitted Discord transcript capture", () => {
           autoStart: [{ providerId: "discord-voice", ...captureTarget, whenOccupied: true }],
         },
       };
-      await fixture.rotateManager(routedConfig);
+      await pluginInstance.run(() => fixture!.rotateManager(routedConfig));
       const routedWarnings: string[] = [];
       const routedContext: Parameters<typeof createTranscriptsAutoStartService>[0] = {
         stateDir,
@@ -763,10 +824,12 @@ describe("Gateway admitted Discord transcript capture", () => {
           resolvedProviderId: routedProvider?.id,
         }),
       ).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
+      expect(getPluginValueInstance(routedProvider!)).toBe(pluginInstance);
       phase("routed-provider:verified");
       routedService = createTranscriptsAutoStartService(routedContext);
       phase("routed-service:start");
-      routedService.start();
+      await withPluginRuntimeRegistryScope(registration.registry, () => routedService!.start())
+        .settled;
       const readRoutedState = () => {
         const capture = [...activeSessions.values()].find(
           (candidate) => candidate.session.source.accountId === captureTarget.accountId,
@@ -856,12 +919,15 @@ describe("Gateway admitted Discord transcript capture", () => {
           try {
             await cleanupRuntime?.();
           } finally {
-            fixture?.restore();
-            restoreDiscordRuntime?.();
-            socketFence.mockRestore();
-            isolated.cleanup();
-            env.restore();
-            phase("cleanup:done");
+            try {
+              await releaseFixtureRegistry?.();
+            } finally {
+              fixture?.restore();
+              socketFence.mockRestore();
+              isolated.cleanup();
+              env.restore();
+              phase("cleanup:done");
+            }
           }
         }
       }

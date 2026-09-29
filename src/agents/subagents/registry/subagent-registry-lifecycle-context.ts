@@ -1,10 +1,11 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as defaultCallGateway } from "../../../gateway/call.js";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 // This type-only leaf exists solely to keep lifecycle sibling modules from importing the controller.
 // Keeping the controller out of their dependency graph satisfies the architecture cycle gate.
-import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
+import type { SubagentRegistryWriteOptions } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type CaptureSubagentCompletionReply =
@@ -22,6 +23,11 @@ export type SubagentLifecycleOptions = {
   getRuntimeConfig(): OpenClawConfig;
   persist(...runIds: string[]): void;
   persistOrThrow(...runIds: string[]): void;
+  persistAsyncOrThrow: (
+    context: OpenClawStateWorkerContext,
+    callbacks: Omit<SubagentRegistryWriteOptions, "context"> & { assertCurrent: () => void },
+    ...runIds: string[]
+  ) => Promise<void>;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
   getLatestRunForChildSession(
@@ -29,7 +35,6 @@ export type SubagentLifecycleOptions = {
     matches?: (entry: SubagentRunRecord) => boolean,
   ): SubagentRunRecord | null;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;
-  resolveSubagentTask(entry: SubagentRunRecord): DetachedTaskFindResult;
   shouldEmitEndedHookForRun(args: {
     entry: SubagentRunRecord;
     reason: SubagentLifecycleEndedReason;
@@ -69,23 +74,20 @@ export interface SubagentLifecycleCommonContext {
 }
 
 export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCommonContext {
+  readonly progressEndedEntries: WeakSet<SubagentRunRecord>;
   acquireTerminalCompletionLock(runId: string): Promise<() => void>;
   bindTerminalSessionEffects(entry: SubagentRunRecord, isCurrent?: () => boolean): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
   bumpTerminalGeneration(entry: SubagentRunRecord): number;
-  hasProgressEnded(entry: SubagentRunRecord): boolean;
   isTerminalCallbackCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
-  markProgressEnded(entry: SubagentRunRecord): void;
   startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean;
 }
 
 export interface SubagentLifecycleCleanupContext extends SubagentLifecycleCommonContext {
-  addScheduledResumeTimer(timer: ReturnType<typeof setTimeout>): void;
+  readonly scheduledResumeTimers: Set<ReturnType<typeof setTimeout>>;
+  readonly cleanupFailureCounts: WeakMap<SubagentRunRecord, number>;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
-  clearCleanupFailureCount(entry: SubagentRunRecord): void;
-  deleteScheduledResumeTimer(timer: ReturnType<typeof setTimeout>): void;
   incrementCleanupFailureCount(entry: SubagentRunRecord): number;
-  hasCleanupFailure(entry: SubagentRunRecord): boolean;
   isCleanupAttemptCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
   isCleanupGeneration(entry: SubagentRunRecord, generation: number): boolean;
   isCleanupGenerationCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
@@ -101,25 +103,31 @@ export interface SubagentLifecycleAnnounceCleanupContext
 export type PendingRequesterSettleWakeCommit = {
   entries: readonly SubagentRunRecord[];
   isCurrent(entry: SubagentRunRecord): boolean;
-  commit(entries: readonly SubagentRunRecord[]): boolean;
+  commit(entries: readonly SubagentRunRecord[]): boolean | Promise<boolean>;
+  retryWholeBatch: boolean;
+  inFlight?: Promise<void>;
   failures: number;
   nextAttemptAt: number;
+  /** One sustained-failure report was emitted for this retry episode. */
+  sustainedFailureReported?: boolean;
+  /** Fault last reported for this episode; a different one is not a repeat. */
+  reportedFailureSignature?: string;
+  /** Reports already emitted for the current signature. */
+  reportedFailureLogs?: number;
+  /** Identical failure reports withheld after the reporting budget ran out. */
+  suppressedFailureLogs?: number;
 };
 
 export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonContext {
+  readonly scheduledRequesterSettleWakeTimers: Map<string, ScheduledRequesterSettleWake>;
+  readonly scheduledRequesterSettleWakeRuns: WeakSet<SubagentRunRecord>;
+  readonly pendingRequesterSettleWakeRearms: WeakSet<SubagentRunRecord>;
   readonly pendingRequesterSettleWakeCommits: WeakMap<
     SubagentRunRecord,
     PendingRequesterSettleWakeCommit
   >;
   resumeAncestorCleanup(settledEntry: SubagentRunRecord): void;
-  deleteRequesterSettleWakeTimer(runId: string): void;
-  getRequesterSettleWakeTimer(runId: string): ScheduledRequesterSettleWake | undefined;
-  hasScheduledRequesterSettleWakeRun(entry: SubagentRunRecord): boolean;
-  markRequesterSettleWakeRearm(entry: SubagentRunRecord): void;
-  markRequesterSettleWakeRunScheduled(entry: SubagentRunRecord): void;
   runRequesterSettleWake(entry: SubagentRunRecord, run: () => Promise<unknown>): Promise<unknown>;
-  setRequesterSettleWakeTimer(runId: string, value: ScheduledRequesterSettleWake): void;
-  takeRequesterSettleWakeRearm(entry: SubagentRunRecord): boolean;
   unmarkRequesterSettleWakeRunScheduled(entry: SubagentRunRecord): void;
 }
 

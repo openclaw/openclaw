@@ -1,4 +1,3 @@
-// Zai tests cover onboard plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,12 +17,10 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 describe("zai onboard", () => {
   let defaultCfg: ReturnType<typeof applyZaiConfig>;
   let cnFlashCfg: ReturnType<typeof applyZaiConfig>;
-  let cnFlashxCfg: ReturnType<typeof applyZaiConfig>;
 
   beforeAll(() => {
     defaultCfg = applyZaiConfig({});
     cnFlashCfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flash" });
-    cnFlashxCfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flashx" });
   });
 
   it("adds zai provider with correct settings", () => {
@@ -40,6 +37,13 @@ describe("zai onboard", () => {
     expect(
       defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === "glm-5.3"),
     ).not.toHaveProperty("baseUrl");
+    for (const id of ["glm-5.3", "glm-5.3-flash"]) {
+      expect(
+        defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === id)?.compat,
+      ).toEqual({
+        codeMode: "preferred",
+      });
+    }
   });
 
   it("uses the manifest default and alias for a fresh general endpoint setup", () => {
@@ -93,13 +97,10 @@ describe("zai onboard", () => {
   });
 
   it("supports CN endpoint for supported coding models", () => {
-    for (const [modelId, cfg] of [
-      ["glm-4.7-flash", cnFlashCfg],
-      ["glm-4.7-flashx", cnFlashxCfg],
-    ] as const) {
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
-      expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(`zai/${modelId}`);
-    }
+    expect(cnFlashCfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+    expect(resolveAgentModelPrimaryValue(cnFlashCfg.agents?.defaults?.model)).toBe(
+      "zai/glm-4.7-flash",
+    );
   });
 
   it("defaults general endpoints to GLM-5.2 and Coding Plan endpoints to GLM-5.3", () => {

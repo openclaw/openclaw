@@ -74,6 +74,14 @@ export function createMessageToolDecisionRecorder(params: {
         throw error;
       }
     },
+    async runBoundaryAsync<T>(operation: () => Promise<T>): Promise<T> {
+      try {
+        return await operation();
+      } catch (error) {
+        recordTypedDenial(error);
+        throw error;
+      }
+    },
     recordTurnCapabilityInactive() {
       record({
         outcome: "denied",
@@ -99,21 +107,6 @@ export function createMessageToolDecisionRecorder(params: {
           {
             code: "provide_new_message_content",
             text: "Provide message content that is not copied runtime or inbound metadata.",
-          },
-        ],
-      });
-    },
-    recordExplicitTargetMissing() {
-      record({
-        outcome: "denied",
-        reasonCode: "message_target_missing",
-        coverageState: "enforced",
-        policyRefs: ["message-target:explicit"],
-        summary: "Message action was denied because this run requires an explicit target.",
-        remediation: [
-          {
-            code: "provide_explicit_message_target",
-            text: "Provide target or targets, and channel when needed, then retry.",
           },
         ],
       });

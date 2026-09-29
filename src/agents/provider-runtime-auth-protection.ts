@@ -10,21 +10,6 @@ type PreparedProviderRuntimeAuth = {
   expiresAt?: number;
 };
 
-function protectRuntimeAuthValue(params: {
-  value: string;
-  provider: string;
-  label: string;
-}): string {
-  if (!params.value) {
-    return params.value;
-  }
-  return looksLikeSecretSentinel(params.value)
-    ? params.value
-    : mintSecretSentinel(params.value, {
-        label: `model-auth:${params.provider}:${params.label}`,
-      });
-}
-
 /** Re-sentinels credentials returned by a provider auth exchange. */
 export function protectPreparedProviderRuntimeAuth(params: {
   provider: string;
@@ -35,9 +20,9 @@ export function protectPreparedProviderRuntimeAuth(params: {
     return undefined;
   }
   const protect = (value: string, label: string): string =>
-    !value || isNonSecretApiKeyMarker(value)
+    !value || isNonSecretApiKeyMarker(value) || looksLikeSecretSentinel(value)
       ? value
-      : protectRuntimeAuthValue({ value, provider: params.provider, label });
+      : mintSecretSentinel(value, { label: `model-auth:${params.provider}:${label}` });
   const request = preparedAuth.request;
   const headers = request?.headers
     ? Object.fromEntries(

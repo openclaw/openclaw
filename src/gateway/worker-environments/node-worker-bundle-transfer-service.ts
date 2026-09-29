@@ -20,12 +20,15 @@ export function createNodeWorkerBundleTransferService(options: ArtifactTransferO
       bundlePrewarm?: 1;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
+      onProgress?: (servedBytes: number) => void;
+      onInterrupted?: (servedBytes: number, reason: string) => void;
     }): { token: string; input: NodeWorkerBundleInstallInput } {
       // The caller closes over this exact node proof; copied node IDs are not authority.
       const { token } = transfer.prepare({
         ...params,
         artifactKey: params.artifact.bundleHash,
         ttlMs: workerBootstrapOperationTimeoutMs(params.artifact),
+        maxServes: 1,
       });
       return {
         token,
@@ -44,9 +47,6 @@ export function createNodeWorkerBundleTransferService(options: ArtifactTransferO
           },
         },
       };
-    },
-    authorize(params: { token: string; bundleHash: string }) {
-      return transfer.authorize({ token: params.token, artifactKey: params.bundleHash });
     },
   };
 }

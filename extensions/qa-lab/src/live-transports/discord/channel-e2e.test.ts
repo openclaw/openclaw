@@ -21,29 +21,20 @@ vi.mock("ws", async () => {
       constructor() {
         super();
         socketHarness.current = this;
-        queueMicrotask(() =>
-          this.emit(
-            "message",
-            Buffer.from(JSON.stringify({ op: 10, d: { heartbeat_interval: 60_000 } })),
-          ),
-        );
+        this.receive({ op: 10, d: { heartbeat_interval: 60_000 } });
+      }
+      receive(packet: unknown) {
+        queueMicrotask(() => this.emit("message", Buffer.from(JSON.stringify(packet))));
       }
       send(value: string) {
         const packet: unknown = JSON.parse(value);
         if (packet && typeof packet === "object" && "op" in packet && packet.op === 2) {
-          queueMicrotask(() =>
-            this.emit(
-              "message",
-              Buffer.from(
-                JSON.stringify({
-                  op: 0,
-                  s: 1,
-                  t: "READY",
-                  d: { user: { id: "423456789012345678", bot: true } },
-                }),
-              ),
-            ),
-          );
+          this.receive({
+            op: 0,
+            s: 1,
+            t: "READY",
+            d: { user: { id: "423456789012345678", bot: true } },
+          });
         }
       }
       terminate() {
@@ -131,23 +122,18 @@ function fixture(options: { manageThreads?: boolean; missingPermissions?: boolea
         messages.delete(id);
         return new Response(null, { status: 204 });
       }
-      if (method === "PATCH" && id) {
-        const message = messages.get(id)!;
-        message.content = z
-          .object({ content: z.string() })
-          .parse(JSON.parse(z.string().parse(init?.body))).content;
-        return Response.json(message);
+      if (method === "GET") {
+        if (id) {
+          return messages.has(id)
+            ? Response.json(messages.get(id))
+            : Response.json({ message: "Unknown message" }, { status: 404 });
+        }
+        return Response.json(
+          [...messages.values()].filter((message) => message.channel_id === target),
+        );
       }
-      if (id) {
-        return messages.has(id)
-          ? Response.json(messages.get(id))
-          : Response.json({ message: "Unknown message" }, { status: 404 });
-      }
-      return Response.json(
-        [...messages.values()].filter((message) => message.channel_id === target),
-      );
     }
-    if (route.includes("/reactions/") || /^\/channels\/\d+$/u.test(route)) {
+    if (/^\/channels\/\d+$/u.test(route)) {
       return new Response(null, { status: 204 });
     }
     throw new Error(`unexpected fixture route ${method} ${route}`);

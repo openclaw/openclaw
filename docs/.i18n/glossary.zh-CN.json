@@ -192,6 +192,14 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "OpenAI authentication",
+    "target": "OpenAI 身份验证"
+  },
+  {
+    "source": "Authentication",
+    "target": "身份验证"
+  },
+  {
     "source": "xAI provider",
     "target": "xAI provider"
   },
@@ -1458,6 +1466,26 @@
   {
     "source": "Zoom meetings plugin",
     "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Slack huddles plugin",
+    "target": "Slack 快速通话插件"
+  },
+  {
+    "source": "Slack huddles plugin reference",
+    "target": "Slack 快速通话插件参考"
+  },
+  {
+    "source": "slack-huddles",
+    "target": "slack-huddles"
+  },
+  {
+    "source": "Slack channel",
+    "target": "Slack 频道"
+  },
+  {
+    "source": "Transcripts CLI",
+    "target": "转录 CLI"
   },
   {
     "source": "Voice call plugin",
@@ -3792,8 +3820,8 @@
     "target": "OpenAI 覆盖范围与费用"
   },
   {
-    "source": "OpenAI image and video generation",
-    "target": "OpenAI 图像与视频生成"
+    "source": "OpenAI image generation",
+    "target": "OpenAI 图像生成"
   },
   {
     "source": "OpenAI voice and speech",
@@ -3890,6 +3918,10 @@
   {
     "source": "Remote and hosted browsers",
     "target": "远程与托管浏览器"
+  },
+  {
+    "source": "Lightweight browsers",
+    "target": "轻量级浏览器"
   },
   {
     "source": "Browser security",
@@ -4922,5 +4954,25 @@
   {
     "source": "Onnx plugin reference",
     "target": "ONNX 插件参考"
+  },
+  {
+    "source": "Telnyx",
+    "target": "Telnyx"
+  },
+  {
+    "source": "Telnyx plugin",
+    "target": "Telnyx 插件"
+  },
+  {
+    "source": "telnyx",
+    "target": "telnyx"
+  },
+  {
+    "source": "Telnyx (AI inference)",
+    "target": "Telnyx（AI 推理）"
+  },
+  {
+    "source": "Deploy a team server",
+    "target": "部署团队服务器"
   }
 ]

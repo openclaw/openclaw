@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import * as uuid from "../../lib/uuid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
@@ -1061,10 +1062,16 @@ describe("custodian page", () => {
       action: "open-agent",
     });
     const { context } = createContext(request);
+    const closePanel = vi.fn();
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, closePanel, { once: true });
     await mountPage(context);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
-    expect(context.navigate).toHaveBeenCalledWith("chat");
+    expect(context.navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main",
+      search: "?__openclawComposerFocus=1",
+    });
+    expect(closePanel).toHaveBeenCalledWith(expect.objectContaining({ detail: { open: false } }));
   });
 
   it("exits setup through normal chat navigation", async () => {

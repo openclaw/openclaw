@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   discordQaScenarioSupport,
   type DiscordQaScenarioImplementation,
@@ -72,6 +73,13 @@ export async function runDiscordScenario(
     }
     return { details: result.details, artifacts: result.artifactPaths };
   }
+  const observation = {
+    token: environment.runtimeEnv.driverBotToken,
+    channelId: environment.runtimeEnv.channelId,
+    observedMessages: environment.observedMessages,
+    observationScenarioId: scenario.id,
+    observationScenarioTitle: scenario.title,
+  };
   if (run.kind === "progress-draft-lifecycle") {
     const deadline = Date.now() + scenario.timeoutMs;
     const remainingMs = () => Math.max(1, deadline - Date.now());
@@ -82,13 +90,9 @@ export async function runDiscordScenario(
         input,
       );
       const draft = await discordQaScenarioSupport.testing.pollChannelMessages({
-        token: environment.runtimeEnv.driverBotToken,
-        channelId: environment.runtimeEnv.channelId,
+        ...observation,
         afterSnowflake: sent.id,
         timeoutMs: remainingMs(),
-        observedMessages: environment.observedMessages,
-        observationScenarioId: scenario.id,
-        observationScenarioTitle: scenario.title,
         triggerMessageId: sent.id,
         triggerTimestamp: sent.timestamp,
         predicate: (message) =>
@@ -104,13 +108,9 @@ export async function runDiscordScenario(
         timeoutMs: remainingMs(),
       });
       const final = await discordQaScenarioSupport.testing.pollChannelMessages({
-        token: environment.runtimeEnv.driverBotToken,
-        channelId: environment.runtimeEnv.channelId,
+        ...observation,
         afterSnowflake: draft.message.messageId,
         timeoutMs: remainingMs(),
-        observedMessages: environment.observedMessages,
-        observationScenarioId: scenario.id,
-        observationScenarioTitle: scenario.title,
         triggerMessageId: sent.id,
         triggerTimestamp: sent.timestamp,
         predicate: (message) =>
@@ -142,9 +142,7 @@ export async function runDiscordScenario(
     });
 
     const failed = await observeProgressTurn(run.errorInput, run.errorFinalText);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_500);
-    });
+    await sleep(1_500);
     await discordQaScenarioSupport.testing.waitForDiscordMessageText({
       token: environment.runtimeEnv.driverBotToken,
       channelId: environment.runtimeEnv.channelId,
@@ -192,13 +190,9 @@ export async function runDiscordScenario(
     : Math.max(1, Math.min(5_000, scenario.timeoutMs - 3_000));
   try {
     const matched = await discordQaScenarioSupport.testing.pollChannelMessages({
-      token: environment.runtimeEnv.driverBotToken,
-      channelId: environment.runtimeEnv.channelId,
+      ...observation,
       afterSnowflake: sent.id,
       timeoutMs: replyTimeoutMs,
-      observedMessages: environment.observedMessages,
-      observationScenarioId: scenario.id,
-      observationScenarioTitle: scenario.title,
       triggerMessageId: sent.id,
       triggerTimestamp: sent.timestamp,
       predicate: (message) =>

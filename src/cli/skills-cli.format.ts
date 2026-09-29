@@ -1,4 +1,3 @@
-// Formatting layer for `openclaw skills` commands; keeps discovery data separate from terminal UI.
 import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
@@ -19,20 +18,18 @@ import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
+import { formatCliRequirements } from "./skills-hooks-cli.format.js";
 
-/** Options for rendering the skill list command. */
 export type SkillsListOptions = {
   json?: boolean;
   eligible?: boolean;
   verbose?: boolean;
 };
 
-/** Options for rendering one skill detail view. */
 export type SkillInfoOptions = {
   json?: boolean;
 };
 
-/** Options for rendering skill readiness checks. */
 export type SkillsCheckOptions = {
   json?: boolean;
   agent?: string;
@@ -111,7 +108,24 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
     .join("; ");
 }
 
-/** Render skill discovery status as sanitized JSON or a terminal table. */
+function formatSkillCheckSection(
+  title: string,
+  skills: SkillStatusEntry[],
+  reason?: (skill: SkillStatusEntry) => string,
+): string[] {
+  return skills.length === 0
+    ? []
+    : [
+        "",
+        theme.heading(title),
+        ...skills.map((skill) => {
+          const emoji = normalizeSkillEmoji(skill.emoji);
+          const suffix = reason ? ` ${theme.muted(`(${reason(skill)})`)}` : "";
+          return `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)}${suffix}`;
+        }),
+      ];
+}
+
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const isReadyForAgent = (skill: SkillStatusEntry) =>
     skill.eligible && !skill.blockedByAgentFilter;
@@ -183,7 +197,6 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
   return appendClawHubHint(lines.join("\n"));
 }
 
-/** Render one skill's status, requirements, install hints, and API-key setup details. */
 export function formatSkillInfo(
   report: SkillStatusReport,
   skillName: string,
@@ -241,36 +254,7 @@ export function formatSkillInfo(
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
   }
 
-  const requirementGroups = SKILL_REQUIREMENT_GROUPS.filter(
-    ([key]) => skill.requirements[key].length > 0,
-  );
-
-  if (requirementGroups.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Requirements:"));
-    const formatRequirementStatus = (value: string, satisfied: boolean) =>
-      satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
-    for (const [key, label] of requirementGroups) {
-      const required = skill.requirements[key];
-      const missing = skill.missing[key];
-      let requirementStatus: string;
-      if (key === "anyBins" || key === "os") {
-        // Missing arrays describe the whole alternative group, not individual availability.
-        const prefix = key === "anyBins" ? "any of: " : "";
-        requirementStatus = formatRequirementStatus(
-          `(${prefix}${required.join(", ")})`,
-          missing.length === 0,
-        );
-      } else {
-        requirementStatus = required
-          .map((requirement) =>
-            formatRequirementStatus(requirement, !missing.includes(requirement)),
-          )
-          .join(", ");
-      }
-      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus}`);
-    }
-  }
+  lines.push(...formatCliRequirements(skill, SKILL_REQUIREMENT_GROUPS));
 
   if (skill.install.length > 0 && !skill.eligible) {
     lines.push("");
@@ -301,7 +285,6 @@ export function formatSkillInfo(
   return appendClawHubHint(lines.join("\n"));
 }
 
-/** Render aggregate setup health for all discovered skills. */
 export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
   const eligible = report.skills.filter((s) => s.eligible);
   const modelVisible = report.skills.filter((s) => s.modelVisible);
@@ -404,51 +387,20 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     }
   }
 
-  if (modelVisible.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Ready and visible to model:"));
-    for (const skill of modelVisible) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      lines.push(`  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)}`);
-    }
-  }
-
-  if (promptHidden.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Ready but hidden from model prompt:"));
-    for (const skill of promptHidden) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      const reason = skill.commandVisible
+  lines.push(
+    ...formatSkillCheckSection("Ready and visible to model:", modelVisible),
+    ...formatSkillCheckSection("Ready but hidden from model prompt:", promptHidden, (skill) =>
+      skill.commandVisible
         ? "skill hides its instructions from the model; commands/cron may still use it"
-        : "skill hides its instructions from the model and is not exposed as a command";
-      lines.push(
-        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(${reason})`)}`,
-      );
-    }
-  }
-
-  if (agentFiltered.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Excluded by agent allowlist:"));
-    for (const skill of agentFiltered) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      lines.push(
-        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted("(loaded, but this agent is not allowed to see/use it)")}`,
-      );
-    }
-  }
-
-  if (missingReqs.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Missing requirements:"));
-    for (const skill of missingReqs) {
-      const emoji = normalizeSkillEmoji(skill.emoji);
-      const missing = formatSkillMissingSummary(skill);
-      lines.push(
-        `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(${missing})`)}`,
-      );
-    }
-  }
+        : "skill hides its instructions from the model and is not exposed as a command",
+    ),
+    ...formatSkillCheckSection(
+      "Excluded by agent allowlist:",
+      agentFiltered,
+      () => "loaded, but this agent is not allowed to see/use it",
+    ),
+    ...formatSkillCheckSection("Missing requirements:", missingReqs, formatSkillMissingSummary),
+  );
 
   return appendClawHubHint(lines.join("\n"));
 }

@@ -292,12 +292,10 @@ suite.define(() => {
       await row.click({ button: "right" });
 
       const menu = page.locator("openclaw-session-menu");
-      const rootAssignmentLabels = await menu
+      const rootAssignmentLabels = menu
         .locator(":scope > wa-dropdown > wa-dropdown-item > .session-menu__text")
-        .allTextContents();
-      expect(rootAssignmentLabels.filter((label) => label.startsWith("Assign to"))).toEqual([
-        "Assign to…",
-      ]);
+        .filter({ hasText: /^Assign to/u });
+      await expectBrowser(rootAssignmentLabels).toHaveText([/^Assign to…$/u]);
       const assignTo = menu.getByRole("menuitem", {
         name: "Assign to…",
         exact: true,

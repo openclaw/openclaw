@@ -1,5 +1,6 @@
+import { createRequire } from "node:module";
 import { PassThrough, Writable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStubChild, readyChildAdapter } from "./child.test-support.js";
 
@@ -23,6 +24,13 @@ vi.mock("../service-child-relay-host.js", () => ({
 describe("createChildAdapter secret-delivery abort", () => {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
   let startChildAdapter: ReturnType<typeof readyChildAdapter>;
+
+  beforeAll(() => {
+    if (process.platform !== "win32") {
+      // The CJS native binding must select the host before cases mock process.platform.
+      createRequire(import.meta.url)("koffi");
+    }
+  });
 
   beforeEach(async () => {
     vi.resetModules();

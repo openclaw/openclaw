@@ -1,4 +1,7 @@
-import { resolveGatewayProfileSuffix } from "../../daemon/constants.js";
+import {
+  normalizeWindowsTaskIdentity,
+  resolveGatewayProfileSuffix,
+} from "../../daemon/constants.js";
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
@@ -26,7 +29,7 @@ function matchesStoppedService(
     process.platform === "darwin"
       ? resolveLaunchAgentLabel
       : process.platform === "win32"
-        ? resolveTaskName
+        ? (env: GatewayServiceState["env"]) => normalizeWindowsTaskIdentity(resolveTaskName(env))
         : resolveSystemdServiceName;
   // Explicit default metadata selects the same manager; protected command hashes
   // still pin the effective launcher and its environment through normalization.
@@ -72,6 +75,8 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     throw new GatewayServiceUpdateOwnershipError(
       "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
       undefined,
+      undefined,
+      "service-ownership-changed",
     );
   }
   // Shipped handoffs and package root swaps retain the exact launcher fingerprint.
@@ -124,6 +129,7 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
         : "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
       undefined,
       inspection.kind === "unavailable" ? inspection.inspectionReason : undefined,
+      inspection.kind === "unavailable" ? undefined : "service-ownership-changed",
     );
   }
   return inspection.kind === "owned" && verdict?.kind === "owned" && !verdict.refreshDefinition

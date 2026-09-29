@@ -426,23 +426,20 @@ function loadBundledEntryModuleSync(
   const profile = shouldProfilePluginLoader();
   const loadStartMs = profile ? performance.now() : 0;
   let sourceLoaderReadyMs = 0;
-  if (canTryNodeRequireBuiltModule(modulePath)) {
-    const native = tryNativeRequireJavaScriptModule(modulePath, {
-      aliasMap: buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url),
-      fallbackOnMissingDependency: true,
-    });
-    if (native.ok) {
-      loaded = native.moduleExport;
-    } else {
-      const moduleLoader = getSourceModuleLoader(modulePath, options);
-      sourceLoaderReadyMs = profile ? performance.now() : 0;
-      loaded = moduleLoader(toSafeImportPath(modulePath));
-    }
+  const native = canTryNodeRequireBuiltModule(modulePath)
+    ? tryNativeRequireJavaScriptModule(modulePath, {
+        aliasMap: buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url),
+        fallbackOnMissingDependency: true,
+      })
+    : undefined;
+  if (native?.ok) {
+    loaded = native.moduleExport;
   } else {
     const moduleLoader = getSourceModuleLoader(modulePath, options);
     sourceLoaderReadyMs = profile ? performance.now() : 0;
     loaded = moduleLoader(toSafeImportPath(modulePath));
   }
+
   if (profile) {
     const endMs = performance.now();
     // Split source-loader creation from graph loading while preserving canonical elapsedMs.
@@ -486,6 +483,21 @@ export function loadBundledEntryExportSync<T>(
     );
   }
   return record[reference.exportName] as T;
+}
+
+function createBundledEntryRuntimeSetter(
+  importMetaUrl: string,
+  reference: BundledEntryModuleRef | undefined,
+): ((runtime: BundledChannelRuntime) => void) | undefined {
+  return reference
+    ? (runtime) => {
+        const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
+          importMetaUrl,
+          reference,
+        );
+        setter(runtime);
+      }
+    : undefined;
 }
 
 /** Defines the full bundled channel entry contract used by core plugin registration. */
@@ -532,15 +544,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
           options,
         )
     : undefined;
-  const setChannelRuntime = runtime
-    ? (pluginRuntime: BundledChannelRuntime) => {
-        const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
-          importMetaUrl,
-          runtime,
-        );
-        setter(pluginRuntime);
-      }
-    : undefined;
+  const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
 
   return {
     kind: "bundled-channel-entry",
@@ -603,15 +607,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
   // Setup loads stay light; expose only the setter needed to inject the active runtime
   // without importing the full channel entry.
-  const setChannelRuntime = runtime
-    ? (pluginRuntime: BundledChannelRuntime) => {
-        const setter = loadBundledEntryExportSync<(runtime: BundledChannelRuntime) => void>(
-          importMetaUrl,
-          runtime,
-        );
-        setter(pluginRuntime);
-      }
-    : undefined;
+  const setChannelRuntime = createBundledEntryRuntimeSetter(importMetaUrl, runtime);
   const loadLegacyStateMigrationDetector = legacyStateMigrations
     ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>(
@@ -628,6 +624,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
           options,
         )
     : undefined;
+
   return {
     kind: "bundled-channel-setup-entry",
     loadSetupPlugin: (options) =>

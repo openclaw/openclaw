@@ -9,6 +9,7 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
+import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -403,12 +404,22 @@ export class DraftSubmissionFlow {
       this.noteBlockedSubmitAttempt();
       return;
     }
-    const preparedTitle = this.callbacks.takePreparedTitle?.();
+    if (
+      !uploadsEnabled(context.config) &&
+      (this.attachmentDraft.attachments.length ||
+        this.pendingPlacement.attachments?.length ||
+        startup?.params.attachments?.length)
+    ) {
+      this.error = uploadsDisabledMessage();
+      this.callbacks.requestUpdate();
+      return;
+    }
     this.blockedSubmitGate = null;
     const input = prepareDraftSubmission(context, this, this.place, startup, background);
     if (!input) {
       return;
     }
+    const preparedTitle = this.callbacks.takePreparedTitle?.();
     const requestId = ++this.submitRequestToken;
     const submittedDraft = this.draftPersistence.captureSubmission();
     const submittedAt = startup?.startedAt ?? Date.now();
@@ -501,6 +512,7 @@ export class DraftSubmissionFlow {
         ? readSessionMethodAccess(context.gateway.snapshot, {
             method: "sessions.create",
             params: createParams,
+            sessionScope: true,
           })
         : this.submissionAccess(placementCreateParams ?? createParams);
       if (!requestAccess.allowed) {
@@ -510,8 +522,11 @@ export class DraftSubmissionFlow {
       }
       const submissionPlacementRecovery = placementTarget ? this.pendingPlacement.capture() : null;
       if (placementTarget && !submissionPlacementRecovery) {
-        this.setPlacementRecoveryUnavailable();
+        this.setPlacementRecoveryUnavailable("creating");
         return;
+      }
+      if (input.apiAttachments?.length) {
+        assertUploadsEnabled(context.config);
       }
       const createRequest =
         input.pendingPlacement && this.pendingPlacement.phase !== "creating"
@@ -568,7 +583,7 @@ export class DraftSubmissionFlow {
             this.gateway.recoveryScope === input.recoveryScope,
           clearRecovery: () => this.clearPendingPlacementRecovery(),
           setError: (error) => this.setError(error),
-          onRecoveryUnavailable: () => this.setPlacementRecoveryUnavailable(),
+          onRecoveryUnavailable: () => this.setPlacementRecoveryUnavailable("created"),
           clearDraft: () => {
             retainSubmittedSession(result.key);
             return this.clearSubmittedDraft(true, submittedDraft);
@@ -688,10 +703,13 @@ export class DraftSubmissionFlow {
 
   private placement = () => resolveDraftSessionPlacement(this.pendingPlacement, this.place);
 
-  private setPlacementRecoveryUnavailable() {
-    this.error = t("newSession.placementStartFailed", {
-      error: "placement recovery storage is unavailable",
-    });
+  private setPlacementRecoveryUnavailable(phase: "creating" | "created") {
+    this.error =
+      phase === "creating"
+        ? t("newSession.placementCreateFailed")
+        : t("newSession.placementStartFailed", {
+            error: "placement recovery storage is unavailable",
+          });
   }
 
   private applyRecoveryDraft(recovery: SessionPlacementRecovery | null) {

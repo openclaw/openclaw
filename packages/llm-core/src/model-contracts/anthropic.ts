@@ -52,24 +52,25 @@ export function resolveClaudeModelIdentity(ref: ClaudeModelRef): string {
   return match?.[1] ?? normalized;
 }
 
+function matchClaudeModelIdentity(normalized: string, pattern: RegExp): string | undefined {
+  const match = pattern.exec(normalized);
+  return match ? normalized.slice(match.index + (match[0].startsWith("-") ? 1 : 0)) : undefined;
+}
+
 /** Resolve Claude Fable 5 through direct ids, cloud ids, or deployment metadata. */
 export function resolveClaudeFable5ModelIdentity(ref: ClaudeModelRef): string | undefined {
-  const normalized = resolveClaudeModelIdentity(ref);
-  const match = /(?:^|-)claude-fable-5(?=$|[^a-z0-9])/.exec(normalized);
-  if (!match) {
-    return undefined;
-  }
-  return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
+  return matchClaudeModelIdentity(
+    resolveClaudeModelIdentity(ref),
+    /(?:^|-)claude-fable-5(?=$|[^a-z0-9])/,
+  );
 }
 
 /** Resolve Claude Mythos 5 through direct ids, cloud ids, or deployment metadata. */
 export function resolveClaudeMythos5ModelIdentity(ref: ClaudeModelRef): string | undefined {
-  const normalized = resolveClaudeModelIdentity(ref);
-  const match = /(?:^|-)claude-mythos-5(?=$|[^a-z0-9])/.exec(normalized);
-  if (!match) {
-    return undefined;
-  }
-  return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
+  return matchClaudeModelIdentity(
+    resolveClaudeModelIdentity(ref),
+    /(?:^|-)claude-mythos-5(?=$|[^a-z0-9])/,
+  );
 }
 
 /**
@@ -96,12 +97,10 @@ export function requiresClaudeMandatoryAdaptiveThinking(ref: ClaudeModelRef): bo
 
 /** Resolve Claude Sonnet 5 through direct ids, cloud ids, or deployment metadata. */
 export function resolveClaudeSonnet5ModelIdentity(ref: ClaudeModelRef): string | undefined {
-  const normalized = resolveClaudeModelIdentity(ref);
-  const match = /(?:^|-)claude-sonnet-5(?=$|[^a-z0-9])/.exec(normalized);
-  if (!match) {
-    return undefined;
-  }
-  return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
+  return matchClaudeModelIdentity(
+    resolveClaudeModelIdentity(ref),
+    /(?:^|-)claude-sonnet-5(?=$|[^a-z0-9])/,
+  );
 }
 
 /** Resolve Claude Opus 5 through aliases, direct ids, cloud ids, or deployment metadata. */
@@ -114,17 +113,13 @@ export function resolveClaudeOpus5ModelIdentity(ref: ClaudeModelRef): string | u
   if (normalized === "opus" || normalized === "opus-5") {
     return "claude-opus-5";
   }
-  const match = /(?:^|-)claude-opus-5(?=$|[^a-z0-9])/.exec(normalized);
-  if (!match) {
-    return undefined;
-  }
-  return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
+  return matchClaudeModelIdentity(normalized, /(?:^|-)claude-opus-5(?=$|[^a-z0-9])/);
 }
 
 /** Resolve the Opus 5.5 contract without matching other Opus 5 generations. */
 export function resolveClaudeOpus55ModelIdentity(ref: ClaudeModelRef): string | undefined {
   const normalized = resolveClaudeModelIdentity(ref);
-  if (normalized === "opus-5-5") {
+  if (normalized === "opus" || normalized === "opus-5-5") {
     return "claude-opus-5-5";
   }
   return /^claude-opus-5-5(?=$|[^a-z0-9])/.test(normalized) ? normalized : undefined;

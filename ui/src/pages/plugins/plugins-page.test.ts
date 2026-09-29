@@ -79,6 +79,13 @@ describe("PluginsPage", () => {
         if (method === "plugins.catalog.browse") {
           return { items: [] };
         }
+        if (method === "plugins.catalog.categories") {
+          return {
+            categories: [
+              { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
+            ],
+          };
+        }
         throw new Error(`Unexpected method ${method}`);
       });
       const harness = createGateway(client);
@@ -102,13 +109,18 @@ describe("PluginsPage", () => {
         ),
       );
       try {
-        expect(request.mock.calls.map(([method]) => method)).toEqual(["plugins.list"]);
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "plugins.catalog.categories",
+          "plugins.list",
+        ]);
+        expect(page.querySelector(".plugin-catalog-chips")?.textContent).toContain("Memory");
       } finally {
         inventory.resolve(current);
       }
       await waitForFast(() => expect(page.result).toBe(current));
       await page.updateComplete;
       expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "plugins.catalog.categories",
         "plugins.list",
         "plugins.catalog.browse",
       ]);
@@ -147,7 +159,7 @@ describe("PluginsPage", () => {
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("catalog unavailable"),
     );
     expect(page.textContent?.match(/catalog unavailable/gu)).toHaveLength(1);
-    expect(request.mock.calls[0]?.slice(0, 2)).toEqual(["plugins.list", {}]);
+    expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.anything());
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {

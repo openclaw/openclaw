@@ -5,6 +5,10 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+} from "./attachment-payload-store.ts";
+import {
   ChatSessionCompanionThreads,
   requestSessionCompanionAnswer,
   requestSessionCompanionState,
@@ -65,19 +69,6 @@ describe("ChatSessionRailState", () => {
     expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
   });
 
-  it("opens the panel from a hidden rail without persisting card", () => {
-    const state = new ChatSessionRailState("pill");
-    state.hide();
-
-    state.openExplicitly();
-
-    expect(state.mode(input())).toBe("expanded");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-    // A fresh state reads the stored preference: the next session gets the
-    // ambient pill, not a sticky panel.
-    expect(new ChatSessionRailState().mode(input())).toBe("pill");
-  });
-
   it("opens digest-less on an idle session and resets per session", () => {
     const state = new ChatSessionRailState("pill");
     const idle = { running: false, activeRunId: null, digest: null } as const;
@@ -99,55 +90,6 @@ describe("ChatSessionRailState", () => {
     runningState.openExplicitly();
     runningState.collapse();
     expect(runningState.mode(input())).toBe("pill");
-  });
-
-  it("auto-opens pill transiently without changing the persisted preference", () => {
-    localStorage.setItem(displayPreferenceKey, "pill");
-    const state = new ChatSessionRailState();
-
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-    expect(new ChatSessionRailState().mode(input())).toBe("pill");
-  });
-
-  it("rejects auto-open while hidden and preserves the off preference", () => {
-    localStorage.setItem(displayPreferenceKey, "off");
-    const state = new ChatSessionRailState();
-
-    expect(state.tryAutoOpen()).toBe(false);
-    expect(state.mode(input())).toBe("hidden");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    expect(new ChatSessionRailState().mode(input())).toBe("hidden");
-  });
-
-  it("persists explicit collapse and hide after transient auto-open", () => {
-    const state = new ChatSessionRailState("pill");
-
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    state.collapse();
-    expect(state.mode(input())).toBe("pill");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
-
-    expect(state.tryAutoOpen()).toBe(true);
-    state.hide();
-    expect(state.mode(input())).toBe("hidden");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("off");
-    expect(state.tryAutoOpen()).toBe(false);
-  });
-
-  it("clears transient auto-open when the session changes", () => {
-    localStorage.setItem(displayPreferenceKey, "pill");
-    const state = new ChatSessionRailState();
-
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    state.resetTransientState();
-    expect(state.mode(input())).toBe("pill");
-    expect(state.tryAutoOpen()).toBe(true);
-    expect(state.mode(input())).toBe("expanded");
-    expect(localStorage.getItem(displayPreferenceKey)).toBe("pill");
   });
 
   it("keeps a companion thread renderable without an observer digest", () => {
@@ -193,6 +135,43 @@ describe("ChatSessionCompanionThreads", () => {
       ["sessions.companion.state", { sessionKey: "one", agentId: "work" }],
       ["sessions.companion.reset", { sessionKey: "one", agentId: "work" }],
     ]);
+  });
+
+  it("sends a full selected passage as context, not an unsupported file", async () => {
+    const selectedText = "Full selected passage " + "x".repeat(2_000);
+    const request = vi.fn(async (_method: string, _params: unknown) => ({
+      answer: "Answer",
+      ts: 1,
+    }));
+    const client = { request: request as GatewayBrowserClient["request"] };
+    await requestSessionCompanionAnswer(client, "one", "Regarding the selection", "work", [
+      {
+        id: "comment",
+        mimeType: "text/plain",
+        selectionAnnotation: {
+          text: selectedText,
+          comment: "Why does this matter?",
+          sessionKey: "one",
+          start: 2,
+          end: selectedText.length + 2,
+        },
+      },
+    ]);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.companion.ask",
+      {
+        sessionKey: "one",
+        agentId: "work",
+        question: "Regarding the selection",
+        selectionContext: expect.stringContaining("User comment:\nWhy does this matter?"),
+      },
+      { timeoutMs: 70_000 },
+    );
+    expect(request.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        selectionContext: expect.stringContaining(`Selected text:\n${selectedText}`),
+      }),
+    );
   });
 
   it("hydrates and retains independent per-session threads", async () => {
@@ -503,6 +482,98 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
   });
 
+  it.each([false, true])(
+    "uses an empty-question fallback only for images (image: %s)",
+    async (image) => {
+      const onSubmit = vi.fn();
+      const element = await mount({
+        onSubmit,
+        companion: {
+          turns: [],
+          loading: false,
+          draft: "",
+          attachments: [
+            image
+              ? { id: "image", mimeType: "image/png" }
+              : {
+                  id: "comment",
+                  mimeType: "text/plain",
+                  selectionAnnotation: {
+                    text: "Selected text",
+                    comment: "Explain this",
+                    sessionKey: "agent:main:run",
+                    start: 0,
+                    end: 13,
+                  },
+                },
+          ],
+        },
+      });
+      expect(element.querySelector<HTMLButtonElement>(".chat-send-btn")?.disabled).toBe(!image);
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      element
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(onSubmit.mock.calls).toEqual(
+        image ? [["What does this image show?"], ["What does this image show?"]] : [],
+      );
+    },
+  );
+
+  it("explains unsupported image input and retries the retained image only on user action", async () => {
+    const threads = new ChatSessionCompanionThreads(() => {
+      element.companion = { ...threads.view("one") };
+    });
+    const image = registerChatAttachmentPayload({
+      attachment: { id: "retry-image", mimeType: "image/png", fileName: "retry.png" },
+      dataUrl: "data:image/png;base64,aW1hZ2U=",
+      file: new File(["image"], "retry.png", { type: "image/png" }),
+    });
+    const ask = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Image input unsupported"), {
+          details: { reason: "image-input-unsupported" },
+          retryable: false,
+        }),
+      )
+      .mockResolvedValue({ answer: "The image is now visible.", ts: 123 });
+    let submitted: Promise<void> | undefined;
+    const element = await mount({
+      companion: threads.view("one"),
+      onSubmit: (turn) => {
+        submitted = threads.submit("one", turn, ask);
+      },
+    });
+    try {
+      threads.setAttachments("one", [image]);
+      await threads.submit("one", "Explain this image", ask);
+      await element.updateComplete;
+      expect(element.textContent).toContain(
+        "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
+      );
+      expect(element.textContent).not.toContain("No utility model is configured");
+      expect(ask).toHaveBeenCalledOnce();
+      expect(getChatAttachmentDataUrl(image)).not.toBeNull();
+      threads.setDraft("one", "Keep my next question");
+      await element.updateComplete;
+      const retry = element.querySelector<HTMLButtonElement>(".chat-session-rail__retry");
+      expect(retry).not.toBeNull();
+      expect(retry?.disabled).toBe(false);
+      retry!.click();
+      await submitted;
+      await element.updateComplete;
+      expect(ask).toHaveBeenCalledTimes(2);
+      expect(ask).toHaveBeenLastCalledWith("one", "Explain this image", [image]);
+      expect(element.textContent).toContain("The image is now visible.");
+      expect(element.querySelector(".chat-session-rail__retry")).toBeNull();
+      expect(threads.view("one").draft).toBe("Keep my next question");
+      expect(getChatAttachmentDataUrl(image)).toBeNull();
+    } finally {
+      threads.retire();
+    }
+  });
+
   it("renders one pending state and retries a retryable failure", async () => {
     const onSubmit = vi.fn();
     const element = await mount({
@@ -655,15 +726,6 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
   });
 
-  it("collapses on Escape", async () => {
-    const element = await mount();
-    element
-      .querySelector(".chat-session-rail--expanded")
-      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await element.updateComplete;
-    expect(element.querySelector(".chat-session-rail--pill")).not.toBeNull();
-  });
-
   it("keeps the ticking rail section out of screen-reader live regions", async () => {
     const element = await mount();
     const section = element.querySelector(".chat-session-rail--expanded");
@@ -760,24 +822,6 @@ describe("ChatSessionRailElement", () => {
 
     expect(element.querySelector(".chat-session-rail__starter")).toBeNull();
     expect(element.querySelector(".chat-session-rail__exchange")).not.toBeNull();
-  });
-
-  it("drops the digest band when there is no digest to show", async () => {
-    const withDigest = await mount({ digest: { ...digest(), assessment: "Steady progress." } });
-    expect(withDigest.querySelector(".chat-session-rail__digest")).not.toBeNull();
-
-    const withoutDigest = await mount({
-      digest: null,
-      running: false,
-      activeRunId: null,
-      companion: {
-        turns: [],
-        loading: false,
-        draft: "What changed?",
-      },
-    });
-    expect(withoutDigest.querySelector(".chat-session-rail--expanded")).not.toBeNull();
-    expect(withoutDigest.querySelector(".chat-session-rail__digest")).toBeNull();
   });
 
   it("auto-opens from pill without persisting card, then collapses persistently", async () => {

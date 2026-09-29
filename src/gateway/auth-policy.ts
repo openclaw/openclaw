@@ -1,39 +1,76 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayAuthPolicy } from "./auth-policy.types.js";
+import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
+import { sourceRolePolicies } from "./operator-role-source-policy.js";
 
-const generations = new WeakMap<OpenClawConfig, string>();
+const policies = new WeakMap<
+  OpenClawConfig,
+  { global: string; identities: Map<string | undefined, GatewayAuthPolicy> }
+>();
 
-/** Session authority follows immutable runtime snapshots, independently of durable device tokens. */
-export function resolveGatewayAuthPolicyGeneration(config: OpenClawConfig): string {
-  let generation = generations.get(config);
-  if (generation === undefined) {
+/** Capture the grant principal together with its generation; null means no identity-derived scopes. */
+export function captureGatewayAuthPolicy(
+  config: OpenClawConfig,
+  principal: { role: string; verifiedIdentity?: string } | null,
+): GatewayAuthPolicy {
+  const verifiedIdentity =
+    principal?.role === "operator"
+      ? normalizeOptionalString(principal.verifiedIdentity)
+      : undefined;
+  let cached = policies.get(config);
+  if (!cached) {
     const gateway = config.gateway;
     const trustedProxy = gateway?.auth?.trustedProxy;
-    generation = stableStringify({
-      roles: gateway?.roles,
-      trustedProxies: gateway?.trustedProxies?.toSorted(),
-      allowRealIpFallback: gateway?.allowRealIpFallback,
-      allowTailscale: gateway?.auth?.allowTailscale,
-      identityScopes: gateway?.auth?.identityScopes,
-      trustedProxy: trustedProxy && {
-        ...trustedProxy,
-        requiredHeaders: (trustedProxy.requiredHeaders ?? []).toSorted(),
-        allowUsers: (trustedProxy.allowUsers ?? []).toSorted(),
-      },
-    });
-    generations.set(config, generation);
+    cached = {
+      global: stableStringify({
+        roles: sourceRolePolicies(gateway?.roles),
+        trustedProxies: gateway?.trustedProxies?.toSorted(),
+        allowRealIpFallback: gateway?.allowRealIpFallback,
+        allowTailscale: gateway?.auth?.allowTailscale,
+        trustedProxy: trustedProxy && {
+          ...trustedProxy,
+          requiredHeaders: (trustedProxy.requiredHeaders ?? []).toSorted(),
+          allowUsers: (trustedProxy.allowUsers ?? []).toSorted(),
+        },
+      }),
+      identities: new Map(),
+    };
+    policies.set(config, cached);
   }
-  return generation;
+  let policy = cached.identities.get(verifiedIdentity);
+  if (!policy) {
+    const grant = verifiedIdentity
+      ? [
+          ...new Set(
+            resolveIdentityOperatorScopes(verifiedIdentity, config.gateway?.auth?.identityScopes),
+          ),
+        ].toSorted()
+      : undefined;
+    policy = Object.freeze({
+      generation: grant ? `${cached.global}\0${stableStringify(grant)}` : cached.global,
+      verifiedIdentity,
+    });
+    cached.identities.set(verifiedIdentity, policy);
+  }
+  return policy;
 }
 
 export function isGatewayAuthPolicyCurrent(
-  generation: string | undefined,
+  policy: GatewayAuthPolicy | undefined,
   config?: OpenClawConfig | null,
 ): boolean {
-  if (generation === undefined) {
+  if (!policy) {
     return true;
   }
   const current = config === undefined ? getRuntimeConfig() : config;
-  return current !== null && resolveGatewayAuthPolicyGeneration(current) === generation;
+  return (
+    current !== null &&
+    captureGatewayAuthPolicy(current, {
+      role: "operator",
+      verifiedIdentity: policy.verifiedIdentity,
+    }).generation === policy.generation
+  );
 }

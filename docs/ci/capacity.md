@@ -8,6 +8,24 @@ read_when:
 
 ## Runner registration budget
 
+The CP10 candidate emits 122 Node rows for its broad PR. At 96 active rows,
+26 wait for an earlier row to finish even when capacity is available; the
+measured-overhead model projects a 13.6-minute workflow wall from that second
+wave. Admitting all selected rows in one wave changes neither their work nor
+the modeled vCPU-minutes. The final PR/main caps remain 130/70, as does the
+5,110-registration arrival envelope, which already budgets all 130 PR rows
+inside five minutes. Current compact limits are 90 native and 96 hosted rows. This is planned admission,
+not proof that the provider supplies 130 runners simultaneously. Naturally occurring runs
+supply the actual wall evidence.
+
+The current automatic main/PR inventory has a conservative union of 71 potentially
+self-hosted non-Node rows. Retain an 84-row allowance, including thirteen reserved
+rows, alongside the unchanged 70/130 Node caps. The four-main/21-PR arrival
+envelope is **5,110 registrations**, leaving 890 below the 6,000 operating target.
+Historical 5,010/5,085/5,160 calculations below describe earlier inventories;
+this fresh count includes the five type stripes and five Windows rows.
+See [critical-path routing](/ci/routing-costs#hosted-assignment-on-the-critical-path).
+
 OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
 runner registrations per 5 minutes in `gh api rate_limit`. Re-check
 `actions_runner_registration` before each tuning pass because GitHub can change
@@ -27,19 +45,19 @@ concurrent repositories, retries, and burst overlap.
 Trusted automatic hybrid first-attempt preflight jobs request the existing
 16-class after three nearby hosted preflights remained unassigned while their
 Blacksmith security jobs completed. Each eligible hybrid run admits one
-Blacksmith preflight plus security when optional hosted admission is closed,
-for at most two control registrations; default Blacksmith retains one. Both jobs already
-belong to the conservative 80 non-Node allowance, so the retained
-`4 × 150 + 21 × 210 = 5,010` ceiling is unchanged. The exposed live bucket still
-reported 10,000 on 2026-09-16; its pooled reader's unused quota does not establish
-organization-wide free capacity. The remaining 990 allowance must still cover
+Blacksmith preflight and gate, plus security when optional hosted admission is
+closed, for at most three control registrations; default Blacksmith retains one.
+All three occur in the current non-Node union and reserved 5,110 envelope.
+The exposed live bucket still reported 10,000; its pooled reader's unused quota
+does not establish organization-wide free capacity. The remaining 890 allowance must cover
 adjacent repositories, releases, retries and carryover. This routing trial does
 not prove available physical capacity or faster preflight execution.
 
 The protected cache warmer has two platform rows: the existing Linux workload and one hosted macOS pnpm-store publisher. Its per-ref concurrency and pending-run coalescing are unchanged. Each admitted warmer run adds one hosted macOS job and no Blacksmith registrations; pull-request CI adds no writers or jobs. Native producer and consumer measurements must include cache transfer, extraction, installation, and archive size before claiming a setup-time saving.
 
-The published-upgrade main tripwire reuses the reserved `docker-seed-e2e` job,
-so the retained peak envelope stays `4 × 150 + 21 × 210 = 5,010` registrations.
+Every admitted canonical main run selects the published-upgrade tripwire in the
+reserved `docker-seed-e2e` job, already included in the current 5,110-registration
+arrival envelope.
 Docs-only main tips remain excluded by the `**/*.md` and `docs/**` push filters.
 Admitted main pushes retain the same two non-canceling parity slots; the bound
 includes both active runs and both coalesced successors. It does not assume
@@ -58,15 +76,33 @@ three-scenario group limit and 32-job concurrency cap are unchanged. The additio
 share the existing headroom for releases, adjacent repositories, and carryover;
 the live shared bucket must still be checked before further fanout changes.
 
+Hourly extension runtime checks reuse the existing Plugin Prerelease owner,
+with its unchanged `max-parallel: 12`. The current inventory emits eight batch
+rows, eighteen Telegram file rows, and six file rows for plugins without package
+metadata and root extension tests: at most 32 Blacksmith registrations per
+admitted hourly run, including turnover. A single non-canceling schedule slot
+prevents overlap with another hourly extension run. Allowing an active run to finish and its pending replacement to start within
+one five-minute bucket reserves two complete inventories, or 64 registrations.
+Adding these to the 5,110 automatic-run envelope gives 5,174. The complete hourly
+Node inventory has a separate 77-row cap, seven above the unchanged 70-row push
+cap. Reserving those seven rows across all four main arrivals adds 28 registrations,
+for a conservative 5,202 envelope, below the 6,000 reference target. This does not
+spend the savings from removing normal CI's seven partial extension rows or
+unrelated PR extension jobs. Manual/release admission remains
+outside that envelope. Recompute the inventory and check the live organization
+bucket before further increases.
+
 The three Mac Node parts add two hosted jobs per run on `github` and `hybrid`, with no added Blacksmith registrations there. Normal Blacksmith routing adds two registrations per qualifying attempt-1 push or trusted PR; manual runs, retries, and untrusted PRs remain hosted. The matrix concurrency cap is three. GitHub's documented Enterprise macOS concurrency allowance is 50, shared with other hosted Mac workflows; it does not guarantee immediate runner admission. No runner class or repository capacity setting changes with this split.
 
 `Release npm Cache Warm` (`release-npm-cache-warm.yml`) runs a hosted Linux job on scheduled and manual triggers to prepare an npm download seed from the latest published OpenClaw package with lifecycle scripts disabled. Its concurrency group is separate from push-triggered Vitest warming, so newer pushes cannot cancel a pending seed. Scheduled runs publish from `main`, so new release branches can restore that seed through GitHub's default-branch cache scope. Each seed starts empty and contains only the current baseline dependency graph. Cross-OS release checks first restore their candidate-specific cache, then a matching runtime/suite cache, then this shared seed. Only npm's content-addressed `_cacache` directory is archived; install prefixes, OpenClaw state, npm logs, and executable `npx` caches remain fresh. The producer and consumers use the same relative archive path and enable cross-OS archives. npm retains normal freshness and integrity checks and downloads missing platform-specific packages. This adds one hosted Linux job per scheduled or manual warmer run, no jobs on pushes, and no Blacksmith registrations.
 
-Small precise PR changes use a focused Node plan. Broad, deleted or unknown changes retain compact core plus the affected plugin fallback; canonical pushes use the integration compact. Every compact planner profile is capped at 90 rows, and plugin fallback packing is capped at 50. The final canonical Node matrix also enforces 70 push rows or 130 PR rows, including precise plans. Missing changed paths, missing current planner capabilities and planner errors fail preflight instead of emitting an incomplete successful matrix. Approved historical dispatches retain their full named plans. Count every emitted matrix row and nonmatrix job, including all six Android rows despite its two-job concurrency cap.
+Canonical PRs use the bounded changed-owner Node plan, including protected transitive consumers and fixed smoke tests. Broad inputs retain their owner coverage; missing or unresolved selection fails preflight. Canonical pushes use the integration compact. Native compact profiles are capped at 90 rows and GitHub-hosted at 96 rows, and plugin fallback packing is capped at 50. The final canonical Node matrix also enforces 70 push rows, 77 main-tier validation rows, or 130 PR rows, including precise plans. Missing changed paths, missing current planner capabilities and planner errors fail preflight instead of emitting an incomplete successful matrix. Approved historical dispatches retain their full named plans. Count every emitted matrix row and nonmatrix job, including the conservative six-row Android inventory, independently of concurrency.
+
+Android retains four normal rows and six full-manual rows. Normal same-repository canonical first attempts on Blacksmith overlap all four rows; the GitHub override, retries, manual dispatches, forks, and noncanonical repositories retain two. Reassigning app lint to the existing Wear and Kotlin-lint rows adds no jobs or registrations. A three-row cap kept every job below ten minutes but left a 941-second Android span in [run 35812544118](https://github.com/openclaw/openclaw/actions/runs/35812544118), so normal runs admit all four independent rows together. The conservative six-row allowance and `4 × 150 + 21 × 210 = 5,010` registration envelope remain unchanged, below the 6,000 operating target against the 10,000 live bucket checked on September 23, 2026. This allowance does not establish physical runner availability or a measured wall-time improvement.
 
 Preflight reserves the actual appended plugin Node rows before packing compact
 core work. Hosted tooling tail compaction therefore starts when the remaining
-Node budget is exceeded, even below the standalone 90-row compact cap. Dist
+Node budget is exceeded, even below the standalone compact cap (90 native or 96 hosted rows). Dist
 descriptors belong to their separate matrix and do not consume this Node budget;
 they still count toward the compact cap. The existing file-owner splitting,
 timing weights, process boundaries, runner requirements, and admission limits
@@ -82,7 +118,7 @@ and passing cases from only 137 of 235 database-worker files. The current 257-fi
 inventory now occupies five complete, disjoint stripes, adding four manual jobs
 while preserving both configs, two workers and the job deadline. Dispatches
 route these rows to GitHub-hosted runners, so the split adds no Blacksmith
-registrations. Compact main/PR planning and the 90/70/130 row caps are unchanged;
+registrations. The final 70/130 push/PR row caps are unchanged;
 neither the file limit nor advisory weights guarantee a wall time.
 
 The shared plugin catch-all, QA and provider suites use native Vitest sharding, sized from the existing 90-file envelope budget. Their complete configs still own discovery and exclusions; the counting inventory never narrows execution to the directly changed plugin. At `2f7fb353`, the catch-all has 486 counting entries and 474 effective files across six jobs, QA has 238/232 across three, and providers have 275/256 across four. Counting entries include files excluded by Vitest, so the budget is conservative. Each job retains its existing worker limits, isolation policy and per-file module cleanup.
@@ -112,7 +148,7 @@ job durations.
 
 Ordinary Codex tests use isolated thread workers and inherit file parallelism from the shared worker budget. Each file retires its mocked module graph and globals; an ordinary process contains at most 24 files. Database-worker-routed Codex tests already use isolated forks and retain an independent 12-file bound. The 300-second no-output watchdog, test deadlines, and assertions remain unchanged. These scheduling bounds are independent of the timing-weight calibration; a larger process bound does not by itself establish a wall-time or matrix-row improvement.
 
-Precise and fallback plugin envelopes share the same packing owner and a 300-second aggregate estimated budget per job, including multiple envelopes of the same config. This budget belongs only to changed-extension jobs; compact core budgets are unchanged. Members retain compatible runner/dist requirements and run one at a time. Packing retains each produced envelope's child process, environment, native shard arguments and include scope, including process-bounded Codex, Matrix and Telegram work. Runtime-preparing envelopes remain separate, and an envelope above the budget stays alone. Worker limits, runner classes, timeouts, coverage and serial stop-on-failure behavior are unchanged.
+Precise and fallback plugin envelopes share the same packing owner and a 300-second aggregate estimated budget per job, including multiple envelopes of the same config. This budget belongs only to changed-extension jobs; compact core budgets are unchanged. Members retain compatible runner/dist requirements and run one at a time. Packing retains each produced envelope's child process, environment, native shard arguments and include scope, including process-bounded Codex, Matrix and Telegram work. Envelopes with identical preparation requirements share one build before their separate processes run; its cost is charged once. Different preparation modes remain separate, and an envelope above the budget stays alone. Worker limits, runner classes, timeouts, coverage and serial stop-on-failure behavior are unchanged.
 
 On the September 22 counting inventory, increasing this admission budget from 240 to 300 seconds packs the same 119 envelopes into 40 instead of 47 jobs. Their aggregate estimated work remains 10,140 seconds. Seven fewer checkouts/setups save an estimated 315–420 machine-seconds at 45–60 seconds per job. This is a packing projection, not measured elapsed-time proof; see [routing costs and the 15-minute qualification](/ci/routing-costs). All four row caps remain unchanged.
 
@@ -124,7 +160,7 @@ The Codex rates were refreshed after the app-server fixture began reusing databa
 
 This calibration preserves execution policy: ordinary Codex files remain serial and non-isolated, database-worker-routed Codex files retain isolated forks, and both keep their 12-file process bound. The 300-second no-output watchdog and test deadlines remain unchanged. Weight changes affect packing and predictions, not per-file scheduling.
 
-The landed caps are 90 compact rows, 130 final PR Node rows and 70 final push Node rows; changed-extension fallback retains its 50-row cap. At the earlier 240-second budget, replaying PR #153435's 38 changed paths and a broad SDK fallback on the `9034c0aa` counting inventory with the refreshed Codex rates emitted 124 envelopes in 48 extension rows, down from 50 rows with the same envelope inventory and process bounds, for both changed sets:
+The caps are 90 native or 96 hosted compact rows, 130 final PR Node rows and 70 final push Node rows; changed-extension fallback retains its 50-row cap. At the earlier 240-second budget, replaying PR #153435's 38 changed paths and a broad SDK fallback on the `9034c0aa` counting inventory with the refreshed Codex rates emitted 124 envelopes in 48 extension rows, down from 50 rows with the same envelope inventory and process bounds, for both changed sets:
 
 | Profile    | Compact PR rows | Final PR Node rows before → after | Final push Node rows |
 | ---------- | --------------: | --------------------------------: | -------------------: |
@@ -138,9 +174,9 @@ With the effective-config ceiling and prerequisite grouping applied to the `f513
 
 Median rates are estimates, not elapsed-time guarantees. Before the Codex fixture change, replaying the historical 123-envelope layout against the largest matching observed child spans gave a 432.758-second combined envelope sum at 240 seconds, versus 520.688 seconds at the interim 320-second budget; its slowest individual envelope took 508.783 seconds. Whole-config observations can have different file inventories across source revisions. These are historical forecasts, not measured walls for the current combined jobs. The original job in run 35490342736 bundled 17 envelopes into 2,015.674 seconds of child spans and 2,049 seconds of wall time despite a 240-second prediction. Native PR CI must verify the improvement toward the ten-minute PR objective. Exact config/include-set observations and successful PR-run ingestion in the timing refit remain follow-up work; narrow PR samples must not prune unrelated observations merely because they were not selected.
 
-GitHub-hosted core storage/state stripes also have a 64-file admission ceiling. In [run 35477045216](https://github.com/openclaw/openclaw/actions/runs/35477045216), a 203-file serial stripe continued passing tests until the one-hour job deadline; its 196-file sibling completed in 2,867 test seconds. The compact split owner bounds each hosted prerequisite-preserving stripe independently of older timing estimates, and the existing distinct-family rule prevents reassembly in one job. Blacksmith and hybrid retain their existing measured partitioning. Every file remains covered once, with fork isolation, serial file execution, worker limits, deadlines, and the 90-row compact cap. This is a workload bound, not a measured new runtime; hosted CI must establish the resulting duration.
+GitHub-hosted core storage/state stripes also have a 64-file admission ceiling. In [run 35477045216](https://github.com/openclaw/openclaw/actions/runs/35477045216), a 203-file serial stripe continued passing tests until the one-hour job deadline; its 196-file sibling completed in 2,867 test seconds. The compact split owner bounds each hosted prerequisite-preserving stripe independently of older timing estimates, and the existing distinct-family rule prevents reassembly in one job. Blacksmith and hybrid retain their existing measured partitioning. Every file remains covered once, with fork isolation, serial file execution, worker limits, deadlines, and the 96-row hosted compact cap. This is a workload bound, not a measured new runtime; hosted CI must establish the resulting duration.
 
-Eligible Blacksmith and hybrid compact bins with multiple ordinary groups request the existing 32-vCPU runner with two child-process slots. Initial packing retains the 360-second aggregate budget and completes Gateway serialization, runtime placement, and worker pinning before compaction. Only jobs already admitted on the 32-class with two child-process slots are then repacked into 500-second bins. Those jobs may share capacity across logical runner classes while each child retains its original runner metadata and worker ceiling. Existing serial jobs retain their membership, ordering, estimates, and worker limits; widening their initial packing can concentrate slow Gateway work even when their final estimate remains below 360 seconds. Compatible parallel groups can fill the new budget without the ten-group cutoff retained by serial jobs. Blacksmith serial jobs retain their 200/276-second budgets; hybrid serial jobs retain 210 seconds. Exclusive jobs retain 150 seconds by default. Only complete ordinary hybrid bins of non-build CLI groups may use 250 seconds and share split siblings; every child must still fit 150 seconds. Groups above their existing serial cap stay alone. Exclusive groups, original single groups, dist descriptors and jobs with runtime preparation remain serial. Hybrid exclusive and dist bins retain their existing prerequisite sharing. The shard executor admits at most two processes only when the actual host has at least eight available CPUs and 24 GiB of memory; smaller capacity admits one. Each overlapping child keeps two Vitest workers, including a singleton left after compaction; inner project parallelism remains one. Commands files follow the measured worker allocation in serial self-hosted rows, with a two-worker fallback for hosted, constrained, frozen, or overlapping execution; the existing non-isolated fork runner retains file-boundary cleanup. The primary `github` profile stays serial at 210 seconds. Preflight records the actual row count for each source revision; canonical inventory comparisons must preserve every original child plan and test input. Native elapsed-time, memory and cleanup evidence must establish the actual effect.
+Eligible Blacksmith and hybrid compact bins with multiple ordinary groups request the existing 32-vCPU runner with two child-process slots. Initial packing retains the 360-second aggregate budget and completes Gateway serialization, runtime placement, and worker pinning before compaction. Only jobs already admitted on the 32-class with two child-process slots are then repacked into 500-second bins. Those jobs may share capacity across logical runner classes while each child retains its original runner metadata and worker ceiling. Existing serial jobs retain their membership, ordering, estimates, and worker limits; widening their initial packing can concentrate slow Gateway work even when their final estimate remains below 360 seconds. Compatible parallel groups can fill the new budget without the ten-group cutoff retained by serial jobs. Blacksmith serial jobs retain their 200/276-second budgets; hybrid serial jobs retain 210 seconds. Exclusive jobs retain 150 seconds by default. Only complete ordinary hybrid bins of non-build CLI groups may use 250 seconds and share split siblings; every child must still fit 150 seconds. Groups above their existing serial cap stay alone. Exclusive groups, original single groups, dist descriptors and jobs with runtime preparation remain serial. Hybrid exclusive and dist bins retain their existing prerequisite sharing. The shard executor admits at most two processes only when the actual host has at least eight available CPUs and 24 GiB of memory; smaller capacity admits one. Each overlapping child keeps two Vitest workers, including a singleton left after compaction; inner project parallelism remains one during outer overlap. Serial source-only Telegram database-worker envelopes have the narrower [inner-process exception](/ci/routing-costs#telegram-process-overlap). Commands files follow the measured worker allocation in serial self-hosted rows, with a two-worker fallback for hosted, constrained, frozen, or overlapping execution; the existing non-isolated fork runner retains file-boundary cleanup. The primary `github` profile stays serial at 210 seconds. Preflight records the actual row count for each source revision; canonical inventory comparisons must preserve every original child plan and test input. Native elapsed-time, memory and cleanup evidence must establish the actual effect.
 
 The `github` compact planner can place smaller ordinary groups on an already-required stronger logical runner. Each emitted job retains its strongest capacity owner, serial execution, original child processes and worker limits, the 210-second budget, and the ten-group limit. SDK and plugin runtime consumers are separated from ordinary files before packing; the SDK light project intersects shared include lists with its own inventory. Parent-derived fractional costs are rounded only at the emitted job boundary, so rounding small consumers cannot create a redundant runtime build. The shared packer can exchange groups to fill compatible capacity while rechecking complete replacements. Runtime-only hosted groups may share their strongest prerequisite within the existing 210-second serial budget; the build itself costs 160–166 seconds and is charged once per job. No-build exclusive groups keep their 150-second limit. Stranded tooling tails are sized against remaining compatible capacity before normal admission is reapplied. Exclusive, dist, oversized, and runtime-preparing bins retain their separate constraints.
 
@@ -148,17 +184,17 @@ The September 16 capacity repair removes the blanket post-packing 32-to-16 downg
 
 Failed-job-only hybrid retries retain their original matrix and its admitted aggregate estimates when routing to hosted Ubuntu. They do not repack to 210 seconds. The existing capacity gate reduces concurrency to one on those hosts, while the retained two-slot descriptor keeps the two-worker child budget. Such retries can exceed the eight-minute normal-run objective; existing 60/120-minute job deadlines and watchdogs are unchanged. Requested runner labels do not establish actual CPU or memory capacity.
 
-The final Node matrix admits longer estimated jobs first across compact and plugin descriptors. Plugin estimates reuse the extension batch cost owner, including existing process boundaries; runtime preparation is charged separately from the same prerequisite table used by compact jobs. Equal estimates and historical descriptors without estimates keep their original order. The 96-job concurrency ceiling bounds active jobs, while the manifest caps bound total admissions. In run `33449014227`, all 96 slots were occupied when the late QA job started; that dependency delay was matrix admission, not evidence of runner-registration throttling.
+The final Node matrix admits longer estimated jobs first across compact and plugin descriptors. Plugin estimates reuse the extension batch cost owner, including existing process boundaries; runtime preparation is charged separately from the same prerequisite table used by compact jobs. Equal estimates and historical descriptors without estimates keep their original order. Trusted same-repository PR first attempts on the default Blacksmith, explicit Blacksmith, or hybrid backend admit up to 130 active Node rows, matching the unchanged PR matrix cap. Hosted plans, RunsOn, fork PRs, retries, frozen targets, main, and all manual dispatches retain the 96-job ceiling. Admitted main and PR qualification dispatches also retain 96; this PR-event optimization is not part of their routing parity contract. In run `33449014227`, all 96 slots were occupied when the late QA job started; that dependency delay was matrix admission, not evidence of runner-registration throttling.
 
-Expanded serial large/small jobs admit 210 predicted seconds; eligible hybrid parallel bins initially admit 360 before the final parallel-only compaction to 500 seconds. All profiles retain the shared 90-row compact cap. The 150-second file-split and default exclusive-group budgets stay unchanged; complete non-build CLI bins alone may use the 250-second ordinary hybrid admission budget. The PR-only performance lifecycle file retains its 136-second fallback from native spans of 127.288/135.808 seconds in runs 33532741896/33545657559; canonical pushes omit that tooling family. Trusted contributor forks can use the GitHub profile on Blacksmith, so every profile participates in the same registration bound. The widest current workflow profiles retain up to 87 other potential rows (14 nonmatrix and 73 matrix), or 88 for historical targets without the UI named-project contract. The conservative cap-based envelope already includes twelve Control UI shards plus the browser-extension row on every profile. Excluding the four unconditionally hosted iOS rows, three hosted macOS Swift phases, and the hosted aggregate gate gives the conservative ceiling of 80 potentially eligible rows. This includes the new Control UI performance job; keep the ceiling rather than spending savings from consolidated checks. With the final Node caps, the bounds are 150 registrations per main run and 210 per PR. Two active main slots, both pending successors and the observed peak of 21 non-skipped PR arrivals give `4 × 150 + 21 × 210 = 5,010` registrations in five minutes. This leaves 990 within the 6,000 reference operating target for release work, adjacent repositories and carryover; it does not prove those arrivals fit. The earlier 19-arrival estimate is obsolete. Using the prior 4,826-registration reference, the bounded 2026-09-02 cohort audit counted 321 unassigned Blacksmith jobs and reserved nine auxiliary rows, giving `4,826 + 321 + 9 = 5,156` planned registrations and an 844-row allowance below that reference. Its 40 exact attempts covered 4,830 jobs; queued observations spanned 21:50:48–21:57:11 UTC and were not simultaneous. Already-assigned jobs, old approval-waiting runs, unobserved retries and unlisted organization work remain outside that cohort, so this is a conditional planning bound rather than a live organization balance. Evaluate a single PR trial using its actual emitted rows separately from the rollout model. Budget all six npm qualification jobs and the relevant full-release children; a shared-token quota response or unused bucket does not establish organization-wide usage or physical runner capacity.
+Expanded serial large/small jobs admit 360 predicted seconds; eligible hybrid parallel bins initially admit 360 before the final parallel-only compaction to 500 seconds. Native profiles retain a 90-row compact cap; hosted planning retains 96. The 150-second file-split and default exclusive-group budgets stay unchanged; complete non-build CLI bins alone may use the 250-second ordinary hybrid admission budget. The PR-only performance lifecycle file retains its 136-second fallback from native spans of 127.288/135.808 seconds in runs 33532741896/33545657559; canonical pushes omit that tooling family. Trusted contributor forks can use the GitHub profile on Blacksmith, so every profile participates in the same registration bound. The widest current workflow profiles retain up to 87 other potential rows (14 nonmatrix and 73 matrix), or 88 for historical targets without the UI named-project contract. The conservative cap-based envelope already includes twelve Control UI shards plus the browser-extension row on every profile. Excluding the four unconditionally hosted iOS rows, three hosted macOS Swift phases, and the hosted aggregate gate gives the conservative ceiling of 80 potentially eligible rows. This includes the new Control UI performance job; keep the ceiling rather than spending savings from consolidated checks. With the final Node caps, the bounds are 150 registrations per main run and 210 per PR. Two active main slots, both pending successors and the observed peak of 21 non-skipped PR arrivals give `4 × 150 + 21 × 210 = 5,010` registrations in five minutes. This leaves 990 within the 6,000 reference operating target for release work, adjacent repositories and carryover; it does not prove those arrivals fit. The earlier 19-arrival estimate is obsolete. Using the prior 4,826-registration reference, the bounded 2026-09-02 cohort audit counted 321 unassigned Blacksmith jobs and reserved nine auxiliary rows, giving `4,826 + 321 + 9 = 5,156` planned registrations and an 844-row allowance below that reference. Its 40 exact attempts covered 4,830 jobs; queued observations spanned 21:50:48–21:57:11 UTC and were not simultaneous. Already-assigned jobs, old approval-waiting runs, unobserved retries and unlisted organization work remain outside that cohort, so this is a conditional planning bound rather than a live organization balance. Evaluate a single PR trial using its actual emitted rows separately from the rollout model. Budget all six npm qualification jobs and the relevant full-release children; a shared-token quota response or unused bucket does not establish organization-wide usage or physical runner capacity.
 
-`checks-ui-e2e` emits thirteen rows for every newly planned target with the named-project contract: twelve combined weighted Control UI shards and one browser-extension row. This width applies across backend profiles, attempts, frozen targets, and missing attempt metadata. Control UI shards use the 16-class; the browser row uses the 8-class unless admitted to hosted Ubuntu by the bounded hybrid plan. Historical targets without the contract retain four total rows on the Blacksmith planner profile or fourteen on GitHub and hybrid profiles. The 2026-09-02 inventory at `49fb9c5` contains 359 files: 329 parallel bundle consumers, three parallel self-owned files, seven serial bundle consumers, and 20 serial private source/custom-build files. Ordinary CI excludes seven real-Gateway files, leaving 352. Four native projects represent resource ownership without adding jobs or execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` share group 0 with at most two workers total, then `ui-e2e-serial` and `ui-e2e-serial-standalone` share group 1 with one worker. Local throttling and explicit worker limits still apply. The shared weighted sequencer charges each file by its measured duration divided by that project's effective worker count and assigns every discovered specification once across the selected Control UI rows. The root config keeps the complete inventory visible for discovery. Serial scheduling still protects private source servers that share a Vite optimizer cache, real Gateways, and the runtime-budget measurement; test cases, deadlines, and isolation are unchanged.
+`checks-ui-e2e` emits nine rows for ordinary canonical PR/main plans with the named-project contract and a known changed-path inventory: eight weighted Control UI shards and one browser-extension row. Full manual inventories, forks, and unknown changed paths retain thirteen rows. This removes four Blacksmith registrations from each eligible ordinary run without increasing the existing registration ceiling. Control UI shards use the 16-class; the browser row uses the 8-class unless admitted to hosted Ubuntu by the bounded hybrid plan. Historical targets without the contract retain four total rows on the Blacksmith planner profile or fourteen on GitHub and hybrid profiles. The 2026-09-02 inventory at `49fb9c5` contains 359 files: 329 parallel bundle consumers, three parallel self-owned files, seven serial bundle consumers, and 20 serial private source/custom-build files. Ordinary CI excludes seven real-Gateway files, leaving 352. Four native projects represent resource ownership without adding jobs or execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` share group 0 with two workers by default or three in ordinary CI, then `ui-e2e-serial` and `ui-e2e-serial-standalone` share group 1 with one worker. Local throttling and explicit worker limits still apply. The shared weighted sequencer charges each file by its measured duration divided by that project's effective worker count and assigns every discovered specification once across the selected Control UI rows. The root config keeps the complete inventory visible for discovery. Serial scheduling still protects private source servers that share a Vite optimizer cache, real Gateways, and the runtime-budget measurement; test cases, deadlines, and isolation are unchanged.
 
 Every selected project discovers Chromium. The first selected bundle-consuming project builds one private production bundle/preview and publishes its URL through Vitest's invocation-scoped root context; later consumers share it until invocation teardown. Standalone projects have no bundle setup or URL bridge, so standalone-only selections skip that build. Enabled manual proof capture uses the shared upload directory, including the MCP and Logs suites.
 
 Ordinary and real-Gateway Control UI jobs upload only allowlisted `failure.public.json` summaries and retain them for seven days, with separate artifact paths for each job and run attempt. Raw `failure.private.json` reports and `failure.private.png` screenshots remain local and are excluded from these uploads. Older frozen targets without the public summary produce no matching upload; raw captures are never a fallback.
 
-The dedicated real-Gateway job runs its complete selected inventory in one invocation through `test/vitest/vitest.ui-e2e-prebuilt.config.ts`. It requires a clean checkout and completed runtime, private QA, and canonical Control UI artifacts from `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:ci-artifacts`. Source and built outputs must remain unchanged until all workers and children finish. A readiness failure stops the invocation without rebuilding or falling back to another config. Files outside the prebuilt config’s shared-reader/writer allowlist run serially first; audited fixtures with private HOME, state, ports, and cleanup then share the existing two-worker limit. The allowlist admits both invocation-preview consumers and fixtures serving canonical built UI bytes through their own prepared Gateway child. The invocation preview builds its own private output from the same source. This adds no CI jobs or shards. The ordinary local config keeps real-Gateway files serial, and frozen targets lacking the prebuilt config retain their original serial command.
+The dedicated real-Gateway lane partitions its complete selected inventory into two jobs through `createUiRealGatewayTestShards` and `test/vitest/vitest.ui-e2e-prebuilt.config.ts`. The first row balances files outside the audited parallel allowlist with selected standalone companions, which share the existing two-worker phase after serial execution without acquiring a bundled preview. The other row owns the remaining parallel files. The real node/SSH desktop resize composition is release-only; its bootstrap runs once on the first row only when the desktop spec belongs to the already selected inventory. Full manual/release runs and direct desktop-spec edits select it. Frequent authenticated-resize, view-only filtering, revocation, takeover, and UI sizing tests remain in ordinary CI; real guest geometry and the complete two-browser/two-transport composition remain in release verification. The planner owns row placement; it and the Vitest config consume the same parallel-eligibility allowlist in `vitest.ui-paths.mjs`. Each job requires a clean checkout and completed runtime, private QA, and canonical Control UI artifacts from `OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm build`; `build-artifacts` retains SDK declaration generation and validation. Source and built outputs stay unchanged until all workers and children finish, and readiness failures stop without rebuilding or falling back. Audited fixtures keep their private HOME, state, ports, cleanup, and existing two-worker bound. Selected invocation-preview consumers and the platform-family fixture serve the validated canonical Control UI assets through private previews without rebuilding them. The preview passes the artifact identity to default mocked Gateway hellos; explicit identity overrides and build-skew checks remain intact. Ordinary local runs retain private UI builds. Frozen targets and planners predating the split retain one complete job; the ordinary local config keeps its serial policy.
 
 The original two-worker rollout had a controlled Linux comparison covering its then-complete inventory of 14 files and 25 tests, reducing invocation elapsed time from 309.374 to 202.027 seconds. Those historical results do not measure later allowlist additions, complete CI timing, or achievement of the CI latency target.
 
@@ -166,11 +202,11 @@ Eligible `control-ui` rows request `blacksmith-16vcpu-ubuntu-2404`; the browser-
 
 In [run 35028248954, UI job 6/7](https://github.com/openclaw/openclaw/actions/runs/35028248954/job/104582299257), the six-shard Control UI plan requested the 16-class and reported four CPUs. Setup took about 3m45s before the test command. The job recorded 168 passing tests and three failures before cancellation about 25m07s after runner startup; a test completed three seconds before cancellation. The twelve-shard plan still needs native CI timing proof, and widening the plan does not resolve those assertions or guarantee completion within the unchanged deadline.
 
-The real-Gateway placement restores the 32-class request, adding zero jobs or registrations. The 16-class delivered four CPUs and canceled a progressing suite at 1,227 seconds in [run 35120538555](https://github.com/openclaw/openclaw/actions/runs/35120538555/job/104877350907). The Blacksmith job budget remains 20 minutes, hosted remains 40, and all test deadlines stay fixed. Its private artifact build may overlap exactly two canonical SDK cache misses only with at least two available CPUs and 25.5 GiB of observed remaining memory for both unchanged 12-GiB heaps and 768 MiB of native headroom each. Unknown finite-cgroup usage, smaller capacity, cache hits, or a single nonempty miss retain serial compilation. Runtime and UI publication still complete before browser readers start; browser worker limits, file inventory, and deadlines are unchanged. Standalone compiler measurements are not complete CI timings, so the full job must be validated on the selected native CI route.
+The two real-Gateway rows retain the existing 32-class request. They add one job and one possible registration when this proof lane is selected; PR admission retains the ordinary family when its existing Gateway/UI owner changes. Blacksmith budgets remain 20 minutes and hosted budgets 40, with unchanged test deadlines. The earlier 16-class delivered four CPUs and canceled a progressing unsplit suite at 1,227 seconds in [run 35120538555](https://github.com/openclaw/openclaw/actions/runs/35120538555/job/104877350907). The split does not change backend, contributor-trust, retry, or cache routing.
 
-The browser-extension row prepares only its native-host runtime JavaScript and assets through the existing `qaRuntime` build profile rather than rebuilding declarations and the Control UI. The thirteen-row named-project plan stays inside the existing conservative registration bound. A failed-job-only retry retains its previously emitted matrix, including older plans with six Control UI shards. PR retries and hybrid push retries select hosted Ubuntu through live routing, so they may take longer; the existing 25-minute timeout is unchanged. Rerunning preflight for a target with the named-project contract selects twelve Control UI shards plus the browser-extension row. Canonical push retries on the Blacksmith profile retain Blacksmith routing. The `max-parallel` ceiling stays 14 for historical targets without the named-project contract, which retain their previous width. Physical capacity must be checked separately from the registration bound.
+The browser-extension row prepares only its native-host runtime JavaScript and assets through the existing `qaRuntime` build profile rather than rebuilding declarations and the Control UI. Both the nine-row ordinary plan and thirteen-row full-inventory plan stay inside the existing conservative registration bound. A failed-job-only retry retains its previously emitted matrix, including older plans with six Control UI shards. PR retries and hybrid push retries select hosted Ubuntu through live routing, so they may take longer; the existing 25-minute timeout is unchanged. Rerunning preflight selects eight Control UI shards for an ordinary known-inventory plan, or twelve for complete validation, plus the browser-extension row. Matrices emitted before worker metadata existed retain the two-worker fallback. Canonical push retries on the Blacksmith profile retain Blacksmith routing. The `max-parallel` ceiling stays 14 for historical targets without the named-project contract, which retain their previous width. Physical capacity must be checked separately from the registration bound.
 
-The previous thirteen-serial-shard layout consumed 4,258 job-seconds in successful [run 33494931388](https://github.com/openclaw/openclaw/actions/runs/33494931388) on 2026-09-01, averaging 327.5 seconds per Control UI row; preflight added 39 seconds and the tail row took 363 seconds. The current projects reduce the modeled body through bounded bundled concurrency. In run `33638745824`, twelve successful first-attempt Control UI rows had median/p90 test steps of 197/235 seconds, while their checkout median reached 116.5 seconds. Reducing thirteen Control UI shards to twelve removes one repeated checkout and setup without combining the separate browser-extension work. The current target is eight minutes for normal non-Windows CI, with fewer jobs preferred over a tighter latency target. Measure queueing, checkout, setup and test work separately; the final gate still waits for Windows, which may exceed that target. The historical serial layout and the single hosted retry are not paired performance comparisons.
+The previous thirteen-serial-shard layout consumed 4,258 job-seconds in successful [run 33494931388](https://github.com/openclaw/openclaw/actions/runs/33494931388) on 2026-09-01, averaging 327.5 seconds per Control UI row; preflight added 39 seconds and the tail row took 363 seconds. The current projects reduce the modeled body through bounded bundled concurrency. In run `33638745824`, twelve successful first-attempt Control UI rows had median/p90 test steps of 197/235 seconds, while their checkout median reached 116.5 seconds. Reducing thirteen Control UI shards to twelve removed one repeated checkout and setup without combining the separate browser-extension work. The current Control UI target is eight minutes per ordinary job within the fifteen-minute PR/main workflow objective. Measure queueing, checkout, setup and test work separately; the final gate still waits for the other selected jobs. The historical serial layout and the single hosted retry are not paired performance comparisons.
 
 Canonical-repo CI keeps Blacksmith as the default runner path for pushes and first-attempt same-repo pull-request runs when the backend is unset or `blacksmith`. Hybrid keeps the heavy set plus the named critical-path plateau lanes on Blacksmith for attempt 1; other light lanes and every rerun Blacksmith lane use GitHub-hosted capacity. Pull-request retries of both UI E2E jobs use GitHub-hosted Ubuntu in every mode; push retries remain on their normal backend unless hybrid fallback applies. Manual `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners for the main test/build lanes. With an unset or `blacksmith` backend, ordinary canonical manual dispatches (`release_gate: false`) can still run the seven `check-shard` rows on their Blacksmith matrix runners; release-gate check rows remain hosted. Same-repo hybrid Full Release Validation sends only frozen-candidate lint to its matrix runner, both for exact main-ancestor SHAs without a release context and for canonical release-context candidates. These manual admissions are outside the main/PR arrival estimate above. The [`github` backend](/ci/runners#runner-backend-modes) provides a manual repository-wide fallback; canonical runs do not probe Blacksmith queue health or mutate the variable automatically.
 
@@ -268,6 +304,8 @@ speedup. Existing two-worker timing generations stay
 as advisory floors until the normal complete-group refit replaces them.
 
 Commands splitting and packing retain the conservative two-worker retry budget.
+File floors and known worker-specific observations are charged before packing;
+the later worker selection cannot add unbudgeted work to a full row.
 After placement, their predicted child seconds use the expected allocation:
 eight on uncapped serial 32-class rows and two on constrained or overlapping rows, capped
 by file count and bounded below by the longest file. Runtime preparation is not
@@ -352,13 +390,17 @@ two; at most 4 GiB caps them at one. Committed timing weights are unchanged.
 
 ## Owner-path and release coverage
 
-Docker seed and QA Smoke retain owner-path selection on canonical main pushes;
-ordinary manual CI and Full Release Validation retain the supported complete
-proofs. Pull requests and their exact-head fallback dispatches omit these jobs,
+Docker seed runs one published-upgrade survivor on every admitted canonical main
+run; QA Smoke retains owner-path selection. Ordinary manual CI and Full Release
+Validation select all six Docker seed lanes. Main builds the complete runtime
+and public SDK declarations through `ciArtifacts` before canonical packaging;
+manual/release runs retain full package generation. Pull requests and their
+exact-head fallback dispatches omit these jobs,
 real-Gateway UI, and named built-process verifiers. Unit/boundary and mocked
 Gateway coverage remain. The complete-file proof inventory belongs to
 `scripts/lib/ci-proof-test-inventory.mts` and applies to precise and compact PR
-plans after owner resolution. Main/manual plans keep every proof assertion.
+plans after owner resolution. Retained main proofs and the full manual inventory
+keep every assertion.
 
 The Windows planner consumes all explicit files in the two existing package
 scripts and keeps every file intact. Reference run `35520647082` had
@@ -370,7 +412,10 @@ The planner now uses elapsed whole-file segments from that run, including
 imports and hooks, instead of summed concurrent case times. Canonical Vitest
 metadata groups compatible project files together; an oversized project splits
 only at file boundaries. The canonical runtime prerequisite owner places its
-two consumers together, so preparation happens once. Current project
+consumers together, so preparation happens once before Vitest workers start.
+This includes the ordinary Claude CLI executable-launch integration test: its
+native, Node-leading, and npm-shim variants reuse prepared dist instead of
+building TypeScript inside the 240-second CLI-preparation budget. Current project
 invocations fall from 72 to 35, without changing process isolation or coverage.
 The model reserves 104 seconds per row for observed setup, shared worker
 compilation, and wrapper transitions, plus 68 seconds for the one runtime
@@ -401,14 +446,14 @@ the earlier two-row Windows inventory. Compact90, push70, PR130, and the
 96-concurrent-Node limit remain unchanged. The daily timing refit still observes
 main and release proofs; no committed weight baseline was changed for tiering.
 
-| Lane                            | PR coverage                                                                                             | Main/manual and full release coverage                                           |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Docker seed                     | Selector, scheduler, update/Doctor/state unit and boundary owners                                       | Owner-selected main; exact published-upgrade survivor on ordinary manual CI     |
-| QA Smoke CI                     | QA plan, catalog, transport, lifecycle and channel unit suites                                          | Owner-selected main; complete supported smoke profile on manual CI              |
-| Real-Gateway UI                 | UI units and mocked-Gateway browser projects                                                            | Existing selected main/manual real-Gateway inventory                            |
-| Built process proofs            | Browser registration, Doctor persistence, Discord multipart, SQLite store, watch and TUI boundary tests | Native host, Doctor, Discord, SQLite, watch and TUI canaries in build-artifacts |
-| Doctor refusal / Codex recovery | Doctor admission/repair and harness replacement/cancellation boundaries                                 | Complete files in main/manual Node plans                                        |
-| Windows                         | All 133 native unit/boundary/process files in measured whole-file rows                                  | Same inventory, historical targets retain their package commands                |
+| Lane                            | PR coverage                                                                                             | Main/manual and full release coverage                                                                        |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Docker seed                     | Existing per-lane changed owners, alongside selector/update/Doctor/state tests                          | Published-upgrade survivor on every admitted canonical main run; all six lanes on ordinary manual/release CI |
+| QA Smoke CI                     | Existing QA/channel/packaging owner scope, alongside focused unit suites                                | Owner-selected main; complete supported smoke profile on manual CI                                           |
+| Real-Gateway UI                 | UI units and mocked-Gateway browser projects                                                            | Existing selected main/manual real-Gateway inventory                                                         |
+| Built process proofs            | Browser registration, Doctor persistence, Discord multipart, SQLite store, watch and TUI boundary tests | Native host, Doctor, Discord, SQLite, watch and TUI canaries in build-artifacts                              |
+| Doctor refusal / Codex recovery | Doctor admission/repair and harness replacement/cancellation boundaries                                 | Complete files in main/manual Node plans                                                                     |
+| Windows                         | All 133 native unit/boundary/process files in measured whole-file rows                                  | Same inventory, historical targets retain their package commands                                             |
 
 ## Measured shard weights
 
@@ -421,16 +466,81 @@ compact groups, runner registrations, or a separate worker budget.
 Gateway core, database-worker, methods, methods-isolated, server, and
 server-isolated configs run with exclusive plan admission. Cold in-process
 Gateway boot measured 37 seconds alone and 50 seconds under contention against
-a 90-second test budget. Jobs containing these configs execute their packed
-plans serially. Plan admission retains the existing summed duration budgets
-and runner allocations; formerly parallel jobs retain
-their two-worker ceiling through the job environment, except measured Gateway
-bins whose other groups retain that ceiling individually. This adds no jobs and
-leaves ordinary jobs' concurrency unchanged. The shard runner enforces the same
-config policy even when a caller requests two plans. Precise changed-test
+a 90-second test budget. Ordinary packed plans before each exclusive plan join
+before it starts; the exclusive plan joins before later plans start. Ordinary
+spans admit at most two plans on CI hosts with at least eight available CPUs and
+24 GiB memory. Root, full-agentic, and Gateway aggregates retain the same fence.
+Portable runners without joined process groups keep Gateway-containing jobs
+serial, as do callers sharing a final cache leaf. Plan admission retains the
+existing summed duration budgets, runner allocations, and per-plan worker limits.
+This adds no jobs. The shard runner enforces the same exclusive fence even when
+a caller requests two plans. Precise changed-test
 selection retains the Gateway config owner and its admission metadata.
 Gateway admission is finalized before runtime placement, so inventory changes
 retain the admitted job ceiling instead of creating a different group policy.
+
+Direct CI invocations with multiple literal test-file targets use this bounded
+admission when their process groups and cache leaves are scheduler-owned and
+output ownership is explicit. Use a console reporter such as `--reporter=dot`
+with `--coverage.enabled=false`, or the existing multi-invocation JSON report
+owner. Unresolved config outputs and GitHub summary reporters stay serial;
+explicit parallel overrides retain their caller-owned output policy.
+Selected specs and file membership remain unchanged. Explicit local parallel
+settings and full-suite continuation retain their existing behavior. Focused CI
+shards stop admission after failure even when inner processes overlap, unless
+ordinary joined failures have explicit continuation enabled. Automatic admission
+also stops after an unverified join and drains admitted work; bounded scheduling
+does not establish that a full protected proof fits its lease or workflow deadline.
+
+Ordinary compact Gateway bins retain their 300-second predicted test budget.
+Formerly parallel bins keep their two-worker ceiling through the job environment,
+except measured Gateway bins whose other groups retain that ceiling individually.
+
+Gateway methods use four workers only in serial, non-frozen self-hosted jobs
+with at least eight actual CPUs and 28 GiB RAM. Constrained hosts, overlapping
+jobs, hosted retries, and frozen targets retain two workers. The four-worker
+timing identity stays separate from two-worker history. Three Linux Testbox
+replays of the original slow row passed with peak summed RSS below 9 GiB and
+at least 6.7 GiB available on a four-CPU, 15.4-GiB machine. The smaller proof
+host explicitly exercised four methods workers; production admission keeps the
+larger memory reserve. These replays establish the tested row, not a whole-CI
+latency guarantee.
+
+The planner retains aggregate work limits and also admits parallel bins only when
+the executor's ordered two-slot queue fits 300 test seconds. The reported test-step
+wall uses that same queue, so the longest child is never divided by two. Once-per-job runtime preparation
+is separate: 52 recent 8-class builds took 41–55 seconds, so its planning reserve
+is 60 seconds. The private-QA reserve remains 104 seconds. Include checkout,
+setup, preparation, dependency waits, and the final gate in workflow projections.
+
+Oversized CLI and Blacksmith agent-support families use the existing file
+splitter, preserving complete inventories and their serial resource policy.
+Ordinary self-hosted groups can share the existing promoted 32-class capacity
+across logical classes, and the existing group exchange fills stranded capacity.
+The final 70/130 push/PR caps remain unchanged. Native compact admission allows 90 rows, while hosted admission allows 96. Native tooling bins retain separate
+two-worker child processes and a 300-second test budget. Rows containing the
+partitioned changed-Node planner proof use 150 seconds in both initial packing
+and measured rebalancing; both reserve 60 seconds for job setup. Hosted hourly tooling retains its existing
+720-second total budget (660 seconds of tests plus setup) to keep the integration
+tier within the hourly row cap. It uses complete hosted file prices without native
+wall observations. GitHub and hybrid tooling use the same file packing for
+hosted retry budgets. A companion may fill an indivisible file's spare worker
+only when it adds no predicted wall time and stays within the existing 300-second
+whole-job budget. This keeps the hourly hybrid plan within 77 Node rows plus two
+dist rows without changing coverage, workers, timing weights, or caps.
+
+The native compact allowance of 90 fits the partitioned planner proof inside the
+existing final PR limit; it does not increase the maximum Node matrix size.
+The changed-Node planner proof is partitioned by ownership across seven files,
+retaining every existing assertion. Independent dependency-hub scenarios run in
+separate cases from leaf-config ownership, preserving the existing deadlines.
+Two workers and serial outer admission remain unchanged. Cold file estimates use the observed case costs
+plus a startup allowance until complete split-file CI observations arrive.
+Indivisible files above 150 seconds keep their recorded cost and require a
+separate test-owner repair; admission never clips their prediction. The worker-artifact CI fixture
+retains the native 32-class allocation: three generation-retention cases require
+eight CPUs and 24 GiB, and the constrained replay already used 6.05 GiB before
+those cases ran. Its two-worker policy stays unchanged.
 
 The large workspace inventory proof runs in its own `agentic-gateway-core-inventory`
 invocation, with exclusive plan admission in full CI plans. Its
@@ -514,6 +624,15 @@ jobs retain `planConcurrency: 1`. The refit preserves each complete child span,
 including contention, without subtracting setup or rewriting historical costs. Runner-profile
 calibration remains a separate admission policy.
 
+A source-only singleton on the native 32-class can also retain a stable timing
+identity across shard renaming and repartitioning. This profile requires eight
+actual CPUs, 28–32 GiB RAM, an eight-worker ceiling, one admitted outer plan,
+and a confirmed current self-hosted run. The exact config, file, and supported
+environment identify the measurement. Two independent successful observations
+are still required. Only the final serial singleton row uses this price; packing,
+shared rows, hosted execution, and fallback worker policies keep their existing
+estimates. These complete child spans already include process overhead.
+
 For split compact groups, the refit also records the parent cost from a complete
 generation within one run and runner profile. It sums each part's median span,
 takes the largest complete generation or direct parent measurement in that run,
@@ -558,16 +677,36 @@ Docs-only runs and unparseable logs do not fill that quota. Failed workflows
 supply positive timing samples only: their missing jobs never count as evidence
 for pruning absent keys. Successful workflow cohorts retain their existing
 pruning policy, including when mixed with failed-workflow samples.
-It also reads the newest five successful `ci.yml` `pull_request` runs for the
-PR-only numbered tooling family. These tests execute the PR merge-ref, not a
-canonical main revision; that provenance is appropriate for PR-only tooling.
-PR logs update only `toolingFileSeconds`, never main compact or release weights.
-Tooling measurements are collected ahead of planner activation: run `35506602947`
-exceeds the current hosted and hybrid row caps when applied. Keep activation
-separate until measured test improvements or approved capacity make every profile fit.
+It also seeks the newest five successful `ci.yml` `pull_request` runs with
+contributing compact or numbered tooling measurements, skipping docs-only and
+unparseable cohorts. The collector recognizes ordinary, `changed-compact`, and
+`changed-config-compact` jobs and reads each log once for both timing families.
+These tests execute the PR merge-ref; `source` records that provenance separately
+from canonical main and release runs. PR plans may select a subset, so their
+measurements never prune unobserved compact, runtime, or tooling weights.
+PR compact samples update only exact selector child keys: a selected subset can
+share the reduced full inventory's parent name, so neither its children nor
+unqualified direct spans can reprice that parent. Main's direct sampling and
+complete-generation folding remain unchanged.
+Compact samples retain their emitted inventory keys and runner profile. When a
+historical key has different or ambiguous worker ceilings, the refit retains its
+previous price instead of averaging unlike policies, including folded parent
+costs. It intersects declared job and group worker limits using the executor's
+minimum rule and resolves declared fallback limits from the executor's recorded
+CPU, memory, plan admission, runner environment, and frozen-target facts. Unknown
+fallback admission retains the previous price. Reliable inherited limits also
+become part of runtime-placement identity. These ceilings describe admitted
+limits, not actual workers under dynamic memory pressure.
+An admitted ceiling that conflicts with an explicit `#workers-N` or
+`#file-parallel-N` timing identity cannot replace that identity's price, even
+when every observed run used the same fallback.
+Current tooling file measurements are active in the planner. The refreshed
+September 26 cohort, bounded serial packing, and ordinary capacity reuse fit
+the existing row caps without activating the older over-cap plan from run `35506602947`.
 The map keeps separate Blacksmith and GitHub measurements. Numbered tooling
 parents and their child timing keys change when files move, so per-file costs
-can survive repacking and serve local tooling scheduling after activation. Unmeasured files use
+survive repacking. Direct profile measurements are not scaled; hosted fallbacks
+use measured Blacksmith files with the existing hosted factor. Unmeasured files use
 the remaining cold hints or the positive two-second default.
 
 Only successful complete tooling invocations contribute. Native file summaries
@@ -618,6 +757,16 @@ child spans of 569.841 and 620.791 seconds replace the stale 136-second weight
 with a rounded median of 595 seconds. Plugin fallback costs have a separate
 estimator and are not inputs to this compact timing reducer.
 
+The September 23 scoped refresh uses successful main runs `35791016837` and
+`35792496414` for the five second-tier compact rows and their displaced groups.
+Complete Gateway-methods generations replace the stale 510-second parent with
+1,023 seconds; partial stripe samples do not supply a parent total. The same
+reducer refreshes 25 other eligible Blacksmith compact prices, including the
+197-second media/UI group and 226-second security group. Partial inventories
+preserve unrelated timing entries. Worker limits, runner classes, admission
+budgets, and matrix caps stay unchanged; exact-head CI measures the resulting
+packing rather than treating estimates as a wall-time guarantee.
+
 The September 16 compact refresh sampled all 168 successful compact jobs in six
 green main runs: `35117379165`, `35120372547`, `35123270863`, `35124135571`,
 `35125714752`, and `35126089717`. Their 132 complete selector generations contain
@@ -647,10 +796,15 @@ complete measurements reached 578 and 491 seconds. Hybrid and hosted already
 split those owners. Standalone agent support retains its existing whole-group
 contract.
 
-Blacksmith-profile PRs changing the compact planner or committed timing file run
-the complete compact core plan: focused planner tests alone cannot measure the
-resulting packing. Hosted profiles retain precise changed-test targeting. This
-uses the existing matrices and caps; plugin fallback keeps its separate owner.
+PRs changing the compact planner or timing inputs now select their owner tests,
+affected transitive import consumers, protected regressions, and fixed smoke
+set on every backend. The complete compact
+inventory still runs hourly on main; Full Release Validation retains its full
+named plan. Changed-owner rows target at most 150 estimated test seconds while
+preserving whole files, existing runner classes, and the 130-row PR cap. A single
+indivisible file or canonical group can exceed that target. These admission estimates do not prove
+job wall time or setup/build/queue savings; before/after replay evidence belongs
+with the change's landing evidence.
 
 The September 16 refresh retained three families' previous complete timing entries to avoid hosted expansion:
 `agentic-gateway-server-isolated`, `agentic-gateway-core-runtime`, and
@@ -721,13 +875,17 @@ in-source `COMPACT_GITHUB_GROUP_SECONDS_HINTS` fallback until hosted observation
 meet the sampling minimum. Later main attempts on the hybrid backend, or main
 runs using `OPENCLAW_CI_RUNNER_BACKEND=github`, can fill it naturally. Once recorded,
 hosted weights survive all-Blacksmith windows: pruning requires observations
-from at least three hosted runs in the sampled window. Compact group sampling
-stays main-only; PR samples influence only the separate tooling file map.
+from at least three hosted runs in the sampled window. Successful PR compact
+samples retain their exact execution identities and never establish inventory
+completeness or fold a selected subset into an unqualified family weight.
 
 The `CI Test Timings Refit` workflow runs daily at 09:43 UTC and supports manual
 dispatch on `main`. When weights change, it updates the single
-`ci/test-timings-refit` branch and PR with sampled run IDs and the changed-entry
-table. It never pushes to `main`; unchanged weights produce no commit or PR
+`ci/test-timings-refit` branch and PR with bounded sampled run IDs and a link to
+the complete report artifact, retained for 30 days. The full changed-entry table
+stays in that file instead of step outputs or the publisher's environment;
+invalid or oversized run-ID summaries fail publication without truncating the
+report. It never pushes to `main`; unchanged weights produce no commit or PR
 update. The gitignored `.artifacts/vitest-shard-timings.json` remains a separate
 whole-config timing cache for the local test-project runner, not an input to
 these CI packers.
@@ -747,9 +905,11 @@ Automatic canonical hybrid first attempts count the complete selected hosted inv
 
 `HYBRID_HOSTED_BASE_ROW_LIMIT` is 40 and `HYBRID_HOSTED_ROW_LIMIT` is 45. At or below 40 base hosted rows, preflight may move `security-fast`, the three `checks-ui` rows, and the browser-extension E2E row to hosted Ubuntu, adding at most five rows and never exceeding 45 through this admission. Above 40 base hosted rows, all five retain their existing Blacksmith routes. An eligible base above 45 emits a warning with the row count and retains the complete base manifest. The 45-row budget bounds optional offload admission; it does not reject existing coverage or reshape noneligible fallback manifests: retries, manual and frozen targets, untrusted authors, other repositories, and the `github` outage override retain their existing routing, including wholly hosted runs that can already exceed 45 rows.
 
-After that admission, canonical main pushes and trusted Windows-selected PRs with a full compact Node plan and at least 500 predicted seconds in one serial row can move five measured check rows to hosted Ubuntu: dependencies, both core test-type stripes, extension package boundaries, and runtime topology architecture. The separate `hybrid_hosted_checks` decision requires fresh healthy [assignment evidence](/ci/runners#hybrid-hosted-assignment-guard) and enough room for every selected check within the same 45-row limit. Precise PRs without that measured latency floor retain their existing routes.
+After that admission, canonical main pushes and trusted Windows-selected PRs with a full compact Node plan and at least 500 predicted seconds in one serial row can move eight check rows to hosted Ubuntu: dependencies, five core test-type stripes, extension package boundaries, and runtime topology architecture. The five stripes distribute the same complete compiler graphs formerly grouped into two rows and the central type-check job. The separate `hybrid_hosted_checks` decision requires fresh healthy [assignment evidence](/ci/runners#hybrid-hosted-assignment-guard) and enough room for every selected check within the same 45-row limit. Precise PRs without that measured latency floor retain their existing routes.
 
-Main pushes then consider lint, central test types, and artifact builds under `hybrid_hosted_main_checks`. These jobs use at most four observed CPUs and had at least five minutes of finish slack in every sampled main run. Their slower hosted execution is acceptable for main's thirty-minute objective; PRs retain Blacksmith for all three jobs. This admission consumes only the remaining hosted capacity and fails closed with the five-check decision. It does not change their timeouts.
+The six current hybrid extension-lint stripes are part of the base hosted inventory. The type split adds at most three Blacksmith registrations when hosted admission is unavailable; using the existing conservative four-main/21-PR arrival envelope, the 153/213 registration bound becomes 156/216, or 5,160 registrations, below the 6,000 operating target. No Node matrix cap or hosted admission limit changes. Reserving the additional real-Gateway row conservatively for every run raises that envelope to 157/217, or 5,185 registrations (`4 × 157 + 21 × 217`), leaving 815 below the operating target. This reservation does not spend ordinary PRs’ existing proof-tier omission; the eligible hybrid hosted inventory is unchanged because these rows retain Blacksmith.
+
+Main pushes then consider lint and central test types under `hybrid_hosted_main_checks`; artifact builds retain Blacksmith. This admission consumes only the remaining hosted capacity and requires the earlier check admission. PRs retain Blacksmith for these two central jobs. The complete workflow targets fifteen minutes, including assignment and setup; compare exact-head timing against that target. Timeouts remain unchanged.
 
 Control UI E2E shards, QA Smoke, real-Gateway checks, and Android retain their existing routes. Test inventory and worker limits remain unchanged. Security waits for preflight's original budget decision and still runs after a preflight failure unless the workflow was canceled. Hosted assignment delay and ordinary cache setup can offset compute savings, so compare the first exact-head run's hosted/Blacksmith row counts and queue times before widening admission.
 

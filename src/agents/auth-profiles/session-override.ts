@@ -20,25 +20,21 @@ import {
   isModelScopedCooldownReason,
 } from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
+import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
-import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
+import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
+// Read-only auth resolution must not import session persistence.
 const sessionAccessorLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
 );
-
-// Session accessor writes are lazy-loaded so read-only auth resolution paths do
-// not import persistence code unless an override must be updated.
-function loadSessionAccessor() {
-  return sessionAccessorLoader.load();
-}
 
 type SessionAuthProfileOverrideState = Pick<
   SessionEntry,
@@ -56,9 +52,18 @@ function profileAuthRequirement(params: {
   store: ReturnType<typeof ensureAuthProfileStore> | undefined;
   profileId: string;
 }): ProviderModelRouteAuthRequirement | undefined {
-  return resolveProviderModelRouteAuthRequirement(
-    params.store?.profiles[params.profileId]?.type ??
-      params.cfg.auth?.profiles?.[params.profileId]?.mode,
+  const credential = params.store?.profiles[params.profileId];
+  const configured = params.cfg.auth?.profiles?.[params.profileId];
+  const provider = credential?.provider ?? configured?.provider;
+  if (!provider) {
+    return undefined;
+  }
+  return (
+    resolveProviderModelAuthPolicy({
+      provider,
+      mode: credential?.type ?? configured?.mode,
+      authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
+    }).authRequirement ?? undefined
   );
 }
 
@@ -113,9 +118,11 @@ async function persistSessionAuthProfileOverrideState(params: {
   sessionKey: string;
   state: SessionAuthProfileOverrideState;
   storePath?: string;
+  assertCommitAllowed?: () => void;
   expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
 }): Promise<SessionEntry | undefined> {
   const { sessionEntry, sessionStore, sessionKey, state, storePath, expectedSnapshot } = params;
+  params.assertCommitAllowed?.();
   const updatedAt = Date.now();
   if (!storePath) {
     if (expectedSnapshot && !Object.hasOwn(sessionStore, sessionKey)) {
@@ -139,7 +146,7 @@ async function persistSessionAuthProfileOverrideState(params: {
     sessionStore[sessionKey] = sessionEntry;
   }
   const persisted = await (
-    await loadSessionAccessor()
+    await sessionAccessorLoader.load()
   ).patchSessionEntryCore(
     { agentId: params.agentId, storePath, sessionKey },
     (current) => {
@@ -156,7 +163,10 @@ async function persistSessionAuthProfileOverrideState(params: {
         updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
       };
     },
-    expectedSnapshot ? undefined : { fallbackEntry: sessionEntry },
+    {
+      ...(expectedSnapshot ? {} : { fallbackEntry: sessionEntry }),
+      assertCommitAllowed: params.assertCommitAllowed,
+    },
   );
   if (persisted) {
     if (expectedSnapshot) {
@@ -265,6 +275,7 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
+  assertCommitAllowed?: () => void;
 }) {
   const { sessionEntry, sessionStore, sessionKey, storePath } = params;
   await persistSessionAuthProfileOverrideState({
@@ -278,6 +289,7 @@ export async function clearSessionAuthProfileOverride(params: {
       authProfileOverrideCompactionCount: undefined,
     },
     storePath,
+    assertCommitAllowed: params.assertCommitAllowed,
   });
 }
 
@@ -291,6 +303,7 @@ async function resolveSessionAuthProfileOverride(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  assertCommitAllowed?: () => void;
   isNewSession: boolean;
   acceptedProviderIds?: string[];
   requesterProfileId?: string;
@@ -339,6 +352,15 @@ async function resolveSessionAuthProfileOverride(params: {
   let current = sessionEntry.authProfileOverride?.trim();
   const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
 
+  const overrideTarget = {
+    agentId,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    assertCommitAllowed: params.assertCommitAllowed,
+  };
+
   const currentProfileId = current;
   if (
     currentProfileId &&
@@ -369,26 +391,25 @@ async function resolveSessionAuthProfileOverride(params: {
         }),
       )
     ) {
+      authProfilesLog.warn(
+        "selected session auth profile is unavailable; explicit pin remains strict",
+        {
+          event: "session_auth_profile_unavailable",
+          sessionKey,
+          profileId: currentProfileId,
+          recovery:
+            "select a configured model@profile or reconnect the intended account with models auth login --profile-id",
+          tags: ["auth_profiles", "session_recovery"],
+        },
+      );
       return { profileId: currentProfileId, store };
     }
-    await clearSessionAuthProfileOverride({
-      agentId,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-    });
+    await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }
 
   if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
-    await clearSessionAuthProfileOverride({
-      agentId,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-    });
+    await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }
 
@@ -410,16 +431,12 @@ async function resolveSessionAuthProfileOverride(params: {
     });
     if (linked) {
       await persistSessionAuthProfileOverrideState({
-        agentId,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
+        ...overrideTarget,
         state: {
           authProfileOverride: linked.profileId,
           authProfileOverrideSource: "user-link",
           authProfileOverrideCompactionCount: undefined,
         },
-        storePath,
       });
       return linked;
     }
@@ -427,13 +444,7 @@ async function resolveSessionAuthProfileOverride(params: {
 
   // Automatic pins must stay inside the currently configured rotation order.
   if (current && order.length > 0 && !order.includes(current)) {
-    await clearSessionAuthProfileOverride({
-      agentId,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-    });
+    await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }
 
@@ -445,16 +456,12 @@ async function resolveSessionAuthProfileOverride(params: {
     // An automatic pin must not trap later turns on an unavailable provider.
     if (current) {
       const latest = await persistSessionAuthProfileOverrideState({
-        agentId,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
+        ...overrideTarget,
         state: {
           authProfileOverride: undefined,
           authProfileOverrideSource: undefined,
           authProfileOverrideCompactionCount: undefined,
         },
-        storePath,
         expectedSnapshot: {
           sessionId: sessionEntry.sessionId,
           authProfileOverride: sessionEntry.authProfileOverride,
@@ -524,6 +531,10 @@ async function resolveSessionAuthProfileOverride(params: {
               allowPluginNormalization: false,
             }),
             resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
+            resolveProfileAuthFlow: (profileId) => {
+              const credential = store.profiles[profileId];
+              return credential?.type === "oauth" ? credential.authFlow : undefined;
+            },
           }),
         })
       : null;
@@ -563,16 +574,12 @@ async function resolveSessionAuthProfileOverride(params: {
     next !== sessionEntry.authProfileOverride || sessionEntry.authProfileOverrideSource !== "auto";
   if (shouldPersist) {
     await persistSessionAuthProfileOverrideState({
-      agentId,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
+      ...overrideTarget,
       state: {
         authProfileOverride: next,
         authProfileOverrideSource: "auto",
         authProfileOverrideCompactionCount: compactionCount,
       },
-      storePath,
     });
   }
 
@@ -598,6 +605,7 @@ export async function resolveSessionAuthSelection(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  assertCommitAllowed?: () => void;
   isNewSession: boolean;
   requesterProfileId?: string;
 }): Promise<SessionAuthSelection | undefined> {

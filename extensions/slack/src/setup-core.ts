@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/channel-setup";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
-// Slack plugin module implements setup core behavior.
 import {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
@@ -14,7 +13,6 @@ import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   defineTokenCredential,
-  parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
   createSetupTranslator,
@@ -28,6 +26,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   buildSlackManifest,
+  buildSlackAllowFromPrompt,
   buildSlackSetupLines,
   SLACK_CHANNEL as channel,
   setSlackChannelAllowlist,
@@ -430,26 +429,7 @@ export function createSlackSetupWizardBase(handlers: {
     dmPolicy: slackDmPolicy,
     allowFrom: createAccountScopedAllowFromSection({
       channel,
-      helpTitle: t("wizard.slack.allowlistTitle"),
-      helpLines: [
-        t("wizard.slack.allowlistIntro"),
-        t("wizard.slack.examples"),
-        "- U12345678",
-        "- @alice",
-        t("wizard.slack.multipleEntries"),
-        t("wizard.channels.docs", { link: formatDocsLink("/slack", "slack") }),
-      ],
-      message: t("wizard.slack.allowFromPrompt"),
-      placeholder: "@alice, U12345678",
-      invalidWithoutCredentialNote: t("wizard.slack.allowFromInvalidWithoutToken"),
-      parseId: (value: string) =>
-        parseMentionOrPrefixedId({
-          value,
-          mentionPattern: /^<@([A-Z0-9]+)>$/i,
-          prefixPattern: /^(slack:|user:)/i,
-          idPattern: /^[A-Z][A-Z0-9]+$/i,
-          normalizeId: (id) => id.toUpperCase(),
-        }),
+      ...buildSlackAllowFromPrompt(),
       resolveEntries: handlers.resolveAllowFromEntries,
     }),
     groupAccess: createAccountScopedGroupAccessSection({

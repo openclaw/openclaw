@@ -24,8 +24,8 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { CronExecutionRootRuntimeError } from "../execution-root-runtime.js";
+import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import {
@@ -104,6 +104,11 @@ export async function runCronIsolatedAgentTurn(
   if (!prepared.ok) {
     return { ...prepared.result, admissionDisposition: "rejected" };
   }
+  await using _ = {
+    [Symbol.asyncDispose]: async () => {
+      await prepared.context.workspaceLease?.release();
+    },
+  };
   await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
   let leaseActive = true;
   // Accounting, delivery, and teardown use the same metadata as inference. Keep

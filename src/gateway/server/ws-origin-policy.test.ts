@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveGatewayAuthPolicyGeneration } from "../auth-policy.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./ws-origin-policy.js";
 import { holdGatewayPolicyResponse, registerGatewayPolicyResponse } from "./ws-policy-close.js";
@@ -66,6 +66,98 @@ describe("committed browser origin policy", () => {
 });
 
 describe("committed authentication policy", () => {
+  it.each([
+    { role: "operator", verifiedIdentity: undefined },
+    { role: "node", verifiedIdentity: "other@example.test" },
+  ])("keeps $role without identity-derived scopes connected across grant edits", (principal) => {
+    const client = {
+      authPolicy: captureGatewayAuthPolicy({}, principal),
+      socket: { close: vi.fn() },
+      invalidated: false,
+    };
+    disconnectDisallowedGatewayPolicyClients([client], {
+      gateway: { auth: { identityScopes: { "other@example.test": ["operator.admin"] } } },
+    });
+    expect(client.invalidated).toBe(false);
+    expect(client.socket.close).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { change: "another identity added", revoked: false },
+    { change: "another identity removed", revoked: false },
+    { change: "unchanged snapshot", revoked: false },
+    { change: "same scopes reordered", revoked: false },
+    { change: "identity removed", revoked: true },
+    { change: "identity downgraded", revoked: true },
+    { change: "identity upgraded", revoked: true },
+    { change: "exact match shadows normalized grant", revoked: true },
+  ])("reconciles only the authenticated identity for $change", ({ change, revoked }) => {
+    const identity = "retained@example.test";
+    const initial: OpenClawConfig = {
+      gateway: {
+        auth: {
+          identityScopes: {
+            "Retained@example.test": ["operator.write", "operator.read"],
+            "other@example.test": ["operator.admin"],
+          },
+        },
+      },
+    };
+    const client = {
+      authenticatedUserId: identity,
+      authPolicy: captureGatewayAuthPolicy(initial, {
+        role: "operator",
+        verifiedIdentity: identity,
+      }),
+      socket: { close: vi.fn() },
+      invalidated: false,
+    };
+    const next = structuredClone(initial);
+    const scopes = next.gateway!.auth!.identityScopes!;
+    if (change === "another identity added") {
+      scopes["new@example.test"] = ["operator.admin"];
+    }
+    if (change === "another identity removed") {
+      delete scopes["other@example.test"];
+    }
+    if (change === "same scopes reordered") {
+      scopes["Retained@example.test"] = ["operator.read", "operator.write", "operator.read"];
+    }
+    if (change === "identity removed") {
+      delete scopes["Retained@example.test"];
+    }
+    if (change === "identity downgraded") {
+      scopes["Retained@example.test"] = ["operator.read"];
+    }
+    if (change === "identity upgraded") {
+      scopes["Retained@example.test"] = ["operator.admin"];
+    }
+    if (change === "exact match shadows normalized grant") {
+      scopes[identity] = [];
+    }
+    disconnectDisallowedGatewayPolicyClients([client], next);
+    expect(client.invalidated).toBe(revoked);
+    expect(client.socket.close).toHaveBeenCalledTimes(revoked ? 1 : 0);
+  });
+
+  it.each(["retained@example.test", "other@example.test"])(
+    "latches an added then removed grant only for its source: %s",
+    (changedIdentity) => {
+      const identity = "retained@example.test";
+      const client = {
+        authenticatedUserId: identity,
+        authPolicy: captureGatewayAuthPolicy({}, { role: "operator", verifiedIdentity: identity }),
+        socket: { close: vi.fn() },
+        invalidated: false,
+      };
+      disconnectDisallowedGatewayPolicyClients([client], {
+        gateway: { auth: { identityScopes: { [changedIdentity]: ["operator.admin"] } } },
+      });
+      disconnectDisallowedGatewayPolicyClients([client], {});
+      expect(client.invalidated).toBe(changedIdentity === identity);
+    },
+  );
+
   it.each(["requiredHeaders", "allowUsers"] as const)(
     "keeps clients connected when trusted-proxy %s are reordered",
     (field) => {
@@ -75,9 +167,12 @@ describe("committed authentication policy", () => {
         allowUsers: ["reader@example.test", "writer@example.test"],
       };
       const client = {
-        authPolicyGeneration: resolveGatewayAuthPolicyGeneration({
-          gateway: { auth: { trustedProxy } },
-        }),
+        authPolicy: captureGatewayAuthPolicy(
+          {
+            gateway: { auth: { trustedProxy } },
+          },
+          null,
+        ),
         socket: { close: vi.fn() },
         invalidated: false,
       };
@@ -95,7 +190,6 @@ describe("committed authentication policy", () => {
     { trustedProxies: ["192.0.2.10"] },
     { allowRealIpFallback: true },
     { auth: { allowTailscale: true } },
-    { auth: { identityScopes: { "reader@example.test": ["operator.read"] } } },
     { auth: { trustedProxy: { userHeader: "x-user", allowUsers: ["reader@example.test"] } } },
     { auth: { trustedProxy: { userHeader: "x-user", deviceAutoApprove: { enabled: true } } } },
     {
@@ -108,7 +202,7 @@ describe("committed authentication policy", () => {
     },
   ])("revokes old authority and drains its accepted config response for %j", (gateway) => {
     const writer = {
-      authPolicyGeneration: resolveGatewayAuthPolicyGeneration({}),
+      authPolicy: captureGatewayAuthPolicy({}, null),
       socket: { close: vi.fn() },
       invalidated: false,
     };
@@ -117,7 +211,7 @@ describe("committed authentication policy", () => {
     holdGatewayPolicyResponse(respond);
     const nextConfig = { gateway };
     const fresh = {
-      authPolicyGeneration: resolveGatewayAuthPolicyGeneration(nextConfig),
+      authPolicy: captureGatewayAuthPolicy(nextConfig, null),
       socket: { close: vi.fn() },
     };
     const worker = { socket: { close: vi.fn() } };

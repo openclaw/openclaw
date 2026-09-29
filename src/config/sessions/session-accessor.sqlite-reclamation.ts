@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -19,6 +20,7 @@ import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
+import { reclaimSessionArchivePublicationInTransaction } from "./session-accessor.sqlite-archive-transaction.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type {
   DeleteSessionEntryLifecycleParams,
@@ -28,7 +30,6 @@ import type {
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import {
   sqliteLifecycleTargetSnapshotsEqual,
-  sqliteSessionEntriesEqual,
   type SqliteLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
@@ -43,9 +44,11 @@ import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
+  shouldRemoveSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ReclamationDatabaseOptions,
+  SessionMaintenanceLiveProtection,
   ReclamationDeleteParams,
   SessionEntryMaintenanceInput,
   SessionEntryRemovalPlan,
@@ -67,7 +70,6 @@ import {
   isRecentHistoricalSessionId,
 } from "./session-accessor.sqlite-references.js";
 import {
-  cloneSessionEntry,
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
   withSqliteSessionDatabase,
@@ -99,7 +101,10 @@ export function resolveSessionReclamationDatabaseOptions(
   const sharedStatePath = options.database?.path ?? resolveOpenClawStateSqlitePath(sourceEnv);
   return {
     agentId: normalizeAgentId(options.agentId),
-    env: { OPENCLAW_STATE_DIR: resolveOpenClawStateDirForDatabasePath(sharedStatePath) },
+    env: {
+      OPENCLAW_STATE_DIR: resolveOpenClawStateDirForDatabasePath(sharedStatePath),
+      ...(isGatewayExternallySupervised(sourceEnv) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
+    },
     path: resolveOpenClawAgentSqlitePath(options),
   };
 }
@@ -145,21 +150,13 @@ export function shouldDeleteSqliteSessionEntryLifecycle(
   ) {
     return false;
   }
-  if (!entry || (params.expectedEntry && !sqliteSessionEntriesEqual(entry, params.expectedEntry))) {
-    return false;
-  }
   if (
-    params.expectedSessionId !== undefined &&
-    (params.expectedSessionId === null
-      ? entry.sessionId !== undefined
-      : entry.sessionId !== params.expectedSessionId)
-  ) {
-    return false;
-  }
-  if (
-    (params.expectedLifecycleRevision !== undefined &&
-      entry.lifecycleRevision !== params.expectedLifecycleRevision) ||
-    (params.expectedUpdatedAt !== undefined && entry.updatedAt !== params.expectedUpdatedAt)
+    !shouldRemoveSessionEntry(entry, {
+      expectedEntry: params.expectedEntry || undefined,
+      expectedSessionId: params.expectedSessionId,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      expectedUpdatedAt: params.expectedUpdatedAt,
+    })
   ) {
     return false;
   }
@@ -251,8 +248,10 @@ export function* prepareHistoricalGenerationDeletions(params: {
   }
 }
 
-function expectedEntryMismatchResult(): DeleteSessionEntryLifecycleResult {
-  return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true };
+export function expectedEntryMismatchResult(
+  archivedTranscripts: DeleteSessionEntryLifecycleResult["archivedTranscripts"] = [],
+): DeleteSessionEntryLifecycleResult {
+  return { archivedTranscripts, deleted: false, expectedEntryMismatch: true };
 }
 
 export function reclaimSqliteSessionInTransaction(
@@ -283,6 +282,9 @@ function reclaimSqliteRowsInTransaction(
   plan: Exclude<SqliteSessionReclamationPlan, { kind: "maintenance-pages" }>,
   callbacks: SqliteSessionReclamationCallbacks,
 ): SqliteSessionReclamationResult {
+  if (plan.kind === "archive-publish-prepare" || plan.kind === "archive-publish-record") {
+    return reclaimSessionArchivePublicationInTransaction(plan, callbacks);
+  }
   if (
     plan.kind === "maintenance-plan" ||
     plan.kind === "maintenance-finalize" ||
@@ -327,83 +329,92 @@ function reclaimSqliteRowsInTransaction(
         return {
           archivedTranscripts,
           deleted: true,
-          deletedEntry: cloneSessionEntry(entry),
+          deletedEntry: structuredClone(entry),
           ...(entry.sessionId ? { deletedSessionId: entry.sessionId } : {}),
         };
       },
       plan.databaseOptions,
+      { operationLabel: "session.reclaim.entry" },
     );
     return { kind: plan.kind, value };
   }
 
   if (plan.kind === "lifecycle-artifacts") {
-    const value = runSqliteSessionDeletionTransaction((transactionDb) => {
-      callbacks.beforeMutation?.();
-      assertPlannedLifecycleArtifactEntriesUnchanged(transactionDb, plan.entries);
-      const archivedTranscripts = deleteMaterializedSessionStatePlans(
-        transactionDb,
-        plan.materializedPlans,
-        undefined,
-        new Set(plan.entries.map((entry) => entry.sessionKey)),
-      );
-      const removedEntries = deletePlannedLifecycleArtifactEntries(transactionDb, plan.entries);
-      callbacks.onCommit?.(transactionDb);
-      return { archivedTranscripts, removedEntries };
-    }, plan.databaseOptions);
+    const value = runSqliteSessionDeletionTransaction(
+      (transactionDb) => {
+        callbacks.beforeMutation?.();
+        assertPlannedLifecycleArtifactEntriesUnchanged(transactionDb, plan.entries);
+        const archivedTranscripts = deleteMaterializedSessionStatePlans(
+          transactionDb,
+          plan.materializedPlans,
+          undefined,
+          new Set(plan.entries.map((entry) => entry.sessionKey)),
+        );
+        const removedEntries = deletePlannedLifecycleArtifactEntries(transactionDb, plan.entries);
+        callbacks.onCommit?.(transactionDb);
+        return { archivedTranscripts, removedEntries };
+      },
+      plan.databaseOptions,
+      { operationLabel: "session.reclaim.lifecycle-artifacts" },
+    );
     return { kind: plan.kind, value };
   }
 
-  const value = runOpenClawAgentWriteTransaction((transactionDb) => {
-    callbacks.beforeMutation?.();
-    const protectedSessionIds = new Set(plan.protectedSessionIds);
-    const diskBudget = plan.kind === "history-eviction" ? plan.diskBudget : undefined;
-    let excludedSessionKeys: ReadonlySet<string> | undefined;
-    if (plan.kind === "historical-generation") {
-      const current = readValidatedSessionDeletionTarget(transactionDb, {
-        ...plan,
-        scope: { kind: "historical-generation", phase: "commit", sessionId: plan.sessionId },
-      });
-      if (!current) {
-        return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true as const };
+  const value = runOpenClawAgentWriteTransaction(
+    (transactionDb) => {
+      callbacks.beforeMutation?.();
+      const protectedSessionIds = new Set(plan.protectedSessionIds);
+      const diskBudget = plan.kind === "history-eviction" ? plan.diskBudget : undefined;
+      let excludedSessionKeys: ReadonlySet<string> | undefined;
+      if (plan.kind === "historical-generation") {
+        const current = readValidatedSessionDeletionTarget(transactionDb, {
+          ...plan,
+          scope: { kind: "historical-generation", phase: "commit", sessionId: plan.sessionId },
+        });
+        if (!current) {
+          return { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true as const };
+        }
+        // Explicit deletion excludes its validated owner; automatic pressure does not.
+        excludedSessionKeys = new Set([
+          plan.deleteParams.target.canonicalKey,
+          ...plan.deleteParams.target.storeKeys,
+          ...current.snapshot.map((row) => row.sessionKey),
+        ]);
+      } else if (
+        // Node activity can change after the parent dispatches the Worker.
+        isRecentHistoricalSessionId({
+          database: transactionDb,
+          ...plan.diskBudget,
+          sessionId: plan.sessionId,
+        })
+      ) {
+        protectedSessionIds.add(plan.sessionId);
       }
-      // Explicit deletion excludes its validated owner; automatic pressure does not.
-      excludedSessionKeys = new Set([
-        plan.deleteParams.target.canonicalKey,
-        ...plan.deleteParams.target.storeKeys,
-        ...current.snapshot.map((row) => row.sessionKey),
-      ]);
-    } else if (
-      // Node activity can change after the parent dispatches the Worker.
-      isRecentHistoricalSessionId({
-        database: transactionDb,
-        ...plan.diskBudget,
-        sessionId: plan.sessionId,
-      })
-    ) {
-      protectedSessionIds.add(plan.sessionId);
-    }
-    const archivedTranscripts = deleteMaterializedSessionStatePlans(
-      transactionDb,
-      plan.materializedPlans,
-      protectedSessionIds,
-      excludedSessionKeys,
-      undefined,
-      diskBudget,
-    );
-    const db = getSessionKysely(transactionDb.db);
-    const deleted =
-      executeSqliteQuerySync(
-        transactionDb.db,
-        db
-          .selectFrom("session_windows")
-          .select("session_id")
-          .where("session_id", "=", plan.sessionId),
-      ).rows.length === 0;
-    if (deleted) {
-      callbacks.onCommit?.(transactionDb);
-    }
-    return { archivedTranscripts: deleted ? archivedTranscripts : [], deleted };
-  }, plan.databaseOptions);
+      const archivedTranscripts = deleteMaterializedSessionStatePlans(
+        transactionDb,
+        plan.materializedPlans,
+        protectedSessionIds,
+        excludedSessionKeys,
+        undefined,
+        diskBudget,
+      );
+      const db = getSessionKysely(transactionDb.db);
+      const deleted =
+        executeSqliteQuerySync(
+          transactionDb.db,
+          db
+            .selectFrom("session_windows")
+            .select("session_id")
+            .where("session_id", "=", plan.sessionId),
+        ).rows.length === 0;
+      if (deleted) {
+        callbacks.onCommit?.(transactionDb);
+      }
+      return { archivedTranscripts: deleted ? archivedTranscripts : [], deleted };
+    },
+    plan.databaseOptions,
+    { operationLabel: `session.reclaim.${plan.kind}` },
+  );
   return { kind: plan.kind, value };
 }
 
@@ -419,9 +430,13 @@ function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOp
 export async function runSqliteSessionReclamation(params: {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
+  refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
-  onWorkerResult?: (result: SqliteSessionReclamationResult) => void;
+  onWorkerResult?: (
+    result: SqliteSessionReclamationResult,
+    databaseIdentity: string | symbol,
+  ) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
   if (params.diagnostics) {
@@ -437,6 +452,9 @@ export async function runSqliteSessionReclamation(params: {
     return await runExclusiveSqliteSessionWrite(
       params.plan.databaseOptions,
       async () => {
+        if (params.plan.kind === "maintenance-plan") {
+          Object.assign(params.plan.input, params.refreshMaintenanceProtection?.());
+        }
         params.assertCommitAllowed?.();
         return await withSqliteSessionDatabase(
           params.plan.databaseOptions,
@@ -445,7 +463,11 @@ export async function runSqliteSessionReclamation(params: {
             return reclaimSqliteSessionInTransaction(params.plan, {
               beforeMutation: params.assertCommitAllowed,
               onCommit: (database, result) => {
-                const publish = prepareReclamationPublication(params.plan, result);
+                const publish = prepareReclamationPublication(
+                  params.plan,
+                  readOpenClawAgentDatabaseIdentity(database).identity,
+                  result,
+                );
                 if (publish) {
                   deferOpenClawAgentPostCommitPublication(database, publish);
                 }
@@ -474,6 +496,9 @@ export async function runSqliteSessionReclamation(params: {
           return retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
         },
         "session.reclamation.retain",
+        undefined,
+        "foreground",
+        signal,
       );
       if (!retained.found) {
         throw new Error("SQLite session reclamation lost its prepared database");
@@ -500,6 +525,7 @@ export async function runSqliteSessionReclamation(params: {
                 worker,
                 assertRequestCurrent,
                 commitGate,
+                signal,
               },
             );
           },

@@ -1,8 +1,3 @@
-/**
- * Configured binding consumer registry.
- *
- * Stores target-family consumers that compile and materialize configured binding rules.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type {
@@ -62,12 +57,7 @@ export function listConfiguredBindingConsumers(): ConfiguredBindingConsumer[] {
 export function resolveConfiguredBindingConsumer(
   binding: ConfiguredBindingRuleConfig,
 ): ConfiguredBindingConsumer | null {
-  for (const consumer of listConfiguredBindingConsumers()) {
-    if (consumer.supports(binding)) {
-      return consumer;
-    }
-  }
-  return null;
+  return listConfiguredBindingConsumers().find((consumer) => consumer.supports(binding)) ?? null;
 }
 
 /**

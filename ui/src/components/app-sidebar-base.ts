@@ -12,7 +12,11 @@ import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import type { GatewayStatus } from "../lib/gateway-status.ts";
-import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccess,
+  type SessionMethodAccessRequest,
+} from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
@@ -113,14 +117,11 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
     return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, {
       method: "sessions.create",
       params: {},
+      sessionScope: true,
     });
   }
 
-  readSessionMutationAccess(request: {
-    method: string;
-    params?: unknown;
-    requiredScope?: "operator.write" | "operator.admin";
-  }): SessionMethodAccess {
+  readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess {
     return readSessionMethodAccess(this.connected ? this.context?.gateway.snapshot : null, request);
   }
 

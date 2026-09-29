@@ -3,12 +3,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
-import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
@@ -18,6 +18,7 @@ import {
   getExpansionStateVersion,
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import * as chatMessage from "./chat-message.ts";
 import {
@@ -350,7 +351,7 @@ describe("chat transcript invalidation", () => {
       const transcript = createTestTranscript();
       const props = threadProps("pane-offscreen-history", sessionKey, messages);
       const project = () =>
-        transcript.renderSession(props.paneId, sessionKey, (session) => {
+        transcript.renderSession(sessionKey, (session) => {
           projectChatTranscript(props, session);
           return html``;
         });
@@ -459,7 +460,11 @@ describe("chat transcript invalidation", () => {
     async (phase) => {
       vi.spyOn(Date, "now").mockReturnValue(60_000);
       const props = threadProps(`pane-terminal-status-${phase}`);
-      const transcript = createTestTranscript();
+      saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+        scrollTop: 0,
+        anchorToEnd: false,
+      });
+      const transcript = createTestTranscript(props.paneId);
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
@@ -593,7 +598,10 @@ describe("chat transcript invalidation", () => {
 
   it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", () => {
     vi.spyOn(Date, "now").mockReturnValue(60_000);
-    const props = threadProps("pane-session-metadata");
+    const props = threadProps("pane-session-metadata", "agent:main:main", [
+      { role: "user", senderLabel: "Alex", content: "Hello" },
+      { role: "assistant", content: "Hi" },
+    ]);
     props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -729,7 +737,7 @@ describe("chat transcript invalidation", () => {
         renderChatThread(
           {
             ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
-            assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
+            assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
             onRequestUpdate: renderPane,
           },
           transcript,
@@ -935,7 +943,11 @@ describe("chat transcript invalidation", () => {
         },
       ],
     };
-    const toolVisibilityController = createTestTranscript();
+    saveChatSessionScrollPosition(toolVisibilityProps.paneId, toolVisibilitySession, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const toolVisibilityController = createTestTranscript(toolVisibilityProps.paneId);
     const toolVisibilityPane = document.body.appendChild(document.createElement("div"));
     const renderToolVisibility = (next = toolVisibilityProps) =>
       render(renderChatThread(next, toolVisibilityController), toolVisibilityPane);

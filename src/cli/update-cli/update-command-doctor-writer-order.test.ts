@@ -90,7 +90,6 @@ vi.mock("../../process/exec.js", async (original) => ({
   }),
 }));
 vi.mock("./progress.js", () => ({ printResult: vi.fn() }));
-vi.mock("./restart-helper.js", () => ({ prepareRestartScript: vi.fn(async () => null) }));
 vi.mock("../../commands/doctor-completion.js", async (original) => ({
   ...(await original<typeof import("../../commands/doctor-completion.js")>()),
   checkShellCompletionStatus: vi.fn(async () => ({ shell: null })),

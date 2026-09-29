@@ -11,6 +11,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icon } from "../../components/icons.ts";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
@@ -451,7 +452,9 @@ class PortalsPage extends OpenClawLightDomElement {
         </header>
         ${
           this.error
-            ? html`<div class="callout danger portals-preview__error">${this.error}</div>`
+            ? html`<div class="callout danger portals-preview__error" role="alert">
+                ${this.error}
+              </div>`
             : nothing
         }
         ${
@@ -547,9 +550,12 @@ class PortalsPage extends OpenClawLightDomElement {
       </div>`;
     }
     return html`
-      <section class="content-header content-header--page">
+      <section
+        class="content-header content-header--page"
+        ${shellLayoutTraits({ toolbarHeader: true })}
+      >
         <div>
-          <div class="page-title">${titleForRoute("portals")}</div>
+          <h1 class="page-title">${titleForRoute("portals")}</h1>
         </div>
       </section>
       ${

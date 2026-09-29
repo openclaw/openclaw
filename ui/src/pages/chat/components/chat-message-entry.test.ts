@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
@@ -71,27 +71,99 @@ describe("chat transcript entry lifecycle", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("animates a new send once, not its acknowledgement or a remounted row", () => {
-    const view = setupEntryTranscript();
-    view.props.queue = [pendingSend("new-prompt")];
-    view.update();
-    const submitted = bubbles(view.container)[0];
-    expect(entering(view.container)).toEqual([submitted]);
+  it.each(["animationend", "animationcancel"])(
+    "retires a prompt after its own %s without replaying on acknowledgement or remount",
+    (eventType) => {
+      const view = setupEntryTranscript();
+      view.props.queue = [pendingSend("new-prompt")];
+      view.update();
+      const submitted = expectDefined(bubbles(view.container)[0], "submitted prompt");
+      expect(entering(view.container)).toEqual([submitted]);
 
-    view.props.messages = [
-      {
+      const finish = (target: Element, animationName: string) =>
+        target.dispatchEvent(
+          Object.assign(new Event(eventType, { bubbles: true }), { animationName }),
+        );
+      finish(expectDefined(submitted.firstElementChild, "prompt child"), "chat-message-enter");
+      finish(submitted, "unrelated-animation");
+      expect(entering(view.container)).toEqual([submitted]);
+      finish(submitted, "chat-message-enter");
+      expect(entering(view.container)).toHaveLength(0);
+
+      view.props.messages = [
+        {
+          role: "user",
+          content: "new-prompt",
+          timestamp: Date.now(),
+          __openclaw: { id: "persisted-prompt", idempotencyKey: "new-prompt", seq: 1 },
+        },
+      ];
+      view.props.queue = [];
+      view.update();
+      expect(bubbles(view.container)[0]).toBe(submitted);
+      expect(entering(view.container)).toHaveLength(0);
+      view.remount();
+      expect(bubbles(view.container)).toHaveLength(1);
+      expect(entering(view.container)).toHaveLength(0);
+      view.transcript.hostDisconnected();
+    },
+  );
+
+  it("keeps consecutive pending steers in place through their history handoff", () => {
+    const view = setupEntryTranscript();
+    const first = { ...pendingSend("First input"), createdAt: 10, queueMode: "steer" as const };
+    const second = { ...pendingSend("Second input"), createdAt: 20, queueMode: "steer" as const };
+    try {
+      view.props.queue = [first];
+      view.update();
+      const firstBubble = expectDefined(bubbles(view.container)[0], "first prompt");
+      view.props.queue = [first, second];
+      view.update();
+      const pendingBubbles = bubbles(view.container).filter((bubble) => bubble.dataset.messageText);
+      expect(pendingBubbles.map((bubble) => bubble.dataset.messageText)).toEqual([
+        "First input",
+        "Second input",
+      ]);
+      expect(pendingBubbles[0]).toBe(firstBubble);
+
+      view.props.messages = [first, second].map((input, index) => ({
         role: "user",
-        content: "new-prompt",
-        timestamp: Date.now(),
-        __openclaw: { id: "persisted-prompt", idempotencyKey: "new-prompt", seq: 1 },
-      },
-    ];
-    view.props.queue = [];
+        content: input.text,
+        timestamp: input.createdAt,
+        __openclaw: { id: input.id, seq: index + 1, idempotencyKey: input.sendRunId },
+      }));
+      view.props.queue = [];
+      view.update();
+      const settledBubbles = bubbles(view.container).filter((bubble) => bubble.dataset.messageText);
+      expect(settledBubbles).toHaveLength(2);
+      expect(settledBubbles[0]).toBe(firstBubble);
+      expect(settledBubbles[1]).toBe(pendingBubbles[1]);
+    } finally {
+      view.transcript.hostDisconnected();
+    }
+  });
+
+  it("retires an unfinished prompt animation when the transcript disconnects", () => {
+    const view = setupEntryTranscript();
+    view.props.queue = [pendingSend("pending-disconnect")];
     view.update();
-    expect(bubbles(view.container)[0]).toBe(submitted);
-    view.remount();
-    expect(bubbles(view.container)).toHaveLength(1);
+    expect(entering(view.container)).toHaveLength(1);
+    view.transcript.hostDisconnected();
     expect(entering(view.container)).toHaveLength(0);
+  });
+
+  it("does not leave a dormant arrival when reduced motion disables animation", () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    const view = setupEntryTranscript();
+    view.props.queue = [pendingSend("reduced-motion-prompt")];
+    view.update();
+    expect(entering(view.container)).toHaveLength(0);
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    view.props.queue = [...view.props.queue, pendingSend("later-prompt")];
+    view.update();
+    expect(entering(view.container).map((bubble) => bubble.dataset.messageText)).toEqual([
+      "later-prompt",
+    ]);
     view.transcript.hostDisconnected();
   });
 

@@ -1,4 +1,3 @@
-// Openrouter provider module implements model/runtime integration.
 import path from "node:path";
 import type {
   AudioTranscriptionRequest,

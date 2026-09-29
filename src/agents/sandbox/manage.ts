@@ -11,6 +11,7 @@ import {
   stopCachedBrowserBridge,
   type CachedBrowserBridge,
 } from "./browser-bridges.js";
+import { removeSandboxContainerRuntime } from "./container-lifecycle.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
   execContainer,
@@ -49,12 +50,19 @@ function toBrowserDockerRuntimeEntry(entry: SandboxBrowserRegistryEntry): Sandbo
 }
 
 /** Lists registered sandbox containers with live backend status and config-label match state. */
-export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
+export async function listSandboxContainers(
+  matches?: (entry: SandboxRegistryEntry) => boolean,
+): Promise<SandboxContainerInfo[]> {
   const config = getRuntimeConfig();
   const registry = await readRegistry();
   const results: SandboxContainerInfo[] = [];
 
   for (const entry of registry.entries) {
+    // Scope selection precedes backend probes: an unrelated target can be offline
+    // or require a different connection without blocking this runtime's recovery.
+    if (matches && !matches(entry)) {
+      continue;
+    }
     const backendId = entry.backendId ?? "docker";
     const manager = getSandboxBackendManager(backendId);
     if (!manager) {
@@ -83,12 +91,17 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
 }
 
 /** Lists registered browser sandbox containers with live Docker status. */
-export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
+export async function listSandboxBrowsers(
+  matches?: (entry: SandboxBrowserRegistryEntry) => boolean,
+): Promise<SandboxBrowserInfo[]> {
   const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const results: SandboxBrowserInfo[] = [];
 
   for (const entry of registry.entries) {
+    if (matches && !matches(entry)) {
+      continue;
+    }
     const agentId = resolveSandboxAgentId(entry.sessionKey);
     const runtime = await dockerSandboxBackendManager.describeRuntime({
       entry: toBrowserDockerRuntimeEntry(entry),
@@ -141,16 +154,7 @@ export async function removeSandboxRuntimeGeneration(params: {
     runtime.kind === "container" ? runtime.entry.backendTarget : undefined,
   );
   assertCurrent();
-  if (id !== null) {
-    const removed = await execContainer(engine, ["rm", "-f", id], { allowFailure: true });
-    assertCurrent();
-    if (
-      removed.code !== 0 &&
-      !/no such (?:container|object)|does not exist/iu.test(removed.stderr)
-    ) {
-      throw new Error("Sandbox runtime generation retirement failed; custody retained");
-    }
-  }
+  await removeSandboxContainerRuntime(engine, runtime.entry.containerName, { id, assertCurrent });
   // A name can be rebound without a registry update. Never forget its replacement's
   // metadata or bridge merely because the old physical ID was already absent.
   const assertAbsent = async () => {

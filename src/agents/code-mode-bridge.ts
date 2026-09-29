@@ -14,7 +14,7 @@ import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
-import type { PendingBridgeRequest } from "./code-mode-runtime.js";
+import { CODE_MODE_EXEC_YIELD_MARGIN_MS, type PendingBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
@@ -331,24 +331,19 @@ export async function runBridgeRequest(params: {
           input.background !== true &&
           input.yieldMs === undefined
         ) {
-          // The shell's 10s default equals Code Mode's default budget. Yield
-          // within the remaining shared deadline so late sequential calls can
-          // still return their process handle and resume the guest inline.
+          // Use the remaining call budget except the margin for inline guest resumption.
+          // Late sequential calls yield sooner so their process handle returns in this call.
           input = {
             ...input,
-            yieldMs: Math.max(1, Math.min(1_000, Math.floor(params.remainingMs / 4))),
+            yieldMs: Math.max(1, Math.floor(params.remainingMs) - CODE_MODE_EXEC_YIELD_MARGIN_MS),
           };
         }
-        const called = await params.runtime.callExactId(binding.id, input, {
+        value = await params.runtime.callExactValue(binding.id, input, {
           recoverySurface: "catalog",
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
         });
-        value =
-          isRecord(called.result) && "details" in called.result
-            ? called.result.details
-            : called.result;
         break;
       }
       case "nodes": {
@@ -379,6 +374,7 @@ export async function runBridgeRequest(params: {
               parentToolCallId: params.parentToolCallId,
               signal: params.signal,
               onUpdate: params.onUpdate,
+              mcpNamespaceGuest: true,
             });
             const guestResult = consumeMcpCodeModeGuestResult(called.result);
             if (guestResult === undefined) {

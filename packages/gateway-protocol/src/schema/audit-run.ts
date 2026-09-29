@@ -210,8 +210,6 @@ const DecisionReceiptDisplayProvenanceV1Schema = Type.Union([
       Type.Literal("operator-approval"),
       Type.Literal("message-delivery"),
       Type.Literal("cron-lifecycle"),
-      Type.Literal("task-lifecycle"),
-      Type.Literal("flow-lifecycle"),
     ]),
   }),
   closedObject({ state: Type.Literal("unverified") }),
@@ -226,15 +224,7 @@ export const DecisionReceiptDisplayV1Schema = closedObject({
     operation: ExecutionIdentityRefSchema,
     summary: Type.Optional(Type.String({ maxLength: 512 })),
   }),
-  decision: closedObject({
-    outcome: Type.Union([
-      Type.Literal("allowed"),
-      Type.Literal("denied"),
-      Type.Literal("not-applicable"),
-      Type.Literal("unknown"),
-    ]),
-    reasonCode: ExecutionIdentityRefSchema,
-  }),
+  decision: closedObject(DecisionReceiptV1Schema.properties.decision.properties),
   enforcement: closedObject({
     coverageState: ExecutionIdentityDecisionCoverageStateSchema,
     policyCount: Type.Integer({ minimum: 0, maximum: 16 }),

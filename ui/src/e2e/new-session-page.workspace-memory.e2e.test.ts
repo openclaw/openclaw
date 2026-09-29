@@ -17,6 +17,7 @@ import {
   captureProjectUiProof,
   captureUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   choosePackagesFolder,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -396,7 +397,7 @@ suite.define(() => {
       await page
         .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
         .click();
-      await page.getByLabel("From", { exact: true }).fill("release/next");
+      await checkoutBaseRefInput(page).fill("release/next");
       await page.getByLabel("Name", { exact: true }).fill("remembered-task");
       await page.keyboard.press("Escape");
 
@@ -418,9 +419,7 @@ suite.define(() => {
       ).toBe("Local");
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
       await placeTrigger.click();
-      await expect
-        .poll(() => page.getByLabel("From", { exact: true }).inputValue())
-        .toBe("release/next");
+      await expect.poll(() => checkoutBaseRefInput(page).inputValue()).toBe("release/next");
       await expect
         .poll(() => page.getByLabel("Name", { exact: true }).inputValue())
         .toBe("remembered-task");

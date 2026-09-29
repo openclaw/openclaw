@@ -4,7 +4,8 @@ import { vi, type Mock } from "vitest";
 import { Client } from "./client.js";
 import type { DiscordCommand } from "./commands.js";
 import type { RawInteraction } from "./interactions.js";
-import type { RequestClient, RequestData } from "./rest.js";
+import type { RequestData } from "./rest-body.js";
+import type { RequestClient } from "./rest.js";
 
 type ClientOptions = ConstructorParameters<typeof Client>[0];
 type RequestQuery = Parameters<RequestClient["get"]>[1];
@@ -60,9 +61,7 @@ export function createInternalTestClient(
 ): Client {
   return new Client(
     {
-      baseUrl: "http://localhost",
       clientId: "app1",
-      publicKey: "public",
       token: "token",
       ...options,
     },

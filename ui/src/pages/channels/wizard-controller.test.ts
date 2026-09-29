@@ -3,38 +3,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import {
+  createWizardTestController as createController,
+  tokenStep,
+} from "./wizard-controller.test-support.ts";
 import { ChannelWizardController } from "./wizard-controller.ts";
-
-type RequestHandler = (
-  method: string,
-  params?: unknown,
-  options?: { timeoutMs?: number | null; signal?: AbortSignal },
-) => Promise<unknown>;
-
-function createController(handler: RequestHandler) {
-  const request = vi.fn(handler);
-  const onChange = vi.fn();
-  const controller = new ChannelWizardController(
-    () => ({ request: request as never }),
-    onChange,
-    () => false,
-    () => "Setup expired. Close and restart setup.",
-  );
-  return { controller, request, onChange };
-}
 
 const selectStep = {
   id: "step-select",
   type: "select" as const,
   message: "Which channel?",
   options: [{ value: "telegram", label: "Telegram" }],
-};
-
-const tokenStep = {
-  id: "step-token",
-  type: "text" as const,
-  message: "Paste token",
-  sensitive: true,
 };
 
 describe("ChannelWizardController", () => {
@@ -311,7 +290,10 @@ describe("ChannelWizardController", () => {
     expect(progressSignal?.aborted).toBe(true);
     expect(onChange).toHaveBeenCalledTimes(changeCountAfterCancel);
     expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(1);
-    expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: "s-progress-cancel" });
+    expect(request).toHaveBeenCalledWith("wizard.cancel", {
+      sessionId: "s-progress-cancel",
+      closeInput: true,
+    });
   });
 
   it("reports an expired gateway progress session without fabricating an answer", async () => {
@@ -424,7 +406,7 @@ describe("ChannelWizardController", () => {
 
     await controller.cancel();
     expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([
-      ["wizard.cancel", { sessionId: "s-failed" }],
+      ["wizard.cancel", { sessionId: "s-failed", closeInput: true }],
     ]);
   });
 
@@ -600,22 +582,6 @@ describe("ChannelWizardController", () => {
       channels: [],
       accounts: [],
     });
-  });
-
-  it("cancel clears the session and notifies the gateway", async () => {
-    const calls: string[] = [];
-    const { controller } = createController(async (method) => {
-      calls.push(method);
-      if (method === "wizard.start") {
-        return { sessionId: "s1", done: false, status: "running", step: selectStep };
-      }
-      return { status: "cancelled" };
-    });
-
-    await controller.start("slack");
-    await controller.cancel();
-    expect(controller.state).toEqual({ phase: "idle" });
-    expect(calls).toContain("wizard.cancel");
   });
 
   it("ignores answers while a previous answer is in flight", async () => {

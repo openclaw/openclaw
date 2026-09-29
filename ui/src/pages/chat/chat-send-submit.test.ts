@@ -1,15 +1,23 @@
 // @vitest-environment node
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   readStoredOutboxStore,
   storageTargetForGateway,
 } from "../../lib/chat/outbox-store.ts";
+import * as toast from "../../lib/toast.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
-import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
+import {
+  createDeliveryAttachmentBatch,
+  createStagedAttachment,
+  reloadChatDocumentStorage,
+} from "./chat-delivery-attachments.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -19,17 +27,115 @@ import {
   findChatSendPayload,
   makeChatHost,
 } from "./chat-host.test-support.ts";
-import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { retryQueuedChatMessage, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
+import { prepareOutboxPayload } from "./outbox-payloads.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
 useChatSendBrowserFixture();
+
+describe("attachment frame admission", () => {
+  const frameLimitedHello = (maxPayload: number) => ({
+    ...sessionMutationGatewayHello(),
+    policy: { maxPayload, attachments: { maxBytes: 100, maxImageBytes: 100 } },
+  });
+  const queuedAttachmentBatch = (host: ChatHost) =>
+    expectDefined(listStoredChatOutboxes(host)[0]?.queue[0], "stored attachment batch");
+
+  it.each([
+    { message: "@Alex review these", chatRunId: null },
+    { message: "/approve approval-1 allow-once", chatRunId: "active-run" },
+  ])(
+    "retains the complete oversized $message draft before transmission",
+    async ({ message, chatRunId }) => {
+      const { attachments, dataUrls } = createDeliveryAttachmentBatch();
+      const mentions = message.startsWith("@")
+        ? [{ profileId: "profile-alex", start: 0, end: 5 }]
+        : [];
+      const replyTarget = { messageId: "reply-source", text: "Earlier question" };
+      const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+      const host = makeChatHost({
+        hello: frameLimitedHello(256 * 1024 + 92),
+        chatMessage: message,
+        chatRunId,
+        chatMentions: mentions,
+        chatReplyTarget: replyTarget,
+        chatAttachments: attachments,
+        requestHandlers: { "chat.send": { status: "started" } },
+      });
+
+      expect(await handleSendChat(host)).toBeUndefined();
+
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.chatMessage).toBe(message);
+      expect(host.chatMentions).toEqual(mentions);
+      expect(host.chatReplyTarget).toEqual(replyTarget);
+      expect(host.chatAttachments).toEqual(attachments);
+      expect(host.chatAttachments.map(getChatAttachmentDataUrl)).toEqual(dataUrls);
+      expect(host.chatQueue).toEqual([]);
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(showToast).toHaveBeenCalledExactlyOnceWith({
+        message: "Too large to send: brief.pdf",
+      });
+    },
+  );
+
+  it("fails a restored batch under the current frame limit without consuming its payload or retrying", async () => {
+    const { attachments, dataUrls } = createDeliveryAttachmentBatch();
+    const source = makeChatHost({
+      connected: false,
+      hello: frameLimitedHello(25 * 1024 * 1024),
+      chatMessage: "Review these after reconnect",
+      chatAttachments: attachments,
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { key: "agent:main", hasActiveRun: false, status: "done" },
+        },
+        "chat.send": { status: "started" },
+      },
+    });
+    await handleSendChat(source);
+    const original = queuedAttachmentBatch(source);
+    expect(original.attachmentPayload).toBeDefined();
+    reloadChatDocumentStorage(attachments);
+    const restored = makeChatHost({
+      client: source.client,
+      chatMessage: "Keep this newer draft",
+      hello: frameLimitedHello(256 * 1024 + 92),
+    });
+    const expectedRow = {
+      id: original.id,
+      sendState: "failed",
+      sendError: "Too large to send: brief.pdf",
+      sendAttempts: 0,
+      attachmentPayload: original.attachmentPayload,
+    };
+
+    await resumeStoredChatOutboxes(restored);
+
+    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(listStoredChatOutboxes(restored)[0]?.queue[0]).toMatchObject(expectedRow);
+    expect(restored.chatError).toBe("Too large to send: brief.pdf");
+
+    await retryQueuedChatMessage(restored, original.id);
+
+    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    const failed = queuedAttachmentBatch(restored);
+    expect(failed).toMatchObject(expectedRow);
+    const hydrated = await prepareOutboxPayload(restored, failed);
+    expect(
+      hydrated.status === "ready" ? hydrated.update.attachments?.map(getChatAttachmentDataUrl) : [],
+    ).toEqual(dataUrls);
+    expect(restored.chatMessage).toBe("Keep this newer draft");
+  });
+});
 
 describe("structured Goal admission", () => {
   const intent = { kind: "session-goal-start", version: 1, issuedAtMs: 1_788_000_000_000 } as const;
@@ -138,8 +244,10 @@ describe("structured Goal admission", () => {
 
   it("restores a rejected objective and retains the original run identity on a stored Retry", async () => {
     let reject = true;
+    const goalMode = { action: "start" as const, sessionId: "incarnation-a" };
     const host = makeChatHost({
       chatMessage: "Start this exactly once",
+      chatGoalDraftMode: goalMode,
       currentSessionId: "incarnation-a",
       chatDisplayedLeafEntryId: "leaf-a",
       requestHandlers: {
@@ -156,9 +264,11 @@ describe("structured Goal admission", () => {
     });
     await handleSendChat(host, undefined, { intent });
     expect(host.chatMessage).toBe("Start this exactly once");
+    expect(host.chatGoalDraftMode).toBe(goalMode);
 
     // Restored outboxes retry an already minted request; they must not mint another run.
     reject = false;
+    host.chatGoalDraftMode = null;
     host.chatMessage = "A separate conversation draft";
     const original = findChatSendPayload(host);
     const queued = {
@@ -184,6 +294,131 @@ describe("structured Goal admission", () => {
     expect(requests).toHaveLength(2);
     expect(requests[1]?.[1]).toEqual(original);
     expect(host.chatMessage).toBe("A separate conversation draft");
+  });
+});
+
+describe("composer recovery", () => {
+  it.each(["attachment", "reply", "goal"])(
+    "does not mix a failed model-wait draft with a newer %s-only draft",
+    async (edit) => {
+      const switchUpdate = createDeferred<boolean>();
+      const newerAttachment =
+        edit === "attachment" ? createStagedAttachment("newer-picker-attachment") : null;
+      const newerReply = edit === "reply" ? { messageId: "newer-quote", text: "New quote" } : null;
+      const newerGoal = edit === "goal" ? { action: "start" as const } : null;
+      const host = makeChatHost({
+        requestHandlers: {},
+        chatMessage: "keep this send separate",
+        pendingSettingsPatches: { "agent:main": switchUpdate.promise },
+      });
+
+      const send = handleSendChat(host);
+      await Promise.resolve();
+      expect(host.chatMessage).toBe("");
+      expect(host.chatQueue[0]?.sendState).toBe("waiting-model");
+      host.chatAttachments = newerAttachment ? [newerAttachment] : [];
+      host.chatReplyTarget = newerReply;
+      host.chatGoalDraftMode = newerGoal;
+
+      switchUpdate.resolve(false);
+      await send;
+
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.chatMessage).toBe("");
+      expect(host.chatAttachments).toEqual(newerAttachment ? [newerAttachment] : []);
+      expect(host.chatReplyTarget).toBe(newerReply);
+      expect(host.chatGoalDraftMode).toBe(newerGoal);
+      expect(host.chatQueue[0]).toMatchObject({
+        sendError: "Chat settings update was interrupted. Review and retry when ready.",
+        sendState: "failed",
+        text: "keep this send separate",
+      });
+      if (newerAttachment) {
+        expect(getChatAttachmentDataUrl(newerAttachment)).toBe(attachmentDataUrl);
+      }
+    },
+  );
+});
+
+describe("reply submission", () => {
+  it("escapes reply sender labels and transfers the quote before chat.send is acknowledged", async () => {
+    const sent = createDeferred<unknown>();
+
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => sent.promise,
+      },
+      chatMessage: "continue",
+      chatReplyTarget: {
+        messageId: "reply-source-1",
+        text: "quoted body",
+        senderLabel: "A *B* [C]",
+      },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatReplyTarget).toBeNull();
+    expect(host.chatQueue[0]?.text).toBe("> **A \\*B\\* \\[C\\]:** quoted body\n\ncontinue");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it("sends replyToId instead of an inline quote when the reply target has a transcript id", async () => {
+    const sent = createDeferred<unknown>();
+
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => sent.promise,
+      },
+      chatMessage: "continue",
+      chatReplyTarget: {
+        messageId: "id:transcript-abc",
+        text: "quoted body",
+        senderLabel: "Molty",
+        sourceMessageId: "transcript-abc",
+      },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatQueue[0]?.text).toBe("continue");
+    expect(host.chatQueue[0]?.replyToId).toBe("transcript-abc");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    const sendCall = host.request.mock.calls.find(([method]) => method === "chat.send");
+    expect(sendCall?.[1]).toMatchObject({ message: "continue", replyToId: "transcript-abc" });
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it("keeps failed reply metadata on the retry row instead of the composer", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => Promise.resolve({ runId: "run-failed", status: "error" }),
+      },
+      chatMessage: "retry this",
+      chatReplyTarget: {
+        messageId: "reply-source-2",
+        text: "quoted body",
+        senderLabel: "User",
+      },
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatReplyTarget).toBeNull();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "failed",
+      text: "> **User:** quoted body\n\nretry this",
+    });
   });
 });
 
@@ -473,12 +708,17 @@ describe("handleSendChat immediate local commands", () => {
   it("restores staged attachments when creating a new session is cancelled", async () => {
     const attachment = createStagedAttachment("cancelled-new-session-att");
     const createChatSession = vi.fn(async () => false);
-    const host = createImmediateCommandHost("/new", attachment, { createChatSession });
+    const replyTarget = { messageId: "quoted-before-new", text: "Keep this quote" };
+    const host = createImmediateCommandHost("/new", attachment, {
+      createChatSession,
+      chatReplyTarget: replyTarget,
+    });
 
     await handleSendChat(host);
 
     expect(createChatSession).toHaveBeenCalledOnce();
     expect(host.chatMessage).toBe("/new");
+    expect(host.chatReplyTarget).toEqual(replyTarget);
     expect(host.chatAttachments).toHaveLength(1);
     expect(host.chatAttachments[0]).toMatchObject(attachment);
     expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(attachmentDataUrl);
@@ -777,7 +1017,7 @@ describe("handleSendChat session ownership", () => {
         );
         expect(host.chatQueue).toEqual([]);
         readiness.mockReturnValue(true);
-        syncVisibleChatQueueProjection(host);
+        chatOutboxOwner(host).syncHost(host);
       }
       expect(host.chatQueue).toMatchObject([
         { id: original.id, text: "later turn", sendAttempts: 0, sendState },

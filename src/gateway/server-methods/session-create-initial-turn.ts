@@ -1,27 +1,15 @@
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeRpcAttachmentsToChatAttachments,
   type RpcAttachmentInput,
 } from "./attachment-normalize.js";
-
-function resolveOptionalInitialSessionMessage(params: {
-  task?: unknown;
-  message?: unknown;
-}): string | undefined {
-  if (typeof params.task === "string" && params.task.trim()) {
-    return params.task;
-  }
-  if (typeof params.message === "string" && params.message.trim()) {
-    return params.message;
-  }
-  return undefined;
-}
 
 export function resolveSessionCreateInitialTurn(params: {
   attachments?: unknown[];
   message?: unknown;
   task?: unknown;
 }) {
-  const message = resolveOptionalInitialSessionMessage(params);
+  const message = readNonBlankString(params.task) ?? readNonBlankString(params.message);
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
     params.attachments as RpcAttachmentInput[] | undefined,
   );

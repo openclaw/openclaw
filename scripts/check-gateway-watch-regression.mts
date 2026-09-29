@@ -10,6 +10,7 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
 import {
   BUILD_STAMP_FILE,
@@ -50,9 +51,6 @@ const WATCH_GATEWAY_SKIP_ENV = {
   NODE_ENV: "test",
 };
 
-/**
- * Maximum retained stdout/stderr text for gateway watch diagnostics.
- */
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
 export const WATCH_LOG_FAILURE_TAIL_CHARS = 12_000;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
@@ -125,9 +123,6 @@ function shellQuote(value: unknown): string {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
-/**
- * Appends watch output while preserving only the diagnostic tail.
- */
 export function appendBoundedWatchLog(
   current: string,
   chunk: string | Uint8Array,
@@ -168,9 +163,6 @@ function readTextTail(filePath: string, maxChars = WATCH_LOG_FAILURE_TAIL_CHARS)
   return text.length <= maxChars ? text : text.slice(-maxChars);
 }
 
-/**
- * Updates bounded watch-build detection state from new output.
- */
 export function updateWatchBuildDetection(
   state: WatchBuildDetectionState,
   chunk: unknown,
@@ -186,9 +178,6 @@ export function updateWatchBuildDetection(
   };
 }
 
-/**
- * Parses gateway watch regression CLI arguments.
- */
 export function parseArgs(argv: string[]): WatchOptions {
   const args = stripLeadingPackageManagerSeparator(argv);
   const options = { ...DEFAULTS };
@@ -395,22 +384,21 @@ function writeSnapshot(snapshotDir: string): {
     [
       `generated_at: ${snapshot.generatedAt}`,
       "",
-      "[dist]",
-      `files: ${dist.files}`,
-      `directories: ${dist.directories}`,
-      `symlinks: ${dist.symlinks}`,
-      `entries: ${dist.entries}`,
-      `apparent_bytes: ${dist.apparentBytes}`,
-      `apparent_human: ${humanBytes(dist.apparentBytes)}`,
-      "",
-      "[dist-runtime]",
-      `files: ${distRuntime.files}`,
-      `directories: ${distRuntime.directories}`,
-      `symlinks: ${distRuntime.symlinks}`,
-      `entries: ${distRuntime.entries}`,
-      `apparent_bytes: ${distRuntime.apparentBytes}`,
-      `apparent_human: ${humanBytes(distRuntime.apparentBytes)}`,
-      "",
+      ...(
+        [
+          ["dist", dist],
+          ["dist-runtime", distRuntime],
+        ] as const
+      ).flatMap(([label, tree]) => [
+        `[${label}]`,
+        `files: ${tree.files}`,
+        `directories: ${tree.directories}`,
+        `symlinks: ${tree.symlinks}`,
+        `entries: ${tree.entries}`,
+        `apparent_bytes: ${tree.apparentBytes}`,
+        `apparent_human: ${humanBytes(tree.apparentBytes)}`,
+        "",
+      ]),
     ].join("\n"),
     "utf8",
   );
@@ -429,9 +417,6 @@ function runCheckedCommand(command: string, args: string[]) {
   throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? "unknown"}`);
 }
 
-/**
- * Reports whether gateway watch output contains a ready marker.
- */
 export function hasGatewayReadyLog(text: string): boolean {
   const normalized = text.replaceAll(ANSI_ESCAPE_PATTERN, "");
   return /\[gateway\] (?:http server listening|ready(?:\b|\s*\())/.test(normalized);
@@ -579,9 +564,6 @@ function parseTimingFile(timeFilePath: string): Timing {
   };
 }
 
-/**
- * Runs a bounded gateway watch process and captures timing/log artifacts.
- */
 export async function runTimedWatch(
   options: TimedWatchOptions,
   outputDir: string,
@@ -964,9 +946,6 @@ function buildRunNodeDeps(env: NodeJS.ProcessEnv) {
   };
 }
 
-/**
- * Reports whether restored CI artifacts need fresh build stamps.
- */
 export function shouldRefreshBuildStampForRestoredArtifacts(params: {
   skipBuild?: boolean;
   buildRequirement?: BuildRequirementSummary;
@@ -978,9 +957,6 @@ export function shouldRefreshBuildStampForRestoredArtifacts(params: {
   );
 }
 
-/**
- * Writes build and runtime-postbuild stamps for the current artifact set.
- */
 export function writeBuildAndRuntimePostBuildStamps(params: { cwd?: string } = {}) {
   const cwd = params.cwd ?? process.cwd();
   writeBuildStamp({ cwd });
@@ -990,9 +966,6 @@ export function writeBuildAndRuntimePostBuildStamps(params: { cwd?: string } = {
 export function calculateDistRuntimeByteGrowth(beforeBytes: number, afterBytes: number): number {
   return afterBytes - beforeBytes;
 }
-/**
- * Collects pass/fail findings for the bounded gateway watch regression run.
- */
 export function collectGatewayWatchFindings(params: {
   distRuntimeByteGrowth: number;
   distRuntimeFileGrowth: number;
@@ -1004,7 +977,7 @@ export function collectGatewayWatchFindings(params: {
   watchBuildReason: string | null;
   watchResult: WatchFindingResult;
   watchTriggeredBuild: boolean;
-}): { failures: string[]; warnings: string[] } {
+}): { failures: string[]; warnings: string[]; limitViolations: LimitViolation[] } {
   const {
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
@@ -1016,6 +989,7 @@ export function collectGatewayWatchFindings(params: {
   } = params;
   const failures: string[] = [];
   const warnings: string[] = [];
+  const limitViolations: LimitViolation[] = [];
   if (watchResult.spawnError) {
     failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
   }
@@ -1067,16 +1041,18 @@ export function collectGatewayWatchFindings(params: {
         failures.push("failed to collect idle CPU timing from the ready gateway:watch window");
       }
     } else if (cpuMs > options.cpuFailMs) {
-      failures.push(
-        `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
-      );
+      limitViolations.push({
+        file: "scripts/check-gateway-watch-regression.mts",
+        title: "Gateway watch CPU budget",
+        message: `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above threshold ${options.cpuFailMs}ms`,
+      });
     } else if (cpuMs > options.cpuWarnMs) {
       warnings.push(
         `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
       );
     }
   }
-  return { failures, warnings };
+  return { failures, warnings, limitViolations };
 }
 
 export function shouldReportDuplicateDistRuntimeRegression(failures: string[]): boolean {
@@ -1211,7 +1187,7 @@ async function main() {
 
   console.log(JSON.stringify(summary, null, 2));
 
-  const { failures, warnings } = collectGatewayWatchFindings({
+  const { failures, warnings, limitViolations } = collectGatewayWatchFindings({
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
     removedPaths: summary.removedPaths,
@@ -1225,7 +1201,8 @@ async function main() {
     warn(message);
   }
 
-  if (failures.length > 0) {
+  const limitsFailed = reportLimitViolations(limitViolations);
+  if (failures.length > 0 || limitsFailed) {
     for (const message of failures) {
       fail(message);
     }

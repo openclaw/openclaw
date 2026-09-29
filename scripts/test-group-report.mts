@@ -14,6 +14,7 @@ import {
   stringListFlag,
   type FlagSpec,
 } from "./lib/arg-utils.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import {
   inspectManagedProcessGroup,
@@ -184,9 +185,6 @@ const compareFlag: FlagSpec<TestGroupReportArgs> = {
   },
 };
 
-/**
- * Parses report, compare, and Vitest-run options for grouped test reports.
- */
 export function parseTestGroupReportArgs(argv: string[]) {
   const args: TestGroupReportArgs = {
     allowFailures: false,
@@ -286,9 +284,6 @@ function parseMaxRssBytes(output: string) {
   return null;
 }
 
-/**
- * Runs a command, captures text output, and terminates timed-out process groups.
- */
 export function spawnText(command: string, args: readonly string[], options: SpawnTextOptions) {
   const maxBuffer = options.maxBufferBytes ?? DEFAULT_SPAWN_OUTPUT_MAX_BYTES;
   const maxLogBytes = options.maxLogBytes ?? DEFAULT_SPAWN_LOG_MAX_BYTES;
@@ -436,15 +431,7 @@ export function spawnText(command: string, args: readonly string[], options: Spa
       }
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
       const currentTail = target === "stderr" ? stderrTail : outputTail;
-      if (buffer.byteLength >= tailBytes) {
-        if (target === "stderr") {
-          stderrTail = buffer.subarray(buffer.byteLength - tailBytes);
-        } else {
-          outputTail = buffer.subarray(buffer.byteLength - tailBytes);
-        }
-        return;
-      }
-      let nextTail = Buffer.concat([currentTail, buffer]);
+      let nextTail = buffer.byteLength >= tailBytes ? buffer : Buffer.concat([currentTail, buffer]);
       if (nextTail.byteLength > tailBytes) {
         nextTail = nextTail.subarray(nextTail.byteLength - tailBytes);
       }
@@ -458,8 +445,6 @@ export function spawnText(command: string, args: readonly string[], options: Spa
       const buffer = Buffer.from(message, "utf8");
       if (logFd !== null) {
         fs.writeSync(logFd, buffer);
-        appendTail(buffer);
-        return;
       }
       appendTail(buffer);
     }
@@ -786,9 +771,6 @@ function validateGroupedReport(
   }
 }
 
-/**
- * Resolves JSON report and per-run artifact directories from an output path.
- */
 export function resolveReportArtifactDirs(outputPath: string) {
   const outputDir = path.dirname(outputPath);
   const outputExt = path.extname(outputPath);
@@ -834,9 +816,6 @@ function buildFullSuiteLeafRunPlans() {
   }
 }
 
-/**
- * Resolves explicit or full-suite Vitest config plans for report generation.
- */
 export function resolveRunPlans(args: TestGroupReportArgs): TestGroupRunPlan[] {
   if (args.reports.length > 0) {
     return [];
@@ -858,9 +837,6 @@ export function resolveRunPlans(args: TestGroupReportArgs): TestGroupRunPlan[] {
   }));
 }
 
-/**
- * Builds env for full-suite report runs, including per-config cache paths.
- */
 export function resolveFullSuiteVitestEnv(
   args: Pick<TestGroupReportArgs, "fullSuite">,
   env: NodeJS.ProcessEnv = process.env,
@@ -879,9 +855,6 @@ export function resolveFullSuiteVitestEnv(
   };
 }
 
-/**
- * Resolves bounded concurrency for grouped report run plans.
- */
 export function resolveRunPlanConcurrency(
   args: Pick<TestGroupReportArgs, "concurrency" | "fullSuite">,
   runPlanCount: number,
@@ -918,9 +891,6 @@ export function resolveReportVitestArgs(
   return [...args.vitestArgs, "--isolate=true"];
 }
 
-/**
- * Builds concrete report run specs from parsed args and config plans.
- */
 export function resolveReportRunSpecs(
   args: TestGroupReportArgs,
   runPlans: TestGroupRunPlan[],
@@ -1147,10 +1117,17 @@ async function main() {
   console.log(renderGroupedTestReport(report, { limit: args.limit, topFiles: args.topFiles }));
   console.log(`[test-group-report] wrote ${path.relative(process.cwd(), output)}`);
 
-  if (args.maxTestMs !== null && report.slowTests.length > 0) {
-    console.error(
-      `[test-group-report] ${report.slowTests.length} tests exceeded ${formatMs(args.maxTestMs)}`,
-    );
+  const maxTestMs = args.maxTestMs;
+  if (
+    maxTestMs !== null &&
+    reportLimitViolations(
+      report.slowTests.map((test) => ({
+        file: test.file,
+        title: "Test duration budget",
+        message: `${test.fullName}: ${formatMs(test.durationMs)} exceeds ${formatMs(maxTestMs)}`,
+      })),
+    )
+  ) {
     process.exit(1);
   }
 

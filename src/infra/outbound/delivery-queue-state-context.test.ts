@@ -2,19 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership.js";
 import {
   deleteTestEnvValue,
   setTestEnvValue,
   withEnv,
   withEnvAsync,
 } from "../../test-utils/env.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { OpenClawStateExternalOwnershipError } from "../sqlite-lifecycle-errors.js";
 import { ackDelivery, retireUnsentDelivery } from "./delivery-queue-ack.js";
 import {
   createDeliveryQueueMediaRetention,
@@ -235,10 +235,9 @@ describe("captured delivery queue state", () => {
     );
     await fs.mkdir(path.dirname(artifact), { recursive: true });
     await fs.writeFile(artifact, "synthetic audio");
-    const stage = createDeliveryQueueMediaRetention(
+    const stage = await createDeliveryQueueMediaRetention(
       [artifact],
       "outbound-media-stage",
-      undefined,
       undefined,
       context,
     );
@@ -254,7 +253,10 @@ describe("captured delivery queue state", () => {
       stage,
       context,
     );
-    const release = retireUnsentDelivery({ id, producerClaimId: claim.producerClaimId }, context);
+    const release = await retireUnsentDelivery(
+      { id, producerClaimId: claim.producerClaimId },
+      context,
+    );
     expect(release).toBeTypeOf("function");
     expect(await fs.readFile(artifact, "utf8")).toBe("synthetic audio");
     await withEnvAsync(

@@ -1,8 +1,8 @@
-// Chat model select state derivation.
 import type {
   FastMode,
   GatewaySessionRow,
   ModelCatalogEntry,
+  ModelCatalogResult,
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -27,6 +27,9 @@ type ChatModelSelectStateInput = {
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
+  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+  catalogRetired?: boolean;
+  catalogInitialized?: boolean;
 };
 
 type ChatModelSelectOption = {
@@ -106,6 +109,12 @@ export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput):
 }
 
 function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
+  if (state.catalogRetired || state.catalogInitialized === false) {
+    return "";
+  }
+  if (state.modelSelectionPolicy?.restricted) {
+    return state.modelSelectionPolicy.defaultModel ?? "";
+  }
   const agentDefault = resolvePreferredServerChatModelValue(
     state.agentDefaultModel,
     undefined,
@@ -130,6 +139,10 @@ function normalizeChatModelAvailabilityKey(value: string): string {
   return `${normalizeChatModelProviderId(normalized.slice(0, separator))}/${normalized.slice(
     separator + 1,
   )}`;
+}
+
+function catalogModelAvailabilityKey(entry: ModelCatalogEntry): string {
+  return normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider));
 }
 
 function resolveCatalogChatModelValue(value: string, options: ChatModelSelectOption[]): string {
@@ -194,11 +207,7 @@ export function resolveChatModelUnavailableReason(
 ): ModelCatalogEntry["unavailableReason"] {
   const value = resolvePreferredServerChatModelValue(model, provider, catalog);
   const key = normalizeChatModelAvailabilityKey(value);
-  const matches = catalog.filter(
-    (entry) =>
-      normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)) ===
-      key,
-  );
+  const matches = catalog.filter((entry) => catalogModelAvailabilityKey(entry) === key);
   if (
     !matches.length ||
     matches.some((entry) => entry.available !== false || !entry.unavailableReason)
@@ -213,6 +222,19 @@ export function resolveChatModelUnavailableReason(
   return matches.some((entry) => entry.unavailableReason === "auth-failed")
     ? "auth-failed"
     : "missing-auth";
+}
+
+export function hasChatModelCatalogSelection(
+  model: string | null | undefined,
+  provider: string | null | undefined,
+  catalog: ModelCatalogEntry[],
+): boolean {
+  const key = normalizeChatModelAvailabilityKey(
+    resolvePreferredServerChatModelValue(model, provider, catalog),
+  );
+  return catalog.some(
+    (entry) => entry.manualSelectionAllowed !== false && catalogModelAvailabilityKey(entry) === key,
+  );
 }
 
 export function chatModelUnavailableMessage(
@@ -234,20 +256,12 @@ export function resolveChatModelSelectState(
 ): ChatModelSelectState {
   const catalog = state.chatModelCatalog ?? [];
   const availableKeys = new Set(
-    catalog
-      .filter((entry) => entry.available !== false)
-      .map((entry) =>
-        normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)),
-      ),
+    catalog.filter((entry) => entry.available !== false).map(catalogModelAvailabilityKey),
   );
   // Catalog members already have a qualified identity. Prepare one retained inventory
   // so unavailable aliases cannot disambiguate labels for their selectable sibling.
   const pickerCatalog = catalog.filter(
-    (entry) =>
-      entry.available !== false ||
-      !availableKeys.has(
-        normalizeChatModelAvailabilityKey(buildQualifiedChatModelValue(entry.id, entry.provider)),
-      ),
+    (entry) => entry.available !== false || !availableKeys.has(catalogModelAvailabilityKey(entry)),
   );
   const displayLookup = buildCatalogDisplayLookup(pickerCatalog);
   const options = buildChatModelOptions(pickerCatalog, displayLookup);
@@ -395,12 +409,7 @@ export function resolveChatFastModeSelectState(
   );
   const applicability = new Set(
     input.catalog
-      .filter(
-        (entry) =>
-          normalizeChatModelAvailabilityKey(
-            buildQualifiedChatModelValue(entry.id, entry.provider),
-          ) === selectedValue,
-      )
+      .filter((entry) => catalogModelAvailabilityKey(entry) === selectedValue)
       .map((entry) => {
         const runtimeEntry = entry.runtimeChoices?.length
           ? resolveModelRuntimeEntry(entry, activeRow?.agentRuntime?.id)

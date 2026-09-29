@@ -5,26 +5,16 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
-import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
 import { resolveCronJobsStorePath } from "./store/paths.js";
-import {
-  deleteCronQuarantinedJobsFromDatabase,
-  saveCronQuarantinedJobs,
-} from "./store/quarantine.js";
-import {
-  assertCronStoreCanPersist,
-  deleteStaleCronJobFamilyRows,
-  readCronJobsFingerprint,
-} from "./store/row-codec.js";
+import { assertCronStoreCanPersist, readCronJobsFingerprint } from "./store/row-codec.js";
 import type { CronJobFamilyIdentity } from "./store/row-codec.js";
+import { prepareCronRunReceiptWriteSchema } from "./store/run-receipt-write-admission.js";
 import { CronJobsStoreChangedError, restoreCronSaveError } from "./store/save-error.js";
 import type {
   CronStoreSaveWorkerOperations,
@@ -33,12 +23,14 @@ import type {
 import {
   isCronRuntimeOnlySave,
   prepareCronStoreChanges,
-  replaceCronStoreRowsInDatabase,
   saveCronStoreChangesInDatabase,
   saveCronStoreInDatabase,
 } from "./store/save.kernel.js";
 import type { CronStoreChangesOptions, CronStoreSaveOptions } from "./store/save.types.js";
-import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
+import type {
+  CronAdmittedStoreTransactionHooks,
+  CronStoreTransactionHooks,
+} from "./store/transaction-hooks.types.js";
 import type { LoadedCronStore } from "./store/types.js";
 import type { CronStoreFile } from "./types.js";
 export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
@@ -102,16 +94,6 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
   }
 }
 
-function loadMutableCronStore(storePath: string): LoadedCronStore {
-  const database = openOpenClawStateDatabase();
-  const storeKey = cronStoreKey(path.resolve(storePath));
-  return loadCronStoreFromDatabase(database.db, storeKey, {
-    write: (operation, operationLabel) =>
-      runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }, { operationLabel }),
-    committed: () => noteCronJobsStoreCommit(storeKey),
-  });
-}
-
 export function assertCronJobsStoreUnchanged(
   db: DatabaseSync,
   storePath: string,
@@ -124,26 +106,30 @@ export function assertCronJobsStoreUnchanged(
 }
 
 /** Removes an owned declarative job family left under obsolete absolute store keys. */
-export function removeStaleCronJobFamilyRows(
+export async function removeStaleCronJobFamilyRows(
   storePath: string,
   family: CronJobFamilyIdentity,
-): number {
-  const activeStoreKey = cronStoreKey(path.resolve(storePath));
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => deleteStaleCronJobFamilyRows(db, activeStoreKey, family),
-    {},
-    { operationLabel: "cron.job-family-adoption" },
-  );
+  opts?: { commitGuard?: () => void },
+): Promise<number> {
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const context = captureOpenClawStateWorkerContext();
+  let removed = 0;
+  await runCronRuntimeMutation({
+    context,
+    type: "cron.removeStaleFamily",
+    input: { storeKey, family: { ...family } },
+    assertCurrent: () => opts?.commitGuard?.(),
+    prepare: () => ({ value: {}, assertCurrent() {} }),
+    publish: (outcome) => {
+      removed = outcome.removed;
+    },
+  });
+  return removed;
 }
 
 /** Loads only the persisted cron job store payload. */
 export async function loadCronJobsStore(storePath: string): Promise<CronStoreFile> {
   return (await loadCronJobsStoreWithConfigJobs(storePath)).store;
-}
-
-/** Synchronously loads only the persisted cron job store payload. */
-export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
-  return loadMutableCronStore(storePath).store;
 }
 
 type SaveCronStoreOptions = {
@@ -170,7 +156,10 @@ function publishCronStoreSaveRevision(storeKey: string, observedRevision: number
 
 function commitCronStoreNative<Value>(
   storeKey: string,
-  operation: (database: OpenClawStateDatabase) => Value,
+  operation: (
+    database: OpenClawStateDatabase,
+    admittedHooks: CronAdmittedStoreTransactionHooks | undefined,
+  ) => Value,
   hooks: CronStoreTransactionHooks | undefined,
   operationLabel?: string,
 ): CronStoreCommit<Value> {
@@ -179,7 +168,10 @@ function commitCronStoreNative<Value>(
   try {
     const value = runOpenClawStateWriteTransaction(
       (database) => {
-        const result = operation(database);
+        const admittedHooks = hooks
+          ? { hooks, receiptSchema: prepareCronRunReceiptWriteSchema(database.db) }
+          : undefined;
+        const result = operation(database, admittedHooks);
         deferSqlitePostCommitPublication(database.db, () => {
           committed = true;
         });
@@ -245,8 +237,8 @@ export function saveCronJobsStoreChangesWithRevisionNative(
   const { transactionHooks, ...options } = opts ?? {};
   return commitCronStoreNative(
     storeKey,
-    ({ db }) =>
-      saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, transactionHooks),
+    ({ db }, admittedHooks) =>
+      saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, admittedHooks),
     transactionHooks,
     "cron.config-mutation",
   );
@@ -298,8 +290,8 @@ export function saveCronJobsStoreWithRevisionNative(
   const { transactionHooks, ...options } = opts ?? {};
   return commitCronStoreNative(
     storeKey,
-    (database) => {
-      saveCronStoreInDatabase(database, storeKey, store, options, transactionHooks);
+    (database, admittedHooks) => {
+      saveCronStoreInDatabase(database, storeKey, store, options, admittedHooks);
       return undefined;
     },
     transactionHooks,
@@ -349,27 +341,7 @@ export async function saveCronJobsStoreWithMetadata(
     if (!acquireMetadata(database.db)) {
       return false;
     }
-    if (opts?.quarantine?.entries.length) {
-      saveCronQuarantinedJobs({
-        storePath: resolvedStorePath,
-        entries: opts.quarantine.entries,
-        nowMs: opts.quarantine.nowMs,
-        database,
-      });
-    }
-    if (opts?.deleteQuarantineEntries?.length) {
-      deleteCronQuarantinedJobsFromDatabase({
-        database: database.db,
-        storePath: resolvedStorePath,
-        entries: opts.deleteQuarantineEntries,
-      });
-    }
-    replaceCronStoreRowsInDatabase(
-      database.db,
-      storeKey,
-      store,
-      opts?.preserveRuntimeState === true,
-    );
+    saveCronStoreInDatabase(database, storeKey, store, { ...opts, stateOnly: false });
     return true;
   });
   if (committed) {

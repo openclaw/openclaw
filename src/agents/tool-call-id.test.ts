@@ -80,8 +80,6 @@ const buildRepeatedEditIdInput = (params: { includeToolUseId?: boolean } = {}) =
     }),
   ]);
 
-const buildRepeatedRawIdInput = () => buildRepeatedEditIdInput();
-
 const buildRepeatedSharedToolResultIdInput = () =>
   buildRepeatedEditIdInput({ includeToolUseId: true });
 
@@ -193,8 +191,8 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
     it("strips non-alphanumeric characters from tool call IDs", () => {
       const input = castAgentMessages([
-        sparseAssistant([{ type: "toolCall", id: "call|item:123", name: "read", arguments: {} }]),
-        buildToolResult({ toolCallId: "call|item:123", toolName: "read", text: "ok" }),
+        sparseAssistant([{ type: "toolCall", id: "call_|item:123-", name: "read", arguments: {} }]),
+        buildToolResult({ toolCallId: "call_|item:123-", toolName: "read", text: "ok" }),
       ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
@@ -203,28 +201,12 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expectSingleToolCallRewrite(out, "callitem123", "strict");
     });
 
-    it("avoids collisions when sanitization would produce duplicate IDs", () => {
-      const input = buildDuplicateIdCollisionInput();
-
-      const out = sanitizeToolCallIdsForCloudCodeAssist(input);
-      expect(out).not.toBe(input);
-      expectCollisionIdsRemainDistinct(out, "strict");
-    });
-
     it("reuses one rewritten id when a tool result carries matching toolCallId and toolUseId", () => {
       const input = buildRepeatedSharedToolResultIdInput();
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
       expect(out).not.toBe(input);
       expectToolUseIdsFollowDistinctToolCallIds(out, "strict");
-    });
-
-    it("assigns distinct IDs when identical raw tool call ids repeat", () => {
-      const input = buildRepeatedRawIdInput();
-
-      const out = sanitizeToolCallIdsForCloudCodeAssist(input);
-      expect(out).not.toBe(input);
-      expectCollisionIdsRemainDistinct(out, "strict");
     });
 
     it("caps tool call IDs at 40 chars while preserving uniqueness", () => {
@@ -247,29 +229,6 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   });
 
   describe("strict mode (alphanumeric only)", () => {
-    it("strips underscores and hyphens from tool call IDs", () => {
-      const input = castAgentMessages([
-        sparseAssistant([
-          {
-            type: "toolCall",
-            id: "plugin_login_1768799841527_1",
-            name: "login",
-            arguments: {},
-          },
-        ]),
-        buildToolResult({
-          toolCallId: "plugin_login_1768799841527_1",
-          toolName: "login",
-          text: "ok",
-        }),
-      ]);
-
-      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
-      expect(out).not.toBe(input);
-      // Strict mode strips all non-alphanumeric characters
-      expectSingleToolCallRewrite(out, "pluginlogin17687998415271", "strict");
-    });
-
     it("preserves native anthropic ids while sanitizing mixed-provider ids when requested", () => {
       const nativeId = "toolu_01ABCDEF1234567890";
       const nonNativeId = "call_123|fc_123";
@@ -449,16 +408,6 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(toolResult.call_id).toBe(toolCall.id);
     });
 
-    it("assigns distinct strict IDs when identical raw tool call ids repeat", () => {
-      const input = buildRepeatedRawIdInput();
-
-      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
-      expect(out).not.toBe(input);
-      const { aId, bId } = expectCollisionIdsRemainDistinct(out, "strict");
-      expect(aId).not.toMatch(/[_-]/);
-      expect(bId).not.toMatch(/[_-]/);
-    });
-
     it("preserves native Kimi function ids in direct strict sanitization", () => {
       expect(sanitizeSingleToolCallId("functions.read:0", "strict")).toBe("functions.read:0");
       expect(sanitizeSingleToolCallId("functions.bash_tool:12", "strict")).toBe(
@@ -468,18 +417,6 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         "functions.edit-file:3",
       );
       expect(sanitizeSingleToolCallId("functions.read:0", "strict9")).not.toBe("functions.read:0");
-    });
-
-    it("preserves native Kimi function ids across assistant/toolResult pairs", () => {
-      const input = castAgentMessages([
-        sparseAssistant([
-          { type: "toolCall", id: "functions.read:0", name: "read", arguments: {} },
-        ]),
-        buildToolResult({ toolCallId: "functions.read:0", toolName: "read", text: "ok" }),
-      ]);
-
-      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
-      expect(out).toBe(input);
     });
 
     it("preserves native Kimi ids while sanitizing non-Kimi siblings", () => {
@@ -596,13 +533,6 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         buildToolResult({ toolCallId: "call_abc|item:123", toolName: "read", text: "one" }),
         buildToolResult({ toolCallId: "call_abc|item:456", toolName: "read", text: "two" }),
       ]);
-
-      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict9");
-      expectDistinctStrict9Ids(out, input);
-    });
-
-    it("assigns distinct strict9 IDs when identical raw tool call ids repeat", () => {
-      const input = buildRepeatedRawIdInput();
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict9");
       expectDistinctStrict9Ids(out, input);

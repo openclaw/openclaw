@@ -154,6 +154,10 @@ stopped. Forced termination without confirmed cleanup remains uncertain. Local
 TUI shell shutdown uses the same cleanup owner for its own commands.
 Permission-denied group probes still count as present; cleanup continues waiting
 within its original deadline for confirmed disappearance.
+On Linux, cleanup reaps already-exited descendants adopted by this process from
+the owned group after the tracked root exits. The root and unrelated child exit
+statuses remain with their existing owners. Reaping covers the configured
+termination grace period and its force-kill fallback.
 If the host was busy, cleanup processes queued native completion events before
 reporting a timeout.
 
@@ -211,10 +215,10 @@ message alongside `status: "failed"`, so the agent can choose the next action.
 
 ## Examples
 
-Run a long task and poll later:
+Run a task longer than the default 10000 ms yield window and poll later:
 
 ```json
-{ "tool": "exec", "command": "sleep 5 && echo done", "yieldMs": 1000 }
+{ "tool": "exec", "command": "sleep 30 && echo done" }
 ```
 
 ```json

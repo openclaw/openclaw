@@ -3,12 +3,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { listMemoryCorePublicArtifacts } from "./public-artifacts.js";
+import plugin from "../index.js";
 
-describe("listMemoryCorePublicArtifacts", () => {
+const registerMemoryCapability = vi.fn<OpenClawPluginApi["registerMemoryCapability"]>();
+plugin.register(createTestPluginApi({ registerMemoryCapability }));
+const publicArtifacts = registerMemoryCapability.mock.calls[0]?.[0].publicArtifacts;
+if (!publicArtifacts) {
+  throw new Error("expected memory-core to register public artifacts");
+}
+
+describe("memory-core public artifacts", () => {
   let fixtureRoot = "";
 
   beforeAll(async () => {
@@ -59,7 +68,7 @@ describe("listMemoryCorePublicArtifacts", () => {
       },
     };
 
-    const artifacts = await listMemoryCorePublicArtifacts({ cfg });
+    const artifacts = await publicArtifacts.listArtifacts({ cfg });
     const eventArtifact = artifacts.find((artifact) => artifact.kind === "event-log");
     if (!eventArtifact) {
       throw new Error("expected memory event export");
@@ -115,6 +124,6 @@ describe("listMemoryCorePublicArtifacts", () => {
       },
     };
 
-    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toStrictEqual([]);
+    await expect(publicArtifacts.listArtifacts({ cfg })).resolves.toStrictEqual([]);
   });
 });

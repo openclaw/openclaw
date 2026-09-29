@@ -1,4 +1,3 @@
-// Qa Lab plugin module reserves Gateway ports across pre-spawn setup.
 type QaGatewayPortServer = {
   once(event: "error", listener: (error: Error) => void): void;
   off(event: "error", listener: (error: Error) => void): void;

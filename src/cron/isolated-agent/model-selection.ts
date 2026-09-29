@@ -1,3 +1,4 @@
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
@@ -7,7 +8,7 @@ import {
   needsThinkHydration,
   normalizeThinkingCatalogProviders,
 } from "../../agents/thinking-runtime.js";
-import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
+import { normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
@@ -70,14 +71,6 @@ type ResolveCronModelSelectionResult =
       error: string;
     };
 
-function formatAllowedModelRefs(params: { cfg: OpenClawConfig; agentId?: string }): string {
-  const configured = resolveConfiguredModelPolicyAllow(params).refs;
-  if (configured && configured.length > 0) {
-    return configured.toSorted().join(", ");
-  }
-  return "(none configured)";
-}
-
 function formatCronPayloadModelRejection(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -89,7 +82,10 @@ function formatCronPayloadModelRejection(params: {
     const modelRef = error.slice("model not allowed:".length).trim();
     const policy = resolveConfiguredModelPolicyAllow(params);
     const policyPath = policy.configPath ?? "agents.defaults.modelPolicy.allow";
-    return `automation model override '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${formatAllowedModelRefs(params)}]`;
+    const allowedModels = policy.refs.length
+      ? policy.refs.toSorted().join(", ")
+      : "(none configured)";
+    return `automation model override '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${allowedModels}]`;
   }
   return `automation model override '${modelOverride}' rejected: ${error}`;
 }
@@ -139,7 +135,7 @@ async function resolveCronThinkingCatalog(params: {
     return catalog;
   }
   // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
-  return normalizeThinkingCatalogProviders(
+  const refreshed = normalizeThinkingCatalogProviders(
     await loadProviderScopedThinkingCatalog({
       config: params.owner.config,
       provider: params.provider,
@@ -150,6 +146,7 @@ async function resolveCronThinkingCatalog(params: {
       workspaceDir: params.owner.workspaceDir,
     }),
   );
+  return findModelInCatalog(refreshed, params.provider, params.model) ? refreshed : catalog;
 }
 
 export async function resolveCronThinkingSelection(params: {
@@ -161,16 +158,7 @@ export async function resolveCronThinkingSelection(params: {
   jobThinking?: string;
   hookThinking?: string;
   sessionThinking?: string;
-}): Promise<{
-  catalog: ModelCatalogEntry[];
-  immutableThinkLevel: ThinkLevel | undefined;
-  loadThinkingCatalog: (
-    provider: string,
-    model: string,
-    agentRuntime: string,
-  ) => Promise<ModelCatalogEntry[]>;
-  requestedThinkLevel: ThinkLevel | undefined;
-}> {
+}) {
   const immutableThinkLevel =
     normalizeThinkLevel(params.jobThinking) ??
     normalizeThinkLevel(params.hookThinking) ??
@@ -190,7 +178,7 @@ export async function resolveCronThinkingSelection(params: {
   return {
     catalog,
     immutableThinkLevel,
-    loadThinkingCatalog: async (provider, model, agentRuntime) =>
+    loadThinkingCatalog: async (provider: string, model: string, agentRuntime: string) =>
       await resolveCronThinkingCatalog({ owner: params.owner, provider, model, agentRuntime }),
     requestedThinkLevel,
   };

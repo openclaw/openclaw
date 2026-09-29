@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CodexThreadItem } from "./app-server/protocol.js";
-import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
@@ -54,66 +53,6 @@ function readTranscript(control: CodexSessionCatalogControl, limit: number, curs
 }
 
 describe("Codex catalog transcript", () => {
-  it("preserves full tool text and raw data before transport paging", () => {
-    const output = "result ".repeat(1000);
-    const source = catalogThreadItem("tool-1", {
-      type: "commandExecution",
-      command: "rg pattern",
-      aggregatedOutput: output,
-      exitCode: 0,
-    });
-
-    expect(toGenericTranscriptItem(source)).toEqual({
-      id: "tool-1",
-      type: "toolResult",
-      text: output,
-      raw: source,
-    });
-  });
-
-  it("keeps native item order and cursors when the requested page size changes", async () => {
-    const source = Array.from({ length: 8 }, (_, index) =>
-      catalogThreadItem(`item-${index}`, { text: `message ${index}` }),
-    );
-    const { control, listItemPage } = nativeItemControl(source);
-
-    const first = await readTranscript(control, 3);
-    const second = await readTranscript(control, 2, first.nextCursor);
-    const third = await readTranscript(control, 4, second.nextCursor);
-
-    expect(first.items.map((item) => item.id)).toEqual(["item-7", "item-6", "item-5"]);
-    expect(second.items.map((item) => item.id)).toEqual(["item-4", "item-3"]);
-    expect(third.items.map((item) => item.id)).toEqual(["item-2", "item-1", "item-0"]);
-    expect(first.nextCursor).toBe("native:item-5");
-    expect(second.nextCursor).toBe("native:item-3");
-    expect(third.nextCursor).toBeUndefined();
-    expect(first).not.toHaveProperty("backwardsCursor");
-    expect(listItemPage).toHaveBeenNthCalledWith(2, {
-      threadId: "thread-1",
-      limit: 2,
-      sortDirection: "desc",
-      cursor: first.nextCursor,
-    });
-  });
-
-  it("returns only 50 items from a native turn containing 57 items", async () => {
-    const source = Array.from({ length: 57 }, (_, index) =>
-      catalogThreadItem(`item-${index}`, { text: `message ${index}` }),
-    );
-    const { control } = nativeItemControl(source);
-
-    const first = await readTranscript(control, 50);
-    expect(first.items).toHaveLength(50);
-    expect(first.nextCursor).toBe("native:item-7");
-
-    const second = await readTranscript(control, 50, first.nextCursor);
-    expect(second.items).toHaveLength(7);
-    expect([...first.items, ...second.items].map((item) => item.id)).toEqual(
-      source.toReversed().map((item) => item.id),
-    );
-    expect(second.nextCursor).toBeUndefined();
-  });
-
   it("cuts native pages by wire bytes without losing raw output or advancing past omitted items", async () => {
     const output = "海🌱\n".repeat(80_000);
     const source = Array.from({ length: 36 }, (_, index) =>

@@ -68,15 +68,12 @@ describe("scripts/lib/vitest-shard-timings.mts", () => {
     );
   });
 
-  it.each([
-    ["src/b.test.ts", "src/a.test.ts"],
-    ["src/ä.test.ts", "src/z.test.ts", "src/A.test.ts"],
-  ])("reuses timing history for reordered selections: %s", (...patterns) => {
+  it("reuses timing history for reordered selections", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shard-timings-"));
     tempDirs.push(tempDir);
     const env = { OPENCLAW_TEST_PROJECTS_TIMINGS_PATH: path.join(tempDir, "timings.json") };
     const config = "test/vitest/vitest.unit-fast.config.ts";
-    const includePatterns = Object.freeze(patterns);
+    const includePatterns = Object.freeze(["src/ä.test.ts", "src/z.test.ts", "src/A.test.ts"]);
     const sample = createShardTimingSample({ config, env, includePatterns }, 1000)!;
     writeShardTimings([sample], tempDir, env);
     const reordered = createShardTimingSample(

@@ -4,6 +4,7 @@ import { delimiter, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
 import { exitedDescendantReaper } from "./exited-descendant-reaper.test-support.js";
+import { createProvisionIsolationFixture } from "./pr-provision-isolation.test-support.js";
 
 export function createProvisionOwnerFixture(
   directory: string,
@@ -18,8 +19,9 @@ export function createProvisionOwnerFixture(
   for (const dir of [canonical, home, bin]) {
     mkdirSync(dir);
   }
+  const isolation = createProvisionIsolationFixture(root, canonical);
   const env: NodeJS.ProcessEnv = {
-    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+    PATH: isolation.path(`${bin}${delimiter}${process.env.PATH ?? ""}`),
     HOME: home,
     TMPDIR: root,
     XDG_CONFIG_HOME: join(home, ".config"),
@@ -89,8 +91,10 @@ fi
     env,
     main,
     git,
+    isolation,
     run(action = "entry", owner = "", options: { holdExitedDescendants?: boolean } = {}) {
       const args = [
+        ...isolation.nodeArgs,
         resolve(source, "scripts/pr-lib/process-group-runner.mjs"),
         canonical,
         process.platform === "darwin" ? "/bin/bash" : "bash",

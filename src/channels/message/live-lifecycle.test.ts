@@ -33,19 +33,19 @@ function createPreviewHarness() {
       receipt: createPreviewMessageReceipt({ id: "final" }),
     };
   });
-  return { posts, draft, send };
+  const adapter = {
+    draft,
+    buildFinalEdit: (payload: Payload) => payload.text,
+    editFinal: vi.fn(async (messageId: string, text: string) => {
+      posts.set(messageId, text);
+    }),
+  };
+  return { posts, draft, send, adapter };
 }
 
 describe("live preview delivery ownership", () => {
   it("protects a promoted answer when the published adapter receives a later final", async () => {
-    const { posts, draft, send } = createPreviewHarness();
-    const adapter = {
-      draft,
-      buildFinalEdit: (payload: Payload) => payload.text,
-      editFinal: async (id: string, text: string) => {
-        posts.set(id, text);
-      },
-    };
+    const { posts, draft, send, adapter } = createPreviewHarness();
     const first = await deliverWithFinalizableLivePreviewAdapter({
       kind: "final",
       payload: { text: "answer" },
@@ -147,7 +147,7 @@ describe("live preview delivery ownership", () => {
   });
 
   it("preserves promoted text and receipt when supplemental delivery is rejected", async () => {
-    const { posts, draft, send } = createPreviewHarness();
+    const { posts, draft, send, adapter } = createPreviewHarness();
     const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
     send.mockRejectedValueOnce(new Error("media rejected"));
     await expect(
@@ -155,10 +155,7 @@ describe("live preview delivery ownership", () => {
         kind: "final",
         payload: { text: "answer" },
         adapter: {
-          buildFinalEdit: (payload) => payload.text,
-          editFinal: async (id, text) => {
-            posts.set(id, text);
-          },
+          ...adapter,
           buildSupplementalPayload: () => ({ text: "media" }),
         },
         deliverNormally: send,
@@ -175,7 +172,7 @@ describe("live preview delivery ownership", () => {
   });
 
   it("does not retry intentionally suppressed supplemental media", async () => {
-    const { posts, draft, send } = createPreviewHarness();
+    const { posts, draft, send, adapter } = createPreviewHarness();
     const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
     send.mockResolvedValueOnce({
       visibleReplySent: false,
@@ -185,10 +182,7 @@ describe("live preview delivery ownership", () => {
       kind: "final",
       payload: { text: "answer" },
       adapter: {
-        buildFinalEdit: (payload) => payload.text,
-        editFinal: async (id, text) => {
-          posts.set(id, text);
-        },
+        ...adapter,
         buildSupplementalPayload: () => ({ text: "media" }),
       },
       deliverNormally: send,
@@ -199,7 +193,7 @@ describe("live preview delivery ownership", () => {
   });
 
   it("settles observed source delivery without reviving a later failure", async () => {
-    const { posts, draft, send } = createPreviewHarness();
+    const { posts, draft, send, adapter } = createPreviewHarness();
     draft.clear.mockRejectedValueOnce(new Error("delete rejected"));
     const lifecycle = createLivePreviewLifecycle<Payload, string>({
       draft,
@@ -212,12 +206,7 @@ describe("live preview delivery ownership", () => {
     await lifecycle.deliver({
       kind: "final",
       payload: { text: "later warning" },
-      adapter: {
-        buildFinalEdit: (payload) => payload.text,
-        editFinal: async (id, text) => {
-          posts.set(id, text);
-        },
-      },
+      adapter,
       deliverNormally: send,
     });
     lifecycle.observeFailure();
@@ -227,10 +216,79 @@ describe("live preview delivery ownership", () => {
     expect(lifecycle.finalFailed).toBe(false);
   });
 
+  it("retains native progress until final acceptance, including accepted error policy", async () => {
+    const { posts, draft } = createPreviewHarness();
+    const onFinalDelivered = vi.fn();
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      cleanupUndelivered: true,
+      retainOnError: true,
+      onFinalDelivered,
+    });
+    lifecycle.beginFinalDelivery();
+    await lifecycle.cleanup();
+    expect([...posts.values()]).toEqual(["Working"]);
+
+    posts.set("native-final", "The task failed.");
+    await lifecycle.observeDelivery(
+      { visibleReplySent: true, messageIds: ["native-final"] },
+      { isError: true },
+    );
+    lifecycle.observeFailure();
+    await lifecycle.cleanup();
+    expect([...posts.values()]).toEqual(["Working", "The task failed."]);
+    expect(lifecycle.finalDelivered).toBe(true);
+    expect(lifecycle.finalSucceeded).toBe(false);
+    expect(lifecycle.finalFailed).toBe(false);
+    expect(onFinalDelivered).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "does not suppress or clean a failed native final (partial=%s)",
+    async (partial) => {
+      const { posts, draft } = createPreviewHarness();
+      const lifecycle = createLivePreviewLifecycle<Payload, string>({
+        draft,
+        cleanupUndelivered: true,
+      });
+      lifecycle.beginFinalDelivery();
+      if (partial) {
+        posts.set("native-prefix", "Accepted answer prefix");
+      }
+      lifecycle.observeFailure(
+        partial ? { visibleReplySent: true, messageIds: ["native-prefix"] } : undefined,
+      );
+      lifecycle.observeSuppression();
+      await lifecycle.cleanup();
+      expect(posts.get("preview")).toBe("Working");
+      expect(posts.get("native-prefix")).toBe(partial ? "Accepted answer prefix" : undefined);
+      expect(lifecycle.finalDelivered).toBe(partial);
+      expect(lifecycle.finalFailed).toBe(true);
+      expect(lifecycle.finalSuppressed).toBe(false);
+    },
+  );
+
+  it("settles explicit native suppression without claiming a visible final", async () => {
+    const { posts, draft } = createPreviewHarness();
+    const lifecycle = createLivePreviewLifecycle<Payload, string>({
+      draft,
+      cleanupUndelivered: true,
+    });
+    lifecycle.beginFinalDelivery();
+    lifecycle.observeSuppression();
+    await lifecycle.cleanup();
+    expect([...posts.values()]).toEqual([]);
+    expect(lifecycle.finalDelivered).toBe(false);
+    expect(lifecycle.finalSuppressed).toBe(true);
+    lifecycle.reset();
+    expect(lifecycle.finalStarted).toBe(false);
+    expect(lifecycle.finalSuppressed).toBe(false);
+  });
+
   it.each(["send", "edit"] as const)(
     "does not apply a stale final %s receipt or observer to the next admitted turn",
     async (operation) => {
-      const { posts, draft } = createPreviewHarness();
+      const { posts, draft, adapter } = createPreviewHarness();
       const oldSend = createDeferred<LivePreviewDeliveryResult>();
       const started = createDeferred();
       const onFinalDelivered = vi.fn();
@@ -252,7 +310,7 @@ describe("live preview delivery ownership", () => {
         adapter:
           operation === "edit"
             ? {
-                buildFinalEdit: (payload) => payload.text,
+                ...adapter,
                 editFinal: acceptOld,
                 onPreviewFinalized: terminalize,
               }
@@ -275,7 +333,7 @@ describe("live preview delivery ownership", () => {
   );
 
   it("does not seal the next turn after an old preview flush settles", async () => {
-    const { posts, draft, send } = createPreviewHarness();
+    const { posts, draft, send, adapter } = createPreviewHarness();
     const flushStarted = createDeferred();
     const finishFlush = createDeferred();
     draft.flush.mockImplementationOnce(async () => {
@@ -283,13 +341,10 @@ describe("live preview delivery ownership", () => {
       await finishFlush.promise;
     });
     const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
-    const editFinal = vi.fn(async (id: string, text: string) => {
-      posts.set(id, text);
-    });
     const delivery = lifecycle.deliver({
       kind: "final",
       payload: { text: "old answer" },
-      adapter: { buildFinalEdit: (payload) => payload.text, editFinal },
+      adapter,
       deliverNormally: send,
     });
     await flushStarted.promise;
@@ -299,12 +354,12 @@ describe("live preview delivery ownership", () => {
     expect((await delivery).kind).toBe("normal-skipped");
     expect(posts.get("preview")).toBe("new turn progress");
     expect(draft.seal).not.toHaveBeenCalled();
-    expect(editFinal).not.toHaveBeenCalled();
+    expect(adapter.editFinal).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
 
   it("keeps the next turn writable when an old final edit is rejected", async () => {
-    const { posts, draft, send } = createPreviewHarness();
+    const { posts, draft, send, adapter } = createPreviewHarness();
     const editStarted = createDeferred();
     const finishEdit = createDeferred();
     let writable = true;
@@ -316,7 +371,7 @@ describe("live preview delivery ownership", () => {
       kind: "final",
       payload: { text: "old answer" },
       adapter: {
-        buildFinalEdit: (payload) => payload.text,
+        ...adapter,
         editFinal: async () => {
           editStarted.resolve();
           await finishEdit.promise;

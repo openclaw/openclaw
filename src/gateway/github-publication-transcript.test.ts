@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/index.js";
 import {
   loadTranscriptEvents,
+  readLatestSessionTranscriptReport,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -223,8 +224,13 @@ describe("GitHub publication transcript reporting", () => {
         nextAction: "Retry.",
       } satisfies SessionGitHubPublicationResult;
       const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
+      // Admit the canonical schema first; inject this failure into the retained report writer.
+      await expect(readLatestSessionTranscriptReport(identity, [])).resolves.toEqual({
+        ok: true,
+        value: undefined,
+      });
       database.db.exec(
-        "CREATE TEMP TRIGGER reject_report BEFORE INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.type') = 'message' BEGIN SELECT RAISE(ABORT, 'report insert failed'); END",
+        "CREATE TRIGGER reject_report BEFORE INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.type') = 'message' BEGIN SELECT RAISE(ABORT, 'report insert failed'); END",
       );
       const markReported = vi.fn(() => {
         const reader = new DatabaseSync(database.path, { readOnly: true });

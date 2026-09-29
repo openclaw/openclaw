@@ -79,6 +79,7 @@ const defaults: Record<string, string> = {
   FROZEN_TARGET: "false",
   HISTORICAL_TARGET: "false",
   FORMAT_CHECK: "false",
+  SKIP_NPM_LOCK: "false",
   CHANGED_CORE_TEST_PATHS_JSON: "",
   RUN_CONTROL_UI_I18N: "false",
   RUN_UI_TESTS: "false",
@@ -144,10 +145,21 @@ export async function runCiGitStep(options: {
   commandResults?: Record<string, { code: FetchResult; output?: string }>;
   workflowRuns?: {
     id: number;
+    run_attempt: number;
     created_at: string;
     status: string;
     conclusion: string | null;
     head_sha: string;
+  }[];
+  workflowJobs?: {
+    runId: number;
+    runAttempt: number;
+    jobs: {
+      name: string;
+      status: string;
+      conclusion: string | null;
+      steps: { name: string; status: string; conclusion: string | null }[];
+    }[];
   }[];
   publishPath?: "directory" | "file" | "symlink";
   checkoutResults?: number[];
@@ -349,6 +361,21 @@ def main():`,
                     "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True)`,
           );
         }
+        if (action === "git-owner" && options.cancelDuringBackoff) {
+          if (!options.realClock || options.virtualBackoff) {
+            throw new Error("Backoff cancellation requires the real owner clock");
+          }
+          const boundary = "    while time.monotonic() < retry_at:\n        check_cancelled()";
+          if (source.split(boundary).length !== 2) {
+            throw new Error("Missing unique Git owner backoff cancellation boundary");
+          }
+          source = source.replace(
+            boundary,
+            `${boundary}
+        subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
+                        "observe", os.environ["TMPDIR"], "linux:configured", "backoff-ready"], check=True)`,
+          );
+        }
         writeFileSync(path.join(actions, action, name), source);
       }
       if (publisher) {
@@ -407,6 +434,7 @@ def main():`,
           diffResult: options.diffResult,
           commandResults: options.commandResults,
           workflowRuns: options.workflowRuns,
+          workflowJobs: options.workflowJobs,
           docsAgent,
           docsPublish,
           maturity,

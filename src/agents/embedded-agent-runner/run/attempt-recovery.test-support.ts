@@ -38,6 +38,7 @@ export type TransportDropScenario = {
   lastToolError?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["lastToolError"];
   pluginHarnessOwnsTransport?: boolean;
   retryAvailable?: boolean;
+  retryConnectionErrors?: boolean;
   replaySafe?: boolean;
   fallbackConfigured?: boolean;
   providerRetryMaxDelayMs?: number;
@@ -142,9 +143,11 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: { runId: "run:transport-drop", config: scenario.config } as Parameters<
-      typeof createEmbeddedRunFailoverRetryController
-    >[0]["runParams"],
+    runParams: {
+      runId: "run:transport-drop",
+      config: scenario.config,
+      retryConnectionErrors: scenario.retryConnectionErrors,
+    } as Parameters<typeof createEmbeddedRunFailoverRetryController>[0]["runParams"],
     provider,
     modelId,
     globalLane: "test",
@@ -174,6 +177,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
           onAgentEvent,
         },
         resolvedSessionKey: "agent:main:transport-drop",
+        fallbackConfigured: scenario.fallbackConfigured ?? false,
+        suspendForFailure: vi.fn(),
         startedAtMs: Date.now(),
         laneController: { throwIfAborted: vi.fn() },
       },
@@ -182,6 +187,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         modelId,
         model: { id: modelId },
         genericCompactionRecoveryAllowed: scenario.compactionEnabled ?? false,
+        attemptedThinking: new Set(["off"]),
+        maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
         snapshot: () => ({
           thinkLevel: "off",
           agentHarness: { id: "openclaw" },

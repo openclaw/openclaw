@@ -43,7 +43,7 @@ enum WideAreaGatewayDiscovery {
         }
 
         guard let statusJson = await context.tailscaleStatus(),
-              !collectTailnetIPv4s(statusJson: statusJson).isEmpty,
+              hasTailnetIPv4(statusJson: statusJson),
               let discovery = await loadWideAreaPtrRecords(
                   remaining: remaining,
                   dig: context.dig)
@@ -85,9 +85,9 @@ enum WideAreaGatewayDiscovery {
                 lanHost: txt["lanHost"],
                 tailnetDns: txt["tailnetDns"],
                 gatewayPort: parseInt(txt["gatewayPort"]),
-                gatewayTls: parseBool(txt["gatewayTls"]),
-                gatewayDirectReachable: parseBool(txt["gatewayDirectReachable"]),
-                sshPort: parseInt(txt["sshPort"]),
+                gatewayTls: GatewayDiscoveryText.txtBoolValue(txt, key: "gatewayTls"),
+                gatewayDirectReachable: GatewayDiscoveryText.txtBoolValue(txt, key: "gatewayDirectReachable"),
+                sshPort: self.parseInt(txt["sshPort"]),
                 cliPath: txt["cliPath"])
             beacons.append(beacon)
         }
@@ -95,28 +95,13 @@ enum WideAreaGatewayDiscovery {
         return beacons
     }
 
-    private static func collectTailnetIPv4s(statusJson: String?) -> [String] {
-        guard let statusJson else { return [] }
-        let decoder = JSONDecoder()
+    private static func hasTailnetIPv4(statusJson: String) -> Bool {
         guard let data = statusJson.data(using: .utf8),
-              let status = try? decoder.decode(TailscaleStatus.self, from: data)
-        else { return [] }
-
-        var ips: [String] = []
-        ips.append(contentsOf: status.selfNode?.resolvedIPs ?? [])
-        if let peers = status.peer {
-            for peer in peers.values {
-                ips.append(contentsOf: peer.resolvedIPs)
-            }
-        }
-
-        var seen = Set<String>()
-        return ips.filter { value in
-            guard self.isTailnetIPv4(value) else { return false }
-            if seen.contains(value) { return false }
-            seen.insert(value)
-            return true
-        }
+              let status = try? JSONDecoder().decode(TailscaleStatus.self, from: data)
+        else { return false }
+        return status.selfNode?.tailscaleIPs?.contains(where: TailscaleNetwork.isTailnetIPv4) == true ||
+            status.peer?.values
+            .contains { $0.tailscaleIPs?.contains(where: TailscaleNetwork.isTailnetIPv4) == true } == true
     }
 
     private static func readTailscaleStatus() async -> String? {
@@ -127,19 +112,17 @@ enum WideAreaGatewayDiscovery {
             "tailscale",
         ]
 
-        var output: String?
         for candidate in candidates {
             if let result = await BoundedCommand.run(
                 path: candidate,
                 arguments: ["status", "--json"],
                 timeout: 0.7)
             {
-                output = result
-                break
+                return result
             }
         }
 
-        return output
+        return nil
     }
 
     private static func loadWideAreaPtrRecords(
@@ -155,12 +138,12 @@ enum WideAreaGatewayDiscovery {
 
         guard let stdout = await dig(
             ["+short", "+time=1", "+tries=1", "@\(self.tailscaleDNSResolver)", probeName, "PTR"],
-            min(defaultTimeoutSeconds, budget)),
-            let ptrLines = stdout.split(whereSeparator: \.isNewline).nonEmpty
+            min(defaultTimeoutSeconds, budget))
         else {
             return nil
         }
-
+        let ptrLines = stdout.split(whereSeparator: \.isNewline)
+        guard !ptrLines.isEmpty else { return nil }
         return (domainTrimmed, ptrLines)
     }
 
@@ -221,22 +204,6 @@ enum WideAreaGatewayDiscovery {
         return Int(trimmed)
     }
 
-    private static func parseBool(_ value: String?) -> Bool {
-        guard let value else { return false }
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized == "1" || normalized == "true" || normalized == "yes"
-    }
-
-    private static func isTailnetIPv4(_ value: String) -> Bool {
-        let parts = value.split(separator: ".")
-        if parts.count != 4 { return false }
-        let octets = parts.compactMap { Int($0) }
-        if octets.count != 4 { return false }
-        let a = octets[0]
-        let b = octets[1]
-        return a == 100 && b >= 64 && b <= 127
-    }
-
     private static func decodeDnsSdEscapes(_ value: String) -> String {
         var bytes: [UInt8] = []
         var pending = ""
@@ -279,10 +246,6 @@ private struct TailscaleStatus: Decodable {
     struct Node: Decodable {
         let tailscaleIPs: [String]?
 
-        var resolvedIPs: [String] {
-            self.tailscaleIPs ?? []
-        }
-
         private enum CodingKeys: String, CodingKey {
             case tailscaleIPs = "TailscaleIPs"
         }
@@ -294,11 +257,5 @@ private struct TailscaleStatus: Decodable {
     private enum CodingKeys: String, CodingKey {
         case selfNode = "Self"
         case peer = "Peer"
-    }
-}
-
-extension Collection {
-    fileprivate var nonEmpty: Self? {
-        isEmpty ? nil : self
     }
 }

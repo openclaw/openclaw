@@ -32,7 +32,8 @@ struct QuickChatAgentDisplay: Equatable, Sendable, Identifiable {
     }
 
     init(summary: AgentSummary) {
-        let emoji = (summary.identity?["emoji"]?.value as? String)?.nonEmptyTrimmed
+        let emoji = (summary.identity?["emoji"]?.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let avatarRendered = summary.identity?["avatarUrl"]?.value as? String
         self.init(
             id: summary.id,
@@ -197,9 +198,25 @@ final class QuickChatModel {
     private(set) var currentSessionThinkingLevel: String?
     private(set) var thinkingOptions: [OpenClawChatThinkingLevelOption] = []
     private(set) var speed = OpenClawChatFastModeProfile.resolve(session: nil, model: nil)
-    private(set) var selectedModelSelectionID: String?
+    private var requestedModelSelectionID: String?
+
+    private(set) var selectedModelSelectionID: String? {
+        get {
+            guard !self.modelCatalogInvalidated else { return nil }
+            guard self.modelSelectionPolicy?.restricted == true,
+                  let selectionID = self.requestedModelSelectionID else { return self.requestedModelSelectionID }
+            if selectionID == OpenClawChatViewModel.defaultModelSelectionID {
+                return self.canSelectDefaultModel ? selectionID : nil
+            }
+            return self.modelChoices.contains(where: { $0.selectionID == selectionID }) ? selectionID : nil
+        }
+        set { self.requestedModelSelectionID = newValue }
+    }
+
     private(set) var selectedThinkingLevel: String?
     private(set) var modelDefaultProvider: String?
+    private(set) var modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
+    private(set) var modelCatalogInvalidated = false
     private(set) var isLoadingModelControls = false
     private(set) var isUpdatingModel = false
     private(set) var modelControlStatusMessage: String?
@@ -251,8 +268,8 @@ final class QuickChatModel {
         },
         agentIdentityProvider: @escaping AgentIdentityProvider = { sessionKey in
             let identity = try await GatewayConnection.shared.agentIdentity(sessionKey: sessionKey)
-            let name = identity.name?.nonEmptyTrimmed ?? identity.agentid
-            let emoji = identity.emoji?.nonEmptyTrimmed
+            let name = identity.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? identity.agentid
+            let emoji = identity.emoji?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             return QuickChatAgentDisplay(
                 id: identity.agentid,
                 name: name,
@@ -298,7 +315,8 @@ final class QuickChatModel {
                 target: target,
                 models: modelCatalog.choices,
                 sessions: sessions,
-                agents: agents)
+                agents: agents,
+                modelSelectionPolicy: modelCatalog.modelSelectionPolicy)
             snapshot.catalogMessage = modelCatalog.message
             snapshot.catalogRefreshFailed = modelCatalog.refreshFailed
             return snapshot
@@ -377,28 +395,15 @@ final class QuickChatModel {
     }
 
     var canCaptureTextContext: Bool {
-        self.canCaptureWindow && !self.isCapturingTextContext
+        self.canCaptureWindow
     }
 
     var canSelectRecentSession: Bool {
-        !self.sessionKey.isEmpty &&
-            self.connectionGate == .available &&
-            !self.isGrantingPermissions &&
-            !self.isCapturingTextContext &&
-            !self.isStartingDictation &&
-            !self.isDictating &&
-            !self.isUpdatingModel &&
-            self.sendState != .sending
+        self.canCaptureWindow
     }
 
     var canToggleDictation: Bool {
-        self.isDictating || self.isStartingDictation || (
-            !self.sessionKey.isEmpty &&
-                self.connectionGate == .available &&
-                !self.isGrantingPermissions &&
-                !self.isCapturingTextContext &&
-                !self.isUpdatingModel &&
-                self.sendState != .sending)
+        self.isDictating || self.isStartingDictation || self.canCaptureWindow
     }
 
     func beginPresentation() -> UUID {
@@ -410,14 +415,7 @@ final class QuickChatModel {
         self.textContextCaptureMessage = nil
         self.cancelTextContextCapture()
         self.resetDictationState()
-        self.cancelModelControlRefresh()
-        self.appliedModelSelections.removeAll()
-        self.selectedModelSelectionID = nil
-        self.selectedThinkingLevel = nil
-        self.currentSessionModelSelectionID = nil
-        self.currentSessionThinkingLevel = nil
-        self.speed = .resolve(session: nil, model: nil)
-        self.modelControlStatusMessage = nil
+        self.resetModelControls()
         self.targetSessionOverride = nil
         self.baseRoutingTarget = nil
         // The cached list stays displayable, but routing metadata must wait for the fresh
@@ -724,7 +722,7 @@ final class QuickChatModel {
     }
 
     func endPresentation() {
-        self.cancelModelCatalogEvents()
+        SimpleTaskSupport.stop(task: &self.modelCatalogEventsTask)
         self.isPresentationActive = false
         self.presentationID = UUID()
         // A quick bar target is presentation-scoped. Never carry a stale recent session
@@ -740,26 +738,19 @@ final class QuickChatModel {
         self.resetDictationState()
         // Model patches are persistent session mutations. Let an accepted selection
         // settle even though its presentation-scoped controls are being discarded.
-        self.cancelModelControlRefresh()
-        self.appliedModelSelections.removeAll()
-        self.selectedModelSelectionID = nil
-        self.selectedThinkingLevel = nil
-        self.currentSessionModelSelectionID = nil
-        self.currentSessionThinkingLevel = nil
-        self.speed = .resolve(session: nil, model: nil)
-        self.modelControlStatusMessage = nil
+        self.resetModelControls()
         // A dispatched chat.send may already be accepted; cancelling and retrying with a new UUID can duplicate it.
         self.cancelPermissionTask()
-        self.cancelPermissionPolling()
+        SimpleTaskSupport.stop(task: &self.permissionPollTask)
     }
 
     func cancelAllTasks() {
-        self.cancelModelCatalogEvents()
+        SimpleTaskSupport.stop(task: &self.modelCatalogEventsTask)
         self.sendTask?.cancel()
         self.sendTask = nil
         self.retryIdentity = nil
         self.cancelPermissionTask()
-        self.cancelPermissionPolling()
+        SimpleTaskSupport.stop(task: &self.permissionPollTask)
         self.cancelTextContextCapture()
         self.cancelModelControlRefresh()
         self.resetDictationState()
@@ -850,6 +841,7 @@ final class QuickChatModel {
         let previousTarget = self.routingTarget
         self.setRoutingTarget(target)
         if previousTarget != target {
+            self.invalidateModelChoices()
             // Explicit overrides survive target changes, but the target's underlying
             // session state must be read again before the compact control claims a value.
             self.currentSessionModelSelectionID = nil
@@ -983,20 +975,13 @@ final class QuickChatModel {
         }
     }
 
-    private func cancelPermissionPolling() {
-        self.permissionPollTask?.cancel()
-        self.permissionPollTask = nil
-    }
-
     private func cancelPermissionTask() {
-        self.permissionTask?.cancel()
-        self.permissionTask = nil
+        SimpleTaskSupport.stop(task: &self.permissionTask)
         self.isGrantingPermissions = false
     }
 
     private func cancelTextContextCapture() {
-        self.textContextCaptureTask?.cancel()
-        self.textContextCaptureTask = nil
+        SimpleTaskSupport.stop(task: &self.textContextCaptureTask)
         self.textContextCaptureID = nil
         self.isCapturingTextContext = false
     }
@@ -1029,7 +1014,7 @@ extension QuickChatModel {
     func selectModel(_ selectionID: String) {
         guard self.canUseModelControls, !self.isUpdatingModel, let target = self.routingTarget else { return }
         let normalized = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized == OpenClawChatViewModel.defaultModelSelectionID ||
+        guard (normalized == OpenClawChatViewModel.defaultModelSelectionID && self.canSelectDefaultModel) ||
             self.modelChoices.contains(where: {
                 $0.selectionID == normalized && $0.manualSelectionAllowed != false && $0.available != false
             })
@@ -1098,8 +1083,14 @@ extension QuickChatModel {
             defaultProvider: self.modelDefaultProvider)
     }
 
+    var canSelectDefaultModel: Bool {
+        !self.modelCatalogInvalidated &&
+            (self.modelSelectionPolicy?.restricted != true || self.modelSelectionPolicy?.defaultModel != nil)
+    }
+
     var displayedModelSelectionID: String? {
-        self.selectedModelSelectionID ?? self.currentSessionModelSelectionID
+        guard !self.modelCatalogInvalidated else { return nil }
+        return self.selectedModelSelectionID ?? self.currentSessionModelSelectionID
     }
 
     var displayedThinkingLevel: String? {
@@ -1114,7 +1105,7 @@ extension QuickChatModel {
     }
 
     private func startModelCatalogEvents(id: UUID) {
-        self.cancelModelCatalogEvents()
+        SimpleTaskSupport.stop(task: &self.modelCatalogEventsTask)
         let eventsProvider = self.modelCatalogEventsProvider
         self.modelCatalogEventsTask = Task { [weak self] in
             let events = await eventsProvider()
@@ -1126,24 +1117,28 @@ extension QuickChatModel {
         }
     }
 
-    private func cancelModelCatalogEvents() {
-        self.modelCatalogEventsTask?.cancel()
-        self.modelCatalogEventsTask = nil
-    }
-
     private func handleModelCatalogDelivery(_ delivery: GatewayConnection.PushDelivery, presentationID: UUID) async {
         guard delivery.isCurrent, let push = delivery.push else { return }
         guard self.isCurrentPresentation(presentationID), let target = self.routingTarget else { return }
         switch push {
         case let .event(event):
             guard event.event == "config.changed" || event.event == "chat.metadata.changed" else { return }
+            if case .modelSelectionChanged = OpenClawChatGatewayPayloadCodec.event(from: event) {
+                self.invalidateModelChoices()
+            }
         case .snapshot, .seqGap:
-            break
+            self.invalidateModelChoices()
         }
         await self.awaitControlPatchSettlement(for: target)
         guard !Task.isCancelled, delivery.isCurrent,
               self.isCurrentPresentation(presentationID), self.routingTarget == target else { return }
         self.refreshModelControls(for: target)
+    }
+
+    private func invalidateModelChoices() {
+        self.cancelModelControlRefresh()
+        self.modelCatalogInvalidated = true
+        self.modelChoices = []
     }
 
     private func refreshModelControls(for target: QuickChatRoutingTarget, afterSettingsChange: Bool = false) {
@@ -1165,6 +1160,8 @@ extension QuickChatModel {
                 guard !Task.isCancelled, self.modelControlsRequestID == requestID,
                       self.routingTarget == target else { return }
                 self.modelChoices = snapshot.models
+                self.modelSelectionPolicy = snapshot.modelSelectionPolicy
+                if self.modelCatalogInvalidated { self.modelCatalogInvalidated = false }
                 self.currentSessionModelSelectionID = snapshot.currentModelSelectionID
                 self.currentSessionThinkingLevel = snapshot.currentThinkingLevel
                 self.thinkingOptions = snapshot.thinkingOptions
@@ -1293,23 +1290,24 @@ extension QuickChatModel {
 
     private func cancelModelControlRefresh() {
         self.modelControlsRequestID = UUID()
-        self.modelControlsTask?.cancel()
-        self.modelControlsTask = nil
+        SimpleTaskSupport.stop(task: &self.modelControlsTask)
         self.isLoadingModelControls = false
     }
 
+    private func resetModelControls() {
+        self.cancelModelControlRefresh()
+        self.appliedModelSelections.removeAll()
+        self.selectedModelSelectionID = nil
+        self.selectedThinkingLevel = nil
+        self.currentSessionModelSelectionID = nil
+        self.currentSessionThinkingLevel = nil
+        self.speed = .resolve(session: nil, model: nil)
+        self.modelControlStatusMessage = nil
+    }
+
     private func resetDictationState() {
-        self.isStartingDictation = false
-        self.isDictating = false
+        self.stopDictation()
         self.dictationStatusMessage = nil
         self.dictationSelectionRange = nil
-        self.dictationTextSession = nil
-    }
-}
-
-extension String {
-    fileprivate var nonEmptyTrimmed: String? {
-        let trimmed = self.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

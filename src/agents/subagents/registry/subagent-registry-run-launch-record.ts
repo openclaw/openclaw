@@ -24,6 +24,7 @@ export type RegisterSubagentRunParams = {
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   completionRequesterSessionId?: string;
+  completionRequesterLifecycleRevision?: string;
   spawnMode?: "run" | "session";
   attachmentId?: string;
   attachmentsDir?: string;
@@ -38,9 +39,6 @@ export type RegisterSubagentRunParams = {
   outputSchema?: Record<string, unknown>;
   queuedLaunch?: SubagentRunRecord["queuedLaunch"];
   queued?: boolean;
-  /** Required when direct dispatch suppresses Gateway tracking. Out-of-process launches keep
-      Gateway's existing best-effort CLI policy; other callers create a best-effort row here. */
-  taskRowOwnership?: "required" | "gateway_best_effort";
   gatewayContextResolver?: GatewayContextResolver;
 };
 
@@ -81,6 +79,7 @@ export function createSubagentRegistrationRecord(
     expectsCompletionMessage: registerParams.expectsCompletionMessage,
     completionTarget: registerParams.completionTarget,
     completionRequesterSessionId: registerParams.completionRequesterSessionId,
+    completionRequesterLifecycleRevision: registerParams.completionRequesterLifecycleRevision,
     spawnMode,
     label: registerParams.label,
     model: registerParams.model,

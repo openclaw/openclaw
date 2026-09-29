@@ -12,6 +12,7 @@ import {
   resolveGatewayCredentialsForUrlEdit,
   type UiSettings,
 } from "../../app/settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
@@ -20,6 +21,7 @@ import type { SparklineSample } from "../../components/sparkline-tile.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
+import { readSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -34,7 +36,6 @@ import {
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "./system-info.ts";
 import { renderConnection } from "./view.ts";
 
-const DIAGNOSTICS_POLL_INTERVAL_MS = 5_000;
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
 
 export class ConnectionPage extends OpenClawLightDomElement {
@@ -61,7 +62,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
 
   private readonly diagnosticsPolling = new PollController(
     this,
-    DIAGNOSTICS_POLL_INTERVAL_MS,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
     () => this.refreshDiagnostics(),
     false,
   );
@@ -196,7 +197,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
         "last-heartbeat",
         {},
         {
-          timeoutMs: DIAGNOSTICS_POLL_INTERVAL_MS,
+          timeoutMs: SYSTEM_INFO_POLL_INTERVAL_MS,
           signal: request.signal,
         },
       );
@@ -243,25 +244,25 @@ export class ConnectionPage extends OpenClawLightDomElement {
       this.context.gateway === gatewaySource &&
       this.gateway.isCurrent(scope);
     try {
-      const response = await scope.client.request<SystemInfoResult>(
-        "system.info",
-        {},
-        {
-          timeoutMs: DIAGNOSTICS_POLL_INTERVAL_MS,
-          signal: request.signal,
-        },
-      );
+      const sample = await readSystemInfo(gatewaySource, request.signal);
       if (!isCurrent()) {
         return;
       }
-      this.systemInfo = response;
-      this.statusHistory = [
-        ...this.statusHistory.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),
-        {
-          at: Date.now(),
-          status: { eventLoop: response.eventLoop, processMemory: response.processMemory },
-        },
-      ];
+      this.systemInfo = sample.value;
+      this.diagnosticsPolling.stop();
+      this.diagnosticsPolling.start();
+      if (this.statusHistory.at(-1)?.at !== sample.at) {
+        this.statusHistory = [
+          ...this.statusHistory.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),
+          {
+            at: sample.at,
+            status: {
+              eventLoop: sample.value.eventLoop,
+              processMemory: sample.value.processMemory,
+            },
+          },
+        ];
+      }
       this.statusFailed = false;
     } catch (error) {
       if (!isCurrent()) {
@@ -395,9 +396,9 @@ export class ConnectionPage extends OpenClawLightDomElement {
       onDiscardSession: () => this.resetSessionDraft(),
     });
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
-          <div class="page-title">${titleForRoute("connection")}</div>
+          <h1 class="page-title">${titleForRoute("connection")}</h1>
           <div class="page-subtitle">
             ${subtitleForRoute("connection")} ${renderLearnMoreLink(CONNECTION_DOCS_URL)}
           </div>

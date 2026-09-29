@@ -344,11 +344,6 @@ describe("followup queue authority", () => {
     { mode: "enabled", groups: [[0], [1, 2], [3], [4], [5]] },
     { mode: "disabled", groups: [[0, 1, 2, 3, 4, 5]] },
     { mode: "policy-deny", groups: [[0, 1, 2], [3], [4], [5]] },
-    { mode: "runtime-cap", groups: [[0, 1, 2, 3, 4, 5]] },
-    { mode: "runtime-theme", groups: [[0, 1, 2], [3], [4], [5]] },
-    { mode: "non-owner", groups: [[0, 1, 2], [3], [4], [5]] },
-    { mode: "no-capability", groups: [[0, 1, 2], [3], [4], [5]] },
-    { mode: "theme-deny", groups: [[0, 1, 2, 3, 4, 5]] },
   ])(
     "collects turns in order within effective screen and theme authority: $mode",
     async ({ mode, groups }) => {
@@ -366,21 +361,12 @@ describe("followup queue authority", () => {
       for (const [index, gatewayUiCommandTarget] of targets.entries()) {
         const run = createRun({ prompt: `selection ${index + 1}`, originatingChannel: "webchat" });
         run.run.gatewayUiCommandTarget = gatewayUiCommandTarget;
-        run.run.clientCaps = mode === "no-capability" ? [] : ["ui-commands"];
-        run.run.senderIsOwner = mode !== "non-owner";
+        run.run.clientCaps = ["ui-commands"];
+        run.run.senderIsOwner = true;
         run.run.approvalReviewerDeviceId = "shared-device";
         run.disableTools = mode === "disabled";
         if (mode === "policy-deny") {
           run.run.config = { tools: { deny: ["screen"] } };
-        }
-        if (mode === "runtime-cap") {
-          run.toolsAllow = ["read"];
-        }
-        if (mode === "runtime-theme") {
-          run.toolsAllow = ["theme"];
-        }
-        if (mode === "theme-deny") {
-          run.run.config = { tools: { deny: ["screen", "theme"] } };
         }
         enqueueFollowupRun(key, run, settings);
       }

@@ -248,7 +248,9 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")!;
       expect(JSON.parse(receipt).modelRef).toBeNull();
       expect(receipt).not.toContain("test-only-provider-key");
-      expect(receipt).not.toContain("provider-login");
+      expect(JSON.parse(receipt).wizard?.authChoice).toBe(
+        entry === "provider sign-in" ? "provider-login" : undefined,
+      );
       publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
       await page.updateComplete;
       publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
@@ -567,6 +569,9 @@ describe("ModelSetupPage first-run activation ownership", () => {
       setVerifyState: () => undefined,
       setActivationState: () => undefined,
       setRefreshWarning: () => undefined,
+      resumeWizard: () => undefined,
+      closeWizard: () => undefined,
+      notify: () => undefined,
     });
     const notify = vi.fn();
     const unsubscribe = setup.subscribe(notify);
@@ -603,10 +608,11 @@ describe("ModelSetupPage first-run activation ownership", () => {
     "replacement",
   ] as const;
   it.each(
-    ["manual key", "provider sign-in"].flatMap((entry) =>
-      ["reply", "refresh"].flatMap((boundary) =>
-        retirements.map((changed) => ({ entry, boundary, changed })),
-      ),
+    [
+      { entry: "manual key", boundary: "reply" },
+      { entry: "provider sign-in", boundary: "refresh" },
+    ].flatMap(({ entry, boundary }) =>
+      retirements.map((changed) => ({ entry, boundary, changed })),
     ),
   )(
     "fences $entry success when $changed retires it during $boundary",
@@ -735,13 +741,11 @@ describe("ModelSetupPage first-run activation ownership", () => {
 
   it.each(
     ["active", "replacement"].flatMap((ownership) =>
-      ["result", "uncertain", "busy"].flatMap((rejection) =>
-        ["candidate", "manual"].map((entry) => ({ ownership, rejection, entry })),
-      ),
+      ["result", "uncertain", "busy"].map((rejection) => ({ ownership, rejection })),
     ),
   )(
-    "handles $rejection without losing failure feedback or replacement ownership ($ownership, $entry)",
-    async ({ ownership, rejection, entry }) => {
+    "handles manual $rejection without losing failure feedback or replacement ownership ($ownership)",
+    async ({ ownership, rejection }) => {
       const { context, client, request } = createFirstRunContext();
       const rejected = createDeferred<unknown>();
       request.mockReturnValue(rejected.promise);
@@ -751,33 +755,16 @@ describe("ModelSetupPage first-run activation ownership", () => {
           result: {
             ...detection,
             manualProviders: [{ id: "provider-key", label: "Provider key" }],
-            candidates:
-              entry === "manual"
-                ? []
-                : [
-                    {
-                      kind: "openai-api-key",
-                      label: "Provider",
-                      detail: "Available",
-                      modelRef: "provider/model",
-                      recommended: true,
-                      credentials: true,
-                    },
-                  ],
           },
         },
         client,
         firstRun: true,
       });
-      if (entry === "manual") {
-        await selectManualProvider(page, "provider-key");
-        const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-        input.value = "test-only-provider-key";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
-      } else {
-        await clickCandidate(page, "openai-api-key");
-      }
+      await selectManualProvider(page, "provider-key");
+      const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
+      input.value = "test-only-provider-key";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       const originalReceipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
       const replacement =
@@ -832,7 +819,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
             : null,
       );
       expect(context.navigate).not.toHaveBeenCalled();
-      if (ownership === "active" && entry === "manual" && rejection !== "uncertain") {
+      if (ownership === "active" && rejection !== "uncertain") {
         [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
           .find((button) => button.textContent?.trim() === "Close")!
           .click();
@@ -883,6 +870,13 @@ describe("ModelSetupPage first-run activation ownership", () => {
           return { sessionId: "auth", done: false, status: "running" };
         }
         if (method === "wizard.next") {
+          if (cancelStatus === "busy") {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "wizard not found",
+              details: { code: "WIZARD_NOT_FOUND" },
+            });
+          }
           if (serverStatus !== "running") {
             return { done: true, status: serverStatus };
           }

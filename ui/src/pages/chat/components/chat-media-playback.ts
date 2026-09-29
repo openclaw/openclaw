@@ -1,3 +1,4 @@
+import { sleepWithAbort } from "@openclaw/retry";
 import { appendAttachmentUrlSearchParam } from "./chat-message-local-media.ts";
 
 export type ChatMediaPlaybackMode = "native" | "transcode";
@@ -27,23 +28,6 @@ export function buildChatMediaFetchHeaders(authToken: string | null | undefined)
     headers.set("Authorization", `Bearer ${token}`);
   }
   return headers;
-}
-
-function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return Promise.reject(playbackAbortError(signal));
-  }
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(playbackAbortError(signal));
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 async function fetchPlaybackHead(params: {
@@ -122,7 +106,7 @@ export async function waitForChatMediaPlayback(params: {
       if (remainingAfterResponseMs <= 0) {
         return "unavailable";
       }
-      await waitForRetry(Math.min(retryDelay, remainingAfterResponseMs), params.signal);
+      await sleepWithAbort(Math.min(retryDelay, remainingAfterResponseMs), params.signal);
     } catch {
       return params.signal.aborted ? "aborted" : "unavailable";
     }

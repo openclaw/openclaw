@@ -1,4 +1,3 @@
-// Mattermost plugin module implements doctor contract behavior.
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {

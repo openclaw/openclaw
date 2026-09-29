@@ -17,10 +17,13 @@ import {
   removePluginInstallRecordFromRecords,
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
+import { resolveInstalledPluginIndexStateDatabaseOptions } from "../plugins/installed-plugin-index-store-path.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { isExternallyDistributedPlugin } from "../plugins/official-external-plugin-catalog.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import type { OpenClawPeerLinkAuditIssue } from "../plugins/plugin-peer-link.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry-refresh.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
@@ -78,38 +81,17 @@ type PluginRegistryHealthIssue =
       kind: "registry-missing-or-stale";
       path: string;
     }
-  | {
-      kind: "stale-managed-npm-bundled-plugin";
-      pluginId: string;
-      packageName: string;
-      packageDir: string;
-      npmRoot: string;
-      version?: string;
-    }
+  | ({ kind: "stale-managed-npm-bundled-plugin" } & StaleManagedNpmBundledPlugin)
   | {
       kind: "stale-local-bundled-plugin-install-record";
       pluginId: string;
       stalePath: string;
     }
+  | ({
+      kind: "managed-npm-openclaw-peer-link" | "registered-npm-openclaw-host-link";
+    } & OpenClawPeerLinkAuditIssue)
   | {
-      kind: "managed-npm-openclaw-peer-link";
-      packageName: string;
-      packageDir: string;
-      reason: string;
-    }
-  | {
-      kind: "registered-npm-openclaw-host-link";
-      packageName: string;
-      packageDir: string;
-      reason: string;
-    }
-  | {
-      kind: "managed-npm-package-unreadable";
-      packageDir: string;
-      reason: string;
-    }
-  | {
-      kind: "registered-npm-package-unreadable";
+      kind: "managed-npm-package-unreadable" | "registered-npm-package-unreadable";
       packageDir: string;
       reason: string;
     }
@@ -188,12 +170,13 @@ function listStaleManagedNpmBundledPlugins(
       if (!pluginId || pluginId !== bundled.pluginId) {
         continue;
       }
+      const version = readPackageVersion(packageDir);
       stale.push({
         pluginId,
         packageName,
         packageDir,
         npmRoot,
-        ...(readPackageVersion(packageDir) ? { version: readPackageVersion(packageDir) } : {}),
+        ...(version ? { version } : {}),
       });
     }
   }
@@ -244,17 +227,12 @@ function removeManagedNpmDependency(params: {
   const packageJson = readJsonObject(npmPackageJsonPath) ?? {};
   const dependencies = readStringMap(packageJson.dependencies);
   delete dependencies[params.packageName];
-  const nextPackageJson =
-    Object.keys(dependencies).length === 0
-      ? (() => {
-          const { dependencies: _dependencies, ...rest } = packageJson;
-          return rest;
-        })()
-      : {
-          ...packageJson,
-          dependencies,
-        };
-  writeJsonTarget(npmPackageJsonPath, nextPackageJson);
+  if (Object.keys(dependencies).length === 0) {
+    delete packageJson.dependencies;
+  } else {
+    packageJson.dependencies = dependencies;
+  }
+  writeJsonTarget(npmPackageJsonPath, packageJson);
   removeManagedNpmPackageLockDependency(params);
   fs.rmSync(params.packageDir, { recursive: true, force: true });
   const scopeDir = path.dirname(params.packageDir);
@@ -411,14 +389,7 @@ export async function detectPluginRegistryHealthIssues(
     });
   }
   for (const plugin of listStaleManagedNpmBundledPlugins(params)) {
-    issues.push({
-      kind: "stale-managed-npm-bundled-plugin",
-      pluginId: plugin.pluginId,
-      packageName: plugin.packageName,
-      packageDir: plugin.packageDir,
-      npmRoot: plugin.npmRoot,
-      ...(plugin.version ? { version: plugin.version } : {}),
-    });
+    issues.push({ kind: "stale-managed-npm-bundled-plugin", ...plugin });
   }
   for (const record of await listStaleLocalBundledPluginInstallRecordShadows(params)) {
     issues.push({
@@ -430,34 +401,16 @@ export async function detectPluginRegistryHealthIssues(
   issues.push(...(await listStaleManagedNpmInstallGenerations(params)));
   const hostLinkAudit = await listPluginOpenClawHostLinkIssues(params);
   for (const issue of hostLinkAudit.peerLinkIssues) {
-    issues.push({
-      kind: "managed-npm-openclaw-peer-link",
-      packageName: issue.packageName,
-      packageDir: issue.packageDir,
-      reason: issue.reason,
-    });
+    issues.push({ kind: "managed-npm-openclaw-peer-link", ...issue });
   }
   for (const failure of hostLinkAudit.packageReadFailures) {
-    issues.push({
-      kind: "managed-npm-package-unreadable",
-      packageDir: failure.packageDir,
-      reason: failure.reason,
-    });
+    issues.push({ kind: "managed-npm-package-unreadable", ...failure });
   }
   for (const issue of hostLinkAudit.registeredPeerLinkIssues) {
-    issues.push({
-      kind: "registered-npm-openclaw-host-link",
-      packageName: issue.packageName,
-      packageDir: issue.packageDir,
-      reason: issue.reason,
-    });
+    issues.push({ kind: "registered-npm-openclaw-host-link", ...issue });
   }
   for (const failure of hostLinkAudit.registeredPackageReadFailures) {
-    issues.push({
-      kind: "registered-npm-package-unreadable",
-      packageDir: failure.packageDir,
-      reason: failure.reason,
-    });
+    issues.push({ kind: "registered-npm-package-unreadable", ...failure });
   }
   return issues;
 }
@@ -539,56 +492,34 @@ export function pluginRegistryIssueToHealthFinding(
 export function pluginRegistryIssueToRepairEffect(
   issue: PluginRegistryHealthIssue,
 ): HealthRepairEffect {
+  const effect = (
+    kind: HealthRepairEffect["kind"],
+    action: string,
+    target: string,
+  ): HealthRepairEffect => ({ kind, action, target, dryRunSafe: false });
   switch (issue.kind) {
     case "registry-missing-or-stale":
-      return {
-        kind: "state",
-        action: "would-rebuild-plugin-registry",
-        target: issue.path,
-        dryRunSafe: false,
-      };
+      return effect("state", "would-rebuild-plugin-registry", issue.path);
     case "stale-managed-npm-bundled-plugin":
-      return {
-        kind: "package",
-        action: "would-remove-stale-managed-npm-bundled-plugin",
-        target: issue.packageDir,
-        dryRunSafe: false,
-      };
+      return effect("package", "would-remove-stale-managed-npm-bundled-plugin", issue.packageDir);
     case "stale-local-bundled-plugin-install-record":
-      return {
-        kind: "state",
-        action: "would-remove-stale-local-bundled-plugin-install-record",
-        target: issue.pluginId,
-        dryRunSafe: false,
-      };
+      return effect(
+        "state",
+        "would-remove-stale-local-bundled-plugin-install-record",
+        issue.pluginId,
+      );
     case "managed-npm-openclaw-peer-link":
-      return {
-        kind: "package",
-        action: "would-relink-managed-npm-openclaw-peer",
-        target: issue.packageDir,
-        dryRunSafe: false,
-      };
+      return effect("package", "would-relink-managed-npm-openclaw-peer", issue.packageDir);
     case "registered-npm-openclaw-host-link":
-      return {
-        kind: "package",
-        action: "would-relink-registered-npm-openclaw-host",
-        target: issue.packageDir,
-        dryRunSafe: false,
-      };
+      return effect("package", "would-relink-registered-npm-openclaw-host", issue.packageDir);
     case "managed-npm-package-unreadable":
-      return {
-        kind: "package",
-        action: "requires-managed-npm-package-readability-repair",
-        target: issue.packageDir,
-        dryRunSafe: false,
-      };
+      return effect("package", "requires-managed-npm-package-readability-repair", issue.packageDir);
     case "registered-npm-package-unreadable":
-      return {
-        kind: "package",
-        action: "requires-registered-npm-package-readability-repair",
-        target: issue.packageDir,
-        dryRunSafe: false,
-      };
+      return effect(
+        "package",
+        "requires-registered-npm-package-readability-repair",
+        issue.packageDir,
+      );
     case "stale-managed-npm-install-generation":
       return staleManagedNpmInstallGenerationToRepairEffect(issue);
   }
@@ -610,25 +541,44 @@ function assertNeverPluginRegistryIssue(issue: never): never {
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
-  let preflight: ReturnType<typeof preflightPluginRegistryDoctorMigration>;
-  try {
-    preflight = preflightPluginRegistryDoctorMigration(params);
-  } catch (error) {
-    if (!(error instanceof InvalidPluginInstallRecordStateError)) {
-      throw error;
+  const readPreflight = () => {
+    try {
+      return preflightPluginRegistryDoctorMigration(params);
+    } catch (error) {
+      if (!(error instanceof InvalidPluginInstallRecordStateError)) {
+        throw error;
+      }
+      note(error.message, "Plugin registry");
+      return undefined;
     }
-    note(error.message, "Plugin registry");
+  };
+  // Invalid input must not bootstrap state; only leased facts can authorize repair.
+  const initial = readPreflight();
+  if (!initial) {
     return { config: params.config };
   }
+  if (!params.prompter.shouldRepair) {
+    return await inspectOrRepairPluginRegistryState(params, initial);
+  }
+  return await withPluginLifecycleLease(
+    resolveInstalledPluginIndexStateDatabaseOptions(params),
+    async () => {
+      const current = readPreflight();
+      return current
+        ? inspectOrRepairPluginRegistryState(params, current)
+        : { config: params.config };
+    },
+  );
+}
 
+async function inspectOrRepairPluginRegistryState(
+  params: PluginRegistryDoctorRepairParams,
+  preflight: ReturnType<typeof preflightPluginRegistryDoctorMigration>,
+): Promise<PluginRegistryDoctorRepairResult> {
   // Earlier Doctor stages can commit install-record repairs inside another metadata scope.
   // This refresh owns the next write, so it must start from the durable ledger.
   clearLoadInstalledPluginIndexInstallRecordsCache();
 
-  const migrationParams = {
-    ...params,
-    config: params.config,
-  };
   const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins(params);
   const removedStaleLocalBundledPluginIds =
     await maybeRepairStaleLocalBundledPluginInstallRecords(params);
@@ -660,7 +610,7 @@ export async function maybeRepairPluginRegistryState(
   );
   if (preflight.action !== "skip-existing") {
     const result = await migratePluginRegistryForDoctor({
-      ...migrationParams,
+      ...params,
       installRecords,
     });
     if (result.migrated) {
@@ -678,7 +628,7 @@ export async function maybeRepairPluginRegistryState(
   }
 
   const index = await refreshPluginRegistry({
-    ...migrationParams,
+    ...params,
     reason: "migration",
     installRecords,
   });

@@ -1,6 +1,3 @@
-// Sidebar footer identity menu, split out of app-sidebar-agent-menu.ts to
-// keep that module inside the TS LOC ratchet. Shares the sidebar menu focus
-// helpers and help submenu with the agent menu.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
@@ -8,16 +5,10 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-catalog.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
-import {
-  DEBUG_OVERLAY_SHORTCUT_LABEL,
-  requestDebugOverlayToggle,
-} from "../pages/debug/debug-overlay-contract.ts";
+import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
 import {
   closeMenuAfterOwnDropdownHide,
   COMMAND_VALUE_PREFIX,
@@ -25,7 +16,9 @@ import {
   moveSidebarMenuFocus,
   renderSidebarHelpMenu,
 } from "./app-sidebar-agent-menu.ts";
+import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import { icons } from "./icons.ts";
+import { renderKbd, renderKeyboardShortcut } from "./kbd.ts";
 import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
 import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
@@ -96,7 +89,10 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
           }
           ${
             !selected && index < 9
-              ? html`<kbd class="session-menu__shortcut" aria-hidden="true">⌘${index + 1}</kbd>`
+              ? renderKbd(["⌘", String(index + 1)], {
+                  className: "session-menu__shortcut",
+                  ariaHidden: true,
+                })
               : nothing
           }
           ${
@@ -109,19 +105,14 @@ function renderIdentityGateways(onClose: SidebarIdentityMenuParams["onClose"]) {
     })}
     ${
       current?.canPromote
-        ? html`<wa-dropdown-item
-            class="sidebar-customize-menu__item"
-            value="command:gateway-set-primary"
-          >
-            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.star}</span>
-            <span class="sidebar-customize-menu__text">${t("nav.gateway.setPrimary")}</span>
-          </wa-dropdown-item>`
+        ? renderSidebarMenuAction(
+            "command:gateway-set-primary",
+            t("nav.gateway.setPrimary"),
+            "star",
+          )
         : nothing
     }
-    <wa-dropdown-item class="sidebar-customize-menu__item" value="command:gateway-settings">
-      <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.server}</span>
-      <span class="sidebar-customize-menu__text">${t("nav.gateway.openSettings")}</span>
-    </wa-dropdown-item>
+    ${renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "server")}
     <div class="sidebar-customize-menu__separator" role="separator"></div>
   `;
 }
@@ -215,14 +206,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
-      <button
-        slot="trigger"
-        type="button"
-        tabindex="-1"
-        aria-hidden="true"
-        aria-label=${t("profilePage.identity.menuLabel")}
-        style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-      ></button>
+      ${renderSidebarMenuTrigger(
+        { x: position.x, y: position.bottom },
+        t("profilePage.identity.menuLabel"),
+        "bottom",
+      )}
       <wa-dropdown-item
         class="sidebar-customize-menu__item sidebar-identity-menu__header"
         value="command:profile"
@@ -243,38 +231,29 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
       </wa-dropdown-item>
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${renderIdentityGateways(params.onClose)}
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
-        <span class="sidebar-customize-menu__text">${t("nav.settings")}</span>
-        <kbd slot="details" class="session-menu__shortcut" aria-hidden="true"
-          >${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings)}</kbd
-        >
-      </wa-dropdown-item>
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:usage">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.coins}</span>
-        <span class="sidebar-customize-menu__text">${titleForRoute("usage")}</span>
-      </wa-dropdown-item>
+      ${renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
+        details: renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, {
+          slot: "details",
+          className: "session-menu__shortcut",
+          ariaHidden: true,
+        }),
+      })}
+      ${renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins")}
       <div class="sidebar-customize-menu__separator" role="separator"></div>
-      <wa-dropdown-item
-        class="sidebar-customize-menu__item sidebar-pair-mobile"
-        value="command:pair-mobile"
-        ?disabled=${!params.canPairDevice}
-        title=${params.canPairDevice ? nothing : t("devices.pairing.adminRequired")}
-      >
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
-        <span class="sidebar-customize-menu__text">${t("devices.pairing.button")}</span>
-      </wa-dropdown-item>
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>
-        <span class="sidebar-customize-menu__text">${t("agentChip.getApps")}</span>
-      </wa-dropdown-item>
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:debug-overlay">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.activity}</span>
-        <span class="sidebar-customize-menu__text">${t("debug.overlay.title")}</span>
-        <span slot="details" class="session-menu__shortcut" aria-hidden="true"
-          >${DEBUG_OVERLAY_SHORTCUT_LABEL}</span
-        >
-      </wa-dropdown-item>
+      ${renderSidebarMenuAction("command:pair-mobile", t("devices.pairing.button"), "smartphone", {
+        className: "sidebar-pair-mobile",
+        disabled: !params.canPairDevice,
+        title: params.canPairDevice ? undefined : t("devices.pairing.adminRequired"),
+      })}
+      ${renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")}
+      ${renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
+        details: renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.debugOverlay, {
+          slot: "details",
+          className: "session-menu__shortcut",
+          ariaHidden: true,
+        }),
+      })}
+
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${renderSidebarHelpMenu()}
       ${
@@ -301,7 +280,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           }}
         ></openclaw-sidebar-build-chip>
         <span class="sidebar-mode-switch">
-          <openclaw-theme-mode-toggle .mode=${params.themeMode}></openclaw-theme-mode-toggle>
+          <openclaw-theme-mode-toggle
+            .mode=${params.themeMode}
+            .menuItem=${true}
+          ></openclaw-theme-mode-toggle>
         </span>
       </div>
     </wa-dropdown>

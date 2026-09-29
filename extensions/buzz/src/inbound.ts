@@ -4,6 +4,7 @@ import {
   logInboundDrop,
   resolveChannelInboundRouteEnvelope,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -56,6 +57,20 @@ export async function handleBuzzInbound(params: {
   const hasControlCommand =
     shouldComputeCommandAuthorized && runtime.channel.text.hasControlCommand(message.text, cfg);
   const groupConfig = account.config.groups?.[channelId];
+  const requireMention = groupConfig?.requireMention ?? true;
+  const isBotOwnedThread =
+    message.threadId &&
+    !wasMentioned &&
+    groupConfig?.requireMentionInBotThreads !== undefined &&
+    groupConfig.requireMentionInBotThreads !== requireMention
+      ? await bus.isBotOwnedThread({ channelId, threadId: message.threadId })
+      : false;
+  params.assertCurrent();
+  const mentionPolicy = resolveBotThreadMentionPolicy({
+    isBotOwnedThread,
+    requireMentionInBotThreads: groupConfig?.requireMentionInBotThreads,
+    requireMention,
+  });
   const access = await runtime.channel.inbound.ingress.resolveStable({
     channelId: "buzz",
     accountId: account.accountId,
@@ -78,7 +93,7 @@ export async function handleBuzzInbound(params: {
     groupAllowFrom: groupConfig?.groupAllowFrom ?? account.config.groupAllowFrom,
     policy: {
       activation: {
-        requireMention: groupConfig?.requireMention ?? true,
+        requireMention: mentionPolicy.requireMention,
         allowTextCommands: true,
       },
     },

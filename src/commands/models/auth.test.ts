@@ -6,7 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
-import type { ProviderPlugin } from "../../plugins/types.js";
+import type { ProviderAuthProfile, ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 
@@ -59,6 +59,7 @@ const mocks = vi.hoisted(() => ({
   upsertAuthProfileWithLock: vi.fn(),
   persistProviderAuthProfilesAfterLogin: vi.fn(),
   removeProviderAuthProfilesWithLock: vi.fn(),
+  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   resolvePluginProvidersCore: vi.fn(),
   createClackPrompter: vi.fn(),
   loadValidConfigSnapshotOrThrow: vi.fn(),
@@ -93,6 +94,11 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   upsertAuthProfile: mocks.upsertAuthProfile,
   upsertAuthProfileWithLock: mocks.upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
+}));
+
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
+  loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
 }));
 
 vi.mock("../../plugins/provider-auth-persistence.js", () => ({
@@ -289,26 +295,6 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) 
           : merged;
       },
     ),
-    applyDefaultModel: vi.fn((cfg: OpenClawConfig, model: string) => ({
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models: {
-            ...cfg.agents?.defaults?.models,
-            [model]: cfg.agents?.defaults?.models?.[model] ?? {},
-          },
-          model: {
-            ...(typeof cfg.agents?.defaults?.model === "object" &&
-            "fallbacks" in cfg.agents.defaults.model
-              ? { fallbacks: cfg.agents.defaults.model.fallbacks }
-              : undefined),
-            primary: model,
-          },
-        },
-      },
-    })),
   };
 });
 
@@ -428,6 +414,10 @@ describe("modelsAuthLoginCommand", () => {
     mocks.tryImportProviderCredential.mockResolvedValue(undefined);
     mocks.removeProviderAuthProfilesWithLock.mockReset();
     mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
+    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset().mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
@@ -556,6 +546,48 @@ describe("modelsAuthLoginCommand", () => {
       }),
     );
   });
+
+  it.each([
+    { profileId: undefined, expectedIds: ["openai:first", "openai:second"] },
+    { profileId: "openai:first", expectedIds: ["openai:first"] },
+    { profileId: "openai:new", expectedIds: [] },
+  ])(
+    "passes only permitted stored profiles to login (profile=$profileId)",
+    async ({ profileId, expectedIds }) => {
+      const credential = {
+        type: "oauth",
+        provider: "openai",
+        access: "synthetic-expired-access",
+        refresh: "synthetic-refresh",
+        expires: 1,
+        clientId: "synthetic-client",
+        authorizationScope: "openid profile resource.invoke offline_access",
+      } as const;
+      const profiles: Record<string, ProviderAuthProfile["credential"]> = {
+        "openai:first": credential,
+        "openai:second": { ...credential, clientId: "another-registration" },
+        "other:private": { ...credential, provider: "other" },
+      };
+      mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({ version: 1, profiles });
+      runProviderAuth.mockResolvedValueOnce({
+        profiles: [{ profileId: profileId ?? "openai:first", credential }],
+      });
+
+      await modelsAuthLoginCommand({ provider: "openai", profileId }, createRuntime());
+
+      expect(runProviderAuth.mock.calls[0]?.[0].existingProfiles).toEqual(
+        expectedIds.map((id) => ({ profileId: id, credential: profiles[id] })),
+      );
+      expect(mocks.loadAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
+        "/tmp/openclaw/agents/main",
+      );
+      expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profiles: [{ profileId: profileId ?? "openai:first", credential }],
+        }),
+      );
+    },
+  );
 
   it("persists a named login profile and promotes that same profile", async () => {
     const runtime = createRuntime();

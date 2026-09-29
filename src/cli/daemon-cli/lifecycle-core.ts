@@ -3,6 +3,8 @@ import type { Writable } from "node:stream";
 import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
+import { readGatewayServiceLoadState } from "../../daemon/service-load-state.js";
+import { collectGatewayServiceStartRepairIssues } from "../../daemon/service-start-repair.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
 import type {
   GatewayServiceStartRepairIssue,
@@ -11,8 +13,7 @@ import type {
 } from "../../daemon/service.js";
 import {
   describeGatewayServiceRestart,
-  inspectGatewayServiceStartRepair,
-  readGatewayServiceLoadState,
+  readGatewayServiceState,
   startGatewayService,
 } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
@@ -135,6 +136,24 @@ async function resolveServiceLoadedOrFail(params: {
   );
 }
 
+async function blockInvalidServiceAction(
+  serviceNoun: string,
+  action: Parameters<typeof getServiceActionPreflightFailure>[0],
+  fail: ReturnType<typeof createDaemonActionContext>["fail"],
+): Promise<boolean> {
+  const preflight = await getServiceActionPreflightFailure(action);
+  if (!preflight) {
+    return false;
+  }
+  fail(
+    !preflight.hints && (action === "start" || action === "restart")
+      ? `${serviceNoun} aborted: config is invalid.\n${preflight.message}\n${formatInvalidConfigRecoveryHint()}`
+      : `${serviceNoun} ${action} blocked: ${preflight.message}`,
+    preflight.hints,
+  );
+  return true;
+}
+
 export async function runServiceUninstall(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -150,12 +169,8 @@ export async function runServiceUninstall(params: {
     return;
   }
 
-  {
-    const preflight = await getServiceActionPreflightFailure("uninstall");
-    if (preflight) {
-      fail(`${params.serviceNoun} uninstall blocked: ${preflight.message}`, preflight.hints);
-      return;
-    }
+  if (await blockInvalidServiceAction(params.serviceNoun, "uninstall", fail)) {
+    return;
   }
 
   let loaded = await resolveServiceLoadedOrFail({
@@ -243,19 +258,9 @@ export async function runServiceStart(params: {
   if (loaded === null) {
     return;
   }
-  // Pre-flight config validation (#35862) — run for both loaded and not-loaded
-  // to prevent launching from invalid config in any start path.
-  {
-    const preflight = await getServiceActionPreflightFailure("start");
-    if (preflight) {
-      fail(
-        preflight.hints
-          ? `${params.serviceNoun} start blocked: ${preflight.message}`
-          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\n${formatInvalidConfigRecoveryHint()}`,
-        preflight.hints,
-      );
-      return;
-    }
+  // Validate before both loaded and not-loaded start paths (#35862).
+  if (await blockInvalidServiceAction(params.serviceNoun, "start", fail)) {
+    return;
   }
   if (!loaded) {
     try {
@@ -380,33 +385,10 @@ export async function runServiceStop(params: {
   if (loaded === null) {
     return;
   }
-  {
-    const preflight = await getServiceActionPreflightFailure("stop");
-    if (preflight) {
-      fail(`${params.serviceNoun} stop blocked: ${preflight.message}`, preflight.hints);
-      return;
-    }
+  if (await blockInvalidServiceAction(params.serviceNoun, "stop", fail)) {
+    return;
   }
-  if (!loaded) {
-    if (params.stopWhenNotLoaded) {
-      try {
-        await params.service.stop({
-          env: process.env,
-          stdout,
-          disable: params.opts?.disable,
-          onMutation: gatewayStopAudit,
-        });
-      } catch (err) {
-        fail(`${params.serviceNoun} stop failed: ${String(err)}`);
-        return;
-      }
-      emit({
-        ok: true,
-        result: "stopped",
-        service: buildDaemonServiceSnapshot(params.service, false),
-      });
-      return;
-    }
+  if (!loaded && !params.stopWhenNotLoaded) {
     try {
       const handled = await params.onNotLoaded?.({ json, stdout, fail });
       if (handled) {
@@ -443,12 +425,14 @@ export async function runServiceStop(params: {
     return;
   }
 
-  const finalLoaded = await resolveServiceLoadedOrFail({
-    serviceNoun: params.serviceNoun,
-    service: params.service,
-    fail,
-    inspectionFailureMessage: `${params.serviceNoun} stop verification failed because service status is unknown`,
-  });
+  const finalLoaded = loaded
+    ? await resolveServiceLoadedOrFail({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        fail,
+        inspectionFailureMessage: `${params.serviceNoun} stop verification failed because service status is unknown`,
+      })
+    : false;
   if (finalLoaded === null) {
     return;
   }
@@ -520,19 +504,9 @@ export async function runServiceRestart(params: {
     return false;
   }
 
-  // Pre-flight config validation: check before any restart action (including
-  // onNotLoaded which may request an unmanaged process restart). (#35862)
-  {
-    const preflight = await getServiceActionPreflightFailure("restart");
-    if (preflight) {
-      fail(
-        preflight.hints
-          ? `${params.serviceNoun} restart blocked: ${preflight.message}`
-          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\n${formatInvalidConfigRecoveryHint()}`,
-        preflight.hints,
-      );
-      return false;
-    }
+  // Validation also precedes unmanaged restart recovery (#35862).
+  if (await blockInvalidServiceAction(params.serviceNoun, "restart", fail)) {
+    return false;
   }
 
   if (params.restartOwnedProcess) {
@@ -574,11 +548,8 @@ export async function runServiceRestart(params: {
 
   if (loaded && !handledRecovery && params.repairLoadedService) {
     try {
-      const { state, issues } = await inspectGatewayServiceStartRepair(
-        params.service,
-        { env: process.env },
-        params.expectedPort,
-      );
+      const state = await readGatewayServiceState(params.service, { env: process.env });
+      const issues = collectGatewayServiceStartRepairIssues(state, params.expectedPort);
       if (issues.length > 0) {
         await prepareGatewayRestartIntent();
         handledRepair = await params.repairLoadedService({

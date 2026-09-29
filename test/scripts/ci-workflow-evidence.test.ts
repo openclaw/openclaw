@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import * as qaEvidence from "../../extensions/qa-lab/test-api.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -24,6 +24,7 @@ import {
   MATURITY_SCORECARD_WORKFLOW,
   TSX_IMPORT,
   UPLOAD_ARTIFACT_V7,
+  evaluateWorkflowRunner,
   quoteShell,
   readMaturityScorecardWorkflow,
   readReleaseChecksWorkflow,
@@ -37,6 +38,10 @@ import {
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Reuse reader transforms while evidence and API fixtures remain local to each case.
+const evidenceCompilerTempDir = useAutoCleanupTempDirTracker(afterAll).make(
+  "openclaw-workflow-evidence-compiler-",
+);
 const TYPESCRIPT_NODE_MODULES = path.dirname(
   path.dirname(fileURLToPath(import.meta.resolve("typescript/package.json"))),
 );
@@ -179,7 +184,11 @@ function runMantisEvidenceReader(
   expect(end).toBeGreaterThan(start);
   return runWorkflowShellScript(
     `set -euo pipefail\nroot=${quoteShell(path.join(root, "evidence"))}\nworktree_root=lanes\n${script.slice(start, end)}\n${functionName} baseline\n`,
-    { cwd: root, env: { ...process.env, GITHUB_WORKSPACE: root } },
+    {
+      cwd: root,
+      env: { ...process.env, GITHUB_WORKSPACE: root },
+      tempDir: evidenceCompilerTempDir,
+    },
   );
 }
 
@@ -558,6 +567,7 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   for (const scriptPath of [
     "packages/normalization-core/src/record-coerce.ts",
     "scripts/check-protocol-since.mts",
+    "scripts/lib/native-typescript.mts",
     "scripts/lib/repo-root.mjs",
   ]) {
     const target = path.join(checkout, scriptPath);
@@ -1055,7 +1065,7 @@ describe("ci workflow guards", () => {
     expect(qaValidateJob.steps[0]).toEqual({
       name: "Setup supported Node runtime",
       uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-      with: { "node-version": "24.19.0", "package-manager-cache": false },
+      with: { "node-version": "24.21.0", "package-manager-cache": false },
     });
     const workflowIdentityStep = qaValidateJob.steps[1];
     expect(workflowIdentityStep).toMatchObject({
@@ -1269,7 +1279,6 @@ fi
     const runProfileStep = qaShardJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile shard",
     );
-    expect(runProfileStep.env?.OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF).toBe("1");
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
     expect(runProfileStep.env?.PROTOCOL_SINCE_BASE_SHA).toBe(
       "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}",
@@ -1711,7 +1720,8 @@ fi
     expect(renderArtifactStep.run).toContain("QA failures allowed:");
 
     expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
-    expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
+    // Routed through the optional release runner group; the baseline label is unchanged.
+    expect(evaluateWorkflowRunner(publishPrJob["runs-on"])).toBe("ubuntu-24.04");
     expect(publishPrJob.permissions).toEqual({ actions: "read", contents: "read" });
     for (const fragment of [
       "needs.publisher_preflight.result == 'success'",
@@ -1956,8 +1966,6 @@ fi
       const producerScript = expectDefined(producerStep?.run, "QA evidence producer script");
       const consumerScript = expectDefined(consumerStep?.run, "QA evidence consumer script");
       const root = tempDirs.make("openclaw-qa-profile-artifact-");
-      const shellTempDir = path.join(root, "shell-temp");
-      mkdirSync(shellTempDir);
       const selectedRoot = path.join(root, "selected");
       writeWorkflowEvidenceApi(selectedRoot, false);
       mkdirSync(path.join(selectedRoot, "extensions/qa-lab/src"), { recursive: true });
@@ -2050,7 +2058,7 @@ fi
       };
       const runProducer = (qaExitCode: string) =>
         runWorkflowShellScript(producerScript, {
-          tempDir: shellTempDir,
+          tempDir: evidenceCompilerTempDir,
           env: {
             ...process.env,
             ALLOW_FAILURES: "true",
@@ -2068,7 +2076,7 @@ fi
         });
       const runConsumer = () =>
         runWorkflowShellScript(consumerScript, {
-          tempDir: shellTempDir,
+          tempDir: evidenceCompilerTempDir,
           cwd: selectedRoot,
           env: {
             ...process.env,

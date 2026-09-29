@@ -104,9 +104,9 @@ body {
 
 .sidebar-close {
   display: none;
+  align-items: center;
+  justify-content: center;
   padding: 3px 8px;
-  font-size: 12px;
-  font-family: inherit;
   background: transparent;
   color: var(--muted);
   border: 1px solid var(--dim);
@@ -1079,7 +1079,7 @@ body {
   }
 
   .sidebar-close {
-    display: block;
+    display: inline-flex;
   }
 
   #content {

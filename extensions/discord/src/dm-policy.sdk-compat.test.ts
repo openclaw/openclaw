@@ -1,28 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DiscordConfigSchema } from "./config-schema.js";
-
-const sdk = vi.hoisted((): { available: boolean; calls: number; failure?: Error } => ({
-  available: true,
-  calls: 0,
-}));
-
-vi.mock("openclaw/plugin-sdk/channel-config-schema", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-config-schema")>();
-  return {
-    ...actual,
-    get refineChannelDmPolicy() {
-      return sdk.available
-        ? (params: Parameters<typeof actual.refineChannelDmPolicy>[0]) => {
-            sdk.calls += 1;
-            if (sdk.failure) {
-              throw sdk.failure;
-            }
-            return actual.refineChannelDmPolicy(params);
-          }
-        : undefined;
-    },
-  };
-});
 
 const cases = [
   { name: "root wildcard", config: { dmPolicy: "open", allowFrom: ["*"] }, issues: [] },
@@ -82,25 +59,12 @@ const cases = [
   },
 ];
 
-describe.each([true, false])("Discord DM policy (SDK helper available=%s)", (available) => {
-  beforeEach(() => {
-    sdk.available = available;
-    sdk.calls = 0;
-    sdk.failure = undefined;
-  });
-
+describe("Discord DM policy through the supported SDK", () => {
   it.each(cases)("preserves $name validation", ({ config, issues }) => {
     const parsed = DiscordConfigSchema.safeParse(config);
+    expect(parsed.success).toBe(issues.length === 0);
     expect(
       parsed.success ? [] : parsed.error.issues.map(({ path, message }) => ({ path, message })),
     ).toEqual(issues);
-    expect(sdk.calls > 0).toBe(available);
   });
-});
-
-it("propagates an available host refiner failure", () => {
-  const failure = new Error("synthetic host refiner failure");
-  sdk.available = true;
-  sdk.failure = failure;
-  expect(() => DiscordConfigSchema.parse({})).toThrow(failure);
 });

@@ -1,13 +1,16 @@
 // Hermes provider config contract parsing and normalization.
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MCP_ENV_REFERENCE_RE,
   mcpValueHasEnvReferences,
   normalizeHermesEnvReferenceName,
   resolveMcpEnvReferences,
 } from "./config-env.js";
-import { childRecord } from "./helpers.js";
 import { normalizeHermesCustomProviderId, normalizeHermesProviderId } from "./model.js";
 
 type OpenClawModelApi =
@@ -186,8 +189,6 @@ export function resolveHermesImplicitBaseUrl(providerId: string | undefined): st
     : undefined;
 }
 
-export { readPositiveNumber };
-
 export function resolveProviderApi(
   raw: Record<string, unknown>,
   providerId?: string,
@@ -319,7 +320,7 @@ export function collectProviderModels(raw: Record<string, unknown>): HermesModel
             ] as const)
           : ([normalizeOptionalString(model), {}] as const),
       )
-    : Object.entries(childRecord(raw, "models")).filter(
+    : Object.entries(asNonArrayRecord(raw.models)).filter(
         ([id]) => !["__discovered_model_catalog__", "__explicit_model_allowlist__"].includes(id),
       );
   for (const [modelId, metadata] of entries) {

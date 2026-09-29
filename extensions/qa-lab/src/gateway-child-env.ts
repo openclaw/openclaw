@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns gateway child runtime environment behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -17,7 +16,7 @@ import {
   QA_LIVE_SETUP_TOKEN_VALUE_ENV,
 } from "./providers/live-frontier/auth.js";
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 
 const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
   // QA owns this child; parent service and test-runner markers describe a different process.
@@ -121,6 +120,10 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  // Child scratch and default compiler caches share the Gateway's joined cleanup lifetime.
+  normalizedEnv.TMPDIR = params.tempRoot;
+  normalizedEnv.TMP = params.tempRoot;
+  normalizedEnv.TEMP = params.tempRoot;
   // Path isolation alone still lets CLI bootstrap discover the operator's service.
   normalizedEnv.OPENCLAW_PROFILE = `qa-${createHash("sha256")
     .update(params.tempRoot)

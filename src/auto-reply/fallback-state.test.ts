@@ -56,6 +56,23 @@ function resolveDemoFallbackTransition(
   });
 }
 
+const cliAliasTransition = {
+  selectedProvider: "anthropic",
+  selectedModel: "claude-opus-4-7",
+  activeProvider: "claude-cli",
+  activeModel: "claude-opus-4-7",
+  attempts: [],
+  state: {
+    fallbackNotice: {
+      kind: "active",
+      selectedModel: "anthropic/claude-opus-4-7",
+      activeModel: "claude-cli/claude-opus-4-7",
+      reason: "selected model unavailable",
+    },
+  },
+  cfg: {},
+} satisfies Parameters<typeof resolveFallbackTransition>[0];
+
 describe("fallback-state", () => {
   afterEach(() => {
     cliBackendsTesting.resetDepsForTest();
@@ -210,27 +227,14 @@ describe("fallback-state", () => {
     expect(resolved.reasonSummary).toContain("Claude Max usage limit reached");
   });
 
-  it.each([
-    // 真实 AWS Bedrock fixture，provenance 可追溯:
-    //   src/agents/failover-error.test.ts:54（引用 AWS troubleshooting 文档）
-    //   src/agents/failover-error.test.ts:688 / provider-error-patterns.test.ts:153
-    "ThrottlingException: Your request was denied due to exceeding the account quotas for Amazon Bedrock.",
-    "ThrottlingException: Too many concurrent requests",
-  ])(
-    "preserves throttle-flavored transient details over the generic rate-limit label (%j)",
-    (error) => {
-      const resolved = resolveDemoFallbackTransition({
-        attempts: [{ ...baseAttempt, error }],
-      });
+  it("preserves throttle-flavored transient details over the generic rate-limit label", () => {
+    const resolved = resolveDemoFallbackTransition({
+      attempts: [{ ...baseAttempt, error: "ThrottlingException: Too many concurrent requests" }],
+    });
 
-      // 回归: TRANSIENT_ERROR_DETAIL_HINT_RE 必须命中 throttle 词族
-      // (throttle/throttling/throttled/ThrottlingException)。原先裸 `throttl\b`
-      // 仅匹配不存在的词干 "throttl"，真实 Bedrock 消息全部失配，详细预览被
-      // 塌缩成通用 "rate limit" 标签。修复后预览得以保留。
-      expect(resolved.reasonSummary).toContain("ThrottlingException");
-      expect(resolved.reasonSummary).not.toBe("rate limit");
-    },
-  );
+    expect(resolved.reasonSummary).toContain("ThrottlingException");
+    expect(resolved.reasonSummary).not.toBe("rate limit");
+  });
 
   it("still collapses to the reason label when a transient reason lacks any transient-detail hint", () => {
     // 防止过度匹配: 修复不得让门控对无 transient 提示的文本也放行。
@@ -282,22 +286,7 @@ describe("fallback-state", () => {
   it("does not treat a CLI runtime alias as a model fallback", () => {
     registerAnthropicCliBackendForTest();
 
-    const resolved = resolveFallbackTransition({
-      selectedProvider: "anthropic",
-      selectedModel: "claude-opus-4-7",
-      activeProvider: "claude-cli",
-      activeModel: "claude-opus-4-7",
-      attempts: [],
-      state: {
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "anthropic/claude-opus-4-7",
-          activeModel: "claude-cli/claude-opus-4-7",
-          reason: "selected model unavailable",
-        },
-      },
-      cfg: {},
-    });
+    const resolved = resolveFallbackTransition(cliAliasTransition);
 
     expect(resolved.fallbackActive).toBe(false);
     expect(resolved.fallbackCleared).toBe(false);
@@ -329,22 +318,7 @@ describe("fallback-state", () => {
       resolveRuntimeCliBackends: () => [],
     });
 
-    const resolved = resolveFallbackTransition({
-      selectedProvider: "anthropic",
-      selectedModel: "claude-opus-4-7",
-      activeProvider: "claude-cli",
-      activeModel: "claude-opus-4-7",
-      attempts: [],
-      state: {
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "anthropic/claude-opus-4-7",
-          activeModel: "claude-cli/claude-opus-4-7",
-          reason: "selected model unavailable",
-        },
-      },
-      cfg: {},
-    });
+    const resolved = resolveFallbackTransition(cliAliasTransition);
 
     expect(resolved.fallbackActive).toBe(false);
     expect(setupBackendLookups).toBe(2);
@@ -364,20 +338,17 @@ describe("fallback-state", () => {
     ).toBeNull();
   });
 
-  it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "o3"])(
-    "does not build a fallback notice for the OpenAI Codex runtime provider alias with %s",
-    (model) => {
-      expect(
-        buildFallbackNotice({
-          selectedProvider: "openai",
-          selectedModel: model,
-          activeProvider: "openai",
-          activeModel: model,
-          attempts: [],
-        }),
-      ).toBeNull();
-    },
-  );
+  it("does not build a fallback notice when provider and model are unchanged", () => {
+    expect(
+      buildFallbackNotice({
+        selectedProvider: "openai",
+        selectedModel: "gpt-5.5",
+        activeProvider: "openai",
+        activeModel: "gpt-5.5",
+        attempts: [],
+      }),
+    ).toBeNull();
+  });
 
   it("still reports fallback when the OpenAI Codex runtime switches model ids", () => {
     expect(

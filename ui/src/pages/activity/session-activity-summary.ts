@@ -24,6 +24,7 @@ export function renderSessionActivitySummary(
     class="activity-feed__recap"
     data-activity-recap=${row.key}
     data-state=${state}
+    role="group"
     aria-busy=${String(updating)}
     aria-label=${t("activityFeed.recap")}
     title=${
@@ -51,13 +52,13 @@ export function renderSessionActivitySummary(
     }
     ${
       feedback
-        ? html`<div class="activity-feed__recap-feedback">
+        ? html`<div class="activity-feed__note">
             <span>${feedback}</span>
             ${
               onRetry &&
               summary?.canEnsure === true &&
               (state === "unavailable" || state === "stale")
-                ? html`<button class="activity-feed__recap-retry" @click=${() => onRetry(row)}>
+                ? html`<button class="activity-feed__note-action" @click=${() => onRetry(row)}>
                     ${t("activityFeed.recapRetry")}
                   </button>`
                 : nothing

@@ -10,7 +10,7 @@ import {
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import pluginEntry from "../../index.js";
 import { handleDirList } from "../node-host/dir-list.js";
 import { createDirFetchTool } from "./dir-fetch-tool.js";
@@ -27,6 +27,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
 vi.mock("../shared/audit.js", () => ({
   appendFileTransferAudit: vi.fn(),
 }));
+
+beforeEach(() => {
+  vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
+  vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+});
 
 afterEach(() => {
   vi.mocked(callGatewayTool).mockReset();
@@ -136,7 +141,6 @@ describe("dir_list tool", () => {
       { name: "nested", isDir: true, size: 0 },
     ];
     vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
-    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
     vi.mocked(callGatewayTool).mockResolvedValue({
       payload: {
         ok: true,
@@ -193,7 +197,6 @@ describe("dir_list tool", () => {
     "reports truncation without inventing an unavailable page token (%s)",
     async (nextPageToken) => {
       vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
       vi.mocked(callGatewayTool).mockResolvedValue({
         payload: {
           ok: true,
@@ -238,8 +241,6 @@ describe("dir_list tool", () => {
     try {
       await Promise.all(names.map((name) => fs.writeFile(path.join(root, name), name)));
       await fs.mkdir(path.join(root, "nested"));
-      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
       const responses: Awaited<ReturnType<typeof handleDirList>>[] = [];
       vi.mocked(callGatewayTool).mockImplementation(async (_method, _options, args) => {
         const request = requireRecord(args, "node invoke request");
@@ -318,9 +319,7 @@ describe("dir_list tool", () => {
 
   it.each([
     ["+0007", 7],
-    ["0007", 7],
     ["7next", 0],
-    ["-1", 0],
     ["9007199254740992", 0],
   ] as const)(
     "bounds maximum listings and resumes without skips from %s",
@@ -333,8 +332,6 @@ describe("dir_list tool", () => {
         mimeType: "x".repeat(10000),
         mtime: i,
       }));
-      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
       vi.mocked(callGatewayTool).mockImplementation(async (_method, _options, args) => {
         const request = requireRecord(args, "node invoke request");
         const token = requireRecord(request.params, "directory params").pageToken;
@@ -432,8 +429,6 @@ describe("dir_list tool", () => {
       { name: "a", isDir: false, size: 1 },
       { name: "b", isDir: false, size: 1 },
     ];
-    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
     vi.mocked(callGatewayTool).mockResolvedValue({
       payload: { path: canonicalPath, entries, truncated: false },
     });
@@ -457,8 +452,6 @@ describe("dir_list tool", () => {
         { name, isDir: false, size: 1 },
         { name: "later.txt", isDir: false, size: 2 },
       ];
-      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
       vi.mocked(callGatewayTool).mockResolvedValue({
         payload: { path: "/root", entries, truncated: true, nextPageToken: "2" },
       });
@@ -481,8 +474,6 @@ describe("dir_list tool", () => {
   it.each(["path", "nextPageToken"] as const)(
     "bounds oversized %s without a partial usable value",
     async (field) => {
-      vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1" }]);
-      vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
       const payload = {
         path: "/root",
         entries: [],

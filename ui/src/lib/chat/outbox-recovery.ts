@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { resolveUiConversationIdentity, hasUiSessionDefaults } from "../sessions/session-key.ts";
 import {
@@ -6,6 +7,7 @@ import {
 } from "./outbox-payload-store.runtime.ts";
 import { normalizeStoredSession } from "./outbox-store-codec.ts";
 import { nextDraftRevision, readDraftRevisionState } from "./outbox-store-draft-state.ts";
+import type { StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
   notifyStoredChatOutboxChanges,
   readStoredOutboxStore,
@@ -14,7 +16,6 @@ import {
   storageTargetForGateway,
   writeStoredOutboxStore,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
   type StoredComposerRecovery,
 } from "./outbox-store.ts";
 
@@ -49,6 +50,7 @@ export function captureChatOutboxRecoveryDestination(
     !storage ||
     !hasUiSessionDefaults(state) ||
     state.selectedChatSessionIncognito ||
+    isIncognitoSessionKey(scope.sessionKey) ||
     (state.connected && state.client && !state.client.recoveryScopeReady)
   ) {
     return null;
@@ -104,7 +106,7 @@ export function restoreChatOutboxRecovery(
     }
     const key = storedChatOutboxScopeKey(scope);
     const existing = store.sessions[key];
-    if (existing?.draft || existing?.goalMode || existing?.queue?.length) {
+    if (existing?.draft || existing?.goalMode || existing?.replyTarget || existing?.queue?.length) {
       return "conflict";
     }
     const session = entry.session;

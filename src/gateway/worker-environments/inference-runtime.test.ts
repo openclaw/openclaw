@@ -43,6 +43,46 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
+  it("reuses the Gateway's boundary cache key across calls and rotates it after a boundary", async () => {
+    const runtime = setup();
+    for (const boundaryCount of [0, 0, 2]) {
+      runtime.readPromptCacheContext.mockReturnValue({ boundaryCount });
+      const inferenceRequest = request();
+      Object.assign(inferenceRequest.options, { promptCacheKey: "worker-chosen-key" });
+      await expect(runtime.executor(params(inferenceRequest, vi.fn()))).resolves.toMatchObject({
+        type: "done",
+      });
+    }
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.promptCacheKey)).toEqual([
+      `${SESSION_ID}:0`,
+      `${SESSION_ID}:0`,
+      `${SESSION_ID}:2`,
+    ]);
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.sessionId)).toEqual([
+      SESSION_ID,
+      SESSION_ID,
+      SESSION_ID,
+    ]);
+  });
+
+  it("preserves an explicit Gateway cache key and refuses a missing prepared owner", async () => {
+    const runtime = setup();
+    runtime.readPromptCacheContext.mockReturnValue({
+      boundaryCount: 3,
+      promptCacheKey: " gateway-explicit-cache ",
+    });
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
+    expect(runtime.stream.mock.calls[0]?.[2]?.promptCacheKey).toBe("gateway-explicit-cache");
+    runtime.readPromptCacheContext.mockReturnValue(undefined);
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "error",
+      reason: "session-not-attached",
+    });
+    expect(runtime.stream).toHaveBeenCalledOnce();
+  });
+
   it("prepares an approved model available only from the bundled static catalog", async () => {
     const runtime = setup(sessionEntry, { catalogOnlyModel: true });
 
@@ -52,6 +92,17 @@ describe("worker inference provider runtime", () => {
     });
     expect(runtime.stream).toHaveBeenCalledOnce();
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("uses the admitted source when current config routes the session to another store", async () => {
+    const runtime = setup();
+    const changedConfig = { ...config, session: { store: "replacement-sessions.json" } };
+
+    await expect(
+      runtime.executor(params(request(), vi.fn(), changedConfig)),
+    ).resolves.toMatchObject({ type: "done" });
+    expect(runtime.scope.authProfile).toBe(PROFILE);
+    expect(runtime.stream).toHaveBeenCalledOnce();
   });
 
   it("returns bounded, redacted model preparation guidance", async () => {
@@ -306,6 +357,7 @@ describe("worker inference provider runtime", () => {
       ...inferenceRequest.options,
       signal: expect.any(AbortSignal),
       sessionId: SESSION_ID,
+      promptCacheKey: `${SESSION_ID}:0`,
       apiKey: AUTH_MARKER,
     });
     expect(emitted.map((event) => event.type)).toEqual([
@@ -506,50 +558,39 @@ describe("worker inference provider runtime", () => {
     expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
   });
 
-  it("rejects a terminal tool call whose identity changed", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({ type: "done", reason: "toolUse", message: terminal });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
-  });
-
-  it("revalidates a normally ended tool call against the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: TOOL_CALL,
-        partial,
+  it.each([
+    { ended: false, omitted: false },
+    { ended: true, omitted: false },
+    { ended: true, omitted: true },
+  ])(
+    "rejects terminal tool identity mismatch (ended=$ended, omitted=$omitted)",
+    async ({ ended, omitted }) => {
+      const runtime = setup();
+      runtime.stream.mockImplementation(() => {
+        const stream = createAssistantMessageEventStream();
+        const partial = finalMessage();
+        const terminal = finalMessage();
+        terminal.content = omitted
+          ? terminal.content.slice(0, 1)
+          : [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
+        stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
+        if (ended) {
+          stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: TOOL_CALL, partial });
+        }
+        stream.push({ type: "done", reason: omitted ? "stop" : "toolUse", message: terminal });
+        return stream;
       });
-      stream.push({ type: "done", reason: "toolUse", message: terminal });
-      return stream;
-    });
+      const emitted: Parameters<Execution["emit"]>[0][] = [];
 
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
-  });
+      await expect(
+        runtime.executor(params(request(), (event) => emitted.push(event))),
+      ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+      if (!ended) {
+        expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
+      }
+    },
+  );
 
   it("rejects tool-call deltas after the end event", async () => {
     const runtime = setup();
@@ -576,31 +617,6 @@ describe("worker inference provider runtime", () => {
     expect(
       emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
     ).toEqual(["{}"]);
-  });
-
-  it("rejects a normally ended tool call omitted from the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = terminal.content.slice(0, 1);
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: TOOL_CALL,
-        partial,
-      });
-      stream.push({ type: "done", reason: "stop", message: terminal });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
   });
 
   it("rejects unresolved pre-identity tool deltas omitted from the terminal message", async () => {
@@ -816,8 +832,12 @@ describe("worker inference provider runtime", () => {
     }
   });
 
-  it("projects worker options before applying provider stream policy", async () => {
+  it("projects worker options and isolates provider policy mutations", async () => {
     const runtime = setup();
+    runtime.applyStreamPolicy.mockImplementation((_agent, _cfg, _provider, _model, options) => {
+      Object.assign(options?.thinkingBudgets ?? {}, { low: 1 });
+      return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
+    });
     const inferenceRequest = request();
     Object.assign(inferenceRequest.options, {
       extra_body: { mode: "worker" },
@@ -832,8 +852,10 @@ describe("worker inference provider runtime", () => {
       temperature: 0.25,
       maxTokens: 256,
       reasoning: "low",
-      thinkingBudgets: { low: 96 },
+      thinkingBudgets: { low: 1 },
     });
+    expect(runtime.stream.mock.calls[0]?.[2]?.thinkingBudgets).toEqual({ low: 96 });
+    expect(inferenceRequest.options.thinkingBudgets).toEqual({ low: 96 });
   });
 
   it("preserves adaptive provider policy while lowering the core stream effort", async () => {

@@ -55,7 +55,7 @@ function mcpRangeRows(appContent: unknown): TestContentRow[] {
   return Array.from({ length: 24 }, (_, index) => ({
     kind: "content" as const,
     key: `row:${index}`,
-    content: index === 17 ? appContent : html`<div>row ${index}</div>`,
+    content: index === 23 ? appContent : html`<div>row ${index}</div>`,
   }));
 }
 
@@ -64,8 +64,12 @@ describe("chat transcript controller", () => {
   afterEach(resetTranscriptTestDom);
 
   it("keeps every re-stamped row observed after moving containers", async () => {
-    const transcript = createTestTranscript();
     const props = threadProps("pane-measure");
+    saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const transcript = createTestTranscript(props.paneId);
     const chatFace = document.body.appendChild(document.createElement("div"));
     render(renderChatThread(props, transcript), chatFace);
     transcript.hostConnected();
@@ -291,7 +295,7 @@ describe("chat transcript controller", () => {
     const { container, renderRows } = await mountTestTranscript("pane-mcp-range", initialRows);
     const { app, teardown } = stubMcpAppLifecycle(container);
 
-    renderRows([initialRows[17]!, ...initialRows.slice(0, 17), ...initialRows.slice(18)]);
+    renderRows([initialRows.at(-1)!, ...initialRows.slice(0, -1)]);
 
     expect(teardown).toHaveBeenCalledOnce();
     expect(app.isConnected).toBe(true);
@@ -313,7 +317,7 @@ describe("chat transcript controller", () => {
     const button = expectDefined(container.querySelector("button"), "MCP app focus target");
     button.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
 
-    renderRows([initialRows[17]!, ...initialRows.slice(0, 17), ...initialRows.slice(18)]);
+    renderRows([initialRows.at(-1)!, ...initialRows.slice(0, -1)]);
 
     expect(teardown).not.toHaveBeenCalled();
     expect(app.isConnected).toBe(true);
@@ -629,6 +633,7 @@ describe("chat transcript controller", () => {
           requestUpdate: vi.fn(),
           updateComplete: Promise.resolve(true),
         },
+        () => `retired-end-index-${nativeGrowth}`,
         { canFollowEnd: () => false },
       );
       const content = numberedContentRows(12);
@@ -757,6 +762,7 @@ describe("chat transcript controller", () => {
           requestUpdate: vi.fn(),
           updateComplete: Promise.resolve(true),
         },
+        () => `height-resize-${locked}`,
         {
           onViewportResize,
           canFollowEnd: () => !policy.chatFollowLocked,
@@ -872,7 +878,7 @@ describe("chat transcript controller", () => {
         requestUpdate: vi.fn(),
         updateComplete: Promise.resolve(true),
       });
-      const transcript = new ChatTranscriptController(host);
+      const transcript = new ChatTranscriptController(host, () => `disclosure-${interrupt}`);
       const rows: TestContentRow[] = [
         {
           kind: "content",
@@ -956,6 +962,7 @@ describe("chat transcript controller", () => {
             requestUpdate: () => undefined,
             updateComplete: Promise.resolve(true),
           },
+          () => `typing-distance-${distance}-${followEnabled}`,
           { canFollowEnd: () => followEnabled },
         ),
       );

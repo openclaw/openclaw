@@ -10,16 +10,16 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
-import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
+import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -68,7 +68,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     InputProvenance: run.inputProvenance,
     InboundEventKind: queued.currentInboundEventKind,
     media: queued.media,
-  } as TemplateContext;
+  };
 }
 
 /** Adapts an admitted queued turn to the canonical agent execution owner. */
@@ -184,17 +184,17 @@ export async function executeFollowupTurn(params: {
             }
           })
       : undefined;
-  const wrapVisibility = <T>(
-    callback: ((value: T) => Promise<boolean | void> | boolean | void) | undefined,
+  const wrapVisibility = <Args extends unknown[]>(
+    callback: ((...args: Args) => Promise<boolean | void> | boolean | void) | undefined,
     allowed = progressAllowed,
   ) =>
     callback
-      ? (value: T) =>
+      ? (...args: Args) =>
           enqueueProgressResult(async () => {
             if (!allowed()) {
               return false;
             }
-            return (await settleProgressVisibilityCallbackResult(callback(value))).visible;
+            return (await settleProgressVisibilityCallbackResult(callback(...args))).visible;
           })
       : undefined;
   const baseTypingSignals = createTypingSignaler({
@@ -250,34 +250,11 @@ export async function executeFollowupTurn(params: {
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
     onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
     onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitStructuredProgress),
-    onCompactionStart: sourceOpts?.onCompactionStart
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionStart!()))
-                  .visible
-              : false,
-          )
-      : undefined,
-    onCompactionEnd: sourceOpts?.onCompactionEnd
-      ? (payload) =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionEnd!(payload)))
-                  .visible
-              : false,
-          )
-      : undefined,
+    onCompactionStart: wrapVisibility(sourceOpts?.onCompactionStart),
+    onCompactionEnd: wrapVisibility(sourceOpts?.onCompactionEnd),
     onReasoningStream: wrapVisibility(sourceOpts?.onReasoningStream),
     onReasoningProgress: wrap(sourceOpts?.onReasoningProgress),
-    onReasoningEnd: sourceOpts?.onReasoningEnd
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onReasoningEnd!())).visible
-              : false,
-          )
-      : undefined,
+    onReasoningEnd: wrapVisibility(sourceOpts?.onReasoningEnd),
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
         if (!progressAllowed()) {
@@ -409,31 +386,6 @@ export async function executeFollowupTurn(params: {
           shouldEmitToolResult,
           shouldEmitToolOutput,
           pendingToolTasks,
-          resetSessionAfterRoleOrderingConflict: async (reason) => {
-            const session = turn.session;
-            if (session.kind !== "session") {
-              return false;
-            }
-            return await resetReplyRunSession({
-              options: {
-                failureLabel: "role ordering conflict",
-                buildLogMessage: (nextSessionId) =>
-                  `Role ordering conflict (${reason}). Restarting session ${session.key} -> ${nextSessionId}.`,
-                cleanupTranscripts: true,
-              },
-              sessionKey: session.key,
-              queueKey: session.key,
-              activeSessionEntry: session.current(),
-              activeSessionStore: turn.sessionStore,
-              storePath: session.storePath,
-              followupRun: turn.queued,
-              onActiveSessionEntry: (entry) => {
-                session.adopt(entry);
-                turn.operation.updateSessionId(entry.sessionId);
-              },
-              onNewSession: () => undefined,
-            });
-          },
           isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
@@ -457,6 +409,16 @@ export async function executeFollowupTurn(params: {
       // custody after lazy collection binds it, so runtime appends consume all sources.
       await recorder?.resolveMessage();
       turn.operation.abortSignal.throwIfAborted();
+      const sourceTurnId = resolveReplySourceTurnId({
+        sourceTurnId: turn.queued.sourceTurnId,
+        admissionRunId: turn.queued.messageId,
+        ingressProvider: turn.queued.run.messageProvider,
+        entry: turn.session.current(),
+      });
+      if (sourceTurnId) {
+        replyRunRegistry.bindSourceTurnId(turn.operation, sourceTurnId);
+        setChannelSourceTurnId(sessionCtx, sourceTurnId);
+      }
       execution = await (recorder?.withPendingInput
         ? recorder.withPendingInput(execute)
         : execute());

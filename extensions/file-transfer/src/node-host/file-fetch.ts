@@ -1,9 +1,9 @@
-// File Transfer plugin module implements file fetch behavior.
 import crypto from "node:crypto";
 import path from "node:path";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { FsSafeError, root } from "openclaw/plugin-sdk/security-runtime";
 import {
   FILE_FETCH_DEFAULT_MAX_BYTES,
@@ -70,13 +70,6 @@ type FileFetchErr = {
 };
 
 type FileFetchResult = FileFetchOk | FileFetchErr;
-
-function clampMaxBytes(input: unknown): number {
-  if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
-    return FILE_FETCH_DEFAULT_MAX_BYTES;
-  }
-  return Math.min(Math.floor(input), FILE_FETCH_HARD_MAX_BYTES);
-}
 
 function classifyFsError(err: unknown): FileFetchErrCode {
   if (err instanceof FsSafeError && err.code === "too-large") {
@@ -153,7 +146,12 @@ export async function handleFileFetch(
   } catch (error) {
     return { ok: false, code: "INVALID_PARAMS", message: String(error) };
   }
-  const maxBytes = binaryMax ?? clampMaxBytes(params.maxBytes);
+  const maxBytes =
+    binaryMax ??
+    Math.min(
+      Math.floor(asPositiveFiniteNumber(params.maxBytes) ?? FILE_FETCH_DEFAULT_MAX_BYTES),
+      FILE_FETCH_HARD_MAX_BYTES,
+    );
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 

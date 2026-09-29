@@ -4,6 +4,62 @@ Read this file only for a non-default backend, manual driver operation, event
 interpretation, persistent fixtures, forum topics, or a failed run. The primary proof sequence stays in
 [`SKILL.md`](../SKILL.md).
 
+## Published-driver topic-binding upgrade
+
+The npm Telegram lane's standalone `telegram-published-upgrade-bindings` selector
+proves that a topic an installed published Gateway handed to a spawned worker
+returns to its parent session after that Gateway's own updater and the
+candidate's next restart. Run it only in the lane's isolated
+container: the secretless install phase owns the published prefix, and the
+validated candidate tarball is mounted read-only for the live phase.
+
+The lane invokes:
+
+```sh
+node .agents/skills/telegram-e2e-userbot/scripts/run-published-upgrade-user-e2e.mjs \
+  --baseline /npm-global/bin/openclaw \
+  --baseline-spec openclaw@2026.9.6 \
+  --candidate /package-under-test/openclaw-2026.9.6.tgz \
+  --output /out/telegram-upgrade
+```
+
+Use the exact published version selected by the workflow. Before leasing, the
+command verifies the installed baseline, reads the candidate's build identity
+and nine reached runtime artifacts without executing package code, and prepares
+the pinned TDLib through the maintained loader. It uses existing Python 3 and
+the driver's standard-library implementation, without `uv` or a source build.
+
+One maintained credential/run scope owns fixture setup, the proxy, recorder,
+mock provider, installed Gateway children, and updater. The published baseline
+must accept a real `sessions_spawn` with `thread:true` and `mode:session`, and
+both parent and child must reply in the actual topic before shutdown; this
+legacy spawn binding hands the current topic to the child. The genuine published
+CLI then runs `update --tag file:<candidate> --yes --no-restart --json` with the
+same runner-created config, token file, workspace, and databases. The candidate
+no longer honors spawn-created bindings on the current Telegram conversation, so
+the next topic turn and its reply must land in the parent topic session
+transcript, not the child's, both after activation and after another restart.
+The child keeps its canonical identity and spawn-phase history, and no later
+turn reaches it. Each of the three Gateway stops requires a joined exit
+code 0 with no signal; forced process cleanup cannot qualify orderly shutdown.
+Artifact hashes, native observations, accepted tool-result correlation, canonical
+session identity, and receipt-scoped cleanup all participate in the verdict.
+
+Initial windows are 900 seconds for the updater and 1,800 seconds for recording;
+the native readiness and authoritative RPC checkpoints retain their own bounded
+deadlines. A timeout fails the run and is not retried. Existing package-registry
+settings belong to the npm lane and are preserved for the updater; broker
+credentials are not inherited by it.
+
+Only `published-upgrade.json` goes to the public output directory. It reports
+package identities, proved relationships, and typed failure facts for updater,
+shutdown, checkpoints, and cleanup. Missing lease-release confirmation stays
+unknown even after fixture deletion succeeds. Raw logs, transcripts, native
+identities, credentials, and runtime state remain in separate private temporary
+storage. Successful runs remove that storage; failed runs retain it for their
+container's existing cleanup policy. Do not upload the raw temporary tree or
+replay uncertain fixture/update mutations without reconciling the owned state.
+
 ## Chat selection
 
 `--chat` accepts a TDLib chat id, `@username`, invite link, or `t.me` link.
@@ -71,10 +127,41 @@ A send confirmation failure stops later scenario actions in both the recorder
 and Node runner. The uncertain send is never retried. Passive Telegram recording
 continues to the original deadline, preserving late updates and the failed
 action in the evidence; the run exits unsuccessfully even if a reply arrives.
+The recorder publishes its failure receipt atomically inside the runner-owned
+scenario barrier directory. The Node runner reads that receipt before admitting
+later actions and when collecting the final result; it does not require native
+directory watching or access to shared temporary-directory ancestor metadata.
 
 Keep one TDLib client per restored state directory. Run custom TDLib inspection
 before the recorder starts or after it exits, under the same live lease. Bot API
 inspection can use the scenario `command` action while recording.
+
+## QA Lab participant identity fixtures
+
+The QA Lab Telegram adapter accepts optional fields on one Convex-leased Test
+Server credential: `forumGroupId`, positive numeric `forumTopicId`, and
+`participants`. Each additional participant supplies a unique lowercase `alias`,
+`testerUserId`, `tdlibArchiveBase64`, `tdlibArchiveSha256`, and `tdlibVersion`.
+The pool owner provisions these independently authorized users under the same
+lease. The SUT bot and every participant must already belong to the selected
+group and forum, and the topic must exist. No credential is acquired by merely
+listing scenarios or running deterministic support tests.
+
+For mixed-user flows, use `senderId: primary` and the additional aliases. A
+single-user fixture binds its first scenario sender label to its leased user;
+changing that label cannot impersonate a second person. `conversation.kind:
+direct` sends to the SUT DM. A group/channel conversation uses `groupId`; adding
+a positive numeric `threadId` selects that forum topic in `forumGroupId` (or the
+existing group when it is itself a forum). Each native chat/topic belongs to one
+logical conversation until transport reset. Replies require a receipt observed
+by the sending participant in that chat; TDLib message IDs cannot cross accounts.
+
+Flow preparation exposes in-memory `telegramIdentityFixture.participantAliases`
+and `forumTopicId`. Set `execution.config.requireParticipantIdentityFixture:
+true` to require the complete mixed-user/forum fixture before sending. It also
+retains the existing `readTelegramMessages()` observer for native topic evidence.
+These inputs enable real Telegram identity proof; deterministic adapter tests do
+not claim that live transport or audit inspection has run.
 
 ## Backends
 
@@ -83,6 +170,17 @@ inspection can use the scenario `command` action while recording.
 | `mock`       | Default deterministic OpenClaw `mock-openai` turn.                      |
 | `qa-mock`    | QA fixtures for tools, delays, and scenario actions.                    |
 | `claude-cli` | Real Claude CLI path for progress behavior the mock lane cannot render. |
+
+Prepare `qa-mock` with `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` before leasing.
+The built lane starts both the provider and Gateway from that checkout's
+`dist/entry.js`; `--source-gateway` selects the development launcher for both.
+A leased run must not rebuild a dirty source checkout while waiting for provider
+readiness.
+
+The named tool-progress shell fixture emits command-style `exec` arguments.
+Use `E2E_ROOT_CONFIG_PATCH='{"tools":{"codeMode":false}}'` for that fixture, or
+choose a code-mode-aware fixture. Keep exec permissions unchanged and verify
+the actual tool result: a planned call alone does not prove the command ran.
 
 `claude-cli` uses the operator's Claude credentials and costs real usage. Its
 default model is `claude-haiku-4-5`; set `E2E_TELEGRAM_CLI_MODEL` to override it.
@@ -144,19 +242,26 @@ The routine runner supplies all state through one Convex lease. Use low-level
 commands only inside runner-owned credential state:
 
 ```bash
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" doctor --json
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" status --json
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" chats --json
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" send --text '/status@{sut}'
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" transcript --limit 20
-uv run "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" probe \
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" doctor --json
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" status --json
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" chats --json
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" send --text '/status@{sut}'
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" transcript --limit 20
+uv run --no-project --no-config --python ">=3.12" python -B "$TELEGRAM_E2E_SKILL_DIR/scripts/user-driver.py" probe \
   --text '@{sut} Reply exactly: USER-E2E-{run}' --expect USER-E2E-
 ```
 
 The leased credential supplies the group id, SUT token and identity, tester id,
 TDLib configuration, and authorized session. Credential state lives in a
-private runner directory. The shared cache at
-`~/.cache/openclaw/telegram-e2e-userbot/tdlib` contains only the TDLib binary.
+private runner directory. The restored credential's `driverEnv` confines HOME,
+temporary files, UV/Python caches, and TDLib downloads to its `runtime/` subtree.
+Pass that environment to manual commands too. The maintained UV invocation runs
+the standard-library driver with an existing Python 3.12+ interpreter; it does
+not create an inline-script virtual environment or download Python. That avoids
+the virtual-environment launcher's `realpath` access to shared temporary
+ancestors under filesystem confinement. Keep the confinement policy intact.
+Prepare TDLib before leasing and select that read-only binary with
+`TELEGRAM_USER_DRIVER_TDLIB_PATH` when using a confined live runner.
 
 `TELEGRAM_USER_DRIVER_TDLIB_PATH` selects a deliberate custom TDLib build.
 `login --qr` is an owner-repair action for a session that cannot be restored; it
@@ -164,8 +269,18 @@ is not a routine maintainer step.
 
 ## Retained-run recovery
 
+When `--output` is supplied, the scenario writes `readiness.json` beside it even
+when readiness fails before Gateway startup. It retains the phase, exit code,
+timeout, duration, output byte counts, and fixed diagnostic categories. It never
+exports raw readiness stdout/stderr, identities, environment values, or paths.
+The doctor includes the same structural diagnostic in its failure. Keep the
+proof directory outside runner scratch.
+
 Failed fixture cleanup can leave a private lease directory with `lease.json`
-and credential state. Preserve that directory and the failure evidence. The
+and credential/runtime state. Process groups and pipes must be joined before
+release; adapters returning a teardown receipt must return `verified: true`.
+A false or missing verification in a returned receipt retains the consumer,
+lease, scratch, and recovery state. Preserve that directory and the failure evidence. The
 receipt contains a secret broker handle: exclude it from proof exports and
 public output. Its presence alone does not establish live authority.
 

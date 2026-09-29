@@ -16,6 +16,7 @@ import {
   parseGitIndexPaths,
   parseGitTreePaths,
   rawPathExists,
+  rawPathStat,
   splitNullBuffer,
   type GitIndexPath,
   type GitTreePath,
@@ -180,17 +181,6 @@ async function inspectOtherPaths(
   );
 }
 
-async function rawDirectoryExists(target: string | Buffer): Promise<boolean> {
-  try {
-    return (await fs.lstat(target)).isDirectory();
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotInventory> {
   const head = await requireGit(input.checkoutPath, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const headPaths = parseGitTreePaths(
@@ -228,7 +218,7 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
     // for Git to drop by name; its untracked children arrive through the listing.
     if (
       !headKeys.has(gitPathKey(entry.path)) &&
-      (await rawDirectoryExists(checkoutPathFromGitBytes(input.checkoutPath, entry.path)))
+      (await rawPathStat(checkoutPathFromGitBytes(input.checkoutPath, entry.path)))?.isDirectory()
     ) {
       continue;
     }

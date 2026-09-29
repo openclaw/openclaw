@@ -47,8 +47,6 @@ import {
   renderLifecycleIcon,
   formatStatusLabel,
   formatUpdatedTime,
-  taskDetail,
-  taskMatchesLifecycle,
   type WorkboardProps,
 } from "./view-helpers.ts";
 import {
@@ -167,17 +165,8 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
       requestTransition(() => props.onOpenSession(session));
     },
   };
-  const {
-    task,
-    busy,
-    activeTask,
-    live,
-    linkedSessionKey,
-    sessionTarget,
-    writable,
-    showStartControls,
-    archived,
-  } = getCardActionState(props, card);
+  const { busy, live, linkedSessionKey, sessionTarget, writable, showStartControls, archived } =
+    getCardActionState(props, card);
   const selectTab = (tab: WorkboardUiState["detailTab"], target: EventTarget | null) => {
     if (tab !== state.detailTab && target instanceof HTMLElement) {
       const body = target
@@ -190,10 +179,9 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
     state.detailTab = tab;
     props.onRequestUpdate?.();
   };
-  const lifecycle = getWorkboardLifecycle(card, props.sessions, task, props.sessionResolution);
-  const formatted = formatLifecycle(lifecycle, task);
-  const sessionStatus = getSessionStatus(card, lifecycle, task);
-  const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
+  const lifecycle = getWorkboardLifecycle(card, props.sessions, props.sessionResolution);
+  const formatted = formatLifecycle(lifecycle);
+  const sessionStatus = getSessionStatus(card, lifecycle);
   const comments = card.metadata?.comments ?? [];
   const automation = card.metadata?.automation;
   const boardId = workboardCardBoardId(card);
@@ -202,7 +190,6 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
   const dependencies = getWorkboardDependencyState(card, state.cards);
   const technicalDetails = renderTechnicalDetails(
     card,
-    task,
     linkedSessionKey,
     state.detailTab === "details",
   );
@@ -216,16 +203,12 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
       : []),
   ] as const;
   const activeTab = tabs.some((tab) => tab.id === state.detailTab) ? state.detailTab : "overview";
-  const sessionStateLabel =
-    task && taskIsAuthoritative ? t(`workboard.taskStatus.${task.status}`) : formatted.label;
-  const sessionEmpty = lifecycle.state === "unlinked" && !task && !linkedSessionKey;
+  const sessionStateLabel = formatted.label;
+  const sessionEmpty = lifecycle.state === "unlinked" && !linkedSessionKey;
   const renderSessionHeading = (tab: "overview" | "session") => html`<div
     class="workboard-detail__execution-main"
   >
-    <div
-      class="workboard-detail__session-row"
-      title=${task && taskIsAuthoritative ? taskDetail(task) : formatted.detail}
-    >
+    <div class="workboard-detail__session-row" title=${formatted.detail}>
       ${
         sessionEmpty || !sessionStatus.visible
           ? html`<span
@@ -234,7 +217,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
               aria-label=${sessionStateLabel}
               title=${sessionStateLabel}
             >
-              ${sessionEmpty ? icons.bot : renderLifecycleIcon(lifecycle, task)}
+              ${sessionEmpty ? icons.bot : renderLifecycleIcon(lifecycle)}
             </span>`
           : nothing
       }
@@ -248,7 +231,6 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
               ? t("workboard.detailNoSessionYet")
               : (lifecycle.session?.displayName ??
                 lifecycle.session?.label ??
-                task?.title ??
                 (linkedSessionKey ? t("workboard.fieldSession") : formatted.label))
           }
         </span>
@@ -279,7 +261,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
           : nothing
       }
       ${
-        tab === "overview" && writable && (linkedSessionKey ? live : activeTask)
+        tab === "overview" && writable && linkedSessionKey && live
           ? renderStopCardAction(props, card, busy)
           : nothing
       }
@@ -291,10 +273,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
     {
       className: "drawer drawer--floating",
       label: card.title,
-      description:
-        task && taskIsAuthoritative
-          ? taskDetail(task)
-          : (lifecycle.session?.displayName ?? formatted.detail),
+      description: lifecycle.session?.displayName ?? formatted.detail,
       style:
         "--openclaw-modal-width: 620px; --openclaw-modal-backdrop-filter: none; --wa-color-overlay-modal: rgba(0, 0, 0, 0.24);",
       onCancel: dismissDetails,

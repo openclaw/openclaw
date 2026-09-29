@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   hasConfiguredAccountValue,

@@ -12,13 +12,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 
-/**
- * Normalizes raw user/channel target input before provider-specific parsing.
- */
-export function normalizeChannelTargetInput(raw: string): string {
-  return raw.trim();
-}
-
 type TargetNormalizer = ((raw: string) => string | undefined) | undefined;
 type TargetNormalizerCacheEntry = {
   version: number;
@@ -33,17 +26,13 @@ function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin 
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
 }
 
-function normalizeTargetLiteral(value: string): string | undefined {
-  return normalizeOptionalLowercaseString(value);
-}
-
 function stripPluginTargetPrefix(raw: string, plugin: ChannelPlugin): string {
   let target = raw.trim();
   const prefixes = [plugin.id, ...(plugin.messaging?.targetPrefixes ?? [])]
-    .map((prefix) => normalizeTargetLiteral(String(prefix)))
+    .map((prefix) => normalizeOptionalLowercaseString(String(prefix)))
     .filter((prefix): prefix is string => Boolean(prefix));
   while (target) {
-    const lowered = normalizeTargetLiteral(target) ?? "";
+    const lowered = normalizeOptionalLowercaseString(target) ?? "";
     const prefix = prefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
     if (!prefix) {
       return target;
@@ -67,13 +56,13 @@ export function resolveReservedTargetLiteral(params: {
   if (!stripped || /^[@#]/.test(stripped) || /^(channel|group|user):/i.test(stripped)) {
     return undefined;
   }
-  const normalized = normalizeTargetLiteral(stripped);
+  const normalized = normalizeOptionalLowercaseString(stripped);
   if (!normalized) {
     return undefined;
   }
   const reserved = new Set(
     reservedLiterals
-      .map(normalizeTargetLiteral)
+      .map(normalizeOptionalLowercaseString)
       .filter((literal): literal is string => Boolean(literal)),
   );
   return reserved.has(normalized) ? normalized : undefined;
@@ -140,7 +129,7 @@ type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
 /**
  * Resolved outbound target returned by a channel plugin target resolver.
  */
-type ResolvedPluginMessagingTarget = {
+export type ResolvedPluginMessagingTarget = {
   to: string;
   kind: TargetResolveKindLike;
   display?: string;
@@ -156,7 +145,7 @@ export function resolveNormalizedTargetInput(
   raw?: string,
   plugin?: ChannelPlugin,
 ): { raw: string; normalized: string } | undefined {
-  const trimmed = normalizeChannelTargetInput(raw ?? "");
+  const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }
@@ -184,19 +173,12 @@ export function looksLikeTargetId(params: {
     // generic phone/mention checks.
     return lookup(params.raw, normalizedInput ?? params.raw);
   }
-  if (/^(channel|group|user):/i.test(params.raw)) {
-    return true;
-  }
-  if (/^[@#]/.test(params.raw)) {
-    return true;
-  }
-  if (/^\+?\d{6,}$/.test(params.raw)) {
-    return true;
-  }
-  if (params.raw.includes("@thread")) {
-    return true;
-  }
-  return /^(conversation|user):/i.test(params.raw);
+  return (
+    /^(channel|group|user|conversation):/i.test(params.raw) ||
+    /^[@#]/.test(params.raw) ||
+    /^\+?\d{6,}$/.test(params.raw) ||
+    params.raw.includes("@thread")
+  );
 }
 
 /**
@@ -265,7 +247,7 @@ export function buildTargetResolverSignature(
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
   const reserved = (resolver?.reservedLiterals ?? [])
-    .map(normalizeTargetLiteral)
+    .map(normalizeOptionalLowercaseString)
     .filter((literal): literal is string => Boolean(literal))
     .toSorted()
     .join(",");

@@ -1,11 +1,12 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import { resolveControlUiAllowedOrigins } from "../../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
   isWebchatClient,
 } from "../../utils/message-channel.js";
-import { resolveGatewayAuthPolicyGeneration } from "../auth-policy.js";
+import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
 import { invalidateGatewayPolicyClient } from "./ws-policy-close.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient } from "./ws-types.js";
@@ -38,7 +39,7 @@ export function resolveGatewayWsBrowserOrigin(
 export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
   return checkBrowserOrigin({
     ...origin,
-    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
+    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
     allowHostHeaderOriginFallback:
       cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   });
@@ -47,18 +48,14 @@ export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg:
 /** Revocation follows committed publication; unrelated authenticated connections remain live. */
 export function disconnectDisallowedGatewayPolicyClients(
   clients: Iterable<
-    Pick<
-      GatewayWsClient,
-      "browserOrigin" | "invalidated" | "invalidatedReason" | "authPolicyGeneration"
-    > & {
+    Pick<GatewayWsClient, "browserOrigin" | "invalidated" | "invalidatedReason" | "authPolicy"> & {
       socket: Pick<GatewayWsClient["socket"], "close">;
     }
   >,
   cfg: OpenClawConfig,
 ): void {
-  const generation = resolveGatewayAuthPolicyGeneration(cfg);
   for (const client of clients) {
-    if (client.authPolicyGeneration !== undefined && client.authPolicyGeneration !== generation) {
+    if (!isGatewayAuthPolicyCurrent(client.authPolicy, cfg)) {
       invalidateGatewayPolicyClient(client, {
         reason: "gateway-policy-changed",
         code: 4001,

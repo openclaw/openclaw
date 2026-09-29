@@ -2,8 +2,10 @@
 // talk.catalog, above the embedded talk schema editor (see memory.ts for the
 // same curated-rows-above-schema shape). The pickers and the raw form patch the
 // same config draft, so both stay in sync without narrowing the schema.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing, type TemplateResult } from "lit";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import {
   renderSettingsRow,
@@ -94,10 +96,7 @@ export function selectedTalkProviderOption(
   if (catalog.kind !== "ready") {
     return undefined;
   }
-  if (selection.provider) {
-    return findProviderOption(catalog.providers, selection.provider);
-  }
-  return findProviderOption(catalog.providers, catalog.activeProvider);
+  return findProviderOption(catalog.providers, selection.provider || catalog.activeProvider);
 }
 
 /**
@@ -109,14 +108,11 @@ export function talkProviderConfigKeys(
   selection: TalkRealtimeSelection,
   option: TalkRealtimeProviderOption | undefined,
 ): string[] {
-  const candidates = [selection.provider, option?.id, ...(option?.aliases ?? [])];
-  const keys: string[] = [];
-  for (const candidate of candidates) {
-    if (candidate && candidate in selection.providerEntries && !keys.includes(candidate)) {
-      keys.push(candidate);
-    }
-  }
-  return keys;
+  return uniqueStrings(
+    [selection.provider, option?.id, ...(option?.aliases ?? [])].flatMap((key) =>
+      key && key in selection.providerEntries ? [key] : [],
+    ),
+  );
 }
 
 /** Effective model/voice: top-level override, else the provider entry value. */
@@ -308,7 +304,7 @@ function renderGptLiveRow(props: TalkViewProps) {
 export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
-      <div class="settings-page">
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
         ${renderDeviceTalk(props.nativeDeviceSettings)}
         ${props.voiceWake ? renderVoiceWakeEditor(props.voiceWake.state, props.voiceWake.onInput, props.voiceWake.onRetry) : nothing}
         ${renderSettingsSection(

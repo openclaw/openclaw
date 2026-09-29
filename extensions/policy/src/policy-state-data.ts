@@ -10,6 +10,7 @@ import { collectPolicyConfiguredAgents, ocPathSegment } from "./policy-state-hel
 import type {
   PolicyAuthProfileEvidence,
   PolicyDataHandlingEvidence,
+  PolicyEvidenceBuilder,
   PolicySecretEvidence,
   SecretRefDefaults,
   SecretRefEvidence,
@@ -29,13 +30,7 @@ export function scanPolicyAuthProfiles(
   return Object.entries(profiles)
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, value]) => {
-      const entry: {
-        id: string;
-        source: string;
-        validMetadata: boolean;
-        provider?: string;
-        mode?: string;
-      } = {
+      const entry: PolicyEvidenceBuilder<PolicyAuthProfileEvidence> = {
         id,
         source: `oc://openclaw.config/auth/profiles/${ocPathSegment(id)}`,
         validMetadata: isValidAuthProfileMetadata(value),
@@ -255,23 +250,13 @@ function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly Polic
   const secrets = asNonArrayRecord(cfg.secrets);
   const providers = asNonArrayRecord(secrets.providers);
   return Object.entries(providers).map(([id, value]) => {
-    const insecure = secretProviderInsecureFlags(value);
-    const entry: {
-      id: string;
-      kind: "provider";
-      source: string;
-      providerSource?: string;
-      insecure?: readonly string[];
-    } = {
+    const entry: PolicyEvidenceBuilder<PolicySecretEvidence> = {
       id,
       kind: "provider",
       source: `oc://openclaw.config/secrets/providers/${ocPathSegment(id)}`,
     };
     if (isRecord(value) && typeof value.source === "string") {
       entry.providerSource = value.source;
-    }
-    if (insecure.length > 0) {
-      entry.insecure = insecure;
     }
     return entry;
   });
@@ -493,11 +478,6 @@ function secretRefEvidence(
 ): SecretRefEvidence | undefined {
   const ref = coerceSecretRef(value, defaults);
   return ref === null ? undefined : { source: ref.source, provider: ref.provider, id: ref.id };
-}
-
-function secretProviderInsecureFlags(value: unknown): readonly string[] {
-  void value;
-  return [];
 }
 
 function isValidAuthProfileMetadata(value: unknown): boolean {

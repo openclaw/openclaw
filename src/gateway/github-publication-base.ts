@@ -1,4 +1,5 @@
 import os from "node:os";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 
@@ -44,6 +45,17 @@ export function githubPublicationBaseLineageArgs(ancestor: string, descendant: s
   return ["git", "merge-base", "--is-ancestor", ancestor, descendant];
 }
 
+const worktreeConfigArgs: readonly string[] = [
+  "git",
+  "config",
+  "--local",
+  "--includes",
+  "--bool",
+  "--default=false",
+  "--get",
+  "extensions.worktreeConfig",
+];
+
 export function githubPublicationUnsafeConfigArgs(scope: "--local" | "--worktree"): string[] {
   return [
     "git",
@@ -57,10 +69,11 @@ export function githubPublicationUnsafeConfigArgs(scope: "--local" | "--worktree
 
 // Shared by node-executed capture and restore. Even intent-to-add can run clean
 // conversion while Git rewrites racily clean entries elsewhere in the index.
-export const GITHUB_PUBLICATION_CONFIG_GUARD_JS = String.raw`
+export const GITHUB_PUBLICATION_CONFIG_GUARD = {
+  worktreeConfigArgs,
+  script: String.raw`
 const scopes = ["--local"];
-const worktreeConfig = spawnSync("git", ["config", "--local", "--includes", "--bool",
-  "--default=false", "--get", "extensions.worktreeConfig"], { cwd, env, timeout: 60000, maxBuffer: 128 * 1024 });
+const worktreeConfig = spawnSync("git", ${JSON.stringify(worktreeConfigArgs.slice(1))}, { cwd, env, timeout: 60000, maxBuffer: 128 * 1024 });
 if (worktreeConfig.error || worktreeConfig.status !== 0) {
   throw Error("Publication workspace has unsupported Git transport configuration");
 }
@@ -75,7 +88,8 @@ for (const scope of scopes) {
     throw Error("Publication workspace has unsupported Git transport configuration");
   }
 }
-`;
+`,
+};
 
 export function parseGitHubPublicationBaseBranch(baseRef: string, defaultBranch: string): string {
   const trimmed = baseRef.trim();
@@ -92,12 +106,7 @@ export function parseGitHubPublicationBaseBranch(baseRef: string, defaultBranch:
 
 /** Returns the authenticated target-base SHA or fails the publication boundary closed. */
 export function parseGitHubPublicationBaseRef(raw: string, baseBranch: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("GitHub publication workspace base branch could not be verified.");
-  }
+  const parsed = safeParseJson(raw);
   const ref = isRecord(parsed) ? readNonBlankString(parsed.ref) : undefined;
   const sha = isRecord(parsed) ? readNonBlankString(parsed.sha) : undefined;
   if (

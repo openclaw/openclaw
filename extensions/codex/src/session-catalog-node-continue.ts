@@ -21,7 +21,7 @@ import {
   findNodeAdoptedSessionEntry,
   nodeAdoptedSourceKey,
   nodeSessionMarker,
-  runSessionActionExclusive,
+  catalogSessionActions,
   type AdoptedSessionEntry,
   type CodexNodeHistory,
   type CodexSessionDisposition,
@@ -72,13 +72,7 @@ export function nodeLabel(node: CatalogNode): string {
 export function compareNodeLabels(left: CatalogNode, right: CatalogNode): number {
   const leftLabel = nodeLabel(left);
   const rightLabel = nodeLabel(right);
-  if (leftLabel < rightLabel) {
-    return -1;
-  }
-  if (leftLabel > rightLabel) {
-    return 1;
-  }
-  return 0;
+  return leftLabel < rightLabel ? -1 : leftLabel > rightLabel ? 1 : 0;
 }
 
 function canContinueCodexOnNode(node: CatalogNode): boolean {
@@ -399,7 +393,7 @@ export async function continueNodeCodexSession(params: {
     sourceKey: operationKey,
     findExisting: () => undefined,
     create: () =>
-      runSessionActionExclusive(sourceKey, async () =>
+      catalogSessionActions.enqueue(sourceKey, async () =>
         continueNodeCodexSessionInner({ ...params, agentId }),
       ),
     complete: async (continued) =>

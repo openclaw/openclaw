@@ -111,6 +111,26 @@ async function retryThroughReload(page: Page, error: ReturnType<Page["locator"]>
 
 const focusedCases = [
   {
+    name: "browser",
+    label: "browser panel",
+    path: focusPath({
+      kind: "browser",
+      sessionKey,
+      tab: { target: "host", profile: "work", targetId: "existing" },
+    }),
+    chunk: /\/assets\/browser-document-[^/?]+\.js(?:\?.*)?$/u,
+    gateway: {
+      featureMethods: ["browser.request"],
+      operatorScopes: ["operator.read"],
+    },
+    ready: (page: Page) =>
+      page
+        .getByText(
+          "Browser control is unavailable for this connection. Reconnect with browser access.",
+        )
+        .waitFor(),
+  },
+  {
     name: "terminal",
     label: "terminal panel",
     path: focusPath({ kind: "terminal" }),
@@ -341,6 +361,7 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport },
         async ({ page }) => {
+          await page.clock.install();
           await page.addInitScript(() => {
             const observed = window as Window & { completedHeadFrames?: number };
             const originalFetch = window.fetch;
@@ -397,7 +418,7 @@ suite.define(() => {
             .toBe(true);
           // A generic automatic retry used to wake one second after this
           // first settled frame. Close must remain authoritative beyond it.
-          await page.waitForTimeout(1_500);
+          await page.clock.runFor(1_500);
           if (documentRequests > 1) {
             await reloaded;
           }

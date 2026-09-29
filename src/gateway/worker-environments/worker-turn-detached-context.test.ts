@@ -32,6 +32,7 @@ import {
   database,
   dispatchInitialWorkerPlacement,
   measureLaunchTurn,
+  readLaunchToolNames,
   placements,
   readWorkerTurnTranscriptStorageRows,
   root,
@@ -105,7 +106,7 @@ async function launchProbe(
   waitForInitialPlacement?: WorkerTurnLauncherOptions["waitForInitialPlacement"],
 ) {
   if (!waitForInitialPlacement) {
-    seedActivePlacement();
+    await seedActivePlacement();
   }
   const deliberateStop = new WorkerRunnerUnavailableError();
   let credentialCalls = 0;
@@ -123,6 +124,7 @@ async function launchProbe(
     reconcileWorkspace: unexpected,
     stop: async () => {},
     measureLaunchTurn,
+    readLaunchToolNames,
     launchTurn: async ({ plan }) => {
       launch = {
         baseLeafId: plan.assignment.transcript.baseLeafId,

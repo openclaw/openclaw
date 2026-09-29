@@ -25,7 +25,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
-import { replayAgentTurnIfCached } from "./agent-dedupe.js";
+import { replayAgentTurnIfCached, resolveAgentWaitSource } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import { captureAgentJobSession, getAgentJobSession, waitForAgentJob } from "./agent-job.js";
@@ -41,6 +41,7 @@ type AgentTurnStartRequest = {
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;
   assertAdmissionCurrent?: () => void;
+  assertInputCommitAllowed?: () => void;
   hasCurrentClientAuthority?: () => boolean;
   preflight: AgentRequestPreflight;
   principal: AgentTurnPrincipal | null;
@@ -56,6 +57,7 @@ export function createAgentTurnService(
     privateCompletion,
     settleWakeReplay,
     assertAdmissionCurrent,
+    assertInputCommitAllowed,
     hasCurrentClientAuthority,
     preflight,
     principal,
@@ -67,6 +69,7 @@ export function createAgentTurnService(
     if (replayAgentTurnIfCached({ preflight, context, io, acceptedOnly: privateCompletion })) {
       return;
     }
+    assertInputCommitAllowed?.();
     const respond: RespondFn = (ok, payload, error, meta) =>
       io.emitAcceptance([ok, payload, error], meta);
     const {
@@ -91,6 +94,7 @@ export function createAgentTurnService(
       isOneShotModelRun,
       isRawModelRun,
       agentDedupeKeys,
+      swarmExecutionLane,
     } = preflight;
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
@@ -145,6 +149,11 @@ export function createAgentTurnService(
       preAcceptedReservedSessionKey,
       preAttachmentSession,
     } = routing;
+    const assertRequestCurrent = () => {
+      assertAdmissionCurrent?.();
+      dedupeLifecycle.assertReservationCurrent();
+      assertInputCommitAllowed?.();
+    };
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
     let gatewayAdmissionTransferred = false;
@@ -159,6 +168,7 @@ export function createAgentTurnService(
     try {
       assertAdmissionCurrent?.();
       const content = await prepareAgentContentPhase({
+        assertAdmissionCurrent: assertRequestCurrent,
         request,
         cfg,
         context,
@@ -176,7 +186,7 @@ export function createAgentTurnService(
         modelOverride,
         explicitRecipientSession,
         knownAgents,
-      });
+      }).catch(dedupeLifecycle.handlePreparationFailure(assertAdmissionCurrent));
       if (!content) {
         return;
       }
@@ -217,11 +227,9 @@ export function createAgentTurnService(
       let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
-      let resolvedStorePath: string | undefined;
       let admittedSessionId = resolvedSessionId ?? runId;
       const admissionController = createAgentAdmissionController({
         assertAdmissionCurrent,
-        cfg,
         runId,
         lifecycleGeneration,
         agentDedupeKeys,
@@ -238,7 +246,6 @@ export function createAgentTurnService(
         getResolvedSessionId: () => resolvedSessionId,
         getResolvedSessionAgentId: () => resolvedSessionAgentId,
         getAgentId: () => agentId,
-        getCfgForAgent: () => cfgForAgent,
         getSessionPersisted: () => sessionPersistedBeforeGatewayAdmission,
         getSupersededSessionId: () => supersededSessionId,
         setAdmittedSessionId: (sessionId) => {
@@ -247,7 +254,7 @@ export function createAgentTurnService(
       });
       releaseGatewayAdmission = admissionController.release;
       const resetPhase = await runAgentResetPhase({
-        assertAdmissionCurrent,
+        assertAdmissionCurrent: assertRequestCurrent,
         request,
         cfg,
         requestedSessionKey,
@@ -312,7 +319,6 @@ export function createAgentTurnService(
           failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
         } = preparedSession;
         cfgForAgent = cfgLocal;
-        resolvedStorePath = storePath;
         // Authorize the canonical session the run will actually target — covering
         // keyless requests whose default/effective session is resolved only here —
         // before any run side effects (admission, dispatch).
@@ -400,7 +406,7 @@ export function createAgentTurnService(
               agentId: sessionAgentId,
               sessionId: committedEntry.sessionId,
             }),
-          assertAdmissionCurrent,
+          assertAdmissionCurrent: assertRequestCurrent,
           request,
           cfg: cfgLocal,
           storePath,
@@ -500,7 +506,7 @@ export function createAgentTurnService(
       const { activeSessionAgentId } = delivery;
 
       const preparedDispatch = await prepareAgentRunDispatch({
-        assertAdmissionCurrent,
+        assertAdmissionCurrent: assertRequestCurrent,
         hasCurrentClientAuthority,
         promptedAt,
         request,
@@ -554,6 +560,7 @@ export function createAgentTurnService(
         setAdmittedRunAbort: admissionController.setAdmittedRunAbort,
         getAdmittedRunAbort: admissionController.getAdmittedRunAbort,
         markAgentRunAccepted: dedupeLifecycle.markAccepted,
+        getOwnedAgentDedupeKeys: dedupeLifecycle.ownedReservationKeys,
       });
       if (!preparedDispatch) {
         return;
@@ -577,7 +584,6 @@ export function createAgentTurnService(
             resolvedSessionKey,
             requestedSessionKey,
             resolvedSessionId,
-            storePath: resolvedStorePath,
             agentId,
             activeSessionAgentId,
             delivery,
@@ -592,6 +598,7 @@ export function createAgentTurnService(
             inputProvenance: preparedDispatch.userTurn.inputProvenance,
             runId,
             agentDedupeKeys,
+            swarmExecutionLane,
             spawnedBy: spawnedByValue,
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,
@@ -647,8 +654,7 @@ export function createAgentTurnService(
       typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
         ? Math.max(0, Math.floor(params.timeoutMs))
         : 30_000;
-    const activeChatEntry = context.chatAbortControllers.get(runId);
-    const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
+    const source = resolveAgentWaitSource(context, runId);
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const queuedResult = () => {
       const queued = context.chatQueuedTurns.get(runId);
@@ -669,17 +675,13 @@ export function createAgentTurnService(
     const runContext = getAgentRunContext(runId);
     const initialSession =
       queuedBeforeWait?.session ??
-      getAgentJobSession(runId, hasActiveChatRun ? "chat" : undefined) ??
+      getAgentJobSession(runId, source === "chat" ? "chat" : undefined) ??
       captureAgentJobSession(runContext);
     const wait = async () => {
       if (queuedBeforeWait) {
         return queuedBeforeWait;
       }
-      const snapshot = await waitForAgentJob({
-        runId,
-        timeoutMs,
-        ...(hasActiveChatRun ? { source: "chat" } : {}),
-      });
+      const snapshot = await waitForAgentJob({ runId, timeoutMs, source });
       const queuedAfterWait = queuedResult();
       if (queuedAfterWait) {
         return queuedAfterWait;

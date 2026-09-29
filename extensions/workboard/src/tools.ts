@@ -1,32 +1,22 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-// Workboard plugin module implements tools behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
 import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
   claimTokenField,
+  createWorkboardCardMutations,
   createWorkboardMoveTool,
+  redactedCardResult,
   strictObject,
+  workspaceField,
 } from "./tools-card-mutations.js";
 import { createWorkboardOrchestrationTools } from "./tools-orchestration.js";
 
 function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
-  const record = (ctx ?? {}) as Record<string, unknown>;
-  return (
-    (typeof record.agentId === "string" && record.agentId) ||
-    (typeof record.sessionKey === "string" && record.sessionKey) ||
-    (typeof record.sessionId === "string" && record.sessionId) ||
-    "agent"
-  );
-}
-
-function canMutateCard(card: WorkboardCard, ownerId: string, token?: string): boolean {
-  const claim = card.metadata?.claim;
-  return !claim || claim.ownerId === ownerId || safeEqualSecret(token, claim.token);
+  return ctx?.agentId || ctx?.sessionKey || ctx?.sessionId || "agent";
 }
 
 function readParentIds(value: unknown): string[] {
@@ -58,35 +48,6 @@ function readParentIds(value: unknown): string[] {
   return parents;
 }
 
-async function requireScopedCard(
-  store: WorkboardStore,
-  cardId: string,
-  ownerId: string,
-  token?: string,
-): Promise<WorkboardCard> {
-  const card = await store.get(cardId);
-  if (!card) {
-    throw new Error(`card not found: ${cardId}`);
-  }
-  if (!canMutateCard(card, ownerId, token)) {
-    throw new Error(`card is claimed by ${card.metadata?.claim?.ownerId ?? "another agent"}.`);
-  }
-  return card;
-}
-
-async function requireClaimedCard(
-  store: WorkboardStore,
-  cardId: string,
-  ownerId: string,
-  token?: string,
-): Promise<WorkboardCard> {
-  const card = await requireScopedCard(store, cardId, ownerId, token);
-  if (!card.metadata?.claim) {
-    throw new Error("card must be claimed before lifecycle completion.");
-  }
-  return card;
-}
-
 function summarizeCard(card: WorkboardCard) {
   return {
     id: card.id,
@@ -116,40 +77,6 @@ function summarizeCard(card: WorkboardCard) {
   };
 }
 
-type WorkboardToolCardParams = {
-  record: Record<string, unknown>;
-  id: string;
-  token?: string;
-  scope: { ownerId: string; token?: string };
-};
-type WorkboardToolCardParamsReader = (rawParams: unknown) => Promise<WorkboardToolCardParams>;
-type WorkboardCardMutation = (
-  id: string,
-  record: Record<string, unknown>,
-  scope: WorkboardToolCardParams["scope"],
-) => Promise<WorkboardCard>;
-
-const ScopedClaimTokenField = claimTokenField("Claim token for claimed cards.");
-
-function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolCardParams {
-  const record = rawParams as Record<string, unknown>;
-  const id = readStringParam(record, "id", { required: true });
-  const token = record.token as string | undefined;
-  return {
-    record,
-    id,
-    token,
-    scope: { ownerId, token },
-  };
-}
-
-// Card payloads stay nested under `card`: the host grades a tool call from
-// reserved keys on `details` (`status`, `ok`, `error`, ...), so a flat card
-// would report every mutation of a blocked card as a failed tool call.
-function redactedCardResult(card: WorkboardCard) {
-  return jsonResult({ card: redactClaimToken(card) });
-}
-
 function redactedProofResult(card: WorkboardCard) {
   const proofId = card.metadata?.proof?.at(-1)?.id;
   if (!proofId) {
@@ -160,6 +87,8 @@ function redactedProofResult(card: WorkboardCard) {
     proofId,
   });
 }
+
+const ScopedClaimTokenField = claimTokenField("Claim token for claimed cards.");
 
 const CardIdSchema = strictObject({
   id: cardIdField(),
@@ -172,30 +101,10 @@ export function createWorkboardTools(params: {
 }): AnyAgentTool[] {
   const { store } = params;
   const ownerId = contextOwner(params.context);
-  const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
-    const input = readCardToolParams(rawParams, ownerId);
-    await requireScopedCard(store, input.id, ownerId, input.token);
-    return input;
-  };
-  const readClaimedCardToolParams = async (
-    rawParams: unknown,
-  ): Promise<WorkboardToolCardParams> => {
-    const input = readCardToolParams(rawParams, ownerId);
-    await requireClaimedCard(store, input.id, ownerId, input.token);
-    return input;
-  };
-  const runCardMutation = async (
-    rawParams: unknown,
-    readParams: WorkboardToolCardParamsReader,
-    mutate: WorkboardCardMutation,
-  ) => {
-    const { record, id, scope } = await readParams(rawParams);
-    return redactedCardResult(await mutate(id, record, scope));
-  };
-  const runScopedCardMutation = (rawParams: unknown, mutate: WorkboardCardMutation) =>
-    runCardMutation(rawParams, readScopedCardToolParams, mutate);
-  const runClaimedCardMutation = (rawParams: unknown, mutate: WorkboardCardMutation) =>
-    runCardMutation(rawParams, readClaimedCardToolParams, mutate);
+  const { readScopedCardToolParams, runClaimedCardMutation } = createWorkboardCardMutations(
+    store,
+    ownerId,
+  );
   const tools: AnyAgentTool[] = [
     {
       name: "workboard_list",
@@ -259,13 +168,7 @@ export function createWorkboardTools(params: {
         ),
         idempotencyKey: Type.Optional(Type.String({ description: "Idempotent create key." })),
         skills: Type.Optional(Type.Array(Type.String(), { description: "Suggested skills." })),
-        workspace: Type.Optional(
-          strictObject({
-            kind: Type.String({ description: "scratch, dir, or worktree." }),
-            path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-            branch: Type.Optional(Type.String({ description: "Suggested branch." })),
-          }),
-        ),
+        workspace: workspaceField(),
         maxRuntimeSeconds: Type.Optional(Type.Number({ description: "Run timeout seconds." })),
         maxRetries: Type.Optional(Type.Number({ description: "Retry budget." })),
         scheduledAt: Type.Optional(Type.Number({ description: "Unix epoch milliseconds." })),
@@ -491,7 +394,9 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(await store.addAttachment(id, record, scope));
+        return redactedCardResult(
+          await store.addAttachment(id, record, scope, params.context?.assertInputCommitAllowed),
+        );
       },
     },
     {
@@ -552,16 +457,8 @@ export function createWorkboardTools(params: {
         return redactedCardResult(await store.unblock(id, scope));
       },
     },
-    createWorkboardMoveTool({ store, readScopedCardToolParams, redactedCardResult }),
-    ...createWorkboardOrchestrationTools({
-      store,
-      ownerId,
-      requireScopedCard,
-      readScopedCardToolParams,
-      readClaimedCardToolParams,
-      runScopedCardMutation,
-      redactedCardResult,
-    }),
+    createWorkboardMoveTool({ store, readScopedCardToolParams }),
+    ...createWorkboardOrchestrationTools({ store, ownerId }),
   ];
   for (const tool of tools) {
     const execute = tool.execute;

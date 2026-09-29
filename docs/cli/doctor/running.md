@@ -112,7 +112,7 @@ The updater uses this repair path before accepting the installed target.
 
 Update-time Doctor runs startup-required repairs before optional inspections.
 On large fleets it can defer auth and model diagnostics, plugin inspection,
-skills and workspace metadata, session-snapshot cleanup, and advisory lint to
+skills and workspace metadata, session-snapshot inspection, and advisory lint to
 reserve time for required repairs and update validation. Each deferred check
 appears as an `update-inspection-deferred` warning in Doctor output and the
 update outcome, with the reason and remaining inspection allowance. A deferred

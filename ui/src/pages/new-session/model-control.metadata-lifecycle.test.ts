@@ -84,6 +84,63 @@ function retainedAccountDraft() {
 }
 
 describe("new-session model metadata lifecycle", () => {
+  it("retires a consumed personal-account model before the next configured draft", async () => {
+    const { context, control, neutral, connected, preview, draw, chooseAccount } =
+      retainedAccountDraft();
+    Object.assign(context, { config: { current: { newSessionModelDefaults: "configured" } } });
+    const alternate = {
+      id: "alternate",
+      name: "Alternate",
+      provider: "anthropic",
+      available: true,
+    };
+    neutral.models.push(alternate);
+    connected.models.push(alternate);
+    const { completion } = await chooseAccount();
+    preview.resolve(connected);
+    await completion;
+    draw()
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/alternate"]')!
+      .click();
+    expect(control.modelForSubmission()).toContain("anthropic/alternate@");
+    control.retireDraftSelection();
+    expect(control.modelForSubmission()).toBe("");
+    expect(draw().querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+      "Automatic",
+    );
+    control.reset();
+  });
+
+  it("keeps a deliberate provider switch when leaving a personal account for a cached catalog", async () => {
+    const {
+      context,
+      control,
+      request,
+      neutral,
+      connected,
+      preview,
+      draw,
+      chooseAccount,
+      savePreference,
+    } = retainedAccountDraft();
+    Object.assign(context, { config: { current: { newSessionModelDefaults: "configured" } } });
+    const other = { id: "other", name: "Other provider", provider: "openai", available: true };
+    neutral.models.push(other);
+    connected.models.push(other);
+    const { completion } = await chooseAccount();
+    preview.resolve(connected);
+    await completion;
+    expect(control.accountSelectionReady()).toBe(true);
+    const reads = request.mock.calls.filter(([method]) => method === "models.list").length;
+    draw().querySelector<HTMLButtonElement>('[data-chat-model-option="openai/other"]')!.click();
+    expect(control.modelForSubmission()).toBe("openai/other");
+    expect(savePreference).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: "openai/other" }),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(reads);
+    control.reset();
+  });
+
   it.each(["replacement", "empty", "rejection"])(
     "displays invalidated models on remount without restoring preferences before %s",
     async (outcome) => {

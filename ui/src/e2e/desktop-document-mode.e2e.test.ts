@@ -5,6 +5,7 @@ import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -266,6 +267,21 @@ suite.define(() => {
     async (initialState) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
         const sessionKey = "agent:main:cloud-desktop";
+        // This test exercises an explicit manual open, not automatic discovery.
+        await page.addInitScript(
+          ({ key, sessionKey: scopedSessionKey }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                sessionKey: scopedSessionKey,
+                sidebarSessionLayouts: {
+                  [scopedSessionKey]: { columns: [], resourceAutoOpenDismissed: true },
+                },
+              }),
+            );
+          },
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), sessionKey },
+        );
         const session = {
           key: sessionKey,
           sessionId: "cloud-desktop-session",
@@ -762,7 +778,7 @@ suite.define(() => {
     });
   });
 
-  it("auto-connects view-only and keeps touch actions beside Picture-in-Picture", async () => {
+  it("keeps all six touch controls reachable at 320px, phone, and desktop widths", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { gateway, panel } = await openDesktopDocument(
         page,
@@ -790,13 +806,76 @@ suite.define(() => {
       expect(viewRequest.params).toEqual({ source: { kind: "host" }, control: false });
       await expect.poll(() => panel.getAttribute("data-view-only")).toBe("true");
       const touchActions = panel.locator(".desktop-touch-action, .desktop-sizing");
-      await expect.poll(() => touchActions.count()).toBe(5);
+      await expect.poll(() => touchActions.count()).toBe(6);
+      await expect
+        .poll(() =>
+          panel.getByRole("button", { name: "Audio unavailable", exact: true }).isDisabled(),
+        )
+        .toBe(true);
       await panel
         .getByRole("button", { name: "Open desktop in Picture-in-Picture", exact: true })
         .waitFor();
       await panel.getByRole("button", { name: "Back", exact: true }).waitFor();
 
-      await panel.getByRole("button", { name: "Take control", exact: true }).click();
+      for (const width of [320, 390, 1280]) {
+        await page.setViewportSize({ width, height: 844 });
+        await page.screenshot({
+          path: path.join(artifactDirectory, "connected-toolbar-" + width + "x844.png"),
+          fullPage: false,
+        });
+        const actions = await touchActions.evaluateAll((elements) =>
+          elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            const root = element.getRootNode() as ShadowRoot;
+            const icon = element.querySelector("svg")?.getBoundingClientRect();
+            const reachable = [
+              [rect.left + 2, rect.top + rect.height / 2],
+              [rect.right - 2, rect.top + rect.height / 2],
+              [rect.left + rect.width / 2, rect.top + 2],
+              [rect.left + rect.width / 2, rect.bottom - 2],
+              [rect.left + rect.width / 2, rect.top + rect.height / 2],
+            ].every(([x, y]) => element.contains(root.elementFromPoint(x!, y!)));
+            return {
+              label: element.getAttribute("aria-label"),
+              width: rect.width,
+              height: rect.height,
+              left: rect.left,
+              right: rect.right,
+              reachable,
+              iconContained:
+                !icon ||
+                (icon.left >= rect.left &&
+                  icon.right <= rect.right &&
+                  icon.top >= rect.top &&
+                  icon.bottom <= rect.bottom),
+            };
+          }),
+        );
+        for (const action of actions) {
+          expect(action.width, action.label ?? "touch control").toBeGreaterThanOrEqual(44);
+          expect(action.height).toBeGreaterThanOrEqual(44);
+          expect(action.left).toBeGreaterThanOrEqual(12);
+          expect(action.right).toBeLessThanOrEqual(width - 12);
+          expect(action.reachable, action.label ?? "touch control").toBe(true);
+          expect(action.iconContained, action.label ?? "touch control").toBe(true);
+        }
+      }
+      await page.setViewportSize({ width: 320, height: 844 });
+      await panel.getByRole("combobox", { name: "Desktop size", exact: true }).focus();
+      await page.keyboard.press("Tab");
+      expect(
+        await panel.evaluate((element) =>
+          element.shadowRoot?.activeElement?.getAttribute("aria-label"),
+        ),
+      ).toBe("Back");
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Shift+Tab");
+      expect(
+        await panel.evaluate((element) =>
+          element.shadowRoot?.activeElement?.getAttribute("aria-label"),
+        ),
+      ).toBe("Take control");
+      await page.keyboard.press("Enter");
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
       expect((await gateway.getRequests("desktop.observe"))[1]?.params).toEqual({
         source: { kind: "host" },
@@ -827,7 +906,7 @@ suite.define(() => {
       await expect.poll(() => panel.getAttribute("data-last-keyboard-text")).toBe("m");
 
       await page.screenshot({
-        path: path.join(artifactDirectory, "connected-toolbar-390x844.png"),
+        path: path.join(artifactDirectory, "controlled-toolbar-320x844.png"),
         fullPage: false,
       });
     });

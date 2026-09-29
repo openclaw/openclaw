@@ -21,7 +21,6 @@ import {
   runWhatsappResponsivenessHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
-  collectMemorySearchHealthFindings,
   collectWorkspaceStatusPluginVersionReadiness,
   runBootstrapSizeHealth,
   runHeartbeatCadenceMigrationHealth,
@@ -304,7 +303,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthCheckIds: ["core/doctor/skills-readiness"],
       run: runSkillsHealth,
     }),
@@ -422,11 +421,15 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:memory-search",
       label: "Memory search",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthChecks: {
         description: "Memory search provider and backend readiness are captured as findings.",
         defaultEnabled: false,
-        detect: collectMemorySearchHealthFindings,
+        async detect(ctx) {
+          const { collectMemorySearchHealthFindings } =
+            await import("../commands/doctor-memory-search.js");
+          return collectMemorySearchHealthFindings(ctx);
+        },
       },
       run: runMemorySearchHealthContribution,
     }),

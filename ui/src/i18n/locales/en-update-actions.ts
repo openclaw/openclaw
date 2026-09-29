@@ -5,6 +5,22 @@ import { en } from "./en.ts";
 // cannot leave an update failure without its host-side recovery command.
 const enUpdateActions = {
   updates: {
+    run: {
+      stepWarning: "Warning: {step}",
+      prepareUpdaterDetails:
+        "Keeping a copy of the current updater so it can finish safely while OpenClaw is replaced.",
+      stepLabel: {
+        snapshotSpace: "Checking space for the recovery backup",
+        prepareUpdater: "Preparing the updater",
+        snapshot: "Saving the recovery backup",
+        fetch: "Downloading update revisions",
+        install: "Installing dependencies",
+        update: "Installing OpenClaw",
+        build: "Building OpenClaw",
+        buildUi: "Building the Control UI",
+        doctor: "Checking configuration and data",
+      },
+    },
     confirm: {
       message: "Installs the available update on the connected Gateway and restarts it.",
       macMessage:
@@ -47,7 +63,7 @@ const enUpdateActions = {
 
 export const registerUpdateActionsEnglish = Object.assign(
   () => {
-    const sections = ["confirm", "dialog", "triage", "report"] as const;
+    const sections = ["run", "confirm", "dialog", "triage", "report"] as const;
     // SAFETY: The canonical English catalog defines these sections as objects.
     const updates = en.updates as Record<(typeof sections)[number], TranslationMap>;
     for (const section of sections) {

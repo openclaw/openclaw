@@ -78,25 +78,23 @@ export class GatewayBrowserDeviceAuthLifecycle {
           role: params.role,
         })
       : null;
-    const storedValue = stored?.token;
     const selectedAuth = selectGatewayConnectAuth({
       token: params.token,
       bootstrapToken: params.bootstrapToken,
       password: params.password,
-      storedToken: storedValue,
+      storedToken: stored?.token,
       storedScopes: stored?.scopes,
       pendingDeviceTokenRetry: params.pendingDeviceTokenRetry,
       trustedDeviceTokenRetry: params.trustedDeviceTokenRetry,
       preferBootstrapToken: params.preferBootstrapToken,
     });
-    const { usingStoredDeviceToken } = selectedAuth;
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: selectedAuth.authBootstrapToken
         ? params.bootstrapScopes
           ? [...params.bootstrapScopes]
           : undefined
         : undefined,
-      usingStoredDeviceToken,
+      usingStoredDeviceToken: selectedAuth.usingStoredDeviceToken,
       storedScopes: selectedAuth.storedScopes,
       defaultScopes: params.defaultScopes,
     });
@@ -117,13 +115,6 @@ export class GatewayBrowserDeviceAuthLifecycle {
       throw new Error("gateway connect challenge timestamp invalid");
     }
     const nonce = params.nonce ?? "";
-    const { authBootstrapToken: primary, signatureToken: signed } = selectedAuth;
-    let token: string | null = null;
-    if (primary) {
-      token = primary;
-    } else if (signed) {
-      token = signed;
-    }
     const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
       clientId: params.client.id,
@@ -131,7 +122,7 @@ export class GatewayBrowserDeviceAuthLifecycle {
       role: params.role,
       scopes,
       signedAtMs,
-      token,
+      token: selectedAuth.authBootstrapToken || selectedAuth.signatureToken || null,
       nonce,
       platform: params.client.platform,
       deviceFamily: params.client.deviceFamily,

@@ -95,7 +95,7 @@ function pairedNode(deviceId: string): PairedDevice {
   };
 }
 
-function connectedNode(deviceId: string, available: number) {
+function connectedNode(deviceId: string, available: number): NodeWorkerSupervisorNodeProof {
   return {
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
@@ -219,6 +219,35 @@ describe("sessions.dispatch device targets", () => {
   describe("automatic paired-device selection", () => {
     afterEach(() => {
       vi.restoreAllMocks();
+    });
+
+    it("dispatches to a capacity-one host whose occupied slot is reclaimable idle", async () => {
+      useDeviceSession();
+      const node = connectedNode("idle-host", 0);
+      node.workerHost.capacity = { total: 1, available: 0, reclaimableIdle: 1 };
+      node.workerHost.idleRetention = true;
+      vi.spyOn(environmentMethods, "listGatewayEnvironments").mockResolvedValue(
+        deviceEnvironments([node]),
+      );
+      const dispatch = vi.fn().mockResolvedValue(activeDevicePlacement(node.nodeId));
+      const context = makeDispatchTestContext({
+        nodeRegistry: { get: () => node } as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      });
+      bindDeviceWorkerAvailability(context.workerEnvironmentService!, async () => ({
+        available: true,
+        node,
+      }));
+      const respond = await invokeSessionDispatch(context, { autoDevice: true });
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ deviceId: node.nodeId }),
+        expect.any(Function),
+        undefined,
+        undefined,
+      );
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+      expect(node.workerHost.capacity.available).toBe(0);
     });
 
     it("dispatches to the highest-capacity eligible host and identifies it in the response", async () => {
@@ -818,11 +847,15 @@ describe("sessions.dispatch device targets", () => {
         name: "missing",
         declaredCommands: ["system.run"],
         commandPolicy: { allow: ["codex.exec-server.stdio.v1"] },
+        expectedMessage:
+          "paired-device command codex.exec-server.stdio.v1 is not advertised by node device-1; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
       },
       {
         name: "declared but denied",
         declaredCommands: ["system.run", "codex.exec-server.stdio.v1"],
         commandPolicy: { deny: ["codex.exec-server.stdio.v1"] },
+        expectedMessage:
+          "paired-device command codex.exec-server.stdio.v1 is blocked by Gateway policy for node device-1; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
       },
     ])("rejects a $name required paired-node command before dispatch", async (scenario) => {
       useDeviceSession("codex");
@@ -852,7 +885,7 @@ describe("sessions.dispatch device targets", () => {
         undefined,
         expect.objectContaining({
           code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringMatching(/command.*(enabled|approved|declared)/i),
+          message: scenario.expectedMessage,
         }),
       );
     });

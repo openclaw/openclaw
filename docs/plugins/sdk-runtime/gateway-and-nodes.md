@@ -12,6 +12,49 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
 
 ## Gateway and node namespaces
 
+### Session resource methods
+
+A plugin can declare `sessionAccess` when registering an additive Gateway method:
+
+```typescript
+api.registerGatewayMethod("my-plugin.session.open", handleOpen, {
+  scope: "operator.write",
+  sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "my_tool" },
+});
+```
+
+This requires a current authenticated profile, an existing canonical top-level
+`sessionKey`, and, when supplied, its matching `agentId`. Broad writers retain
+the session's sharing rules. `allowOwnSessionScope` additionally admits
+`operator.sessions.write` only for the caller's own session. `requiredTool`
+checks the canonical effective session tool policy and an admitted agent run's
+tool limits. Agent callers are bound to their own conversation. Currently,
+resource tool-policy admission does not support locked model selection.
+
+The handler receives `sessionAccessAuthority`. Call `assertCurrent()` before
+and after awaited preparation and immediately before effects. The router closes
+this invocation handle when the handler finishes; it cannot be reused to adopt
+new resources afterward.
+
+Use `retain()` during the handler to obtain an original-person access borrow
+with `signal`, `assertCurrent()` and `release()`, for example for an interactive
+viewer. Use `retainSession()` for a resource shared by independently authorized
+collaborators. That second borrow checks only the exact session incarnation and
+store generation; it does not authorize operations. Each operation still needs
+its own person/run admission. Normal row progress preserves both lifetimes;
+reset, deletion or physical-store replacement invalidates the session borrow.
+Release every borrow on failed startup, replacement and service cleanup.
+
+`sandboxRequired` describes the admitted session/role constraint. A consumer
+must provide a compliant backend or report that its backend is unsupported.
+This metadata does not turn a Gateway-hosted process into a sandbox.
+
+For tool presentation, `readGatewayToolOperatorScopes()` from
+`openclaw/plugin-sdk/agent-harness-runtime` returns a copy of the current admitted
+operator's scopes after checking that authority. It returns `undefined` for
+system/local calls without an operator capture. It does not grant permissions;
+the selected Gateway method still authorizes the request.
+
 ### Person access lifetimes
 
 `api.registerGatewayAccessPolicy({ authorize })` adds a plugin-owned access
@@ -256,6 +299,8 @@ applicable policy also requires fresh publication admission.
     unavailable state on expected preparation failure and let `isAvailable`
     withhold their commands; throwing aborts node startup. Use `watchAvailability`
     for later availability changes and `onDisconnect` for execution cleanup.
+    The cleanup callback returned by `watchAvailability` may return a promise.
+    Node shutdown awaits that callback and reports cleanup failures.
 
     <Warning>
     The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. When `openDuplex` runs inside an authenticated Gateway request, its effective scopes never exceed that authenticated caller's actual scopes, even if a trusted plugin requests stronger scopes. Without an authenticated incoming client, existing trusted-plugin scope behavior applies. Use requested scopes only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
@@ -283,6 +328,14 @@ before dispatch and each frame. Closing the service cancels open channels.
 Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
+
+Current service handles also expose `enqueueRun(id, mode)` for service-owned
+work. It uses the normal cron admission queue with the service's live authority,
+independently of a completed agent tool caller. Use `"if-enabled"` to request an
+immediate run without overriding a disabled job. Retained handles still reject
+when the service stops or the scheduler is replaced, including while waiting for
+admission. This optional method is absent on older hosts; it has no caller-scoped
+fallback.
 
 Current Gateway service handles also provide `await cron.isEnabled()` to observe
 whether automatic scheduling is enabled, including the `OPENCLAW_SKIP_CRON`

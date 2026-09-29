@@ -1,12 +1,12 @@
 // Reads transcript artifacts; live store acquisition stays with the caller.
 import fs from "node:fs";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
-import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
-import { readFileWindowFully } from "../infra/file-read.js";
+import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   resolveHistoryAnchorPageRange,
@@ -90,27 +90,31 @@ function normalizeRecentSessionReadOptions(opts?: Partial<ReadRecentSessionMessa
   return { maxMessages, maxBytes, maxLines };
 }
 
-async function readRecentTranscriptTailLinesAsync(
+async function readRecentSessionSnapshotFromPathAsync(
   filePath: string,
-  opts: ReadRecentSessionMessagesOptions,
-  displaySource: string,
+  opts: ReturnType<typeof normalizeRecentSessionReadOptions>,
+  index: SessionTranscriptIndex,
   sessionId: string,
-): Promise<string[]> {
-  const { maxBytes, maxLines } = normalizeRecentSessionReadOptions(opts);
+): Promise<{ messages: unknown[]; transcriptEvents: TranscriptEvent[] }> {
+  if (opts.maxMessages === 0) {
+    return { messages: [], transcriptEvents: [] };
+  }
+  const { maxBytes, maxLines } = opts;
   const handle = await fs.promises.open(filePath, "r");
+  let lines: string[];
   try {
     const stat = await handle.stat();
-    assertArchiveTranscriptSource(filePath, stat, displaySource, sessionId);
+    assertArchiveTranscriptSource(filePath, stat, index.displaySource, sessionId);
     const readLen = Math.min(stat.size, maxBytes);
     const readStart = Math.max(0, stat.size - readLen);
     const buffer = Buffer.alloc(readLen);
     const bytesRead = await readFileWindowFully(handle, buffer, readStart);
     const finalStat = await handle.stat();
-    assertArchiveTranscriptSource(filePath, finalStat, displaySource, sessionId);
+    assertArchiveTranscriptSource(filePath, finalStat, index.displaySource, sessionId);
     if (bytesRead <= 0) {
-      return [];
+      return { messages: [], transcriptEvents: [] };
     }
-    return buffer
+    lines = buffer
       .toString("utf-8", 0, bytesRead)
       .split(/\r?\n/)
       .slice(readStart > 0 ? 1 : 0)
@@ -119,6 +123,7 @@ async function readRecentTranscriptTailLinesAsync(
   } finally {
     await handle.close();
   }
+  return parseRecentTranscriptTailSnapshot(lines, opts.maxMessages, index);
 }
 
 function parseRecentTranscriptTailSnapshot(
@@ -394,24 +399,6 @@ export class ArchivedTranscriptReader {
       totalMessages: 0,
     };
   }
-}
-
-async function readRecentSessionSnapshotFromPathAsync(
-  filePath: string,
-  opts: ReturnType<typeof normalizeRecentSessionReadOptions>,
-  index: SessionTranscriptIndex,
-  sessionId: string,
-): Promise<{ messages: unknown[]; transcriptEvents: TranscriptEvent[] }> {
-  if (opts.maxMessages === 0) {
-    return { messages: [], transcriptEvents: [] };
-  }
-  const lines = await readRecentTranscriptTailLinesAsync(
-    filePath,
-    opts,
-    index.displaySource,
-    sessionId,
-  );
-  return parseRecentTranscriptTailSnapshot(lines, opts.maxMessages, index);
 }
 
 function indexedTranscriptEntryToMessage(entry: MaterializedTranscriptEntry): unknown {

@@ -1,4 +1,3 @@
-// Github Copilot plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   definePluginEntry,
@@ -15,6 +14,7 @@ import {
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { resolveFirstGithubToken } from "./auth.js";
 import {
   normalizeGithubCopilotDomain,
@@ -48,18 +48,8 @@ async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
 }
 
-function resolveCopilotConfiguredPrimary(cfg: OpenClawConfig): string {
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  return typeof existingModel === "string"
-    ? existingModel.trim()
-    : typeof existingModel === "object" && typeof existingModel?.primary === "string"
-      ? existingModel.primary.trim()
-      : "";
-}
-
 function applyCopilotDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
-  if (resolveCopilotConfiguredPrimary(cfg)) {
+  if (resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)) {
     return cfg;
   }
   const defaults = cfg.agents?.defaults;
@@ -298,7 +288,7 @@ async function runGitHubCopilotNonInteractiveAuth(
   );
 
   let starterModel: string | undefined;
-  if (!resolveCopilotConfiguredPrimary(configWithDomain)) {
+  if (!resolveAgentModelPrimaryValue(configWithDomain.agents?.defaults?.model)) {
     const { resolveCopilotStarterModel } = await loadGithubCopilotRuntime();
     starterModel = await resolveCopilotStarterModel({
       githubToken,
@@ -587,10 +577,6 @@ export default definePluginEntry({
       };
     }
 
-    async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
-      return await runGitHubCopilotDeviceAuth(ctx, PUBLIC_GITHUB_COPILOT_DOMAIN);
-    }
-
     async function runGitHubCopilotEnterpriseAuth(ctx: ProviderAuthContext) {
       const domain = await promptForEnterpriseDomain(ctx);
       if (!domain) {
@@ -621,15 +607,15 @@ export default definePluginEntry({
           hint: "Browser device-code flow",
           kind: "device_code",
           starterModel: DEFAULT_COPILOT_MODEL,
-          run: async (ctx) => await runGitHubCopilotAuth(ctx),
-          runNonInteractive: async (ctx) => await runGitHubCopilotNonInteractiveAuth(ctx),
+          run: (ctx) => runGitHubCopilotDeviceAuth(ctx, PUBLIC_GITHUB_COPILOT_DOMAIN),
+          runNonInteractive: runGitHubCopilotNonInteractiveAuth,
         },
         {
           id: "device-enterprise",
           label: "GitHub Enterprise device login (data residency)",
           hint: "Device-code flow against your *.ghe.com tenant",
           kind: "device_code",
-          run: async (ctx) => await runGitHubCopilotEnterpriseAuth(ctx),
+          run: runGitHubCopilotEnterpriseAuth,
           wizard: {
             choiceId: "github-copilot-enterprise",
             choiceLabel: "GitHub Copilot (Enterprise / data residency)",

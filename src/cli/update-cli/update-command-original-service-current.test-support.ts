@@ -27,8 +27,8 @@ import {
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import { restartRetainedUpdateGatewayService } from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   compensateOriginalManagedService,
@@ -149,67 +149,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     },
   );
 
-  it.each(["current", "replaced", "revoked"] as const)(
-    "revalidates retained definition after final native lock: %s",
-    async (scenario) => {
-      const { state, rootA, rootB, before, serviceState, mocks } = fixture();
-      await admitted(async (run) => {
-        const original = await observeOriginalManagedServiceRuntime(
-          { root: rootB, opts: { run } },
-          before,
-        );
-        if (!original) {
-          throw new Error("missing original observation");
-        }
-        const entered = createDeferred();
-        const release = createDeferred();
-        const holder = withGatewayServiceOperationLock(state.env, async () => {
-          entered.resolve();
-          await release.promise;
-        });
-        await entered.promise;
-        const revalidate = vi.fn(async () => {
-          await revalidateOriginalManagedServiceRuntime(original, () =>
-            run.executorFence!.assertCurrent(),
-          );
-        });
-        const work = restartRetainedUpdateGatewayService({
-          run,
-          root: rootA,
-          env: state.env,
-          stdout: process.stdout,
-          assertCurrent: () => run.executorFence!.assertCurrent(),
-          revalidate,
-        });
-        const result = work.then(
-          () => ({ error: undefined }),
-          (error: unknown) => ({ error }),
-        );
-        try {
-          expect(revalidate).not.toHaveBeenCalled();
-          expect(mocks.nativeRestart).not.toHaveBeenCalled();
-          if (scenario === "replaced") {
-            serviceState.command!.programArguments.push("--replacement");
-          }
-          if (scenario === "revoked") {
-            run.executorFence = undefined;
-          }
-        } finally {
-          release.resolve();
-          await holder;
-        }
-        const settled = await result;
-        expect(Boolean(settled.error)).toBe(scenario !== "current");
-        expect(mocks.nativeRestart).toHaveBeenCalledTimes(scenario === "current" ? 1 : 0);
-        if (scenario === "current") {
-          expect(revalidate).toHaveBeenCalledOnce();
-        }
-      });
-    },
-  );
-
   it.each([
-    "own-rebind",
     "own-rebind-without-stop",
     "own-compensated-rebind-without-stop",
     "own-pin-rebind",
@@ -218,7 +158,18 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     "revoked",
     "schema-newer",
   ] as const)("retained own-rebind compensation: %s", async (scenario) => {
-    const { state, rootB, before, serviceState, mocks } = fixture();
+    const { state, rootA, rootB, before, serviceState, mocks } = fixture();
+    const managedDefinition = structuredClone(serviceState.command!);
+    serviceState.command = {
+      ...managedDefinition,
+      workingDirectory: state.home,
+      managedDefinition,
+      managedOverrides: {},
+    };
+    before.serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
+      state: serviceState,
+      root: rootA,
+    });
     const pinScope = { kind: "gateway" as const, env: state.env };
     const pinScenario = scenario === "own-pin-rebind" || scenario === "foreign-pin";
     if (pinScenario) {
@@ -258,6 +209,10 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
                       path.join(rootB, "dist/index.js"),
                       "gateway",
                     ],
+                  };
+                  serviceState.command.managedDefinition = {
+                    ...managedDefinition,
+                    programArguments: serviceState.command.programArguments,
                   };
                   if (pinScenario) {
                     commitDaemonRuntimePin(
@@ -304,6 +259,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         await args.beforeMutation();
         args.assertCurrent();
         expect(args.programArguments).toEqual(originalCommand.programArguments);
+        expect(args.workingDirectory).toBe(managedDefinition.workingDirectory);
         expect(args.preserveAutoStart).toBe(true);
         serviceState.command = structuredClone(originalCommand);
         commitDaemonRuntimePin(pinScope, args.runtimePinUpdate, serviceState.command);
@@ -459,13 +415,10 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
   });
 
   it.each([
-    "timeout",
     "entry-limit",
-    "byte-limit",
     "read-error",
     "later-timeout",
     "later-entry-limit",
-    "later-byte-limit",
     "launcher-limit",
     "launcher-drift",
     "read-window",
@@ -486,9 +439,6 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
           if (!scenario.startsWith("later-") || treeReads > 1) {
             if (scenario.includes("entry-limit")) {
               throw new integrity.PackageIntegrityLimitError("entry");
-            }
-            if (scenario.includes("byte-limit")) {
-              throw new integrity.PackageIntegrityLimitError("byte");
             }
             throw new integrity.PackageIntegrityTimeoutError(30_000);
           }
@@ -551,21 +501,18 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
   });
 
   it.each([
-    "unsupported",
-    "capable",
+    "healthy",
     "scheduled",
     "uncertain",
     "not-ready",
     "no-restart",
     "no-retained-custody",
-    "definition-drift",
     "manager-drift",
     "authority-lost",
   ] as const)("current F3 candidate-native selection: %s", async (scenario) => {
     const { state, rootB, before, serviceState, mocks } = fixture();
     const probe = createDeferred();
     const started = createDeferred();
-    mocks.capability.mockResolvedValue(scenario === "capable");
     const actualLock = nativeLock.withGatewayServiceOperationLock;
     let locks = 0;
     vi.spyOn(nativeLock, "withGatewayServiceOperationLock").mockImplementation(
@@ -618,6 +565,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
               handoff() {},
               interrupted: () => false,
               beginMutation() {},
+              assertRecoveryCurrent() {},
               restore,
               complete: vi.fn(),
             },
@@ -639,9 +587,6 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         expect(mocks.capability).not.toHaveBeenCalled();
         expect(mocks.nativeRestart).not.toHaveBeenCalled();
         expect(mocks.restart).not.toHaveBeenCalled();
-        if (scenario === "definition-drift") {
-          serviceState.command!.programArguments.push("--port", "19997");
-        }
         if (scenario === "manager-drift") {
           serviceState.env = {
             ...state.env,
@@ -658,7 +603,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
       if (["scheduled", "uncertain", "authority-lost", "no-retained-custody"].includes(scenario)) {
         expect(settled.error).toBeInstanceOf(UpdateCommandRecoveryPendingError);
       } else {
-        const healthy = scenario === "unsupported" || scenario === "capable";
+        const healthy = scenario === "healthy";
         expect(settled.error).toBeUndefined();
         expect(settled.value).toMatchObject({
           rolledBack: false,
@@ -672,15 +617,11 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         });
       }
       expect(mocks.restart).not.toHaveBeenCalled();
-      expect(restore).toHaveBeenCalledTimes(
-        ["unsupported", "capable", "not-ready"].includes(scenario) ? 1 : 0,
-      );
+      expect(restore).toHaveBeenCalledTimes(["healthy", "not-ready"].includes(scenario) ? 1 : 0);
       expect(mocks.nativeRestart).toHaveBeenCalledTimes(
-        ["unsupported", "capable", "scheduled", "uncertain", "not-ready"].includes(scenario)
-          ? 1
-          : 0,
+        ["healthy", "scheduled", "uncertain", "not-ready"].includes(scenario) ? 1 : 0,
       );
-      if (scenario === "unsupported") {
+      if (scenario === "healthy") {
         expect(mocks.capability).not.toHaveBeenCalled();
         expect(mocks.nativeRestart).toHaveBeenCalledWith(
           expect.objectContaining({

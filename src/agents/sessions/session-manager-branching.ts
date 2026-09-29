@@ -2,8 +2,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { replaceSessionWithBranchedTranscript } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
-import { SessionManagerEntries } from "./session-manager-entries.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { SessionManagerMetadata } from "./session-manager-metadata.js";
 import type {
   LabelEntry,
   PreservedOpaqueFileEntry,
@@ -12,7 +12,7 @@ import type {
 } from "./session-manager-types.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-view-types.js";
 
-export class SessionManagerBranching extends SessionManagerEntries {
+export class SessionManagerBranching extends SessionManagerMetadata {
   private collectBranchedSessionPath(leafId: string): {
     entries: SessionEntry[];
     opaqueEntries: PreservedOpaqueFileEntry[];
@@ -114,25 +114,17 @@ export class SessionManagerBranching extends SessionManagerEntries {
       parentSession: persistenceTarget ? previousSessionId : undefined,
     };
     const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
-    const labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }> = [];
-    for (const [targetId, label] of this.labelsById) {
-      if (pathEntryIds.has(targetId)) {
-        labelsToWrite.push({
-          targetId,
-          label,
-          timestamp: this.labelTimestampsById.get(targetId)!,
-        });
-      }
-    }
-
     const labelEntries: LabelEntry[] = [];
     let parentId = branchPath.tailId;
-    for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
+    for (const [targetId, label] of this.labelsById) {
+      if (!pathEntryIds.has(targetId)) {
+        continue;
+      }
       const labelEntry: LabelEntry = {
         type: "label",
         id: generateSessionEntryId(),
         parentId,
-        timestamp: labelTimestamp,
+        timestamp: this.labelTimestampsById.get(targetId)!,
         targetId,
         label,
       };

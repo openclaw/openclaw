@@ -107,16 +107,24 @@ function responseTurn(turn: number, rejectedResponseStatus: string): string {
               ),
             ]
           : [message(RECOVERED_MARKER)];
+  const earlyEvents = malformedItemDone
+    ? [
+        {
+          type: "response.output_item.done",
+          // Refusal precedes the call in that terminal snapshot. Keep its identity
+          // at the same position so this control cannot stop on an index conflict.
+          output_index: terminalStatus === "refusal" ? 1 : 0,
+          item: call("call_rejected_edit", "edit", TRUNCATED_FRAGMENT),
+        },
+      ]
+    : [];
+  // HTTP EOF is not a completed Responses event. The transport must not borrow
+  // the earlier write/read responses' terminal facts to recover this rejection.
+  if (malformedItemDone && terminalStatus === "eof") {
+    return responsesSse(earlyEvents);
+  }
   return responsesSse([
-    ...(malformedItemDone
-      ? [
-          {
-            type: "response.output_item.done",
-            output_index: 0,
-            item: call("call_rejected_edit", "edit", TRUNCATED_FRAGMENT),
-          },
-        ]
-      : []),
+    ...earlyEvents,
     {
       type:
         malformedItemDone && terminalStatus === "failed" ? "response.failed" : "response.completed",
@@ -284,13 +292,16 @@ describe("issue #147040 real runtime proof", () => {
           "incomplete",
           "refusal",
           "error",
-          // Without terminal drain, even a later coherent completion is unread.
-          // Fail closed after committed effects rather than guessing its outcome.
+          // Item completion rejects malformed arguments before dispatch. The
+          // canonical drain now reads the later terminal facts; only coherent
+          // completion may resume the transcript after the earlier tools settle.
           "item-done-completed",
           "item-done-refusal",
           "item-done-error",
           "item-done-failed",
+          "item-done-eof",
         ]) {
+          const expectsRecovery = status === "completed" || status === "item-done-completed";
           await fs.rm(path.join(workspaceDir, "note.txt"), { force: true });
           rejectedResponseStatus = status;
           providerRequests.length = 0;
@@ -312,7 +323,7 @@ describe("issue #147040 real runtime proof", () => {
             { runId: started.runId, timeoutMs: 30_000 },
             { timeoutMs: 35_000 },
           );
-          if (status === "completed") {
+          if (expectsRecovery) {
             expect(
               waited,
               JSON.stringify({
@@ -337,7 +348,11 @@ describe("issue #147040 real runtime proof", () => {
           expect(settledMessages.includes("Successfully wrote")).toBe(true);
           expect(settledMessages.includes("call_failed_read")).toBe(true);
           expect(countOccurrences(settledMessages, USER_PROMPT)).toBe(1);
-          if (status !== "completed") {
+          const retryReasons = observedEvents
+            .filter((event) => event.stream === "run_status" && event.data.phase === "retrying")
+            .map((event) => event.data.reason);
+          expect.soft(retryReasons, status).toEqual(expectsRecovery ? ["tool_call_rejection"] : []);
+          if (!expectsRecovery) {
             expect.soft(providerRequests.length, status).toBe(3);
             const stoppedHistory = await gateway.client.request<{ messages?: unknown[] }>(
               "chat.history",
@@ -378,8 +393,10 @@ describe("issue #147040 real runtime proof", () => {
           }
           expect(JSON.parse(failedRead.output)).toMatchObject({ status: "error", tool: "read" });
           expect(countOccurrences(recoveryMessages, USER_PROMPT)).toBe(1);
+          expect(recoveryMessages.includes("call_rejected_edit")).toBe(false);
           expect(recoveryMessages.includes(TRUNCATED_FRAGMENT)).toBe(false);
           expect(recoveryMessages.includes("malformed JSON arguments")).toBe(false);
+          expect(recoveryMessages.includes("invalid JSON arguments")).toBe(false);
 
           const history = await gateway.client.request<{ messages?: unknown[] }>("chat.history", {
             sessionKey,
@@ -388,6 +405,7 @@ describe("issue #147040 real runtime proof", () => {
           const serialized = JSON.stringify(history.messages ?? []);
           expect(serialized.includes(RECOVERED_MARKER)).toBe(true);
           expect(serialized.includes("malformed JSON arguments")).toBe(false);
+          expect(serialized.includes("invalid JSON arguments")).toBe(false);
           expect(serialized.includes("incomplete terminal tool call")).toBe(false);
           expect(serialized.includes(TRUNCATED_FRAGMENT)).toBe(false);
         }

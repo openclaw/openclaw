@@ -9,6 +9,7 @@ import type {
 import type {
   WorkerToolAuthority,
   WorkerOptionalLocalToolName,
+  WorkerToolName,
 } from "../../worker/tool-authority.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
@@ -20,6 +21,7 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
   prepareComputer(): Promise<PreparedWorkerComputer | undefined> | undefined;
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
+  launchToolNames: readonly WorkerToolName[];
   portalAvailable?: boolean;
 }): Promise<{
   browser?: WorkerBrowserLaunchDescriptor;
@@ -51,6 +53,7 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
   const toolAuthority = resolveWorkerToolAuthority({
     modelRef: params.modelRef,
     turn: params.turn,
+    launchToolNames: params.launchToolNames,
     portalAvailable: params.portalAvailable,
     availableOptionalToolNames,
   });

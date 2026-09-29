@@ -219,17 +219,13 @@ export function createStateStartupCorpusFixture() {
                 doctorOnlyStateMigrations: true,
                 preparePluginMetadataSnapshot: true,
               });
-              phase("doctor-checkpoint");
-              await runDoctorConfigPreflight({
-                observe: false,
-                requireStartupMigrationCheckpoint: true,
-              });
               phase("startup-config-read");
               const initialSnapshotRead = await io.readConfigFileSnapshotWithPluginMetadata();
               phase("startup-config");
               const startup = await loadGatewayStartupConfigSnapshot({
                 initialSnapshotRead,
                 minimalTestGateway: false,
+                ambientEnvTriggers: "suppress",
                 log: console,
               });
               const config = startup.snapshot.config;

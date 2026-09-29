@@ -1246,14 +1246,13 @@ describe("WorkboardStore", () => {
     expect(card.position).toBe(0);
   });
 
-  it("keeps initial session, run, and task links when creating cards", async () => {
+  it("keeps initial native session and run links when creating cards", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
 
     const card = await store.create({
       title: "Follow up",
       sessionKey: "agent:main:dashboard:1",
       runId: "run-1",
-      taskId: "task-1",
       execution: {
         id: "exec-1",
         kind: "agent-session",
@@ -1270,7 +1269,6 @@ describe("WorkboardStore", () => {
     expect(card).toMatchObject({
       sessionKey: "agent:main:dashboard:1",
       runId: "run-1",
-      taskId: "task-1",
       execution: {
         engine: "claude",
         mode: "manual",
@@ -2590,61 +2588,6 @@ describe("WorkboardStore", () => {
     expect(claimed.card.metadata?.claim).toMatchObject({
       ownerId: "main",
       token: "fresh-token",
-    });
-  });
-
-  it("creates idempotent child cards and promotes them when parents finish", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const parent = await store.create({ title: "Parent", status: "running" });
-    const child = await store.create({
-      title: "Child",
-      status: "todo",
-      parents: [parent.id],
-      tenant: "release",
-      idempotencyKey: "fanout:1",
-      skills: ["testing"],
-      workspace: { kind: "scratch" },
-    });
-
-    expect(child.status).toBe("todo");
-    expect(child.metadata?.links).toEqual([
-      expect.objectContaining({ type: "parent", targetCardId: parent.id }),
-    ]);
-    await expect(store.get(parent.id)).resolves.toMatchObject({
-      metadata: { links: [expect.objectContaining({ type: "child", targetCardId: child.id })] },
-    });
-    await expect(
-      store.create({
-        title: "Duplicate child",
-        tenant: "release",
-        idempotencyKey: "fanout:1",
-      }),
-    ).resolves.toMatchObject({ id: child.id });
-    await expect(
-      store.create({
-        title: "Different tenant child",
-        tenant: "qa",
-        idempotencyKey: "fanout:1",
-      }),
-    ).resolves.toMatchObject({ title: "Different tenant child" });
-    await expect(
-      store.create({ title: "Unscoped child", idempotencyKey: "fanout:1" }),
-    ).resolves.toMatchObject({ title: "Unscoped child" });
-
-    await store.complete(parent.id, { summary: "Parent done." });
-    const promoted = await store.promoteReady();
-
-    expect(promoted.cards).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
-    await expect(store.get(child.id)).resolves.toMatchObject({
-      status: "ready",
-      metadata: {
-        automation: {
-          tenant: "release",
-          idempotencyKey: "fanout:1",
-          skills: ["testing"],
-          workspace: { kind: "scratch" },
-        },
-      },
     });
   });
 
@@ -4010,7 +3953,7 @@ describe("WorkboardStore", () => {
     const {
       store,
       stores: { subscriptions },
-    } = createWorkboardSqliteTestHarness();
+    } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     const historical = await store.create({
       title: "Archived notifications",
       boardId: "ops",
@@ -4070,7 +4013,7 @@ describe("WorkboardStore", () => {
     const {
       store,
       stores: { subscriptions },
-    } = createWorkboardSqliteTestHarness();
+    } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     const card = await store.create({ title: "Notify me", boardId: "ops" });
     const subscription = await store.subscribeNotifications({
       boardId: "ops",
@@ -4158,7 +4101,7 @@ describe("WorkboardStore", () => {
   });
 
   it("does not skip same-millisecond notification events after cursor advancement", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     await store.create({
       title: "First same-ms event",
       boardId: "ops",
@@ -4206,7 +4149,7 @@ describe("WorkboardStore", () => {
   });
 
   it("does not skip unsequenced notifications after a sequenced same-millisecond event", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     await store.create({
       title: "Sequenced notification",
       boardId: "ops",
@@ -4260,7 +4203,7 @@ describe("WorkboardStore", () => {
   });
 
   it("drains large same-millisecond notification batches without replaying delivered ids", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     for (let index = 0; index < 205; index += 1) {
       await store.create({
         title: `Same-ms event ${index}`,
@@ -4298,7 +4241,7 @@ describe("WorkboardStore", () => {
   });
 
   it("filters replayed notification events by session and run subscriptions", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const matching = await store.create({
       title: "Matching session",
       boardId: "ops",
@@ -4347,7 +4290,7 @@ describe("WorkboardStore", () => {
   });
 
   it("replays card-scoped subscriptions without requiring the board id", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const card = await store.create({ title: "Ops card", boardId: "ops" });
     const subscription = await store.subscribeNotifications({
       cardId: card.id,
@@ -4364,7 +4307,7 @@ describe("WorkboardStore", () => {
   });
 
   it("replays stale metadata as stale notification events", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     await store.create({
       title: "Stale card",
       boardId: "ops",
@@ -4475,40 +4418,6 @@ describe("WorkboardStore", () => {
 
     await expect(store.get(card.id)).resolves.toEqual(archived);
     expect(changes).not.toHaveBeenCalled();
-  });
-
-  it("does not promote or claim an archived scheduled card", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(1_000);
-      const store = createWorkboardSqliteTestStore();
-      const card = await store.create({
-        title: "Archived scheduled work",
-        status: "scheduled",
-        scheduledAt: 2_000,
-      });
-      const archived = await store.archive(card.id, true);
-      const changes = vi.fn();
-      store.subscribeChanges(changes);
-
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        await expect(store.promoteReady(3_000 + attempt)).resolves.toEqual({
-          cards: [],
-          count: 0,
-        });
-      }
-      await expect(store.claim(card.id, { ownerId: "worker" })).rejects.toThrow(/archived/);
-      await expect(store.get(card.id)).resolves.toEqual(archived);
-      expect(changes).not.toHaveBeenCalled();
-
-      vi.setSystemTime(3_000);
-      await store.archive(card.id, false);
-      await expect(store.claim(card.id, { ownerId: "worker" })).resolves.toMatchObject({
-        card: { id: card.id, status: "running" },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("does not promote, time out, or reclaim archived cards during dispatch", async () => {

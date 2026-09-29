@@ -87,10 +87,8 @@ const defaultPool = process.platform === "win32" ? "forks" : "threads";
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/chat-metadata-runtime.cache.test.ts",
-  "server-methods/tasks.access.test.ts",
-  "server-methods/tasks.test.ts",
-  "server-methods/agent.task-runtime.test.ts",
   "server-methods/agent.test.ts",
+  "server-methods/agent.followup-owner.test.ts",
   "server-methods/agent.visitor-access.test.ts",
   "server-methods/board.runtime-boundaries.test.ts",
   "server-methods/chat.reset-visible-yield.test.ts",
@@ -287,9 +285,6 @@ describe("projects vitest config", () => {
     expect(gatewayFallback.exclude).toContain(overrideFixture);
     expect(methodsConfig.exclude).toContain("src/gateway/server-methods/agent.test.ts");
     expect(methodsConfig.exclude).toContain(
-      "src/gateway/server-methods/agent.task-runtime.test.ts",
-    );
-    expect(methodsConfig.exclude).toContain(
       "src/gateway/server-methods/health.owner-routing.test.ts",
     );
     expect(methodsConfig.exclude).toContain(
@@ -302,9 +297,6 @@ describe("projects vitest config", () => {
       "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
     );
     expect(gatewayFallback.exclude).toContain("src/gateway/server-methods/agent.test.ts");
-    expect(gatewayFallback.exclude).toContain(
-      "src/gateway/server-methods/agent.task-runtime.test.ts",
-    );
     expect(gatewayFallback.exclude).toContain(
       "src/gateway/server-methods/health.owner-routing.test.ts",
     );
@@ -373,13 +365,13 @@ describe("projects vitest config", () => {
       createUnitFastIsolatedVitestConfig,
       "src/system-agent/assistant.configured.test.ts",
     ],
-    ["fake timers", createUnitFastFakeTimersVitestConfig, "src/acp/control-plane/manager.test.ts"],
+    ["fake timers", createUnitFastFakeTimersVitestConfig, "src/acp/translator.stop-reason.test.ts"],
   ])("limits %s unit-fast include files to the project's owned tests", (_, createConfig, owned) => {
     const unrelated = "src/gateway/openresponses-http.test.ts";
     const mixedIncludeFile = patternFiles.writePatternFile("mixed-unit-fast-include.json", [
       "src/plugin-sdk/text-chunking.test.ts",
       "src/system-agent/assistant.configured.test.ts",
-      "src/acp/control-plane/manager.test.ts",
+      "src/acp/translator.stop-reason.test.ts",
       unrelated,
     ]);
     const unrelatedIncludeFile = patternFiles.writePatternFile("unrelated-unit-fast-include.json", [
@@ -665,7 +657,6 @@ describe("projects vitest config", () => {
     undefined,
     "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
     "src/channels/plugins/contracts/session-key-artifact.contract.test.ts",
-    "src/tasks/task-registry.test.ts",
   ])("preserves public channel contract command coverage with include filter %s", (filter) => {
     const includeFile = filter
       ? patternFiles.writePatternFile("command-include.json", [filter])
@@ -949,9 +940,9 @@ describe("projects vitest config", () => {
     },
   );
 
-  it("keeps the bundled lane on the platform pool with the non-isolated runner", () => {
+  it("keeps the bundled lane in broker-capable forks with the non-isolated runner", () => {
     const testConfig = requireTestConfig(bundledConfig);
-    expect(testConfig.pool).toBe(defaultPool);
+    expect(testConfig.pool).toBe("forks");
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });

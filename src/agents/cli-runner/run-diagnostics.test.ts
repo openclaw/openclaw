@@ -1,5 +1,6 @@
 // Verifies Claude CLI synthetic harness/run hierarchy and terminal events.
 import { afterEach, describe, expect, it } from "vitest";
+import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
@@ -43,6 +44,7 @@ async function flushDiagnosticEvents(): Promise<void> {
 
 describe("Claude CLI run diagnostics", () => {
   afterEach(() => {
+    resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
   });
 
@@ -175,7 +177,22 @@ describe("Claude CLI run diagnostics", () => {
           messageChannel: "webchat",
         },
         async (lifecycle) => {
-          lifecycle.setExecutionOwner("main");
+          lifecycle.setExecutionContext({
+            agentId: "main",
+            config: { diagnostics: { otel: { enabled: true, captureContent: true } } },
+          });
+          runWithDiagnosticTraceContext(undefined, () =>
+            emitAgentEvent({
+              runId,
+              stream: "item",
+              data: {
+                kind: "preamble",
+                itemId: "cli-1",
+                phase: "end",
+                progressText: "Checking files.",
+              },
+            }),
+          );
           const modelTrace = freezeDiagnosticTraceContext(
             createDiagnosticTraceContextFromActiveScope(),
           );
@@ -247,6 +264,16 @@ describe("Claude CLI run diagnostics", () => {
     // Run/harness attribution agrees with the model-call attribution.
     expect(eventOf("model.call.started")?.agentId).toBe("main");
     expect(eventOf("run.completed")?.agentId).toBe(eventOf("model.call.started")?.agentId);
+    const commentary = diagnostics.events.find(({ event }) => event.type === "agent.commentary");
+    expect(commentary?.event).toMatchObject({
+      agentId: "main",
+      harnessId: "claude-cli",
+      trace: eventOf("harness.run.started").trace,
+      contentCaptured: true,
+    });
+    expect(commentary?.privateData.modelContent?.outputMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "Checking files." }] },
+    ]);
   });
 
   it("emits one terminal run and harness event when the Claude turn fails", async () => {
@@ -262,17 +289,31 @@ describe("Claude CLI run diagnostics", () => {
             model: "claude-opus-4-7",
           },
           async (lifecycle) => {
+            lifecycle.setExecutionContext({ agentId: "main", config: {} });
+            emitAgentEvent({
+              runId,
+              stream: "item",
+              data: { kind: "preamble", phase: "end", progressText: "Before error." },
+            });
             lifecycle.setPhase("cleanup");
             throw new Error("managed session cleanup failed");
           },
         ),
       ).rejects.toThrow("managed session cleanup failed");
+      emitAgentEvent({
+        runId,
+        stream: "item",
+        data: { kind: "preamble", phase: "end", progressText: "After error." },
+      });
       await flushDiagnosticEvents();
     } finally {
       diagnostics.unsubscribe();
     }
 
-    expect(diagnostics.events).toHaveLength(4);
+    expect(diagnostics.events).toHaveLength(5);
+    expect(
+      diagnostics.events.filter(({ event }) => event.type === "agent.commentary"),
+    ).toHaveLength(1);
     expect(diagnostics.events.map(({ event }) => event.type)).toEqual(
       expect.arrayContaining([
         "harness.run.started",
@@ -295,7 +336,7 @@ describe("Claude CLI run diagnostics", () => {
     });
     expect(
       diagnostics.events
-        .slice(2)
+        .filter(({ event }) => event.type === "run.completed" || event.type === "harness.run.error")
         .every(({ privateData }) => privateData.errorMessage === "managed session cleanup failed"),
     ).toBe(true);
   });

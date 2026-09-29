@@ -8,6 +8,16 @@ const KITTY_MODIFIERS = {
   ctrl: 4,
 };
 const LOCK_MODIFIER_MASK = 64 + 128;
+const SHORTCUT_HANDLERS = [
+  [Key.alt("enter"), "onAltEnter"],
+  [Key.alt("up"), "onAltUp"],
+  [Key.ctrl("l"), "onCtrlL"],
+  [Key.ctrl("o"), "onCtrlO"],
+  [Key.ctrl("p"), "onCtrlP"],
+  [Key.ctrl("g"), "onCtrlG"],
+  [Key.ctrl("t"), "onCtrlT"],
+  [Key.shift("tab"), "onShiftTab"],
+] as const;
 
 // Decodes Ctrl+Alt layout output into the intended printable AltGr character.
 function decodeAltGrPrintable(data: string): string | undefined {
@@ -63,37 +73,12 @@ export class CustomEditor extends Editor {
       return;
     }
 
-    if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
-      this.onAltEnter();
-      return;
-    }
-    if (matchesKey(data, Key.alt("up")) && this.onAltUp) {
-      this.onAltUp();
-      return;
-    }
-    if (matchesKey(data, Key.ctrl("l")) && this.onCtrlL) {
-      this.onCtrlL();
-      return;
-    }
-    if (matchesKey(data, Key.ctrl("o")) && this.onCtrlO) {
-      this.onCtrlO();
-      return;
-    }
-    if (matchesKey(data, Key.ctrl("p")) && this.onCtrlP) {
-      this.onCtrlP();
-      return;
-    }
-    if (matchesKey(data, Key.ctrl("g")) && this.onCtrlG) {
-      this.onCtrlG();
-      return;
-    }
-    if (matchesKey(data, Key.ctrl("t")) && this.onCtrlT) {
-      this.onCtrlT();
-      return;
-    }
-    if (matchesKey(data, Key.shift("tab")) && this.onShiftTab) {
-      this.onShiftTab();
-      return;
+    for (const [key, property] of SHORTCUT_HANDLERS) {
+      const handler = this[property];
+      if (matchesKey(data, key) && handler) {
+        handler.call(this);
+        return;
+      }
     }
     if (matchesKey(data, Key.escape) && this.onEscape && !this.isShowingAutocomplete()) {
       this.onEscape();

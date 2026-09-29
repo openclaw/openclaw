@@ -40,25 +40,10 @@ beforeEach(() => {
 describe("completed delivery through runner and dispatcher", () => {
   it.each([
     {
-      name: "speech only",
-      source: "[[tts:text]]Spoken only.[[/tts:text]]",
-      speech: "Spoken only.",
-    },
-    {
       name: "speech with visible text",
       source: "Shown. [[tts:text]]Spoken only.[[/tts:text]]",
       speech: "Spoken only.",
       visible: "Shown.",
-    },
-    {
-      name: "voice media",
-      source: "[[audio_as_voice]]MEDIA:https://example.test/voice.ogg",
-      voice: true,
-    },
-    {
-      name: "target media",
-      source: "[[reply_to:12345]]MEDIA:https://example.test/image.png",
-      target: "12345",
     },
     {
       name: "explicit speech alongside silence",

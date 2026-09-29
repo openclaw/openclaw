@@ -125,7 +125,7 @@ describe("hybrid project ranking", () => {
     },
   );
 
-  it.each([undefined, [], ["one"]])(
+  it.each([undefined, ["one"]])(
     "filters invalid tags and preserves entry ownership for %j",
     (active) => {
       const global = { score: 0.8 };

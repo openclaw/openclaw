@@ -56,6 +56,7 @@ export class DraftPlaceBrowser {
   private browserRegistrationId: number | null = null;
   private browserRegistrationCounter = 0;
   private openPopoverValue: DraftPickerKind | null = null;
+  private focusRequestId = 0;
   // Independent hide animations can overlap; keep every trigger fenced until its own completes.
   private readonly hidingPopovers = new Set<DraftPickerKind>();
   private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
@@ -65,7 +66,7 @@ export class DraftPlaceBrowser {
   private readonly projectSearchTask: Task<readonly unknown[], ProjectsSearchRemoteResult>;
 
   constructor(
-    host: ReactiveControllerHost,
+    private readonly host: ReactiveControllerHost,
     private readonly gateway: DraftGatewayState,
     private readonly read: () => DraftPlaceBrowserSnapshot,
     private readonly callbacks: DraftPlaceBrowserCallbacks,
@@ -372,12 +373,17 @@ export class DraftPlaceBrowser {
   }
 
   showRoot() {
+    const wasBrowsing = this.browserOpenValue;
     this.resetBrowser(false);
+    if (wasBrowsing) {
+      this.focusProjectView('[data-value="browse"]');
+    }
   }
 
   selectGatewayBrowser(path?: string) {
     this.browserOpenValue = true;
     this.loadBrowser(path && isAbsolutePath(path) ? path : undefined);
+    this.focusProjectView(".new-session-page__browser-path");
   }
 
   loadBrowser(path: string | undefined) {
@@ -485,6 +491,7 @@ export class DraftPlaceBrowser {
   }
 
   disconnect() {
+    this.focusRequestId += 1;
     this.environmentQueryValue = "";
     this.browser.reset();
     this.clearProjectSearchTimer();
@@ -496,6 +503,7 @@ export class DraftPlaceBrowser {
   }
 
   private resetBrowser(closePopover: boolean) {
+    this.focusRequestId += 1;
     this.browser.reset();
     this.browserOpenValue = false;
     this.browserProjectPathValue = null;
@@ -509,6 +517,30 @@ export class DraftPlaceBrowser {
   private clearProjectSearchTimer() {
     globalThis.clearTimeout(this.projectSearchTimer);
     this.projectSearchTimer = undefined;
+  }
+
+  private focusProjectView(selector: string) {
+    const requestId = ++this.focusRequestId;
+    const origin = this.callbacks.activeElement();
+    void this.host.updateComplete.then(() => {
+      if (
+        requestId !== this.focusRequestId ||
+        this.openPopoverValue !== "project" ||
+        this.hidingPopovers.has("project")
+      ) {
+        return;
+      }
+      const active = this.callbacks.activeElement();
+      if (active && active !== origin && active !== this.callbacks.body()) {
+        return;
+      }
+      const target = this.callbacks
+        .querySelector(".new-session-page__project-popover")
+        ?.querySelector<HTMLElement>(selector);
+      if (target?.isConnected) {
+        target.focus({ preventScroll: true });
+      }
+    });
   }
 
   private restorePopoverTrigger(id: string, popoverSelector: string) {

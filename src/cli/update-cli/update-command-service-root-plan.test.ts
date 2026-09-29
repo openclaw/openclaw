@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 
 const service = vi.hoisted(() => ({
@@ -21,6 +22,9 @@ vi.mock("../../daemon/service.js", async (original) => ({
 vi.mock("../../infra/gateway-supervision.js", () => ({
   assertGatewayServiceMutationAllowed: service.admit,
 }));
+vi.mock("../../daemon/runtime-paths.js", () => ({
+  resolvePinnedDaemonRuntimePath: vi.fn(async (value) => value),
+}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -30,7 +34,7 @@ afterEach(() => {
   service.readDefinitionMutationCapability.mockReset();
 });
 
-async function fixture() {
+async function fixture({ systemd = false } = {}) {
   const root = tempDirs.make("service-root-plan-");
   const serviceRoot = path.join(root, "service");
   const invokingRoot = path.join(root, "invoking");
@@ -41,9 +45,13 @@ async function fixture() {
     JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
   );
   const nodeRunner = path.join(root, "bin", "node");
-  service.readCommand.mockResolvedValue({
+  const command = {
     programArguments: [nodeRunner, path.join(serviceRoot, "dist", "index.js"), "gateway"],
-  });
+    sourcePath: path.join(root, "gateway.cmd"),
+  };
+  service.readCommand.mockResolvedValue(
+    systemd ? { ...command, managedDefinition: command, managedOverrides: {} } : command,
+  );
   service.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
   return { serviceRoot, invokingRoot, nodeRunner };
 }
@@ -100,9 +108,9 @@ describe("managed service root planning", () => {
       expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
     },
   );
-  it.each(["darwin", "linux"])("keeps writable split-prefix rebinds on %s", async (platform) => {
-    const f = await fixture();
-    vi.stubGlobal("process", { ...process, platform });
+  it("keeps writable split-prefix rebinds with known-empty systemd overrides", async () => {
+    const f = await fixture({ systemd: true });
+    vi.stubGlobal("process", { ...process, platform: "linux" });
     expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
       rootRedirect: null,
       serviceRoot: f.serviceRoot,
@@ -111,24 +119,38 @@ describe("managed service root planning", () => {
     });
     expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
   });
-  it.each(["win32", "linux"])("keeps same-root updates in place on %s", async (platform) => {
+  it("updates an owned split-root Bun service in place with its verified executable", async () => {
+    const f = await fixture({ systemd: true });
+    const bun = path.join(path.dirname(f.nodeRunner), "bun");
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    const command = {
+      programArguments: [bun, path.join(f.serviceRoot, "dist", "index.js"), "gateway"],
+      environment: { OPENCLAW_SQLITE_LIBRARY: "/fixture/sqlite.dylib" },
+    };
+    service.readCommand.mockResolvedValue({
+      ...command,
+      managedDefinition: command,
+      managedOverrides: {},
+    });
+    expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
+      rootRedirect: { root: f.serviceRoot, previousRoot: f.invokingRoot },
+      nodeRunner: bun,
+      serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
+    });
+    expect(resolvePinnedDaemonRuntimePath).toHaveBeenCalledWith(
+      bun,
+      "bun",
+      expect.objectContaining(command.environment),
+    );
+  });
+  it("keeps same-root Windows updates in place", async () => {
     const f = await fixture();
-    vi.stubGlobal("process", { ...process, platform });
+    vi.stubGlobal("process", { ...process, platform: "win32" });
     expect(await resolveManagedServicePackageUpdatePlan({ root: f.serviceRoot })).toEqual({
       rootRedirect: null,
       nodeRunner: f.nodeRunner,
       serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
     });
     expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
-  });
-  it("retains the existing protected-definition redirect", async () => {
-    const f = await fixture();
-    vi.stubGlobal("process", { ...process, platform: "linux" });
-    service.readDefinitionMutationCapability.mockResolvedValue({ kind: "sealed" });
-    expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
-      rootRedirect: { root: f.serviceRoot, previousRoot: f.invokingRoot },
-      nodeRunner: f.nodeRunner,
-      serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
-    });
   });
 });

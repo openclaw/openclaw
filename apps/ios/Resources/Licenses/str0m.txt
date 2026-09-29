@@ -90,7 +90,7 @@ Source: https://github.com/tokio-rs/bytes
 Declared license: MIT
 LICENSE: L016
 
-cc 1.4.5
+cc 1.4.7
 Source: https://github.com/rust-lang/cc-rs
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
@@ -102,7 +102,7 @@ Declared license: Apache-2.0 OR MIT
 LICENSE-APACHE: L001
 LICENSE-MIT: L018
 
-cfg-if 1.0.4
+cfg-if 1.0.5
 Source: https://github.com/rust-lang/cfg-if
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
@@ -219,7 +219,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L001
 LICENSE-MIT: L036
 
-dimpl 0.7.3
+dimpl 0.7.4
 Source: https://github.com/algesten/dimpl
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE.txt: L037
@@ -260,7 +260,7 @@ Declared license: MIT/Apache-2.0
 LICENSE-APACHE: L005
 LICENSE-MIT: L044
 
-find-msvc-tools 0.1.12
+find-msvc-tools 0.1.13
 Source: https://github.com/rust-lang/cc-rs
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
@@ -565,7 +565,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L079
 LICENSE-MIT: L080
 
-sctp-proto 0.10.4
+sctp-proto 0.10.5
 Source: https://github.com/algesten/sctp-proto
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L081
@@ -662,7 +662,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L055
 LICENSE-MIT: L039
 
-syn 3.0.5
+syn 3.0.6
 Source: https://github.com/dtolnay/syn
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L055
@@ -725,7 +725,7 @@ LICENSE: L094
 LICENSE-APACHE: L095
 LICENSE-MIT: L096
 
-unicode-ident 1.0.24
+unicode-ident 1.0.26
 Source: https://github.com/dtolnay/unicode-ident
 Declared license: (MIT OR Apache-2.0) AND Unicode-3.0
 LICENSE-APACHE: L055

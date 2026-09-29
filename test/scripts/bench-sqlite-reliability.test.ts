@@ -2,7 +2,7 @@
 import { fork, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
 import {
@@ -18,11 +18,16 @@ import {
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const nodeExecutable = resolveTestNodeExecPath();
@@ -493,13 +498,14 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
       tempDirs.make("openclaw-sqlite-reliability-test-"),
       "writer.sqlite",
     );
+    const writerUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.sqliteReliabilityWriter);
     const child = fork(
-      path.resolve("scripts/lib/sqlite-reliability-writer.ts"),
+      fileURLToPath(writerUrl),
       [databasePath, "8", "64", "4", "256", String(64 * 1024 * 1024), "1"],
       {
         cwd: process.cwd(),
         execPath: nodeExecutable,
-        execArgv: [...nodeArgs, "--import", "tsx"],
+        execArgv: [...nodeArgs, ...resolveRuntimeWorkerThreadExecArgv(writerUrl, nodeExecutable)],
         serialization: "json",
         stdio: ["ignore", "ignore", "pipe", "ipc"],
       },

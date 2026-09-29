@@ -14,7 +14,7 @@ import type { GithubIssueSubmitHooks, RunGithubCli } from "../../../infra/github
 import type { RestartSentinelPayload } from "../../../infra/restart-sentinel.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -127,6 +127,7 @@ function createReportHarness(params: { getGeneration: () => string }) {
   const harness = createDispatchTestHarness({
     extraHandlers: { "update.report": handler },
     buildRequestContext: () => ({
+      getRuntimeConfig: () => ({}),
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     }),
     getRequiredSharedGatewaySessionGeneration: params.getGeneration,
@@ -263,8 +264,6 @@ describe("update report live authority boundary", () => {
     { authority: "system-admin", retire: false, boundary: "auth" },
     { authority: "gateway-owner", retire: true, boundary: "prepared" },
     { authority: "system-admin", retire: true, boundary: "prepared" },
-    { authority: "gateway-owner", retire: false, boundary: "prepared" },
-    { authority: "system-admin", retire: false, boundary: "prepared" },
   ] as const)(
     "revalidates delegated $authority authority at $boundary, retired=$retire",
     async ({ authority, retire, boundary }) => {

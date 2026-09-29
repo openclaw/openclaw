@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import ignore from "ignore";
-import { readRegularFileSync } from "../infra/regular-file.js";
 
 const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 // Ignore files are line-oriented pattern lists; a few MiB is generous headroom

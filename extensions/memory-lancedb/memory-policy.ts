@@ -1,15 +1,19 @@
 import { createHash } from "node:crypto";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  escapeHtml as escapeMemoryForPrompt,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
   DEFAULT_RECALL_MAX_CHARS,
   type MemoryCategory,
 } from "./config.js";
-import type { MemorySearchResult } from "./lancedb-store.js";
+import type { MemoryDB, MemorySearchResult } from "./lancedb-store.js";
 import { looksLikeEnvelopeSludge } from "./memory-capture-sanitization.js";
 
 export function extractUserTextContent(message: unknown): string[] {
@@ -42,14 +46,8 @@ export function normalizeRecallQuery(
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,
 ): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const limit = normalizeMaxChars(maxChars, DEFAULT_RECALL_MAX_CHARS);
+  const limit = resolveNonNegativeIntegerOption(maxChars, DEFAULT_RECALL_MAX_CHARS);
   return normalized.length > limit ? truncateUtf16Safe(normalized, limit).trimEnd() : normalized;
-}
-
-function normalizeMaxChars(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.floor(value))
-    : fallback;
 }
 
 export type AutoCaptureMessageProgress = {
@@ -147,8 +145,6 @@ export function prepareAutoCaptureMessages(
   return progress;
 }
 
-// LanceDB Provider
-
 const DUPLICATE_SEARCH_LIMIT = 5;
 
 const MEMORY_TRIGGERS = [
@@ -177,14 +173,6 @@ const PROMPT_INJECTION_PATTERNS = [
   /\b(run|execute|call|invoke)\b.{0,40}\b(tool|command)\b/i,
 ];
 
-const PROMPT_ESCAPE_MAP: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-
 export function looksLikePromptInjection(text: string): boolean {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -193,10 +181,8 @@ export function looksLikePromptInjection(text: string): boolean {
   return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-export function escapeMemoryForPrompt(text: string): string {
-  // Recalled context is model-only; hydration scans the bare turn/facts and masks legacy markers.
-  return text.replace(/[&<>"']/g, (char) => PROMPT_ESCAPE_MAP[char] ?? char);
-}
+// Recalled context is model-only; hydration scans the bare turn/facts and masks legacy markers.
+export { escapeMemoryForPrompt };
 
 // Legacy label-only rows slip past now that header detection keys on the provenance marker, and the
 // marker-free checks catch only payload/bracket shapes. `doctor --fix` deletes sentinel and fenced rows
@@ -210,14 +196,7 @@ function normalizeStoredMemoryText(text: string): string {
 }
 
 export async function findCleanDuplicateMemory(
-  db: {
-    search(
-      agentId: string,
-      vector: number[],
-      limit?: number,
-      minScore?: number,
-    ): Promise<MemorySearchResult[]>;
-  },
+  db: Pick<MemoryDB, "search">,
   agentId: string,
   vector: number[],
   exactText?: string,
@@ -241,7 +220,7 @@ export function formatRecalledMemoryForModel(
   text: string,
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,
 ): string {
-  const limit = normalizeMaxChars(maxChars, DEFAULT_RECALL_MAX_CHARS);
+  const limit = resolveNonNegativeIntegerOption(maxChars, DEFAULT_RECALL_MAX_CHARS);
   return truncateUtf16Safe(escapeMemoryForPrompt(text), limit);
 }
 
@@ -277,7 +256,7 @@ export function shouldCapture(
   if (looksLikeEnvelopeSludge(text)) {
     return false;
   }
-  const maxChars = normalizeMaxChars(options?.maxChars, DEFAULT_CAPTURE_MAX_CHARS);
+  const maxChars = resolveNonNegativeIntegerOption(options?.maxChars, DEFAULT_CAPTURE_MAX_CHARS);
   if (text.length > maxChars) {
     return false;
   }

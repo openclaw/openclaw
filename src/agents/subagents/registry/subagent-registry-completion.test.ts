@@ -3,6 +3,8 @@
  * Verifies outcome comparison and exactly-once lifecycle hook emission.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -143,4 +145,47 @@ describe("emitSubagentEndedHookOnce", () => {
     expect(inFlightRunIds.has(entry.runId)).toBe(false);
     expect(entry.endedHookEmittedAt).toBeUndefined();
   });
+
+  it.each(["committed", "refused", "unknown"] as const)(
+    "joins the ended-hook stamp and retains the emitted fact when %s",
+    async (outcome) => {
+      lifecycleMocks.getGlobalHookRunner.mockReturnValue({
+        hasHooks: () => true,
+        runSubagentEnded: lifecycleMocks.runSubagentEnded,
+      });
+      const entered = createDeferred();
+      const write = createDeferred();
+      const failure =
+        outcome === "unknown"
+          ? new SqliteWorkerError("Hook stamp acknowledgement lost", "outcome-unknown")
+          : new Error("Hook stamp refused before commit");
+      const params = createEmitParams({
+        persist: vi.fn(() => {
+          entered.resolve();
+          return write.promise;
+        }),
+      });
+      const pending = mod.emitSubagentEndedHookOnce(params).then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+      await entered.promise;
+      expect(params.inFlightRunIds.has(params.entry.runId)).toBe(true);
+      expect(params.entry.endedHookEmittedAt).toEqual(expect.any(Number));
+      await expect(mod.emitSubagentEndedHookOnce(params)).resolves.toBe(false);
+      if (outcome === "committed") {
+        write.resolve();
+      } else {
+        write.reject(failure);
+      }
+      expect(await pending).toEqual(
+        outcome === "unknown" ? { error: failure } : { result: outcome === "committed" },
+      );
+      expect(params.inFlightRunIds.has(params.entry.runId)).toBe(false);
+      expect(params.entry.endedHookEmittedAt).toEqual(expect.any(Number));
+      await expect(mod.emitSubagentEndedHookOnce(params)).resolves.toBe(false);
+      expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledOnce();
+      expect(params.persist).toHaveBeenCalledOnce();
+    },
+  );
 });

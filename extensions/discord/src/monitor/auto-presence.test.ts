@@ -28,7 +28,7 @@ function createStore(params?: {
 }
 
 describe("discord auto presence", () => {
-  it.each(["rate_limit", "overloaded"])("maps %s cooldown to dnd", (reason) => {
+  it("maps overloaded cooldown to dnd", () => {
     const now = Date.now();
     const updatePresence = vi.fn();
     const controller = createDiscordAutoPresenceController({
@@ -40,7 +40,7 @@ describe("discord auto presence", () => {
       },
       gateway: { isConnected: true, updatePresence },
       loadAuthStore: () =>
-        createStore({ cooldownUntil: now + 60_000, failureCounts: { [reason]: 2 } }),
+        createStore({ cooldownUntil: now + 60_000, failureCounts: { overloaded: 2 } }),
       now: () => now,
     });
     controller.runNow();

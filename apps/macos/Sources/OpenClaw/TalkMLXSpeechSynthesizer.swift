@@ -95,11 +95,11 @@ actor TalkMLXSpeechSynthesizer {
         let request = MLXTTSRequest.synthesize(MLXTTSSynthesizeRequest(
             id: id,
             text: trimmed,
-            modelRepo: Self.resolvedModelRepo(modelRepo),
-            language: language?.nilIfBlank,
-            voice: voicePreset?.nilIfBlank,
-            referenceAudioPath: referenceAudioPath?.nilIfBlank,
-            referenceText: referenceText?.nilIfBlank,
+            modelRepo: modelRepo?.nonEmpty ?? Self.defaultModelRepo,
+            language: language?.nonEmpty,
+            voice: voicePreset?.nonEmpty,
+            referenceAudioPath: referenceAudioPath?.nonEmpty,
+            referenceText: referenceText?.nonEmpty,
             stream: true))
 
         for attempt in 0...1 {
@@ -467,10 +467,6 @@ actor TalkMLXSpeechSynthesizer {
             argumentPrefix: ["openclaw-mlx-tts"],
             displayName: "openclaw-mlx-tts")
     }
-
-    private static func resolvedModelRepo(_ modelRepo: String?) -> String {
-        modelRepo?.nilIfBlank ?? self.defaultModelRepo
-    }
 }
 
 private enum MLXTTSTransportError: Error {
@@ -606,12 +602,5 @@ private final class MLXMemoryPressureMonitor: @unchecked Sendable {
 
     deinit {
         self.source.cancel()
-    }
-}
-
-extension String {
-    fileprivate var nilIfBlank: String? {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
