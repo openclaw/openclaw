@@ -235,8 +235,8 @@ A recurring job re-runs the same instructions on every fire, so anything the mod
 works out from scratch costs the same time and tokens each run. Keep the model for
 judgment and move the repeatable parts into code:
 
-- Put listing and diffing, dedupe, checkpoints or watermarks, and failure counting in
-  a workspace script that the payload runs in a single `exec` call.
+- Put listing and diffing, dedupe, and checkpoints or watermarks in a workspace
+  script that the payload runs in a single `exec` call.
 - Keep detailed instructions in a workspace file next to the script and have the
   message reference it (for example, "Follow `scripts/<job>.md`"), so most fixes
   need only workspace file edits, not a job update.
@@ -248,12 +248,12 @@ judgment and move the repeatable parts into code:
   quiet fires skip the model. Scripts can call a configured MCP server only when
   `toolsAllow` names it (`<server>__<tool>` or `<server>__*`). Triggers and script
   payloads are unavailable when `cron.triggers.enabled` is `false`.
-- Let a one-off transient failure, such as one source timing out once, pass
-  silently. When the same failure repeats, make the run fail instead of posting the
-  error yourself: throw from trigger or script payload JavaScript, or exit non-zero
-  from a command payload. A script that returns an error field still succeeds. Only
-  failed runs count toward
-  [failure notifications](/automation/cron-jobs/delivery#failure-notifications).
+- When a run fails, make it fail instead of posting the error yourself: throw from
+  trigger or script payload JavaScript, or exit non-zero from a command payload. A
+  script that returns an error field still succeeds. The scheduler owns failure
+  accounting:
+  [failure notifications](/automation/cron-jobs/delivery#failure-notifications)
+  already wait for consecutive failed runs, so a one-off outage stays quiet.
 
 ## Execution styles
 
