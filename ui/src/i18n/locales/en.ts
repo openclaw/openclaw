@@ -2160,9 +2160,8 @@ export const en: TranslationMap & {
       sessionExpired:
         "The Gateway no longer has this setup session. It may already have finished. Close this dialog and choose Check again to review the current setup.",
       gatewayNotResponding:
-        "The Gateway is not responding. Check that it is running, then try signing in again.",
-      gatewayReconnecting:
-        "The Gateway is not responding. Sign-in continues when it reconnects, or you can cancel.",
+        "The Gateway is not responding. Check that it is running, then try again.",
+      gatewayReconnecting: "The Gateway is not responding. Sign-in continues when it reconnects.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
   },

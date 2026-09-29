@@ -113,18 +113,22 @@ export class ModelSetupWizardRunner {
     return this.session?.admitted === true;
   }
 
-  suspend(notice: string): void {
+  suspend(notice?: string): void {
     const session = this.session;
     if (!session) {
       return;
     }
     session.suspended = true;
     session.abortController.abort();
-    // No sign-in URL can arrive while the Gateway is away; a resumed step
-    // still offers its URL as an explicit link.
+    // A suspended wizard cannot receive its sign-in URL; a resumed step still
+    // offers that URL as an explicit link.
     session.reservedWindow?.close();
     session.reservedWindow = null;
-    this.setState({ phase: "starting", authChoice: session.authChoice, notice });
+    this.setState({
+      phase: "starting",
+      authChoice: session.authChoice,
+      ...(notice ? { notice } : {}),
+    });
   }
 
   restore(recovery: ModelSetupWizardRecovery, onTerminalResult: WizardTerminalObserver): void {

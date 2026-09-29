@@ -268,11 +268,16 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const connection = observation.connection;
     this.observedConnection = connection;
     this.nativeModels.reset();
+    // A pending agent roster keeps the connection; only a lost Gateway delays sign-in.
+    const suspendedNotice =
+      !connection.connected && this.wizardMode === "auth"
+        ? t("modelSetup.wizard.gatewayReconnecting")
+        : undefined;
     if (observation.kind === "pending") {
       if (!this.wizard.hasAdmittedSession) {
         this.pageState = { phase: "loading" };
       }
-      this.wizard.suspend(t("modelSetup.wizard.gatewayReconnecting"));
+      this.wizard.suspend(suspendedNotice);
       return;
     }
     const authenticatedOwnerLost =
@@ -302,7 +307,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (sameWizardOwner && this.wizard.hasAdmittedSession) {
       this.wizardMutationGeneration += 1;
       this.wizardMutationActive = false;
-      this.wizard.suspend(t("modelSetup.wizard.gatewayReconnecting"));
+      this.wizard.suspend(suspendedNotice);
       if (this.canUseSetup(connection.client)) {
         this.firstRun.reconnectActivation(connection);
         void this.runWizardMutation(() => this.wizard.resume());

@@ -142,7 +142,7 @@ describe("ModelSetupWizardRunner", () => {
     });
     await runner.start("provider-auth");
     const pending = runner.requestCancellation();
-    runner.suspend("reconnecting");
+    runner.suspend();
     client = { request: replacementRequest } as unknown as GatewayBrowserClient;
     await runner.resume();
     await expect(runner.requestCancellation()).resolves.toBe("running");
@@ -356,7 +356,7 @@ describe("ModelSetupWizardRunner", () => {
     });
     await runner.start("meta-api-key");
     const answer = runner.answer("synthetic-key");
-    runner.suspend("reconnecting");
+    runner.suspend();
     client = { request: replacementRequest } as unknown as GatewayBrowserClient;
     await runner.resume();
     expect(replacementRequest).toHaveBeenCalledExactlyOnceWith(
@@ -399,7 +399,7 @@ describe("ModelSetupWizardRunner", () => {
     });
     await runner.start("meta-api-key");
     const answer = runner.answer("synthetic-key");
-    runner.suspend("reconnecting");
+    runner.suspend();
     terminalReply.resolve({
       done: true,
       status: "done",

@@ -46,10 +46,9 @@ suite.define(() => {
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog.getByText("Details", { exact: true }).click();
         await dialog
-          .getByText(
-            "The Gateway is not responding. Check that it is running, then try signing in again.",
-            { exact: true },
-          )
+          .getByText("The Gateway is not responding. Check that it is running, then try again.", {
+            exact: true,
+          })
           .waitFor();
       },
     );
@@ -77,8 +76,7 @@ suite.define(() => {
         await closed;
         const dialog = page.locator("openclaw-modal-dialog");
         const notice = dialog.getByRole("alert").filter({
-          hasText:
-            "The Gateway is not responding. Sign-in continues when it reconnects, or you can cancel.",
+          hasText: "The Gateway is not responding. Sign-in continues when it reconnects.",
         });
         await notice.waitFor();
 
