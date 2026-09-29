@@ -6,6 +6,43 @@ Linux environment. Select it through `agents.defaults.agentRuntime.id` or an age
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
+## Model parameters
+
+Set service tier and response verbosity through OpenClaw's existing model
+parameters, without additional Agents API plugin settings:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "params": {
+        "serviceTier": "priority",
+        "textVerbosity": "low"
+      }
+    }
+  }
+}
+```
+
+Both ordinary conversations and isolated completions use these parameters.
+Configuration precedence is global defaults, default model parameters, agent
+model parameters, then agent parameters. `service_tier` and `text_verbosity`
+are also accepted. A null value clears an inherited override. Invalid values
+are ignored with a warning.
+
+- `serviceTier`: `auto`, `default`, `flex`, `priority`, or `fast`, subject to
+  model and account support. The selected tier is sent when creating a session
+  and updated before each subsequent turn. Removing the setting restores
+  automatic tier selection. Steering retains the active turn's tier.
+- `textVerbosity`: `low`, `medium`, or `high`. Omission uses the API's `medium`
+  default. The API cannot change verbosity on an existing session, so changing
+  its effective value requires `/new` or `/reset` before continuing.
+
+Existing sessions with no verbosity override remain usable without a reset.
+These parameters do not change the executor environment or reasoning effort.
+
+## HTTP MCP servers
+
 Configure HTTP MCP servers through the shared `mcp.servers` configuration or an
 enabled plugin's MCP bundle. For example:
 

@@ -72,6 +72,7 @@ export function resolveAgentHarnessAvailabilityDecision(
       ...params,
       provider,
       requestedRuntime: policy.runtime,
+      handledModelParamKeys: registered.harness.modelParamKeys,
       providerOwnership: params.resolveProviderOwnership?.(),
     }),
   );

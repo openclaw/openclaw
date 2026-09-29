@@ -11,6 +11,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
 import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
+import { SERVICE_TIER_KEYS, TEXT_VERBOSITY_KEYS } from "./agentsapi-model-params.js";
 import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 
 const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
@@ -40,6 +41,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
     id: "agentsapi",
     label: "OpenAI Agents API (MVP)",
     autoSelection: { providerIds: [] },
+    modelParamKeys: [...SERVICE_TIER_KEYS, ...TEXT_VERBOSITY_KEYS],
     deliveryDefaults: { visibleReplies: "automatic" },
     conversationToolPolicySupport: "exact",
     conversationToolPolicyNativeTools: AGENTS_API_NATIVE_TOOL_REQUIREMENTS,

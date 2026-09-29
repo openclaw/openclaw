@@ -108,6 +108,8 @@ export function buildAgentHarnessSupportContext(
     /** Prepared provider facts take precedence over config rediscovery. */
     modelProvider?: AgentHarnessSupportContext["modelProvider"];
     requestedRuntime: AgentHarnessSupportContext["requestedRuntime"];
+    /** Parameter names consumed by the candidate harness being probed. */
+    handledModelParamKeys?: readonly string[];
     config?: OpenClawConfig;
     /** Finalized route/auth selection; missing runtimePolicy stays undeclared. */
     preparedModelProvider?: boolean;
@@ -142,12 +144,15 @@ export function buildAgentHarnessSupportContext(
       ? "present"
       : "none");
   const agentId = resolveAgentRuntimePolicyAgentId(params);
-  const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId,
-  });
+  const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams(
+    {
+      config: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
+      agentId,
+    },
+    params.handledModelParamKeys,
+  );
   const configuredModelProvider = providerConfig
     ? {
         api: modelConfig?.api ?? providerConfig.api ?? "openai-responses",
@@ -273,14 +278,19 @@ export function resolveAutoAgentHarnessId(
   return resolveAutoAgentHarnessSelection(
     listRegisteredAgentHarnesses().map(({ harness }) => harness),
     params.provider,
-    () => buildAgentHarnessSupportContext({ ...params, requestedRuntime: "auto" }),
+    (handledModelParamKeys) =>
+      buildAgentHarnessSupportContext({
+        ...params,
+        requestedRuntime: "auto",
+        handledModelParamKeys,
+      }),
   ).selected?.id;
 }
 
 export function resolveAutoAgentHarnessSelection(
   harnesses: readonly AgentHarness[],
   provider: string,
-  createSupportContext: () => AgentHarnessSupportContext,
+  createSupportContext: (handledModelParamKeys?: readonly string[]) => AgentHarnessSupportContext,
 ) {
   const hintedCandidates = harnesses.map((harness) => ({
     harness,
@@ -289,7 +299,13 @@ export function resolveAutoAgentHarnessSelection(
   let supportContext: AgentHarnessSupportContext | undefined;
   const candidates = hintedCandidates.map(({ harness, support }) => ({
     harness,
-    support: support ?? harness.supports((supportContext ??= createSupportContext())),
+    support:
+      support ??
+      harness.supports(
+        harness.modelParamKeys?.length
+          ? createSupportContext(harness.modelParamKeys)
+          : (supportContext ??= createSupportContext()),
+      ),
   }));
   const selected = candidates
     .filter(isSupportedHarness)

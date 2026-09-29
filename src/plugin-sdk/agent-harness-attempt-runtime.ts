@@ -14,6 +14,10 @@ export {
 } from "../agents/harness/attempt-events.js";
 export { selectSupportedReasoningEffort } from "../agents/harness/reasoning-effort.js";
 export {
+  resolveAliasedParamValue,
+  resolveModelExtraParamSources,
+} from "../agents/model-extra-params.js";
+export {
   resolveAgentHarnessHistoryLimits,
   resolveAgentWorkspaceMemoryRouting,
   shouldIncludeAgentHarnessRuntimeContext,

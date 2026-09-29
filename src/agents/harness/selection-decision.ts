@@ -163,10 +163,11 @@ export function resolveAgentHarnessSelectionDecision(
   const { candidates, selected } = resolveAutoAgentHarnessSelection(
     pluginHarnesses,
     params.provider,
-    () =>
+    (handledModelParamKeys) =>
       buildAgentHarnessSupportContext({
         ...params,
         requestedRuntime: runtime,
+        handledModelParamKeys,
         providerOwnership: resolveProviderRefOwnership({
           provider: params.provider,
           config: params.config,

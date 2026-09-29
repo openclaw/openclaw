@@ -434,6 +434,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
               provider: entry.provider,
               modelId: entry.id,
               requestedRuntime: runtimeId,
+              handledModelParamKeys: harness.modelParamKeys,
               modelProvider: {
                 api: route?.api ?? entry.api,
                 baseUrl: route?.baseUrl ?? entry.baseUrl,

@@ -95,7 +95,7 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
       .spyOn(AgentsApiClient.prototype, "create")
       .mockResolvedValue("fresh-self-hosted-session");
     const update = vi
-      .spyOn(AgentsApiClient.prototype, "setReasoningEffort")
+      .spyOn(AgentsApiClient.prototype, "updateSettings")
       .mockResolvedValue(undefined);
     const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue(undefined);
     vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
@@ -140,7 +140,7 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
           kind: "failed",
           error: expect.objectContaining({
             message:
-              "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
+              "Agents API model, credential, environment, MCP configuration, or response verbosity changed; reset the OpenClaw session before continuing",
           }),
         },
       });

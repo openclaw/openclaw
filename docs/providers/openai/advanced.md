@@ -209,14 +209,22 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     Supported values: `auto`, `default`, `flex`, `priority`.
 
     <Warning>
-    `params.serviceTier` is an authored embedded-provider setting, not native
-    Codex app-server configuration. It is forwarded only by the embedded
-    runtime to native OpenAI endpoints (`api.openai.com`) and native ChatGPT
+    `params.serviceTier` is forwarded by the embedded runtime and the Agents API
+    harness. It is not native Codex app-server configuration. The embedded
+    runtime forwards it to native OpenAI endpoints (`api.openai.com`) and native ChatGPT
     endpoints (`chatgpt.com/backend-api`). If you route either provider through
     a proxy, OpenClaw leaves `service_tier` untouched. Configure the native
     harness separately with `plugins.entries.codex.config.appServer.serviceTier`;
     the shared Fast-mode run control can supersede that value.
     </Warning>
+
+    The Agents API harness additionally accepts `fast` when supported by the
+    selected model and account. It updates the tier before subsequent turns;
+    removing the override restores automatic selection. It also accepts
+    `params.textVerbosity` (`low`, `medium`, or `high`) for response length.
+    Verbosity defaults to `medium` and changing it requires `/new` or `/reset`
+    because the API cannot update text settings on an existing session.
+    Both settings also apply to Agents API isolated completions.
 
   </Accordion>
 

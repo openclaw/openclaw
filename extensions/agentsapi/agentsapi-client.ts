@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import OpenAI from "openai";
 import type {
+  AgentCreateParams,
   AgentReasoningParam,
   AgentSessionEvent,
+  AgentTextParam,
   AgentToolParam,
   HostedEnvironmentFileParam,
 } from "openai/resources/beta/agents/agents";
@@ -200,6 +202,8 @@ export class AgentsApiClient {
       mcpTools?: AgentToolParam.AgentToolConfigParamMcp[];
       files?: AgentsApiInputFile[];
       reasoning?: AgentReasoningParam;
+      serviceTier?: AgentCreateParams["service_tier"];
+      textVerbosity?: AgentTextParam["verbosity"];
       environment?: AgentsApiEnvironment;
     },
   ): Promise<string> {
@@ -210,6 +214,8 @@ export class AgentsApiClient {
           model,
           instructions,
           reasoning: options?.reasoning,
+          service_tier: options?.serviceTier,
+          ...(options?.textVerbosity ? { text: { verbosity: options.textVerbosity } } : {}),
           multi_agent: { enabled: false },
           tools: [
             { type: "web_search", mode: "live" },
@@ -234,10 +240,22 @@ export class AgentsApiClient {
     input: string,
     model: string,
     reasoning: AgentReasoningParam,
+    options?: {
+      serviceTier?: AgentCreateParams["service_tier"];
+      textVerbosity?: AgentTextParam["verbosity"];
+    },
   ) {
     const session = await this.sessions.create(
       {
-        agent: { model, instructions, reasoning, tools: [], multi_agent: { enabled: false } },
+        agent: {
+          model,
+          instructions,
+          reasoning,
+          service_tier: options?.serviceTier,
+          ...(options?.textVerbosity ? { text: { verbosity: options.textVerbosity } } : {}),
+          tools: [],
+          multi_agent: { enabled: false },
+        },
         environment: { type: "none" },
         input,
         vault_ids: [],
@@ -256,19 +274,24 @@ export class AgentsApiClient {
     }
   }
 
-  async setReasoningEffort(
+  async updateSettings(
     sessionId: string,
     effort: AgentReasoningParam["effort"],
+    serviceTier: AgentCreateParams["service_tier"],
     signal: AbortSignal,
   ): Promise<void> {
     const session = await this.sessions.update(
       sessionId,
-      {},
+      {
+        agent: {
+          reasoning: { effort: effort ?? null },
+          // Removing an override restores the API's automatic tier selection.
+          service_tier: serviceTier ?? null,
+        },
+      },
       {
         signal,
         headers: { "Idempotency-Key": randomUUID() },
-        // The API supports agent updates; this SDK version types only metadata.
-        body: { agent: { reasoning: { effort: effort ?? null } } },
       },
     );
     this.assertCurrent();

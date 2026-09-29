@@ -70,20 +70,26 @@ export function resolveModelExtraParamSources(params: {
   return { defaultParams, modelParams, agentModelParams, agentParams: agent?.params };
 }
 
-/** Returns whether embedded OpenClaw would apply authored provider request parameters. */
+/** Returns whether authored parameters still require provider request handling. */
 export function hasAuthoredProviderRequestParams(
   params: Parameters<typeof resolveModelExtraParamSources>[0],
+  handledModelParamKeys?: readonly string[],
 ): boolean {
   const sources = resolveModelExtraParamSources(params);
   if (
     [sources.defaultParams, sources.agentParams].some(
-      (source) => source !== undefined && Object.keys(source).length > 0,
+      (source) =>
+        source !== undefined &&
+        Object.keys(source).some((key) => !handledModelParamKeys?.includes(key)),
     )
   ) {
     return true;
   }
   return [sources.modelParams, sources.agentModelParams].some((modelParams) =>
-    Object.entries(modelParams ?? {}).some(([key, value]) => !isAgentRuntimeModelParam(key, value)),
+    Object.entries(modelParams ?? {}).some(
+      ([key, value]) =>
+        !handledModelParamKeys?.includes(key) && !isAgentRuntimeModelParam(key, value),
+    ),
   );
 }
 

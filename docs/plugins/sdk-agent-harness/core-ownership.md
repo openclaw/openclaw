@@ -383,6 +383,12 @@ Two secret-free provider-owned facts describe the selected route:
   transport, proxy, TLS, local-service, private-network behavior, or request
   parameters exist. The fact does not expose those values.
 
+Harnesses can declare `modelParamKeys` for parameters they consume from
+`agents.*.params` and agent model entries. Core excludes only those keys when
+checking that candidate's support. Undeclared parameters and provider-level or
+prepared transport overrides remain subject to the existing check. Omitting
+`modelParamKeys` preserves the conservative default.
+
 Return `{ supported: false, reason }` when the harness cannot reproduce the
 prepared transport. Do not infer support by reading raw config after selection.
 Add `fallbackRuntime: "openclaw"` only when the built-in runtime can reproduce

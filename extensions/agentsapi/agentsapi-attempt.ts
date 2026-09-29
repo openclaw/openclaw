@@ -33,6 +33,7 @@ import { AgentsApiClient } from "./agentsapi-client.js";
 import { collectOutputs, prepareInputs, uploadInputs } from "./agentsapi-files.js";
 import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
+import { resolveAgentsApiModelParams } from "./agentsapi-model-params.js";
 import { buildAgentsApiInstructions, buildAgentsApiTurnContext } from "./agentsapi-prompt.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
@@ -216,6 +217,7 @@ export async function runAgentsApiAttempt(
     );
     assertCurrent();
     const environment = resolveAgentsApiEnvironment(readPluginConfig(), params.workspaceDir);
+    const modelParams = resolveAgentsApiModelParams(params);
     const surface = buildAgentsApiToolSurface(
       runParams,
       controller.signal,
@@ -231,6 +233,10 @@ export async function runAgentsApiAttempt(
       // Preserve existing hosted identities only when no network policy is configured.
       ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
       ...(mcpTools.length ? [mcpTools] : []),
+      // The API defaults to medium and cannot update verbosity on a saved session.
+      ...(modelParams.textVerbosity && modelParams.textVerbosity !== "medium"
+        ? [{ textVerbosity: modelParams.textVerbosity }]
+        : []),
     ];
     const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
     if (binding && binding.authFingerprint !== fingerprint) {
@@ -242,10 +248,11 @@ export async function runAgentsApiAttempt(
         environment.type !== "openai_hosted" ||
         environment.network != null ||
         mcpTools.length > 0 ||
+        (modelParams.textVerbosity !== undefined && modelParams.textVerbosity !== "medium") ||
         binding.authFingerprint !== toolsFingerprint
       ) {
         throw new Error(
-          "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
+          "Agents API model, credential, environment, MCP configuration, or response verbosity changed; reset the OpenClaw session before continuing",
         );
       }
       await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
@@ -307,6 +314,7 @@ export async function runAgentsApiAttempt(
           mcpTools,
           files: inputs.files,
           environment,
+          ...modelParams,
           reasoning: {
             effort: reasoningEffort,
             ...(params.reasoningLevel && params.reasoningLevel !== "off"
@@ -318,7 +326,12 @@ export async function runAgentsApiAttempt(
       assertCurrent();
       await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
     } else {
-      await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
+      await client.updateSettings(
+        remoteSessionId,
+        reasoningEffort,
+        modelParams.serviceTier,
+        controller.signal,
+      );
       assertCurrent();
     }
     if (!creatingSession && inputs.files.length) {

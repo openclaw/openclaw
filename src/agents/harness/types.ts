@@ -473,6 +473,8 @@ type AgentHarnessContract<
   conversationToolPolicySafeDenyTools?: readonly string[];
   /** OpenClaw tool capabilities an indivisible native surface requires from effective profiles. */
   conversationToolPolicyNativeTools?: readonly string[];
+  /** Agent/default model parameter names this harness consumes without provider transport overrides. */
+  modelParamKeys?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
   resolveSessionRuntimeOwnership?(params: {

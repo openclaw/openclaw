@@ -1,6 +1,7 @@
 import { createAgentHarnessAssistantMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { normalizeUsage, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AgentsApiClient, type AgentsApiItem } from "./agentsapi-client.js";
+import { resolveAgentsApiModelParams } from "./agentsapi-model-params.js";
 import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import { readAgentsApiFinalText } from "./agentsapi-text.js";
@@ -56,6 +57,7 @@ export async function runAgentsApiIsolatedCompletion(
       params.thinkLevel === undefined
         ? {}
         : { effort: resolveAgentsApiReasoningEffort({ model, thinkLevel: params.thinkLevel }) },
+      resolveAgentsApiModelParams({ ...params, modelId: model.id }),
     );
     sessionId = session.id;
     native = createAgentsApiSession({
