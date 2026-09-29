@@ -20,8 +20,15 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:runtime-facts";
 let registry: typeof import("../../subagents/registry/subagent-registry.test-helpers.js");
 
-async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
+async function captureAttempt(codeModeOverride: boolean, sessionStore: string, appendOnly = false) {
   resetEmbeddedAttemptHarness();
+  if (appendOnly) {
+    getHoisted().resolveTranscriptPolicyMock.mockReturnValue({
+      allowSyntheticToolResults: false,
+      repairToolUseResultPairing: true,
+      appendOnlyRuntimeContext: true,
+    });
+  }
   getHoisted().createOpenClawCodingToolsMock.mockReturnValue([
     {
       name: "sessions_spawn",
@@ -123,6 +130,46 @@ describe("subagent facts through full attempt history preparation", () => {
     expect(queued.systemPrompt).not.toContain("run-worker");
     expectSubagentCarrier(queued.messages, "status=queued");
     expectSubagentCarrier(running.messages, "status=running");
+    // At rest without the append-only policy the carrier is omitted entirely: no carrier
+    // and no empty "## Active Subagents" section replace the vanished child facts.
+    expect(empty.messages).not.toContainEqual(
+      expect.objectContaining({
+        role: "custom",
+        customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+        display: false,
+      }),
+    );
+  });
+
+  it("keeps emitting the explicit empty subagent snapshot under the append-only policy", async () => {
+    const sessionStore = path.join(
+      tempDirs.make("openclaw-attempt-subagent-facts-append-only-"),
+      "sessions.json",
+    );
+    const storePath = resolvePhysicalSessionStorePath({ sessionKey, storePath: sessionStore });
+    const run = {
+      runId: "run-worker",
+      childSessionKey: "agent:main:subagent:worker",
+      controllerSessionKey: sessionKey,
+      requesterSessionKey: sessionKey,
+      requesterStorePath: storePath,
+      controllerStorePath: storePath,
+      requesterDisplayKey: "main",
+      task: "Inspect fixtures",
+      label: "Worker",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      execution: { status: "queued" },
+    } satisfies SubagentRunRecord;
+    registry.addSubagentRunForTests(run);
+    const queued = await captureAttempt(false, sessionStore, true);
+    registry.resetSubagentRegistryForTests();
+    const empty = await captureAttempt(false, sessionStore, true);
+
+    expect(empty.systemPrompt).toBe(queued.systemPrompt);
+    expectSubagentCarrier(queued.messages, "status=queued");
+    // Append-only carriers keep prior facts: after the children finish, the explicit empty
+    // snapshot still supersedes the queued state instead of going silent.
     expectSubagentCarrier(empty.messages, "## Active Subagents\nnone");
   });
 });

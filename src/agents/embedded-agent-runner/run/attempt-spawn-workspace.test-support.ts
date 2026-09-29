@@ -28,7 +28,10 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
-import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
+import {
+  agentSessionQueuePromptContext,
+  agentSessionSetPromptPreparation,
+} from "../../sessions/agent-session-prompting.js";
 import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
 import {
   getModelRegistryRuntime,
@@ -99,6 +102,7 @@ type AttemptSpawnWorkspaceHoisted = {
     (sessionKey: string | undefined, config: unknown, route?: unknown) => number | undefined
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
+  resolveTranscriptPolicyMock: UnknownMock;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
   compactionReserveTokens: number;
   systemPromptTexts: string[];
@@ -121,6 +125,10 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const ensureGlobalUndiciDispatcherStreamTimeoutsMock = vi.fn();
   const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
   const createOpenClawCodingToolsMock = vi.fn(() => []);
+  const resolveTranscriptPolicyMock = vi.fn(() => ({
+    allowSyntheticToolResults: false,
+    repairToolUseResultPairing: true,
+  }));
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
@@ -230,6 +238,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     detectAndLoadPromptImagesMock,
     getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
+    resolveTranscriptPolicyMock,
     preemptiveCompactionCalls,
     compactionReserveTokens,
     systemPromptTexts,
@@ -682,10 +691,7 @@ vi.mock("../../tool-fs-policy.js", () => ({
 }));
 
 vi.mock("../../transcript-policy.js", () => ({
-  resolveTranscriptPolicy: () => ({
-    allowSyntheticToolResults: false,
-    repairToolUseResultPairing: true,
-  }),
+  resolveTranscriptPolicy: (params: unknown) => hoisted.resolveTranscriptPolicyMock(params),
 }));
 
 vi.mock("../cache-ttl.js", () => ({
@@ -882,6 +888,12 @@ type MutableSession = {
     callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
   ) => void;
   [agentSessionSetPromptPreparation]: (prepare: (() => Promise<void>) | undefined) => void;
+  [agentSessionQueuePromptContext]: (message: {
+    customType: string;
+    content: string;
+    display: boolean;
+    details?: Record<string, unknown>;
+  }) => () => void;
 };
 
 export type EmbeddedAttemptSession = Omit<MutableSession, "agent"> & {
@@ -1006,6 +1018,10 @@ export function resetEmbeddedAttemptHarness(
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
+  hoisted.resolveTranscriptPolicyMock.mockReset().mockReturnValue({
+    allowSyntheticToolResults: false,
+    repairToolUseResultPairing: true,
+  });
   hoisted.preemptiveCompactionCalls.length = 0;
   hoisted.compactionReserveTokens = 0;
   hoisted.systemPromptTexts.length = 0;
@@ -1167,6 +1183,15 @@ export function createDefaultEmbeddedSession(params?: {
           }
         }
         return prompt(...args);
+      };
+    },
+    [agentSessionQueuePromptContext]: (message) => {
+      // The fake session keeps no pending-next-turn queue: the prompt-owned carrier
+      // joins the LLM-bound message set on queue and the returned cleanup retires
+      // it, mirroring AgentSessionPrompting's queue-and-cleanup lifecycle.
+      session.messages = [...session.messages, message];
+      return () => {
+        session.messages = session.messages.filter((pending) => pending !== message);
       };
     },
   };

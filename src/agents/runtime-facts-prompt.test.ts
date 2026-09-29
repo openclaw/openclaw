@@ -39,9 +39,10 @@ describe("approved executable runtime facts", () => {
       file.agents!.main!.allowlist!.reverse();
       expect((await buildRuntimeFactsContext(params)).at(0)?.text).toBe(added);
       file.agents = {};
-      expect((await buildRuntimeFactsContext(params)).at(0)?.text).toBe(
-        "## Approved executables\nnone",
-      );
+      expect(await buildRuntimeFactsContext(params)).toEqual([]);
+      expect(
+        (await buildRuntimeFactsContext({ ...params, includeEmptySnapshots: true })).at(0)?.text,
+      ).toBe("## Approved executables\nnone");
     }));
 
   it("bounds hints and omits command approvals, global wildcards, bare names, and unsafe or oversized tokens", () =>
@@ -151,18 +152,21 @@ describe("media task runtime facts", () => {
     expect(read).toHaveBeenCalledExactlyOnceWith("agent:main:media", "main");
 
     read.mockReturnValue([]);
-    expect(await buildRuntimeFactsContext(mediaParams)).toEqual([
-      {
-        kind: "conversation-data",
-        text: [
-          "## Media Generation Tasks",
-          "- tool=image_generate; none",
-          "- tool=music_generate; none",
-          "- tool=video_generate; none",
-        ].join("\n"),
-      },
-    ]);
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(await buildRuntimeFactsContext(mediaParams)).toEqual([]);
+    expect(await buildRuntimeFactsContext({ ...mediaParams, includeEmptySnapshots: true })).toEqual(
+      [
+        {
+          kind: "conversation-data",
+          text: [
+            "## Media Generation Tasks",
+            "- tool=image_generate; none",
+            "- tool=music_generate; none",
+            "- tool=video_generate; none",
+          ].join("\n"),
+        },
+      ],
+    );
+    expect(read).toHaveBeenCalledTimes(3);
   });
 
   it.each([
@@ -172,27 +176,51 @@ describe("media task runtime facts", () => {
     },
     {
       tools: ["music_generate", "video_generate"],
-      expected:
+      expected: "## Media Generation Tasks\n- tool=music_generate; task=music-1; status=running",
+      expectedEmpty:
         "## Media Generation Tasks\n- tool=music_generate; task=music-1; status=running\n- tool=video_generate; none",
     },
-  ])("includes only enabled media sections: $tools", async ({ tools, expected }) => {
-    const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations").mockReturnValue([
-      createMediaTask(),
-      createMediaTask({
-        taskId: "music-1",
-        taskKind: "music_generation",
-        sourceId: "music_generate",
-      }),
-    ]);
-    expect(
-      await buildRuntimeFactsContext({
-        ...params,
-        sessionKey: "agent:main:media",
-        capabilityToolNames: new Set(tools),
-      }),
-    ).toEqual([{ kind: "conversation-data", text: expected }]);
-    expect(read).toHaveBeenCalledExactlyOnceWith("agent:main:media", "main");
-  });
+  ])(
+    "includes only enabled media sections: $tools",
+    async ({
+      tools,
+      expected,
+      expectedEmpty,
+    }: {
+      tools: string[];
+      expected: string;
+      expectedEmpty?: string;
+    }) => {
+      const read = vi.spyOn(mediaActivity, "listMediaGenerationOperations").mockReturnValue([
+        createMediaTask(),
+        createMediaTask({
+          taskId: "music-1",
+          taskKind: "music_generation",
+          sourceId: "music_generate",
+        }),
+      ]);
+      expect(
+        await buildRuntimeFactsContext({
+          ...params,
+          sessionKey: "agent:main:media",
+          capabilityToolNames: new Set(tools),
+        }),
+      ).toEqual([{ kind: "conversation-data", text: expected }]);
+      if (expectedEmpty !== undefined) {
+        expect(
+          await buildRuntimeFactsContext({
+            ...params,
+            sessionKey: "agent:main:media",
+            capabilityToolNames: new Set(tools),
+            includeEmptySnapshots: true,
+          }),
+        ).toEqual([{ kind: "conversation-data", text: expectedEmpty }]);
+        expect(read).toHaveBeenCalledTimes(2);
+      } else {
+        expect(read).toHaveBeenCalledExactlyOnceWith("agent:main:media", "main");
+      }
+    },
+  );
 
   it.each([undefined, "", "   "])(
     "keeps explicit empty media facts without session %j",
@@ -203,6 +231,14 @@ describe("media task runtime facts", () => {
           ...params,
           sessionKey,
           capabilityToolNames: new Set(["image_generate", "video_generate"]),
+        }),
+      ).toEqual([]);
+      expect(
+        await buildRuntimeFactsContext({
+          ...params,
+          sessionKey,
+          capabilityToolNames: new Set(["image_generate", "video_generate"]),
+          includeEmptySnapshots: true,
         }),
       ).toEqual([
         {

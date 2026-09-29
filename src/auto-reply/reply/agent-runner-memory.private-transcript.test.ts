@@ -8,6 +8,8 @@ import {
   peekSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { addSession, deleteSession } from "../../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../../agents/bash-process-registry.test-helpers.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -352,6 +354,11 @@ it.each(["completed", "interrupted"] as const)(
         if (outcome === "interrupted") {
           expect.soft(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
         }
+        // Give the next human turn a current, non-empty runtime fact so its own carrier is
+        // observed with something to say instead of relying on empty "none" sections.
+        const execSession = createProcessSessionFixture({ id: "exec-a", backgrounded: true });
+        execSession.scopeKey = scope.sessionKey;
+        addSession(execSession);
         foreground.prompt = human;
         const current = loadSessionEntry(scope)!;
         const result = await runReplyAgent({
@@ -396,8 +403,16 @@ it.each(["completed", "interrupted"] as const)(
           (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
         );
         const nextUser = text(humanMessages[userIndex]?.content);
-        expect(humanMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
+        const humanCarriers = humanMessages.filter(isModelRuntimeContextCarrier);
+        expect(humanCarriers).toHaveLength(1);
         expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(userIndex);
+        // The carrier belongs to this human turn and reports the retained exec session; the
+        // at-rest subagent dimension no longer emits an empty section without the append-only
+        // policy, so its very presence here proves the context was built for this turn.
+        const carrierText = text(humanCarriers[0]!.content);
+        expect(carrierText).toContain("Active exec sessions:");
+        expect(carrierText).toContain("exec-a running");
+        expect(carrierText).not.toContain("## Active Subagents");
         const canonicalHuman = SessionManager.open(scope)
           .buildSessionContext()
           .messages.findLast(
@@ -425,6 +440,7 @@ it.each(["completed", "interrupted"] as const)(
           }
         }
       } finally {
+        deleteSession("exec-a");
         completeFirstPrivateResponse?.();
         interrupted.abort(createAbortError("fixture cleanup"));
         await flush?.catch(() => undefined);

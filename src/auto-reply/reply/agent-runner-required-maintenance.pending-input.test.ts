@@ -11,6 +11,8 @@ import {
   getSessionMcpRuntimeManagerForTesting,
   setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { addSession, deleteSession } from "../../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../../agents/bash-process-registry.test-helpers.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
@@ -340,6 +342,11 @@ describe("required maintenance with restart-safe admitted input", () => {
             relativePath: "memory/checkpoint.md",
           }));
           const foregroundContexts: unknown[][] = [];
+          // Give the foreground turn a current, non-empty runtime fact so its own carrier is
+          // observed with something to say instead of relying on empty "none" sections.
+          const execSession = createProcessSessionFixture({ id: "exec-a", backgrounded: true });
+          execSession.scopeKey = sessionKey;
+          addSession(execSession);
           observeForeground = () => {
             foregroundContexts.push(
               SessionManager.open(scope, state.workspaceDir)
@@ -416,12 +423,22 @@ describe("required maintenance with restart-safe admitted input", () => {
           expect(foregroundMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(
             userIndex,
           );
+          // The carrier belongs to this foreground turn and reports the retained exec
+          // session; the at-rest subagent dimension no longer emits an empty section without
+          // the append-only policy, so its presence here proves the context was built for
+          // the approved user turn, not replayed from the maintenance passes.
+          const foregroundCarrier = foregroundMessages.find(isModelRuntimeContextCarrier)!;
+          const carrierText = providerText(foregroundCarrier.content);
+          expect(carrierText).toContain("Active exec sessions:");
+          expect(carrierText).toContain("exec-a running");
+          expect(carrierText).not.toContain("## Active Subagents");
           expect(foregroundContexts[0]!.at(-1)).toMatchObject({
             role: "user",
             content: approved,
             idempotencyKey: `${runId}:user`,
           });
         } finally {
+          deleteSession("exec-a");
           await waitForSessionMaintenance(sessionKey);
           recorder?.finishPendingInput?.("interrupted");
           admissionOwner.close();

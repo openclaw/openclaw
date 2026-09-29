@@ -79,6 +79,8 @@ export async function buildMediaTaskRuntimeContext(params: {
   capabilityToolNames: ReadonlySet<string>;
   sessionKey?: string;
   agentId: string;
+  /** Keep literal `none` snapshots so append-only carriers can supersede prior facts. */
+  includeEmptySnapshots?: boolean;
 }): Promise<string | undefined> {
   const sections = [
     ["image_generate", IMAGE_GENERATION_TASK_KIND],
@@ -91,14 +93,18 @@ export async function buildMediaTaskRuntimeContext(params: {
   }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const tasks = sessionKey ? listMediaGenerationOperations(sessionKey, params.agentId) : [];
-  const facts = enabled.map(
-    ([tool, taskKind]) =>
-      buildActiveMediaGenerationTaskPromptContext({
-        tasks,
-        agentId: params.agentId,
-        taskKind,
-        sourcePrefix: tool,
-      }) ?? `- tool=${tool}; none`,
-  );
-  return ["## Media Generation Tasks", ...facts].join("\n");
+  const facts = enabled.map(([tool, taskKind]) => {
+    const text = buildActiveMediaGenerationTaskPromptContext({
+      tasks,
+      agentId: params.agentId,
+      taskKind,
+      sourcePrefix: tool,
+    });
+    if (text) {
+      return text;
+    }
+    return params.includeEmptySnapshots ? `- tool=${tool}; none` : undefined;
+  });
+  const present = facts.filter((text): text is string => Boolean(text));
+  return present.length ? ["## Media Generation Tasks", ...present].join("\n") : undefined;
 }

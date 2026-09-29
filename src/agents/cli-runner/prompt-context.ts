@@ -23,10 +23,13 @@ export async function buildCliTurnAppendContext(
   },
 ): Promise<string> {
   const { resolveSystemPromptUsage } = await import("./helpers.js");
+  // Retained native sessions keep prior-turn facts: emit an explicit empty snapshot so a
+  // vanished active media task is superseded instead of staying the last known state.
   const mediaTaskContext = await buildMediaTaskRuntimeContext({
     capabilityToolNames: params.capabilityToolNames,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    includeEmptySnapshots: true,
   });
   await prepareActiveNodeContext(params.requesterProfileId);
   return [

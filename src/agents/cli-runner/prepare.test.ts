@@ -3797,6 +3797,93 @@ describe("prepareCliRunContext", () => {
         sessionKey: "agent:main:test",
         agentId: "main",
         capabilityToolNames: new Set(["image_generate", "video_generate"]),
+        includeEmptySnapshots: true,
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "supersedes a vanished active media task with an explicit empty snapshot (plugin execution %s)",
+    async (pluginExecution) => {
+      const config = createCliBackendConfig({ bundleMcp: true });
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({
+          agentId: "main",
+          tools: ["music_generate"].map((name) => ({
+            name,
+            label: name,
+            description: name,
+            parameters: Type.Object({}),
+            execute: vi.fn(),
+          })),
+        })),
+      });
+      if (pluginExecution) {
+        setCliBackendForPrepareTest({
+          id: "test-cli",
+          bundleMcp: true,
+          prepareExecution: () => ({
+            async *execute() {
+              yield { type: "result" };
+            },
+          }),
+        });
+      }
+      const prepareTurn = () =>
+        fixture.prepare({
+          sessionKey: "agent:main:test",
+          trigger: "user",
+          config,
+          prompt: "latest ask",
+          transcriptPrompt: "latest ask",
+        });
+      const activeCarrier = [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "## Media Generation Tasks",
+        "- tool=music_generate; task=music-1; status=running",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n");
+      mockBuildMediaTaskRuntimeContext.mockResolvedValue(
+        "## Media Generation Tasks\n- tool=music_generate; task=music-1; status=running",
+      );
+      const active = await prepareTurn();
+      // The task vanishes between turns. The shared constructor emits the explicit empty
+      // snapshot only for callers that preserve it, so mirror that contract: without the
+      // flag the carrier would be silent and the retained active task would survive.
+      mockBuildMediaTaskRuntimeContext.mockImplementation(async (params) =>
+        params.includeEmptySnapshots
+          ? "## Media Generation Tasks\n- tool=music_generate; none"
+          : undefined,
+      );
+      const cleared = await prepareTurn();
+      const emptyCarrier = [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "## Media Generation Tasks",
+        "- tool=music_generate; none",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n");
+      expect(active.params.prompt).toBe(
+        pluginExecution ? "latest ask" : `latest ask\n\n${activeCarrier}`,
+      );
+      expect(active.promptContext).toEqual(
+        pluginExecution ? { appendContext: activeCarrier } : undefined,
+      );
+      expect(cleared.params.prompt).toBe(
+        pluginExecution ? "latest ask" : `latest ask\n\n${emptyCarrier}`,
+      );
+      expect(cleared.promptContext).toEqual(
+        pluginExecution ? { appendContext: emptyCarrier } : undefined,
+      );
+      expect(mockBuildMediaTaskRuntimeContext).toHaveBeenLastCalledWith({
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        capabilityToolNames: new Set(["music_generate"]),
+        includeEmptySnapshots: true,
       });
     },
   );
