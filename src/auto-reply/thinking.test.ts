@@ -175,6 +175,43 @@ describe("provider profiles", () => {
     expect(listThinkingLevels(params.provider, params.model, params.catalog, "codex")).toEqual([]);
   });
 
+  it("forwards catalog-derived effort provenance to provider hooks", () => {
+    const contexts: Array<Record<string, unknown>> = [];
+    mocks.profile.mockImplementation((params: { context: Record<string, unknown> }) => {
+      contexts.push(params.context);
+      return undefined;
+    });
+
+    resolveThinkingProfile({
+      provider: "demo",
+      model: "demo/Mixed",
+      catalog: [
+        {
+          provider: "demo",
+          id: "demo/Mixed",
+          reasoning: true,
+          thinkingLevelMap: { off: null },
+          catalogReasoningEfforts: true,
+        },
+      ],
+    });
+    resolveThinkingProfile({
+      provider: "demo",
+      model: "demo/Mixed",
+      catalog: [
+        {
+          provider: "demo",
+          id: "demo/Mixed",
+          reasoning: true,
+          thinkingLevelMap: { off: null },
+        },
+      ],
+    });
+
+    expect(contexts[0]?.catalogReasoningEfforts).toBe(true);
+    expect(contexts[1]?.catalogReasoningEfforts).toBeUndefined();
+  });
+
   it.each([
     { agentRuntime: "openclaw", maxCap: undefined, expected: true },
     { agentRuntime: "auto", maxCap: null, expected: false },

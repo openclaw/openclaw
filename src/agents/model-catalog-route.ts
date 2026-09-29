@@ -202,6 +202,7 @@ export function projectModelCatalogEntryForRoute(params: {
         : {}),
       ...(donor?.reasoning !== undefined ? { reasoning: donor.reasoning } : {}),
       ...(donor?.thinkingLevelMap ? { thinkingLevelMap: donor.thinkingLevelMap } : {}),
+      ...(donor?.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
       ...(donor?.thinkingPolicyProvider
         ? { thinkingPolicyProvider: donor.thinkingPolicyProvider }
         : {}),

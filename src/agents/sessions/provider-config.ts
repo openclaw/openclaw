@@ -45,6 +45,7 @@ interface ProviderModelConfig
       | "parameterCount"
       | "family"
       | "compat"
+      | "catalogReasoningEfforts"
     >,
     Partial<Pick<Model, "api" | "baseUrl">> {
   /** Cost per token (for tracking, can be 0). */
