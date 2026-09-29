@@ -51,17 +51,21 @@ Five rules shape everything below:
 | ------------ | ------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
 | Instructions | `AGENTS.md` and workspace instruction files             | Human only                                          | Always, at session start                               |
 | Curated core | `MEMORY.md`, `USER.md`                                  | Dreaming consolidation; direct user request         | At session start when provenance is eligible; budgeted |
-| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Via Active Memory for eligible private sessions; otherwise searchable on demand |
+| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | On recall; not at session start                        |
 | Prospective  | Standing intents (SQLite) and cron jobs                 | `intent` tool; scheduled tasks                      | Only when a trigger fires                              |
 | Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading                               |
 
 The boundary that matters most is between the **curated core** and the
-**episodic** tier. The table's **Injected** column refers to automatic context assembly: the episodic tier itself is not injected at session start, but eligible private-session transcripts can be surfaced into reply context by the separate Active Memory recall path. Curated files are small, normally in context when their
+**episodic** tier. Curated files are small, normally in context when their
 provenance is eligible, and written only through gated consolidation. Episodic
-files are large, append-friendly,
-and reachable only through explicit search tools or the escalation lane.
-Nothing crosses from episodic to curated without passing the promotion gates
-described below.
+files are large, append-friendly, and retrieved through search tools or
+Active Memory rather than loaded at session start. With
+`memory.search.rememberAcrossConversations` enabled and Active Memory on,
+relevant excerpts from the same agent's other recognized private conversations
+can inform reply context before generation. See
+[Remember across conversations](/concepts/active-memory/enabling#remember-across-conversations)
+for eligibility and privacy boundaries. Nothing crosses from episodic to curated
+without passing the promotion gates described below.
 
 ## Provenance: every memory knows where it came from
 
