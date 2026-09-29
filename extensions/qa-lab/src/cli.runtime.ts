@@ -59,6 +59,7 @@ import {
   QA_FRONTIER_PARITY_CANDIDATE_LABEL,
 } from "./providers/live-frontier/parity.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
+import { QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY } from "./qa-channel-transport.js";
 import {
   addQaCredentialSet,
   diagnoseQaCredentialBroker,
@@ -69,7 +70,6 @@ import {
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import {
-  defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
   qaTransportSupportsModuleFlows,
   type QaTransportId,
@@ -1056,7 +1056,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   // servers bounded even when a caller requests a larger suite concurrency.
   const liveConcurrencyLimit =
     liveAdapterFactory?.isolatesInstances === true
-      ? defaultQaSuiteConcurrencyForTransport(transportId)
+      ? QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY
       : undefined;
   const runtimeResult = await runQaSuite({
     repoRoot,

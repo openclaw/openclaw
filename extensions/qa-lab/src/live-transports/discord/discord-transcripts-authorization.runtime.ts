@@ -89,18 +89,6 @@ async function waitForDiscordVoiceDisconnect(params: {
   );
 }
 
-async function deleteChannelMessage(params: {
-  channelId: string;
-  messageId: string;
-  token: string;
-}) {
-  await requestDiscord<void>(
-    `/channels/${params.channelId}/messages/${params.messageId}`,
-    params.token,
-    { method: "DELETE", timeoutMs: 15_000 },
-  );
-}
-
 function transcriptStartPrompt(params: {
   channelId: string;
   guildId: string;
@@ -188,11 +176,11 @@ async function deleteScenarioMessages(params: {
   let failures = 0;
   for (const message of params.messages.toReversed()) {
     try {
-      await deleteChannelMessage({
-        token: message.token,
-        channelId: params.channelId,
-        messageId: message.messageId,
-      });
+      await requestDiscord<void>(
+        `/channels/${params.channelId}/messages/${message.messageId}`,
+        message.token,
+        { method: "DELETE", timeoutMs: 15_000 },
+      );
       deleted += 1;
     } catch {
       failures += 1;
@@ -245,7 +233,7 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
       voiceDisconnected: false,
     },
   };
-  let evidencePath: string | undefined;
+  let evidencePath: string;
 
   try {
     await waitForDiscordVoiceDisconnect({
@@ -380,6 +368,6 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
   }
   return {
     details: "visible denial, authorized transcript join, and verified stop/leave",
-    artifacts: evidencePath ? { transcriptAuthorization: evidencePath } : {},
+    artifacts: { transcriptAuthorization: evidencePath },
   };
 }

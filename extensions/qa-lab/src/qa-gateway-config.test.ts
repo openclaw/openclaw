@@ -5,11 +5,7 @@ import {
   QA_SESSION_OBSERVER_HEADER,
   registerQaSessionObserver,
 } from "./providers/shared/session-observer-registry.js";
-import {
-  buildQaGatewayConfig,
-  DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
-  mergeQaControlUiAllowedOrigins,
-} from "./qa-gateway-config.js";
+import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
 
 function buildConfig(params: Partial<Parameters<typeof buildQaGatewayConfig>[0]>) {
@@ -592,21 +588,24 @@ describe("buildQaGatewayConfig", () => {
   });
 
   it("merges dynamic qa-lab origins without dropping the built control ui root", () => {
-    expect(mergeQaControlUiAllowedOrigins(["http://127.0.0.1:60196", "  "])).toEqual([
-      ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
-      "http://127.0.0.1:60196",
-    ]);
-
     const cfg = buildConfig({
       controlUiRoot: "/tmp/openclaw/dist/control-ui",
-      controlUiAllowedOrigins: ["http://127.0.0.1:60196"],
+      controlUiAllowedOrigins: [
+        " http://127.0.0.1:60196 ",
+        "  ",
+        "http://localhost:18789",
+        "http://127.0.0.1:60196",
+      ],
       ...createQaChannelTransportParams(),
     });
 
     expect(cfg.gateway?.controlUi?.enabled).toBe(true);
     expect(cfg.gateway?.controlUi?.root).toBe("/tmp/openclaw/dist/control-ui");
     expect(cfg.gateway?.controlUi?.allowedOrigins).toEqual([
-      ...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS,
+      "http://127.0.0.1:18789",
+      "http://localhost:18789",
+      "http://127.0.0.1:43124",
+      "http://localhost:43124",
       "http://127.0.0.1:60196",
     ]);
   });

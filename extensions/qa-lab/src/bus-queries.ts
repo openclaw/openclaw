@@ -15,7 +15,7 @@ import type {
   QaBusToolCall,
 } from "./runtime-api.js";
 
-export const DEFAULT_ACCOUNT_ID = "default";
+const DEFAULT_ACCOUNT_ID = "default";
 
 export function normalizeAccountId(raw?: string): string {
   const trimmed = raw?.trim();
@@ -55,7 +55,7 @@ function cloneToolCall(toolCall: QaBusToolCall): QaBusToolCall {
   };
 }
 
-export function cloneEvent(event: QaBusEvent): QaBusEvent {
+function cloneEvent(event: QaBusEvent): QaBusEvent {
   switch (event.kind) {
     case "inbound-message":
     case "outbound-message":
@@ -109,14 +109,6 @@ export function requireQaBusMessageForAccount(params: {
     throw new Error(`qa-bus message not found: ${params.input.messageId}`);
   }
   return match;
-}
-
-export function readQaBusMessage(params: {
-  messages: Map<string, QaBusMessage>;
-  input: QaBusReadMessageInput;
-}) {
-  const message = requireQaBusMessageForAccount(params);
-  return cloneMessage(message);
 }
 
 export function searchQaBusMessages(params: {
