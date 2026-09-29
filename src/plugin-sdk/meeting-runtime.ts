@@ -51,6 +51,8 @@ export {
   leaveMeetingWithBrowser,
   readMeetingTranscriptWithBrowser,
 } from "../meeting-bot/browser-session-control.js";
+// Serializes work on a browser target; callers still own session/source checks.
+export { runMeetingBrowserAct } from "../meeting-bot/browser-act-lock.js";
 export {
   asMeetingBrowserTabs,
   readMeetingBrowserTab,

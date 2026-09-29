@@ -1,3 +1,4 @@
+import type { MeetingRealtimeAudioEngineHandle } from "openclaw/plugin-sdk/meeting-runtime";
 import {
   createMeetingNodeBrowserFixture,
   useMeetingTestState,
@@ -11,7 +12,7 @@ const testState = useMeetingTestState(createOpenClawTestState);
 
 const realtimeMocks = vi.hoisted(() => ({
   healths: [] as Array<{ bridgeClosed: boolean }>,
-  speak: vi.fn(),
+  speak: vi.fn<MeetingRealtimeAudioEngineHandle["speak"]>(),
   startAgent: vi.fn(async ({ transport }: { transport: { stop(): Promise<void> } }) => {
     const health = { bridgeClosed: false };
     realtimeMocks.healths.push(health);
@@ -115,7 +116,7 @@ describe("Zoom meetings node realtime recovery", () => {
         requesterSessionKey: "agent:support:session:caller",
       }),
     );
-    expect(realtimeMocks.speak).toHaveBeenCalledWith("hello");
+    expect(realtimeMocks.speak).toHaveBeenCalledWith("hello", expect.any(Function), undefined);
     expect(joined.session.chrome?.audioBridge).toMatchObject({ type: "node-command-pair" });
 
     const firstEngine = await realtimeMocks.startAgent.mock.results[0]?.value;
@@ -129,10 +130,16 @@ describe("Zoom meetings node realtime recovery", () => {
 
     expect(recovered.spoken).toBe(true);
     expect(realtimeMocks.startAgent).toHaveBeenCalledTimes(2);
-    expect(realtimeMocks.speak).toHaveBeenCalledWith("again");
+    expect(realtimeMocks.speak).toHaveBeenCalledWith("again", expect.any(Function), undefined);
     expect(joined.session.chrome?.health?.bridgeClosed).toBe(false);
     expect(harness.state.audioCaptureId).toEqual(expect.any(String));
+    const assertCurrent = realtimeMocks.speak.mock.calls.at(-1)?.[1];
+    if (!assertCurrent) {
+      throw new Error("Expected the meeting owner to guard native speech.");
+    }
+    expect(assertCurrent).not.toThrow();
     await runtime.leave(joined.session.id);
+    expect(assertCurrent).toThrow("Meeting session is no longer active");
     expect(harness.state.audioCaptureId).toBeUndefined();
   });
 });

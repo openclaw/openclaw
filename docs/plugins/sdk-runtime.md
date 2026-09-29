@@ -274,6 +274,12 @@ reports that outcome as `uncertain`; it must not be treated as proof of cancella
 or permission to retry with a new request ID. Pre-dispatch authority checks and
 the adapter's final page-session and URL checks remain required.
 
+For reads that share the same browser target, `runMeetingBrowserAct` exposes the
+existing serialization lock. Supply an absolute deadline from `performance.now()`,
+not `Date.now()`. The caller must still pin the session and route and revalidate
+live authority after awaited work. Acquiring the lock does not grant permission
+to act or make a cached source current.
+
 ## Worker provider allocation authority
 
 The Gateway supplies `assertCurrent()` in the options passed to worker providers'

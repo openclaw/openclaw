@@ -193,14 +193,15 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       158,
       env,
     ),
+    // +1 export and callable: native chat reuses the shared meeting browser-operation queue.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4591,
+      4592,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2695,
+      2696,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

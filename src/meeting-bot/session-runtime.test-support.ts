@@ -44,6 +44,10 @@ export function createTestRuntime(params: {
   participation?: MeetingParticipationOptions<TestSession>;
   talkBack?: boolean;
   transcribe?: boolean;
+  refreshBrowserHealth?(
+    session: TestSession,
+    options?: { force?: boolean; readOnly?: boolean },
+  ): Promise<void>;
   refreshReusableSession?(
     session: TestSession,
     request: TestRequest,
@@ -145,7 +149,8 @@ export function createTestRuntime(params: {
     },
     joinTransport: (input) => params.joinTransport(input),
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
-    refreshBrowserHealth: async () => {},
+    refreshBrowserHealth: async (session, options) =>
+      await params.refreshBrowserHealth?.(session, options),
     refreshStatus: async () => {},
     refreshReusableSession: async (session, request, resolved) =>
       await params.refreshReusableSession?.(session, request, resolved),

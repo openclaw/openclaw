@@ -130,6 +130,32 @@ This only applies to API-created rooms, so OAuth must be configured. If you auth
 
 If the browser fallback hits a Google login or Meet permission blocker, the tool returns `manualAction: { reason, message }` with the `browser.nodeId`/`browser.targetId`/`browserUrl`. Report that message and stop opening new Meet tabs until the operator finishes the browser step.
 
+### Native meeting chat
+
+Chat capture starts in the background; the join response does not wait for its first browser read.
+
+Managed `chrome` and `chrome-node` sessions open the native Meet chat panel and observe incoming messages. In `agent` and `bidi` modes, a fresh request for the agent goes through the configured OpenClaw agent and normally produces one written answer. This works while the Meet microphone is muted. `transcribe` mode observes messages but does not consult the agent or reply automatically. Twilio does not expose native chat.
+
+Automatic chat consultations use read-only tools even when `realtime.toolPolicy` is `owner`; `none` still disables tools. The runtime owns delivery, so the consultant cannot send a separate answer or bypass the original source check. Manual operator tool calls retain their configured scope.
+
+The first chat snapshot is context only. Native message IDs keep identical messages separate; edits revoke pending answers to the prior revision. Own echoes and messages whose sender layout cannot be verified never authorize replies. Source references expire after two minutes and are invalidated by leaving, tab reassignment, or a new page epoch. An edited message cannot reopen an already attempted reply.
+
+To keep delayed initial history from appearing fresh, the reader recognizes the current Meet UI's empirically verified 16-digit microsecond timestamp in native message IDs and compares it with a fixed page-owned observation cutoff. This is an observed UI contract, not a documented Google API guarantee. Unknown ID formats, future timestamps, and messages at or before that cutoff remain context only. Clock skew can therefore suppress legitimate new requests. Closing and reopening the panel does not reset the cutoff; an observed departure resets the page epoch before a later rejoin. Historical exceptions remain remembered after row-cache eviction; if that bounded history fills, new message identities remain context only until rejoining.
+
+An operator can send an exact message through the same session owner:
+
+```bash
+openclaw googlemeet send-chat <session-id> "The proposal is ready to review." --request-id proposal-ready-1
+```
+
+The `google_meet` tool exposes `action: "send_chat"` with `sessionId`, `requestId`, and `text`. The generic equivalent is `action: "participate"` with `participationAction: { type: "chat.send", text: "..." }`. Read `action: "participation_context"` for supported capabilities and current source references. `sourceId` binds a reply to an observed request; callers cannot supply source text or manufacture voice permission.
+
+The default output is chat. Voice requires `output: "voice"` and a current incoming chat source that explicitly asks for spoken output, such as “Please read the summary out loud.” A model answer mentioning speech cannot change the channel. Voice uses the existing meeting speech path and requires a ready, unmuted audio route; failure does not trigger a second written answer.
+
+Use a stable `requestId` for an identical retry. Completed and uncertain attempts are recorded in the shared state database, so reconnecting or repeating a tool call does not repeat a send. Only an explicitly correctable rejection permits one correction with `correctionOf`. Existing composer drafts, including whitespace, are preserved. Messages must contain nonblank text of at most 4,000 UTF-16 code units; they are never silently shortened or split.
+
+A successful chat result confirms that Meet cleared the same composer after its native Send button was clicked. It does not prove recipient delivery. An `uncertain` result means the effect could have occurred and must not be retried automatically. Speech submission likewise does not confirm playback completion. The observer depends on Meet's current English chat UI; unavailable or changed controls fail without switching tabs or nodes.
+
 ### Observe-only join
 
 Set `"mode": "transcribe"` to skip the duplex realtime bridge (no virtual-audio requirement, no talk-back). Transcribe-mode Chrome joins also skip OpenClaw's microphone/camera permission grant and the Meet **Use microphone** path; if Meet shows the audio-choice interstitial, automation tries **Continue without microphone** first. Managed Chrome transports install a best-effort Meet caption observer in every mode so durable notes are available without changing the live agent-consult path. `googlemeet status --json` and `googlemeet doctor` report `captioning`, `captionsEnabledAttempted`, `transcriptLines`, `lastCaptionAt`, `lastCaptionSpeaker`, `lastCaptionText`, and a `recentTranscript` tail.

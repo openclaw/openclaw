@@ -84,6 +84,7 @@ type GoogleMeetGatewayToolAction =
   | "transcript"
   | "participation_context"
   | "participate"
+  | "send_chat"
   | "recover_current_tab"
   | "setup_status"
   | "leave"
@@ -94,6 +95,8 @@ type GoogleMeetGatewayToolAction =
 
 function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolAction): string {
   switch (action) {
+    case "send_chat":
+      return "googlemeet.participate";
     case "participation_context":
       return "googlemeet.participationContext";
     case "recover_current_tab":
@@ -128,7 +131,14 @@ export function readGoogleMeetParticipationParams(raw: Record<string, unknown>):
       throw new Error(`${name} must be a non-empty string`);
     }
   }
-  const action = asParamRecord(raw.participationAction);
+  const action: Record<string, unknown> =
+    raw.action === "send_chat"
+      ? {
+          type: "chat.send",
+          text: raw.text,
+          ...(raw.output === undefined ? {} : { output: raw.output }),
+        }
+      : asParamRecord(raw.participationAction);
   const type = normalizeOptionalString(action.type);
   if (!type) {
     throw new Error("participationAction.type required");

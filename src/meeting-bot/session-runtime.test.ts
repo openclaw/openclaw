@@ -843,37 +843,3 @@ describe("MeetingSessionRuntime leave cleanup", () => {
     expect(releaseBrowserTab).toHaveBeenCalledTimes(2);
   });
 });
-
-describe("MeetingSessionRuntime speech readiness", () => {
-  it("treats an unknown microphone state as transiently unverified", async () => {
-    const { runtime } = createTestRuntime({
-      talkBack: true,
-      releaseBrowserTab: async () => true,
-      joinTransport: async ({ session }) => {
-        session.browser = {
-          launched: true,
-          hasAudioBridge: true,
-          health: { inCall: true },
-        };
-        return {};
-      },
-    });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "main",
-    });
-
-    expect(runtime.refreshSpeechReadiness(session)).toEqual({
-      ready: false,
-      reason: "browser-unverified",
-      message: "browser unverified",
-    });
-    expect(session.browser?.health).toMatchObject({
-      speechReady: false,
-      speechBlockedReason: "browser-unverified",
-    });
-
-    session.browser!.health = { ...session.browser?.health, micMuted: false };
-    expect(runtime.refreshSpeechReadiness(session)).toEqual({ ready: true });
-  });
-});

@@ -15,6 +15,7 @@ import {
   writeStdoutJson,
   writeStdoutLine,
 } from "./cli-shared.js";
+import { readGoogleMeetParticipationParams } from "./plugin-registration.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandContext): void {
@@ -116,6 +117,41 @@ export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandCon
 export function registerGoogleMeetSessionCommands(context: GoogleMeetCliCommandContext): void {
   const params = context;
   const { root, callGateway } = context;
+
+  root
+    .command("send-chat")
+    .description("Send one native Meet chat message through the current session")
+    .argument("<session-id>", "Meet session ID")
+    .argument("<text>", "Exact message, at most 4000 UTF-16 units")
+    .requiredOption("--request-id <id>", "Stable request ID; reuse only for an identical retry")
+    .option("--source-id <id>", "Original current source ID from participation_context")
+    .option("--correction-of <id>", "Rejected request that explicitly permits one correction")
+    .option("--output <output>", "chat (default), or voice when the source explicitly requests it")
+    .action(
+      async (
+        sessionId: string,
+        text: string,
+        options: {
+          requestId: string;
+          sourceId?: string;
+          correctionOf?: string;
+          output?: string;
+        },
+      ) => {
+        const payload = { action: "send_chat", sessionId, text, ...options };
+        const parsed = readGoogleMeetParticipationParams(payload);
+        const delegated = await callGoogleMeetGateway({
+          callGateway,
+          method: "googlemeet.participate",
+          payload,
+        });
+        writeStdoutJson(
+          delegated.ok
+            ? delegated.payload
+            : await (await params.ensureRuntime()).participate(parsed.sessionId, parsed.request),
+        );
+      },
+    );
 
   root
     .command("status")

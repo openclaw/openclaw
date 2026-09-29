@@ -68,7 +68,198 @@ function createEventlessResponseFixture(
   return { harness, session, callbacks, dispatch, onResponseDone };
 }
 
+function createLifecycleGatedFixture() {
+  const harness = createHarness();
+  let callbacks!: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
+  const sendAudio = vi.fn();
+  const close = vi.fn();
+  const bridge = makeBridge({ sendUserMessage: vi.fn(), sendAudio, close });
+  const observers = {
+    onEvent: vi.fn(),
+    onResponseDone: vi.fn(),
+    onResponseRequest: vi.fn(),
+    onTranscript: vi.fn(),
+    onClose: vi.fn(() => {
+      harness.endTurn("closed");
+      harness.close();
+    }),
+  };
+  const shouldHandleResponseLifecycle = vi.fn(() => true);
+  const session = harness.createBridge(
+    {
+      provider: {
+        id: "test",
+        label: "Test",
+        isConfigured: () => true,
+        createBridge: (request) => {
+          callbacks = request;
+          return bridge;
+        },
+      },
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+      ...observers,
+    },
+    { shouldHandleResponseLifecycle },
+  );
+  return {
+    harness,
+    session,
+    callbacks,
+    sendAudio,
+    close,
+    observers,
+    shouldHandleResponseLifecycle,
+  };
+}
+
 describe("realtime voice session harness", () => {
+  it.each(["typed", "legacy"] as const)(
+    "fences %s provider lifecycle callbacks during and after local speech",
+    async (completion) => {
+      const { harness, session, callbacks, observers, shouldHandleResponseLifecycle } =
+        createLifecycleGatedFixture();
+      shouldHandleResponseLifecycle.mockReturnValue(false);
+      harness.recordOutputAudio(Buffer.from([1, 2]));
+      const localTurn = harness.talk.activeTurnId;
+      const response = { responseId: "resp-late" };
+      const created = { direction: "server", type: "response.created", ...response } as const;
+      const done = { direction: "server", type: "response.done", ...response } as const;
+      const finishProviderResponse = () => {
+        if (completion === "typed") {
+          callbacks.onResponseDone?.({ status: "completed", ...response });
+        } else {
+          callbacks.onEvent?.(done);
+        }
+      };
+
+      session.sendUserMessage("Provider request during local speech");
+      callbacks.onEvent?.(created);
+      finishProviderResponse();
+      callbacks.onEvent?.(done);
+      expect(harness.talk.activeTurnId).toBe(localTurn);
+      expect(observers.onResponseRequest).not.toHaveBeenCalled();
+      expect(observers.onResponseDone).not.toHaveBeenCalled();
+      expect(observers.onEvent).toHaveBeenCalledWith(created);
+      expect(observers.onEvent).toHaveBeenCalledWith(done);
+
+      harness.endTurn();
+      shouldHandleResponseLifecycle.mockReturnValue(true);
+      callbacks.onEvent?.(created);
+      expect(harness.talk.activeTurnId).toBeUndefined();
+      const nextLocalTurn = harness.ensureTurn();
+      callbacks.onEvent?.(created);
+      finishProviderResponse();
+      callbacks.onEvent?.(done);
+      expect(harness.talk.activeTurnId).toBe(nextLocalTurn);
+      expect(observers.onResponseDone).not.toHaveBeenCalled();
+
+      harness.endTurn();
+      session.sendUserMessage("Fresh provider response");
+      callbacks.onEvent?.({
+        direction: "server",
+        type: "response.created",
+        responseId: "resp-fresh",
+      });
+      callbacks.onEvent?.(created);
+      const metadata = { textMode: "snapshot" } as const;
+      callbacks.onTranscript?.("assistant", "Fresh response", true, metadata);
+      expect(observers.onTranscript).toHaveBeenCalledExactlyOnceWith(
+        "assistant",
+        "Fresh response",
+        true,
+        metadata,
+      );
+      callbacks.onResponseDone?.({ status: "completed", responseId: "resp-fresh" });
+      expect(observers.onResponseRequest).toHaveBeenCalledOnce();
+      expect(observers.onResponseDone).toHaveBeenCalledExactlyOnceWith({
+        status: "completed",
+        responseId: "resp-fresh",
+      });
+      expect(harness.transcript).toMatchObject([{ role: "assistant", text: "Fresh response" }]);
+      expect(harness.talk.activeTurnId).toBeUndefined();
+      await session.close();
+      harness.close();
+    },
+  );
+
+  it("allows fresh unkeyed audio responses after local speech releases", async () => {
+    const { harness, session, callbacks, observers, shouldHandleResponseLifecycle } =
+      createLifecycleGatedFixture();
+    shouldHandleResponseLifecycle.mockReturnValue(false);
+    harness.recordOutputAudio(Buffer.from([1, 2]));
+    const localTurn = harness.talk.activeTurnId;
+    callbacks.onResponseDone?.({ status: "completed" });
+    callbacks.onEvent?.({ direction: "server", type: "response.done" });
+    expect(harness.talk.activeTurnId).toBe(localTurn);
+    expect(observers.onResponseDone).not.toHaveBeenCalled();
+
+    harness.endTurn();
+    shouldHandleResponseLifecycle.mockReturnValue(true);
+    harness.recordInputAudio(Buffer.from([3, 4]));
+    callbacks.onResponseDone?.({ status: "completed" });
+    expect(harness.talk.activeTurnId).toBeUndefined();
+    expect(observers.onResponseDone).toHaveBeenCalledExactlyOnceWith({ status: "completed" });
+    await session.close();
+    harness.close();
+  });
+
+  it("retains provider terminal fencing after an active response is retired for local speech", async () => {
+    const { harness, session, callbacks, observers, shouldHandleResponseLifecycle } =
+      createLifecycleGatedFixture();
+    callbacks.onEvent?.({ direction: "server", type: "response.created", responseId: "old" });
+    expect(harness.finishResponse({ status: "cancelled", responseId: "old" }).ok).toBe(true);
+    shouldHandleResponseLifecycle.mockReturnValue(false);
+    harness.recordOutputAudio(Buffer.from([1, 2]));
+    harness.endTurn();
+    shouldHandleResponseLifecycle.mockReturnValue(true);
+    callbacks.onEvent?.({ direction: "server", type: "response.created", responseId: "old" });
+    expect(harness.talk.activeTurnId).toBeUndefined();
+    const nextTurn = harness.ensureTurn();
+    callbacks.onEvent?.({ direction: "server", type: "response.created", responseId: "old" });
+    callbacks.onResponseDone?.({ status: "completed", responseId: "old" });
+    callbacks.onEvent?.({ direction: "server", type: "response.done", responseId: "old" });
+    expect(harness.talk.activeTurnId).toBe(nextTurn);
+    expect(observers.onResponseDone).not.toHaveBeenCalled();
+    await session.close();
+    harness.close();
+  });
+
+  it("keeps user input and terminal cleanup observable while assistant lifecycle is reserved", async () => {
+    const {
+      harness,
+      session,
+      callbacks,
+      sendAudio,
+      close,
+      observers,
+      shouldHandleResponseLifecycle,
+    } = createLifecycleGatedFixture();
+    shouldHandleResponseLifecycle.mockReturnValue(false);
+    const audio = Buffer.from([1, 2]);
+    harness.recordOutputAudio(audio);
+    const metadata = { textMode: "snapshot" } as const;
+    callbacks.onTranscript?.("assistant", "Stale provider transcript", true, metadata);
+    callbacks.onTranscript?.("user", "Please keep listening", true, metadata);
+    expect(harness.transcript.map(({ role, text }) => ({ role, text }))).toEqual([
+      { role: "user", text: "Please keep listening" },
+    ]);
+    expect(observers.onTranscript).toHaveBeenCalledExactlyOnceWith(
+      "user",
+      "Please keep listening",
+      true,
+      metadata,
+    );
+    expect(harness.recordInputAudio(audio)).toBe(true);
+    session.sendAudio(audio);
+    expect(sendAudio).toHaveBeenCalledWith(audio);
+    callbacks.onClose?.("completed");
+    expect(observers.onClose).toHaveBeenCalledOnce();
+    expect(harness.talk.activeTurnId).toBeUndefined();
+    await session.close();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it.each(["capabilities", "continuous"] as const)(
     "preserves provider-owned interruption selected by %s",
     async (selection) => {

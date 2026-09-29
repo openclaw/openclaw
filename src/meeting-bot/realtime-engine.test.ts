@@ -43,10 +43,12 @@ async function createEngineFixture(options?: {
     },
   };
   const pendingWrites: PendingWrite[] = [];
+  const firstWriteStarted = createDeferredCore();
   const writeOutput = vi.fn(
     () =>
       new Promise<void>((resolve) => {
         pendingWrites.push({ resolve });
+        firstWriteStarted.resolve();
       }),
   );
   const clearOutput = vi.fn(async () => {});
@@ -66,6 +68,12 @@ async function createEngineFixture(options?: {
     writeOutput,
   };
   const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+  const synthesize = vi.fn(async () => ({
+    success: true,
+    audioBuffer: Buffer.alloc(960, 1),
+    sampleRate: 24_000,
+    outputFormat: "pcm16",
+  }));
   const handle = await startMeetingRealtimeEngine({
     config: {
       chrome: { audioFormat: "pcm16-24khz" },
@@ -86,7 +94,7 @@ async function createEngineFixture(options?: {
       sessionIdPrefix: "meeting-test",
     },
     providers: [provider],
-    runtime: {} as never,
+    runtime: { tts: { textToSpeechTelephony: synthesize } } as never,
     tools: [],
     transport,
   });
@@ -97,12 +105,14 @@ async function createEngineFixture(options?: {
   return {
     closeBridge,
     disposeTransport,
+    firstWriteStarted,
     logger,
     stopTransport,
     beginOutput,
     callbacks: bridgeCallbacks,
     clearOutput,
     handle,
+    synthesize,
     handleBargeIn,
     submitToolResult,
     releaseWrite(index: number) {
@@ -138,6 +148,44 @@ async function createEngineFixture(options?: {
 }
 
 describe("meeting realtime engine output ownership", () => {
+  it("keeps exact speech open when the retired provider turn completes late", async () => {
+    const fixture = await createEngineFixture();
+    fixture.announceOutputResponse("old-provider-response");
+    const speaking = Promise.resolve(
+      fixture.handle.speak(
+        "A literal answer.",
+        () => {},
+        async () => {},
+      ),
+    );
+    try {
+      await fixture.firstWriteStarted.promise;
+      expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      const started = fixture.handle
+        .getHealth()
+        .recentTalkEvents.findLast((event) => event.type === "output.audio.started");
+      expect(started?.turnId).toBeDefined();
+      fixture.callbacks.onResponseDone?.({
+        responseId: "old-provider-response",
+        status: "completed",
+      });
+      expect(fixture.handle.getHealth().recentTalkEvents).not.toContainEqual(
+        expect.objectContaining({ type: "turn.ended", turnId: started?.turnId }),
+      );
+      fixture.releaseWrite(0);
+      await speaking;
+      expect(fixture.handle.getHealth().recentTalkEvents).toContainEqual(
+        expect.objectContaining({ type: "turn.ended", turnId: started?.turnId }),
+      );
+    } finally {
+      if (fixture.writeOutput.mock.calls.length) {
+        fixture.releaseWrite(0);
+      }
+      await fixture.handle.stop();
+      await speaking.catch(() => {});
+    }
+  });
+
   it.each(["resolve", "reject"] as const)(
     "drains provider transcripts before %s cleanup releases transport",
     async (outcome) => {

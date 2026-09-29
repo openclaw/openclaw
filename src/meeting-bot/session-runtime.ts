@@ -28,7 +28,10 @@ import type {
   MeetingSessionRuntimeHandles,
   MeetingSessionRuntimeOptions,
 } from "./session-runtime-types.js";
-import { evaluateMeetingSpeechReadiness } from "./session-speech-readiness.js";
+import {
+  evaluateMeetingSpeechReadiness,
+  submitMeetingSpeechWithReadiness,
+} from "./session-speech-readiness.js";
 import { MeetingSessionTranscriptStore } from "./session-transcript-store.js";
 import type {
   MeetingBrowserHealth,
@@ -63,7 +66,10 @@ export class MeetingSessionRuntime<
   readonly #sessionLeaves = new Map<string, Promise<MeetingSessionLeaveResult<TSession>>>();
   readonly #sessionCleanup = new MeetingSessionCleanupTracker();
   readonly #meetingLock = new KeyedAsyncQueue();
-  readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
+  readonly #sessionSpeakers = new Map<
+    string,
+    NonNullable<MeetingSessionRuntimeHandles<THealth>["speak"]>
+  >();
   readonly #sessionHealth = new Map<string, () => Partial<THealth>>();
   readonly #durableTranscripts: MeetingSessionDurableTranscripts<TSession>;
   readonly #transcriptStore: MeetingSessionTranscriptStore<TSession>;
@@ -270,55 +276,79 @@ export class MeetingSessionRuntime<
   async speak(
     sessionId: string,
     instructions?: string,
+    assertCurrent?: () => void,
+    refreshCurrent?: () => Promise<void>,
   ): Promise<{ found: boolean; spoken: boolean; session?: TSession }> {
     const session = this.#sessions.get(sessionId);
     if (!session) {
       return { found: false, spoken: false };
     }
-    if (session.state !== "active") {
+    const isSessionCurrent = () =>
+      this.#sessions.get(sessionId) === session &&
+      session.state === "active" &&
+      !this.#sessionLeaves.has(sessionId);
+    const assertSpeechCurrent = () => {
+      if (!isSessionCurrent()) {
+        throw new Error("Meeting session is no longer active");
+      }
+      assertCurrent?.();
+    };
+    if (!isSessionCurrent()) {
       return { found: true, spoken: false, session };
     }
+    assertSpeechCurrent();
     const delegated = await this.options.speakViaTransport(session, instructions);
-    if (session.state !== "active") {
+    if (!isSessionCurrent()) {
       return { found: true, spoken: false, session };
     }
+    assertSpeechCurrent();
     if (delegated?.handled) {
       return { found: true, spoken: delegated.spoken, session };
     }
-    await this.refreshBrowserHealth(session);
-    if (session.state !== "active") {
+    await this.refreshBrowserHealth(session, {
+      readOnly: Boolean(assertCurrent || refreshCurrent),
+    });
+    if (!isSessionCurrent()) {
       return { found: true, spoken: false, session };
     }
+    assertSpeechCurrent();
     await this.#sessionCleanup.prepareRuntime(session.id, async () => {
-      if (session.state !== "active") {
+      if (!isSessionCurrent()) {
         return;
       }
+      assertSpeechCurrent();
       const handles = await this.options.ensureRealtimeBridge(session);
       if (handles) {
+        // Adopt cleanup even if leave or source invalidation won the startup race.
         this.#attachRuntimeHandles(session, handles);
       }
     });
-    if (session.state !== "active") {
+    if (!isSessionCurrent()) {
       await this.#sessionCleanup.stopRuntime(session.id);
       return { found: true, spoken: false, session };
     }
+    assertSpeechCurrent();
     const speak = this.#sessionSpeakers.get(sessionId);
-    if (!speak || session.state !== "active") {
+    if (!speak) {
       return { found: true, spoken: false, session };
     }
-    const readiness = this.refreshSpeechReadiness(session);
-    if (!readiness.ready) {
-      const note = readiness.message
-        ? `Realtime speech blocked: ${readiness.message}`
-        : this.options.messages.speechBlockedFallback;
-      this.#noteSession(session, note);
-      session.updatedAt = nowIso();
-      return { found: true, spoken: false, session };
-    }
-    speak(instructions || this.options.defaultSpeechInstructions);
+    // Startup may recover the bridge; require audio readiness only after it is owned.
+    const spoken = await submitMeetingSpeechWithReadiness({
+      speak,
+      instructions: instructions || this.options.defaultSpeechInstructions,
+      assertCurrent: assertSpeechCurrent,
+      refreshCurrent,
+      refreshReadiness: () => this.refreshSpeechReadiness(session),
+      refreshBrowserHealth: () =>
+        this.refreshBrowserHealth(session, { force: true, readOnly: true }),
+      speechBlockedFallback: this.options.messages.speechBlockedFallback,
+      onBlocked: (message) => this.#noteSession(session, message),
+    });
     session.updatedAt = nowIso();
-    this.refreshHealth(sessionId);
-    return { found: true, spoken: true, session };
+    if (spoken) {
+      this.refreshHealth(sessionId);
+    }
+    return { found: true, spoken, session };
   }
 
   async speakWhenReady(session: TSession, instructions: string): Promise<boolean> {
@@ -707,11 +737,7 @@ export class MeetingSessionRuntime<
     return Boolean(this.options.isBrowserTransport(session.transport) && browser?.launched);
   }
 
-  #evaluateSpeechReadiness(session: TSession): {
-    ready: boolean;
-    reason?: TSpeechBlockedReason;
-    message?: string;
-  } {
+  #evaluateSpeechReadiness(session: TSession) {
     return evaluateMeetingSpeechReadiness({
       browser: this.options.getBrowser(session),
       managedBrowser: this.#isManagedBrowserSession(session),

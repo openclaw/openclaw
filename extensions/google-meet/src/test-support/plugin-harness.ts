@@ -256,6 +256,9 @@ type GoogleMeetToolDetails = {
   test_listen: Awaited<ReturnType<GoogleMeetRuntime["testListen"]>>;
   status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>;
   transcript: Awaited<ReturnType<GoogleMeetRuntime["transcript"]>>;
+  participation_context: ReturnType<GoogleMeetRuntime["participationContext"]>;
+  participate: Awaited<ReturnType<GoogleMeetRuntime["participate"]>>;
+  send_chat: Awaited<ReturnType<GoogleMeetRuntime["participate"]>>;
   recover_current_tab: Awaited<ReturnType<GoogleMeetRuntime["recoverCurrentTab"]>>;
   setup_status: Awaited<ReturnType<GoogleMeetRuntime["setupStatus"]>>;
   latest: GoogleMeetLatestConferenceRecordResult & {
@@ -345,4 +348,24 @@ export function createGoogleMeetToolGatewayForTest(
   return vi.fn(async (method: string, _options: unknown, params?: unknown) =>
     requireRecord(await invokeGoogleMeetGatewayMethodForTest(methods, method, params), resultLabel),
   );
+}
+
+export function createGoogleMeetBrowserRequestHandlersForTest(
+  pinnedNodeId: string,
+  browserRequest: (params: unknown) => Promise<unknown>,
+) {
+  return {
+    gatewayRequestHandler: async (method: string, params?: Record<string, unknown>) => {
+      if (method !== "browser.request") {
+        throw new Error(`Unexpected in-process Gateway method: ${method}`);
+      }
+      return await browserRequest(params);
+    },
+    nodesInvokeHandler: async (request: { nodeId: string; command: string; params?: unknown }) => {
+      if (request.nodeId !== pinnedNodeId || request.command !== "browser.proxy") {
+        throw new Error("Browser participation did not use the session's pinned node.");
+      }
+      return { payload: { result: await browserRequest(request.params) } };
+    },
+  };
 }

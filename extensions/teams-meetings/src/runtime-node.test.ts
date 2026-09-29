@@ -1,3 +1,4 @@
+import type { MeetingRealtimeAudioEngineHandle } from "openclaw/plugin-sdk/meeting-runtime";
 import {
   createMeetingNodeBrowserFixture,
   useMeetingTestState,
@@ -10,7 +11,7 @@ const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
 const testState = useMeetingTestState(createOpenClawTestState);
 
 const realtimeMocks = vi.hoisted(() => ({
-  speak: vi.fn(),
+  speak: vi.fn<MeetingRealtimeAudioEngineHandle["speak"]>(),
   startAgent: vi.fn(async ({ transport }: { transport: { stop(): Promise<void> } }) => ({
     getHealth: () => ({}),
     providerId: "test",
@@ -102,10 +103,16 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
     expect(realtimeMocks.startAgent).toHaveBeenCalledWith(
       expect.objectContaining({ requesterSessionKey: "agent:support:session:caller" }),
     );
-    expect(realtimeMocks.speak).toHaveBeenCalledWith("hello");
+    expect(realtimeMocks.speak).toHaveBeenCalledWith("hello", expect.any(Function), undefined);
     expect(joined.session.chrome?.audioBridge).toMatchObject({ type: "node-command-pair" });
     expect(harness.state.audioCaptureId).toEqual(expect.any(String));
+    const assertCurrent = realtimeMocks.speak.mock.calls.at(-1)?.[1];
+    if (!assertCurrent) {
+      throw new Error("Expected the meeting owner to guard native speech.");
+    }
+    expect(assertCurrent).not.toThrow();
     await runtime.leave(joined.session.id);
+    expect(assertCurrent).toThrow("Meeting session is no longer active");
     expect(harness.state.audioCaptureId).toBeUndefined();
   });
 });

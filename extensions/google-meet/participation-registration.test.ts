@@ -1,3 +1,9 @@
+import {
+  validateJsonSchemaValue,
+  type JsonSchemaObject,
+} from "openclaw/plugin-sdk/json-schema-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import type { GoogleMeetRuntime } from "./src/runtime.js";
@@ -7,6 +13,8 @@ import {
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
 import { testing } from "./test-api.js";
+
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 const runtime = vi.hoisted(() => ({
   reconcileTranscriptPolicy: vi.fn<GoogleMeetRuntime["reconcileTranscriptPolicy"]>(),
@@ -83,6 +91,81 @@ describe("Google Meet participation and tool registration", () => {
         mode: { type: "string" },
       },
     });
+  });
+
+  it("advertises only the googlemeet CLI descriptor", () => {
+    const { cliRegistrations } = setup();
+
+    expect(cliRegistrations).toEqual([
+      {
+        commands: ["googlemeet"],
+        descriptors: [
+          {
+            name: "googlemeet",
+            description: "Join and manage Google Meet calls",
+            hasSubcommands: true,
+            machineOutput: expect.any(Function),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("registers the node-host command used by chrome-node transport", () => {
+    const { nodeHostCommands, nodeInvokePolicies } = setup();
+
+    const command = nodeHostCommands.find(
+      (entry): entry is Record<string, unknown> =>
+        isRecord(entry) && entry.command === "googlemeet.chrome",
+    );
+    if (!command) {
+      throw new Error("expected googlemeet.chrome node host command");
+    }
+    expect(command.cap).toBe("google-meet");
+    expect(command.dangerous).toBe(true);
+    expect(typeof command.handle).toBe("function");
+    expect(nodeInvokePolicies).toHaveLength(1);
+    expect(nodeInvokePolicies[0]).toMatchObject({
+      commands: ["googlemeet.chrome"],
+      dangerous: true,
+    });
+  });
+
+  it("exposes native chat on the provider-safe flat tool schema", () => {
+    const { tool } = setup();
+    const parameters = requireRecord(tool.parameters, "Google Meet tool parameters");
+    const properties = requireRecord(
+      parameters.properties,
+      "Google Meet tool parameter properties",
+    );
+    const action = requireRecord(properties.action, "Google Meet action parameter");
+
+    expect(parameters.type).toBe("object");
+    expect(JSON.stringify(tool.parameters)).not.toContain("anyOf");
+    expect(action.enum).toContain("send_chat");
+    expect(properties.text).toMatchObject({ type: "string" });
+    expect(properties.output).toMatchObject({ type: "string", enum: ["chat", "voice"] });
+  });
+
+  it.each([
+    { text: "Send in chat.", expected: true },
+    { text: "Send in chat.", output: "chat", expected: true },
+    { text: "Reply aloud.", output: "voice", expected: true },
+    { text: "Never send both.", output: "both", expected: false },
+    { text: 123, expected: false },
+  ])("validates send_chat tool parameters: %j", ({ expected, ...message }) => {
+    const { tool } = setup();
+    const result = validateJsonSchemaValue({
+      schema: tool.parameters as JsonSchemaObject,
+      cacheKey: "google-meet.tool.send-chat",
+      value: {
+        action: "send_chat",
+        sessionId: "meet_1",
+        requestId: "request-1",
+        ...message,
+      },
+    });
+    expect(result.ok).toBe(expected);
   });
 
   it("passes action identity and correction references to the runtime once", async () => {

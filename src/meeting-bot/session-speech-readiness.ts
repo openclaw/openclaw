@@ -1,3 +1,4 @@
+import type { MeetingSessionRuntimeHandles } from "./session-runtime-types.js";
 import type { MeetingBrowserHealth } from "./session-types.js";
 
 export type MeetingSpeechReadinessMessages<TReason extends string> = {
@@ -60,4 +61,54 @@ export function evaluateMeetingSpeechReadiness<TReason extends string>(params: {
         reason: speech.audioBridgeUnavailableReason,
         message: speech.audioBridgeUnavailable,
       };
+}
+
+/** Keep final native output checks bound to the session owner's live readiness. */
+export async function submitMeetingSpeechWithReadiness(params: {
+  speak: NonNullable<MeetingSessionRuntimeHandles<MeetingBrowserHealth>["speak"]>;
+  instructions?: string;
+  assertCurrent: () => void;
+  refreshCurrent?: () => Promise<void>;
+  refreshReadiness: () => { ready: boolean; message?: string };
+  refreshBrowserHealth: () => Promise<void>;
+  speechBlockedFallback: string;
+  onBlocked: (message: string) => void;
+}): Promise<boolean> {
+  params.assertCurrent();
+  const initial = params.refreshReadiness();
+  if (!initial.ready) {
+    params.onBlocked(
+      initial.message
+        ? `Realtime speech blocked: ${initial.message}`
+        : params.speechBlockedFallback,
+    );
+    return false;
+  }
+  const assertReady = () => {
+    params.assertCurrent();
+    const readiness = params.refreshReadiness();
+    if (!readiness.ready) {
+      throw new Error(
+        readiness.message
+          ? `Realtime speech blocked: ${readiness.message}`
+          : params.speechBlockedFallback,
+      );
+    }
+  };
+  assertReady();
+  await params.speak(
+    params.instructions,
+    assertReady,
+    // Presence selects exact source-backed speech, not the ordinary greeting path.
+    params.refreshCurrent
+      ? async () => {
+          await params.refreshCurrent?.();
+          assertReady();
+          await params.refreshBrowserHealth();
+          assertReady();
+        }
+      : undefined,
+  );
+  assertReady();
+  return true;
 }

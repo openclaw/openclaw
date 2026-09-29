@@ -29,6 +29,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import plugin from "./index.js";
 import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
 import { resolveGoogleMeetConfig, type GoogleMeetConfig } from "./src/config.js";
+import { GoogleMeetChatObserver } from "./src/google-meet-chat.js";
 import { fetchGoogleMeetSpace } from "./src/meet-api.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
 import {
@@ -985,11 +986,15 @@ async function captureMeetLeaveScript() {
 }
 
 describe("google-meet plugin", () => {
+  // Native chat has its own registered lifecycle suite with the real observer.
+  // Keep legacy audio/join fixtures from starting background polls or a live CLI fallback.
+  const startChatObserver = vi.spyOn(GoogleMeetChatObserver.prototype, "start");
   beforeEach(() => {
     vi.clearAllMocks();
     for (const mock of Object.values(voiceCallMocks)) {
       mock.mockReset();
     }
+    startChatObserver.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -1006,6 +1011,7 @@ describe("google-meet plugin", () => {
   });
 
   afterAll(() => {
+    startChatObserver.mockRestore();
     vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.doUnmock("openclaw/plugin-sdk/meeting-runtime");
     vi.doUnmock("./src/voice-call-gateway.js");
@@ -1433,44 +1439,6 @@ describe("google-meet plugin", () => {
     expect(() => normalizeMeetUrl("https://meet.google.com:444/abc-defg-hij")).toThrow(
       "meet.google.com",
     );
-  });
-
-  it("advertises only the googlemeet CLI descriptor", () => {
-    const { cliRegistrations } = setup();
-
-    expect(cliRegistrations).toEqual([
-      {
-        commands: ["googlemeet"],
-        descriptors: [
-          {
-            name: "googlemeet",
-            description: "Join and manage Google Meet calls",
-            hasSubcommands: true,
-            machineOutput: expect.any(Function),
-          },
-        ],
-      },
-    ]);
-  });
-
-  it("registers the node-host command used by chrome-node transport", () => {
-    const { nodeHostCommands, nodeInvokePolicies } = setup();
-
-    const command = nodeHostCommands.find(
-      (entry): entry is Record<string, unknown> =>
-        isRecord(entry) && entry.command === "googlemeet.chrome",
-    );
-    if (!command) {
-      throw new Error("expected googlemeet.chrome node host command");
-    }
-    expect(command.cap).toBe("google-meet");
-    expect(command.dangerous).toBe(true);
-    expect(typeof command.handle).toBe("function");
-    expect(nodeInvokePolicies).toHaveLength(1);
-    expect(nodeInvokePolicies[0]).toMatchObject({
-      commands: ["googlemeet.chrome"],
-      dangerous: true,
-    });
   });
 
   it("keeps local Chrome talk-back available on Linux and blocks unsupported hosts", async () => {
@@ -6293,7 +6261,7 @@ describe("google-meet plugin", () => {
     expect(bridge.close).not.toHaveBeenCalled();
     expect(bridge.acknowledgeMark).toHaveBeenCalled();
     expect(bridge.triggerGreeting).not.toHaveBeenCalled();
-    handle.speak("Say exactly: hello from the meeting.");
+    void handle.speak("Say exactly: hello from the meeting.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the meeting.");
     const health = handle.getHealth();
     expect(health.providerConnected).toBe(true);
@@ -6782,7 +6750,7 @@ describe("google-meet plugin", () => {
       );
     });
     expect(bridge.triggerGreeting).not.toHaveBeenCalled();
-    handle.speak("Say exactly: hello from the node.");
+    void handle.speak("Say exactly: hello from the node.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the node.");
     expect(callbacks.audioFormat).toStrictEqual({
       encoding: "pcm16",

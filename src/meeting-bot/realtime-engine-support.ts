@@ -1,6 +1,6 @@
 import { normalizeOptionalString as readLogString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -21,7 +21,10 @@ import type {
 } from "../talk/provider-types.js";
 import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
 import { truncateUtf16Safe } from "../utils.js";
-import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
+import {
+  convertMeetingTtsAudioForBridge,
+  type MeetingRealtimeAudioFormat,
+} from "./realtime-audio-format.js";
 import type { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
 
 const MEETING_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
@@ -218,6 +221,34 @@ export function normalizeMeetingTtsPromptText(text: string | undefined): string 
   return trimmed;
 }
 
+export async function synthesizeMeetingSpeech(params: {
+  text: string;
+  runtime: PluginRuntime;
+  cfg: OpenClawConfig;
+  audioFormat: MeetingRealtimeAudioFormat;
+  displayName: string;
+  assertCurrent(): void;
+}) {
+  params.assertCurrent();
+  const result = await params.runtime.tts.textToSpeechTelephony({
+    text: params.text,
+    cfg: params.cfg,
+  });
+  params.assertCurrent();
+  if (!result.success || !result.audioBuffer || !result.sampleRate) {
+    throw new Error(result.error ?? "TTS conversion failed");
+  }
+  const audio = convertMeetingTtsAudioForBridge(
+    result.audioBuffer,
+    result.sampleRate,
+    params.audioFormat,
+    result.outputFormat,
+    params.displayName,
+  );
+  params.assertCurrent();
+  return { audio, result };
+}
+
 export function createMeetingRealtimeLifecycleHandlers(
   params: MeetingRealtimeLifecycleHandlersParams,
 ) {
@@ -264,7 +295,7 @@ export function createMeetingRealtimeLifecycleHandlers(
       event.type === "error" &&
       event.detail === MEETING_REALTIME_CANCELLATION_RACE_DETAIL
     ) {
-      if (params.outputOwner.clearBlocked()) {
+      if (params.outputOwner.clearBlocked() && !params.outputOwner.hasExactSpeech()) {
         params.lifecycle.outputGenerationActive = false;
         params.harness.finishOutputAudio(event.type);
       }

@@ -179,6 +179,103 @@ describe("google-meet CLI", () => {
     });
   });
 
+  describe.each(["gateway", "local"] as const)("send-chat through %s", (route) => {
+    it.each([
+      { name: "default chat", options: {} },
+      {
+        name: "source-bound voice correction",
+        options: { sourceId: "source-1", correctionOf: "request-0", output: "voice" },
+      },
+    ])("routes $name through participation without changing the text", async ({ options }) => {
+      const text = "  Exact message.\nKeep this spacing.  ";
+      const result: Awaited<ReturnType<GoogleMeetRuntime["participate"]>> = {
+        requestId: "request-1",
+        status: "succeeded",
+      };
+      const participate = vi.fn<GoogleMeetRuntime["participate"]>().mockResolvedValue(result);
+      const ensureRuntime = vi.fn(async () => ({ participate }) as unknown as GoogleMeetRuntime);
+      const callGatewayFromCli = vi.fn<
+        NonNullable<Parameters<typeof setupCli>[0]["callGatewayFromCli"]>
+      >(async () => {
+        if (route === "local") {
+          throw Object.assign(new Error("unknown method: googlemeet.participate"), {
+            name: "GatewayClientRequestError",
+            gatewayCode: "INVALID_REQUEST",
+            retryable: false,
+          });
+        }
+        return result;
+      });
+      const stdout = captureStdout();
+      try {
+        await setupCli({ callGatewayFromCli, ensureRuntime }).parseAsync(
+          [
+            "googlemeet",
+            "send-chat",
+            "meet_1",
+            text,
+            "--request-id",
+            "request-1",
+            ...(options.sourceId ? ["--source-id", options.sourceId] : []),
+            ...(options.correctionOf ? ["--correction-of", options.correctionOf] : []),
+            ...(options.output ? ["--output", options.output] : []),
+          ],
+          { from: "user" },
+        );
+
+        expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(
+          "googlemeet.participate",
+          { json: true, timeout: "5000" },
+          { action: "send_chat", sessionId: "meet_1", text, requestId: "request-1", ...options },
+          { progress: false },
+        );
+        expect(ensureRuntime).toHaveBeenCalledTimes(route === "local" ? 1 : 0);
+        const request = {
+          requestId: "request-1",
+          ...(options.sourceId ? { sourceId: options.sourceId } : {}),
+          ...(options.correctionOf ? { correctionOf: options.correctionOf } : {}),
+          action: {
+            type: "chat.send",
+            text,
+            ...(options.output ? { output: options.output } : {}),
+          },
+        };
+        expect(participate.mock.calls).toEqual(route === "local" ? [["meet_1", request]] : []);
+        expect(parseStdoutJson(stdout)).toEqual(result);
+      } finally {
+        stdout.restore();
+      }
+    });
+  });
+
+  it("does not retry send-chat locally after a gateway timeout", async () => {
+    const error = Object.assign(new Error("gateway timed out"), {
+      name: "GatewayTransportError",
+      kind: "timeout",
+      connectionDetails: { url: "ws://127.0.0.1:18789" },
+    });
+    const callGatewayFromCli = vi
+      .fn<NonNullable<Parameters<typeof setupCli>[0]["callGatewayFromCli"]>>()
+      .mockRejectedValue(error);
+    const ensureRuntime = vi.fn(async () => {
+      throw new Error("local runtime should not be loaded");
+    });
+    const stdout = captureStdout();
+    try {
+      await expect(
+        setupCli({ callGatewayFromCli, ensureRuntime }).parseAsync(
+          ["googlemeet", "send-chat", "meet_1", "Send once.", "--request-id", "request-1"],
+          { from: "user" },
+        ),
+      ).rejects.toBe(error);
+      expect(callGatewayFromCli).toHaveBeenCalledOnce();
+      expect(ensureRuntime).not.toHaveBeenCalled();
+      expect(stdout.output()).toBe("");
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("prints setup checks as text and JSON", async () => {
     {
       const stdout = await runCli(

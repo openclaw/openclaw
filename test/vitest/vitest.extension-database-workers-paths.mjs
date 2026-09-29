@@ -272,6 +272,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/feishu/src/monitor.webhook-security.test.ts",
   "extensions/feishu/src/outbound-delivery.test.ts",
   "extensions/feishu/src/outbound.send-authority.test.ts",
+  "extensions/google-meet/chat-observer-runtime-registration.test.ts",
+  "extensions/google-meet/chat-runtime-registration.test.ts",
   "extensions/google-meet/participation-runtime-registration.test.ts",
   "extensions/imessage/src/monitor.approval-reaction-replay.test.ts",
   "extensions/imessage/src/message-resource.test.ts",

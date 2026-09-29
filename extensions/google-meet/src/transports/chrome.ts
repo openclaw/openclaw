@@ -5,12 +5,11 @@ import {
   recoverMeetingBrowserTab,
   resolveLocalMeetingBrowserRequest,
   MeetingPlatformAdapter,
-  type MeetingBrowserRequestCaller,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveTranscriptsConfig } from "openclaw/plugin-sdk/transcripts";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
-import { callBrowserProxyOnNode, resolveChromeNode } from "./chrome-browser-proxy.js";
+import { chromeNodeBrowserRequest, resolveChromeNode } from "./chrome-browser-proxy.js";
 import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js";
 import {
   GOOGLE_MEET_BROWSER_NODE_ADAPTER,
@@ -59,21 +58,6 @@ type ChromeBrowserRouteParams = {
   transport?: "chrome" | "chrome-node";
   nodeId?: string;
 };
-
-function chromeNodeBrowserRequest(
-  runtime: PluginRuntime,
-  nodeId: string,
-): MeetingBrowserRequestCaller {
-  return async (request) =>
-    await callBrowserProxyOnNode({
-      runtime,
-      nodeId,
-      method: request.method,
-      path: request.path,
-      body: request.body,
-      timeoutMs: request.timeoutMs,
-    });
-}
 
 export async function leaveChromeMeet(
   params: ChromeBrowserRouteParams & {
