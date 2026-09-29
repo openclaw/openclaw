@@ -260,6 +260,11 @@ fun ShellScreen(
               onClose = closeSidebar,
               onDragActiveChange = { sidebarRowDragging = it },
               onNewSession = {
+                viewModel.startNewChat()
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+              },
+              onNewIndependentSession = {
                 viewModel.startNewChat(creation = ChatSessionCreation.Independent)
                 nav.selectTab(Tab.Chat)
                 closeSidebar()

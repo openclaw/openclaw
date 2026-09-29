@@ -172,6 +172,9 @@ export async function createGatewaySession(
   const label = normalizeOptionalString(params.label);
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
+  if (params.independent === true && parentSessionKey) {
+    return invalidSessionRequest("independent creation cannot specify parentSessionKey");
+  }
   const projectId = normalizeOptionalString(params.projectId);
   const pendingProjectGitUrl = normalizeOptionalString(params.pendingProjectGitUrl);
   const requestedToolOverrides = params.toolOverrides !== undefined;
@@ -358,6 +361,7 @@ export async function createGatewaySession(
   // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
   // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
   const dashboardParentSessionKey =
+    params.independent !== true &&
     !parentSessionKey &&
     !params.authorizedPluginId &&
     !incognito &&
@@ -605,6 +609,9 @@ export async function createGatewaySession(
       return targetRead;
     }
     const currentTargetEntry = targetRead.value;
+    if (params.independent === true && currentTargetEntry) {
+      return invalidSessionRequest("independent creation requires a new session key");
+    }
     // Delegated isolation survives changes to the creator's current role.
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);

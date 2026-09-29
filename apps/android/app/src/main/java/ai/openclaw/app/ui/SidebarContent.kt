@@ -426,6 +426,7 @@ internal fun OpenClawSidebar(
   onSelectDestination: (SidebarDestination) -> Unit,
   rowHostBand: IntRect? = null,
   onNewChildSession: ((String) -> Unit)? = null,
+  onNewIndependentSession: (() -> Unit)? = null,
 ) {
   val palette = sidebarPalette(ClawTheme.colors)
   val scope = rememberCoroutineScope()
@@ -628,6 +629,13 @@ internal fun OpenClawSidebar(
         )
       }
       IconButton(
+        onClick = onNewSession,
+        enabled = connection.isConnected && canMutateSessions && !sessionCreating && pendingRunCount == 0,
+        modifier = Modifier.size(48.dp).testTag("sidebar-new-session"),
+      ) {
+        Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("New session"), tint = palette.text)
+      }
+      IconButton(
         onClick = {
           if (searchVisible) query = ""
           searchVisible = !searchVisible
@@ -652,17 +660,19 @@ internal fun OpenClawSidebar(
         }
       }
     }
-    OutlinedButton(
-      onClick = onNewSession,
-      enabled = connection.isConnected && canMutateSessions && !sessionCreating && pendingRunCount == 0,
-      modifier = Modifier.fillMaxWidth().testTag("sidebar-new-session"),
-    ) {
-      if (sessionCreating) {
-        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = palette.text)
-      } else {
-        Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+    if (onNewIndependentSession != null) {
+      OutlinedButton(
+        onClick = onNewIndependentSession,
+        enabled = connection.isConnected && canMutateSessions && !sessionCreating && pendingRunCount == 0,
+        modifier = Modifier.fillMaxWidth().testTag("sidebar-new-independent-session"),
+      ) {
+        if (sessionCreating) {
+          CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = palette.text)
+        } else {
+          Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+        }
+        Text(nativeString("New independent session"), modifier = Modifier.padding(start = 8.dp))
       }
-      Text(nativeString("New independent session"), modifier = Modifier.padding(start = 8.dp))
     }
     if (searchVisible) {
       SidebarSearchField(

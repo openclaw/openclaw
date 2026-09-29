@@ -36,7 +36,8 @@ class ChatControllerSidebarCreationTest {
         val params = chatControllerTestJson.parseToJsonElement(requests.single { it.first == "sessions.create" }.second!!).jsonObject
         assertEquals(JsonPrimitive("ops"), params["agentId"])
         if (creation == ChatSessionCreation.Independent) {
-          assertEquals(setOf("agentId"), params.keys)
+          assertEquals(setOf("agentId", "independent"), params.keys)
+          assertEquals(JsonPrimitive(true), params["independent"])
         } else {
           val key = params["key"]?.jsonPrimitive?.content.orEmpty()
           assertTrue(key.startsWith("agent:ops:dashboard:"))

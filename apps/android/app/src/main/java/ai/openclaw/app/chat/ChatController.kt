@@ -2433,6 +2433,9 @@ class ChatController internal constructor(
       val params =
         buildJsonObject {
           put("agentId", JsonPrimitive(ownerAgentId))
+          if (creation == ChatSessionCreation.Independent) {
+            put("independent", JsonPrimitive(true))
+          }
           if (creation is ChatSessionCreation.Child) {
             // An unspecified key can reset main instead of creating a parallel child.
             put("key", JsonPrimitive("agent:$ownerAgentId:dashboard:${UUID.randomUUID()}"))

@@ -53,6 +53,100 @@ function describeSessionStoreForensics(storePath: string): string {
   return JSON.stringify({ storeDir, files, resolvedTargetPath: target.path, rows });
 }
 
+test("sessions.create publishes independent roots and explicit children without changing the parent", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("existing-sidebar-parent", {
+        thinkingLevel: "high",
+        fastMode: true,
+      }),
+    },
+  });
+  const parentKey = "agent:main:main";
+  const parentBefore = loadSessionEntry({ sessionKey: parentKey, storePath });
+  expect(parentBefore?.sessionId).toBe("existing-sidebar-parent");
+  const root = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+    agentId: "main",
+    key: "agent:main:dashboard:independent-sidebar",
+    independent: true,
+  });
+  expect(root.ok).toBe(true);
+  const rootKey = requireNonEmptyString(root.payload?.key, "independent root key");
+  expect(rootKey).toBe("agent:main:dashboard:independent-sidebar");
+  const storedRoot = loadSessionEntry({ sessionKey: rootKey, storePath });
+  expect(storedRoot?.sessionId).toBe(root.payload?.sessionId);
+  expect(storedRoot?.parentSessionKey).toBeUndefined();
+  expect(storedRoot?.fastMode).not.toBe(true);
+  expect(storedRoot?.thinkingLevel).not.toBe("high");
+
+  const childKey = "agent:main:dashboard:explicit-sidebar-child";
+  const child = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+    agentId: "main",
+    key: childKey,
+    parentSessionKey: parentKey,
+    emitCommandHooks: true,
+    succeedsParent: false,
+  });
+  expect(child).toMatchObject({ ok: true, payload: { key: childKey } });
+  expect(child.payload?.sessionId).not.toBe(parentBefore?.sessionId);
+  expect(loadSessionEntry({ sessionKey: childKey, storePath })).toMatchObject({
+    sessionId: child.payload?.sessionId,
+    parentSessionKey: parentKey,
+    thinkingLevel: "high",
+    fastMode: true,
+  });
+  expect(loadSessionEntry({ sessionKey: parentKey, storePath })).toEqual(parentBefore);
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+
+  const rootRead = await directSessionReq<{ session: { key: string; parentSessionKey?: string } }>(
+    "sessions.describe",
+    { key: rootKey },
+  );
+  expect(rootRead).toMatchObject({ ok: true, payload: { session: { key: rootKey } } });
+  expect(rootRead.payload?.session.parentSessionKey).toBeUndefined();
+  const childRead = await directSessionReq("sessions.describe", { key: childKey });
+  expect(childRead).toMatchObject({
+    ok: true,
+    payload: { session: { key: childKey, parentSessionKey: parentKey } },
+  });
+});
+
+test("sessions.create rejects conflicting independent intent and existing-key adoption", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:existing-child";
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("existing-parent"),
+      [key]: sessionStoreEntry("existing-child", { parentSessionKey: "agent:main:main" }),
+    },
+  });
+  const before = loadSessionEntry({ sessionKey: key, storePath });
+  const conflict = await directSessionReq("sessions.create", {
+    agentId: "main",
+    independent: true,
+    parentSessionKey: "agent:main:main",
+  });
+  expect(conflict).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "independent creation cannot specify parentSessionKey",
+    },
+  });
+  const adoption = await directSessionReq("sessions.create", {
+    agentId: "main",
+    key,
+    independent: true,
+  });
+  expect(adoption).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "independent creation requires a new session key" },
+  });
+  expect(loadSessionEntry({ sessionKey: key, storePath })).toEqual(before);
+});
+
 test("sessions.create assigns and registers its requested group", async () => {
   const { storePath } = await createSessionStoreDir();
   const broadcastToConnIds = vi.fn();

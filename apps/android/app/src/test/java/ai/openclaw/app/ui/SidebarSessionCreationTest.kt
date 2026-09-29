@@ -23,6 +23,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -60,6 +61,7 @@ class SidebarSessionCreationTest {
     val mounted = mutableStateOf(true)
     val connected = mutableStateOf(true)
     val session = ChatSessionEntry(key = "agent:main:demo", sessionId = "demo", updatedAtMs = null, displayName = "Project notes", pinned = true)
+    var inherited = 0
     var roots = 0
     var parent: String? = null
     NativeStringResources.install(app)
@@ -88,7 +90,8 @@ class SidebarSessionCreationTest {
               showCloseButton = true,
               onClose = {},
               onDragActiveChange = {},
-              onNewSession = { roots++ },
+              onNewSession = { inherited++ },
+              onNewIndependentSession = { roots++ },
               onNewChildSession = { parent = it },
               onSelectAgent = {},
               onSelectSession = {},
@@ -99,6 +102,9 @@ class SidebarSessionCreationTest {
           }
         }
       }
+      composeRule.onNodeWithTag("sidebar-new-session").assertIsEnabled().performClick()
+      assertEquals(1, inherited)
+      assertEquals(0, roots)
       composeRule
         .onNodeWithText("New independent session")
         .assertIsDisplayed()
@@ -122,6 +128,7 @@ class SidebarSessionCreationTest {
           .compress(Bitmap.CompressFormat.PNG, 100, it)
       }
       composeRule.runOnIdle { connected.value = false }
+      composeRule.onNodeWithTag("sidebar-new-session").assertIsNotEnabled()
       composeRule.onNodeWithText("New independent session").assertIsNotEnabled()
       composeRule.onNodeWithText("New child").assertIsNotEnabled()
     } finally {
