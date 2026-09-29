@@ -77,11 +77,12 @@ const CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CO
 const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*|(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`;
 // Bare `pass:` is a config key only where a record starts: at the text or line start (LF or CR, indentation
 // and a YAML `- ` sequence marker allowed), right after `{`, `,`, `;`, `(`, `[`, `|`, `&` or a quote, or after an
-// inline `key=value` / `key:value` field. A `pass:` that follows a plain word mid-sentence stays prose.
+// inline `key=value` (spaces around `=` allowed) or `key:value` field. A `pass:` that follows a plain word
+// mid-sentence stays prose, including after a spaced `key: value` phrase, which is how prose introduces lists.
 // Written as flat alternatives: an optional `(?:-[ \t]+)?` after `[ \t]*` is rejected by the safe-regex
 // guard as nested repetition, which would silently drop the whole pattern. The `^` alternative needs the
 // full text, so the pattern is also listed in CHUNK_UNSAFE_PATTERN_SOURCES.
-const CONFIG_BARE_PASS_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^[ \t]*|[\r\n][ \t]*|[,{;(\[|&"'\x60][ \t]*|(?:^|[\r\n])[ \t]*-[ \t]+|[A-Za-z0-9_.-]+[=:][^\s]+[ \t]+)pass\s*:\s*([^\s#"'\x60<>]+)/g`;
+const CONFIG_BARE_PASS_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^[ \t]*|[\r\n][ \t]*|[,{;(\[|&"'\x60][ \t]*|(?:^|[\r\n])[ \t]*-[ \t]+|[A-Za-z0-9_.-]+(?:[ \t]*=[ \t]*|:)[^\s]+[ \t]+)pass\s*:\s*([^\s#"'\x60<>]+)/g`;
 const CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS})=([^\s#"'\x60<>]+)/g`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
 const CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;

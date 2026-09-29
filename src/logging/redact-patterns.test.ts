@@ -53,6 +53,12 @@ describe("default pattern table", () => {
       expect(redactSensitiveText(`user=bot pass: ${value}`, { mode: "tools" })).toBe(
         "user=bot pass: opaque…7890",
       );
+      expect(redactSensitiveText(`user = bot pass: ${value}`, { mode: "tools" })).toBe(
+        "user = bot pass: opaque…7890",
+      );
+      expect(redactSensitiveText(`user= bot pass: ${value}`, { mode: "tools" })).toBe(
+        "user= bot pass: opaque…7890",
+      );
       expect(redactSensitiveText(`host:db.example.test pass: ${value}`, { mode: "tools" })).toBe(
         "host:db.example.test pass: opaque…7890",
       );
