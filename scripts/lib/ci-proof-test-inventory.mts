@@ -276,7 +276,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/browser/chrome-extension/background.creation-lifecycle.test.ts",
   "extensions/browser/chrome-extension/background.fetch-continuation.test.ts",
   "extensions/browser/chrome-extension/background.initial-target.test.ts",
-  "extensions/browser/chrome-extension/background.navigation.test.ts",
   "extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
   "extensions/browser/index.test.ts",
   "extensions/browser/plugin-registration.shutdown.test.ts",

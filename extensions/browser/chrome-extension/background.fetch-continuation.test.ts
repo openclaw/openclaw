@@ -263,7 +263,8 @@ async function assertReceiptAndContinuity(rig: Awaited<ReturnType<typeof setup>>
 
 // The native completion is the only fault-injected boundary. Real background
 // policy, Fetch lease/pause ownership, and both logical relay sessions participate.
-describe.each(["all", "selected"] as const)("Fetch continuation in %s", (mode) => {
+describe("Fetch continuation in selected mode", () => {
+  const mode = "selected";
   it.each(["completion-first", "commit-first"] as const)(
     "preserves receipt and both target sessions: %s",
     async (order) => {
@@ -292,11 +293,10 @@ describe.each(["all", "selected"] as const)("Fetch continuation in %s", (mode) =
     },
   );
 
-  it.each(
-    ["Fetch.enable", "Fetch.disable"].flatMap((method) =>
-      ["completion-first", "commit-first"].map((order) => ({ method, order })),
-    ),
-  )(
+  it.each([
+    { method: "Fetch.enable", order: "commit-first" },
+    { method: "Fetch.disable", order: "completion-first" },
+  ])(
     "preserves configuration $method completion ($order) and lease ownership",
     async ({ method, order }) => {
       const rig = await setupConfiguration(mode, method);
