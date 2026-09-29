@@ -5,9 +5,16 @@
 // normalize model refs during config migration and doctor enumeration
 // cold-loads those closures for every declaring plugin.
 
-export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+export { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
+export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+export {
+  findNormalizedProviderKey,
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 export {
   normalizeAntigravityPreviewModelId,
   normalizeGooglePreviewModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalize";
+export { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 export { parseModelRef } from "../agents/model-selection-normalize.js";

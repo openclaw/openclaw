@@ -1,6 +1,7 @@
 import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
 import { sanitizeAndNormalizeEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
+import { findNormalizedProviderKey } from "openclaw/plugin-sdk/model-ref-parse";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -13,7 +14,6 @@ import {
   readProviderJsonResponse,
   readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   coerceSecretRef,
   hasConfiguredSecretInput,
@@ -128,11 +128,9 @@ function resolveConfiguredProvider(options: OllamaEmbeddingOptions) {
   if (direct) {
     return { providerId, config: direct };
   }
-  const normalized = normalizeProviderId(providerId);
-  for (const [candidateId, candidate] of Object.entries(providers)) {
-    if (normalizeProviderId(candidateId) === normalized) {
-      return { providerId: candidateId, config: candidate };
-    }
+  const candidateId = findNormalizedProviderKey(providers, providerId);
+  if (candidateId !== undefined) {
+    return { providerId: candidateId, config: providers[candidateId] };
   }
   const fallback = providers.ollama;
   return fallback ? { providerId: "ollama", config: fallback } : undefined;

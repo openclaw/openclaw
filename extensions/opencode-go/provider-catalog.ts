@@ -8,8 +8,8 @@ import {
   type ProviderCatalogSnapshot,
   type ProjectedUpstreamProviderCatalogModel as OpencodeGoModelDefinition,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { normalizeBaseUrl } from "openclaw/plugin-sdk/provider-http";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "opencode-go";
@@ -66,16 +66,10 @@ const opencodeGoCatalog = createUpstreamProviderCatalog({
       : model,
 });
 
-type FetchOpencodeGoLiveModelIdsParams = {
-  apiKey?: string;
-  discoveryApiKey?: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
-};
-
-export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProviderConfig {
-  return opencodeGoCatalog.buildStaticProvider(apiKey);
-}
+export const {
+  buildStaticProvider: buildStaticOpencodeGoProviderConfig,
+  buildLiveProvider: buildOpencodeGoLiveProviderConfig,
+} = opencodeGoCatalog;
 
 export async function resolveOpencodeGoStarterModel(params: {
   apiKey: string;
@@ -94,12 +88,6 @@ export async function resolveOpencodeGoStarterModel(params: {
   });
   const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
   return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
-}
-
-export async function buildOpencodeGoLiveProviderConfig(
-  params: FetchOpencodeGoLiveModelIdsParams = {},
-): Promise<ModelProviderConfig> {
-  return await opencodeGoCatalog.buildLiveProvider(params);
 }
 
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
@@ -139,10 +127,6 @@ export function normalizeOpencodeGoResolvedModel(
       supportsReasoningEffort: false,
     },
   };
-}
-
-function normalizeBaseUrl(baseUrl: string | undefined): string {
-  return (baseUrl ?? "").trim().replace(/\/+$/, "");
 }
 
 export function normalizeOpencodeGoBaseUrl(params: {

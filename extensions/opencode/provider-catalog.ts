@@ -10,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeBaseUrl } from "openclaw/plugin-sdk/provider-http";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "opencode";
@@ -20,13 +19,6 @@ const OPENCODE_ZEN_MODELS_ENDPOINT = "https://opencode.ai/zen/v1/models";
 const OPENCODE_UPSTREAM_CATALOG_ENDPOINT = "https://models.opencode.ai/api.json";
 const OPENCODE_ZEN_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_ZEN_MODELS_CACHE_TTL_MS = 60_000;
-
-type FetchOpencodeZenLiveModelIdsParams = {
-  apiKey?: string;
-  discoveryApiKey?: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
-};
 
 const OPENCODE_ZEN_MANIFEST_PROVIDER = manifest.modelCatalog.providers.opencode;
 const OPENCODE_ZEN_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
@@ -78,9 +70,10 @@ export async function prepareOpencodeZenModel(params: {
   return snapshot?.get(params.modelId.trim().toLowerCase())?.model;
 }
 
-export function buildStaticOpencodeZenProviderConfig(apiKey?: string): ModelProviderConfig {
-  return opencodeZenCatalog.buildStaticProvider(apiKey);
-}
+export const {
+  buildStaticProvider: buildStaticOpencodeZenProviderConfig,
+  buildLiveProvider: buildOpencodeZenLiveProviderConfig,
+} = opencodeZenCatalog;
 
 export async function resolveOpencodeZenStarterModel(params: {
   apiKey: string;
@@ -99,12 +92,6 @@ export async function resolveOpencodeZenStarterModel(params: {
   });
   const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
   return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
-}
-
-export async function buildOpencodeZenLiveProviderConfig(
-  params: FetchOpencodeZenLiveModelIdsParams = {},
-): Promise<ModelProviderConfig> {
-  return await opencodeZenCatalog.buildLiveProvider(params);
 }
 
 export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {

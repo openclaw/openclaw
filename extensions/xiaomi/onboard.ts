@@ -1,4 +1,3 @@
-// Xiaomi setup module handles plugin onboarding behavior.
 import {
   createDefaultModelsPresetAppliers,
   createDefaultModelsConnectionPresetAppliers,
@@ -42,55 +41,42 @@ const xiaomiTokenPlanPresetAppliers = createDefaultModelsPresetAppliers<[]>({
   primaryModelRef: XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_REF,
   resolveParams: (cfg) => {
     const defaultProvider = buildXiaomiTokenPlanProvider();
+    const defaultModel = defaultProvider.models.find(
+      (model) => model.id === XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_ID,
+    );
     return {
       providerId: XIAOMI_TOKEN_PLAN_PROVIDER_ID,
       api: defaultProvider.api ?? "openai-completions",
       baseUrl: defaultProvider.baseUrl,
       defaultModels: cfg.models?.mode === "replace" ? (defaultProvider.models ?? []) : [],
       defaultModelId: XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_ID,
-      aliases: (() => {
-        const defaultModel = defaultProvider.models?.find(
-          (m) => m.id === XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_ID,
-        );
-        return [
-          {
-            modelRef: XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_REF,
-            alias: defaultModel?.name ?? "Xiaomi MiMo V2.6 Pro",
-          },
-        ];
-      })(),
+      aliases: [
+        {
+          modelRef: XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_REF,
+          alias: defaultModel?.name ?? "Xiaomi MiMo V2.6 Pro",
+        },
+      ],
     };
   },
 });
-
-function withProviderBaseUrl(
-  cfg: OpenClawConfig,
-  providerId: string,
-  baseUrl: string,
-): OpenClawConfig {
-  const providers: Record<string, unknown> = {
-    ...cfg.models?.providers,
-    [providerId]: {
-      ...cfg.models?.providers?.[providerId],
-      baseUrl,
-    },
-  };
-  return {
-    ...cfg,
-    models: {
-      ...cfg.models,
-      providers,
-    },
-  } as OpenClawConfig;
-}
 
 export function applyXiaomiTokenPlanConfig(
   cfg: OpenClawConfig,
   region: XiaomiTokenPlanRegion,
 ): OpenClawConfig {
-  return withProviderBaseUrl(
-    xiaomiTokenPlanPresetAppliers.applyConfig(cfg),
-    XIAOMI_TOKEN_PLAN_PROVIDER_ID,
-    resolveXiaomiTokenPlanBaseUrl(region),
-  );
+  const next = xiaomiTokenPlanPresetAppliers.applyConfig(cfg);
+  const provider = next.models!.providers![XIAOMI_TOKEN_PLAN_PROVIDER_ID];
+  return {
+    ...next,
+    models: {
+      ...next.models,
+      providers: {
+        ...next.models?.providers,
+        [XIAOMI_TOKEN_PLAN_PROVIDER_ID]: {
+          ...provider,
+          baseUrl: resolveXiaomiTokenPlanBaseUrl(region),
+        },
+      },
+    },
+  };
 }

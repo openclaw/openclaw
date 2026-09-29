@@ -110,9 +110,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
       const url =
         typeof annotation.url_citation?.url === "string"
           ? annotation.url_citation.url
-          : typeof annotation.url === "string"
-            ? annotation.url
-            : undefined;
+          : annotation.url;
       const normalizedUrl = normalizeOptionalString(url);
       if (normalizedUrl) {
         citations.push(normalizedUrl);

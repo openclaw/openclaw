@@ -10,8 +10,8 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
+import { findNormalizedProviderKey } from "openclaw/plugin-sdk/model-ref-parse";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import {
@@ -110,11 +110,9 @@ function resolveConfiguredLmstudioProvider(options: MemoryEmbeddingProviderCreat
   if (direct) {
     return { providerId, config: direct };
   }
-  const normalized = normalizeProviderId(providerId);
-  for (const [candidateId, candidate] of Object.entries(providers)) {
-    if (normalizeProviderId(candidateId) === normalized) {
-      return { providerId: candidateId, config: candidate };
-    }
+  const candidateId = findNormalizedProviderKey(providers, providerId);
+  if (candidateId !== undefined) {
+    return { providerId: candidateId, config: providers[candidateId] };
   }
   const fallback = providers[LMSTUDIO_PROVIDER_ID];
   return fallback ? { providerId: LMSTUDIO_PROVIDER_ID, config: fallback } : undefined;
