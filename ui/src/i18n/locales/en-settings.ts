@@ -409,6 +409,9 @@ const enSettings = {
       creating: "Building: creating",
       uncertain: "Paused: uncertain",
       noImage: "No image",
+      coldOnly: "Cold only",
+      captureUnsupportedHint:
+        "Workers provision cold. Capture is retried after warmImages.refreshAfter. Set settings.warmImage: false on this profile to stop capture attempts.",
       pending: "Pending",
       created: "Created {age}",
       lastUsed: "Last used {age}",

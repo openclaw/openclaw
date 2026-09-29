@@ -22,7 +22,9 @@ import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import {
   clearCrabboxWarmImageCapture,
+  crabboxCaptureUnsupportedSentence,
   crabboxWarmImageRecoveryHint,
+  isCrabboxWarmImageCaptureUnsupported,
   sameCrabboxWarmImageGeneration,
   withoutCrabboxWarmImageOperation,
   type openCrabboxWarmImageStore,
@@ -38,7 +40,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
   openStore: () => WarmImageStore;
   lookupLease: WarmImageStore["lookupLease"];
   assertCurrent: (context: LeaseContext) => void;
-  warnOnce: (action: string, error: unknown) => void;
+  warnOnce: (action: string, error: unknown, failed?: boolean) => void;
   collectImages: (context: LeaseContext, phase: "teardown") => Promise<void>;
   verifyImage: (
     context: LeaseContext,
@@ -61,6 +63,12 @@ export function createCrabboxWarmImageCapture(dependencies: {
     retireImage,
     checkpointCommand,
   } = dependencies;
+  const warnUnsupported = (message: string) =>
+    warnOnce(
+      "capture unsupported",
+      `${crabboxCaptureUnsupportedSentence(message)} Workers for this profile provision cold; OpenClaw retries capture after warmImages.refreshAfter; set settings.warmImage: false on the profile to stop capture attempts.`,
+      false,
+    );
 
   return async function capture(
     context: LeaseContext & {
@@ -104,6 +112,10 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         let existing = (await openStore().lookup(key))!;
         if (existing.operation) {
+          return;
+        }
+        if (isCrabboxWarmImageCaptureUnsupported(existing, dependencies.policy.refreshAfterMs)) {
+          warnUnsupported(existing.captureUnsupported.message);
           return;
         }
         if (existing.image?.pinned && existing.previous?.pinned) {
@@ -280,6 +292,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
             return undefined;
           }
           const next = withoutCrabboxWarmImageOperation(current);
+          delete next.captureUnsupported;
           // Pin mutations cannot race capture. Retain at most one previous image;
           // the displaced unpinned generation becomes durable deletion debt.
           const predecessor = current.image;
@@ -351,11 +364,32 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
       } catch (error) {
         captureError = coerceErrorMessage(error);
+        const unsupported = creating
+          ? CrabboxCheckpointCreateError.unsupportedCapture(error, context)
+          : undefined;
         const notSubmitted =
           creating && CrabboxCheckpointCreateError.wasNotSubmitted(error, context);
         let recoveryRequired = creating;
         if (claimed && key) {
           try {
+            if (unsupported) {
+              const recorded = await openStore().update(key, (current) =>
+                current?.operation?.type === "capture" && current.operation.id === captureId
+                  ? {
+                      ...withoutCrabboxWarmImageOperation(current),
+                      captureUnsupported: {
+                        atMs: Date.now(),
+                        provider: context.provider,
+                        message: unsupported.message,
+                      },
+                    }
+                  : undefined,
+              );
+              if (recorded) {
+                warnUnsupported(unsupported.message);
+                return;
+              }
+            }
             if (creating && !notSubmitted) {
               await openStore().update(key, (current) =>
                 current?.operation?.type === "capture" && current.operation.id === captureId

@@ -11,6 +11,28 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
+const REFRESH_MS = 24 * 60 * 60 * 1_000;
+const captureUnsupported = (atMs: number) => ({
+  atMs,
+  provider: "hetzner",
+  message: "Native capture is unsupported by this coordinator",
+});
+const retainedColdProfile = (atMs: number): WarmProfileRecord => ({
+  version: 3,
+  captureUnsupported: captureUnsupported(atMs),
+  allocations: {
+    cbx_retained: {
+      choice: { kind: "cold" },
+      machineClass: "standard",
+      phase: "pending",
+      preparationKey: null,
+      cacheKey: null,
+      purpose: null,
+      demandAtMs: null,
+      imageGeneration: null,
+    },
+  },
+});
 const context = () => ({
   profiles: [PROFILE],
   signal: new AbortController().signal,
@@ -40,6 +62,76 @@ const expiredImage = (id: string): WarmProfileRecord => ({
 });
 
 describe("Crabbox idle image maintenance", () => {
+  it.each([REFRESH_MS - 1, REFRESH_MS])(
+    "retains a cold-only profile after its last release only while its refusal is active (age=%i)",
+    async (age) => {
+      const now = 2 * REFRESH_MS;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const { provider, calls } = createWarmProvider();
+      const store = openWarmImageStore();
+      const record = retainedColdProfile(now - age);
+      store.register("retained", record);
+
+      await provider.destroy({
+        leaseId: "cbx_retained",
+        profile: { ...PROFILE, warmImage: false },
+      });
+
+      expect(store.lookup("retained")).toEqual(
+        age < REFRESH_MS ? { ...record, allocations: {} } : undefined,
+      );
+      expect(calls.map(({ argv }) => argv[1])).toEqual(["stop"]);
+    },
+  );
+
+  it("collects expired marker-only profiles without deleting active markers or allocation owners", async () => {
+    const now = 2 * REFRESH_MS;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const { provider, calls } = createWarmProvider();
+    const store = openWarmImageStore();
+    const held = retainedColdProfile(now - REFRESH_MS);
+    const active = {
+      version: 3 as const,
+      allocations: {},
+      captureUnsupported: captureUnsupported(now),
+    };
+    store.register("retained", held);
+    store.register("active", active);
+    store.register("expired", {
+      version: 3,
+      allocations: {},
+      captureUnsupported: captureUnsupported(now - REFRESH_MS),
+    });
+
+    await provider.maintain!(context());
+
+    expect(store.lookup("expired")).toBeUndefined();
+    expect(store.lookup("active")).toEqual(active);
+    expect(store.lookup("retained")).toEqual(held);
+    expect(calls).toEqual([]);
+  });
+
+  it("evicts active marker-only profiles to admit an allocation at capacity without provider deletion", async () => {
+    const now = 2 * REFRESH_MS;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const { provider, calls } = createWarmProvider();
+    const store = openWarmImageStore();
+    for (let index = 0; index < 128; index += 1) {
+      store.register(`cold-only-${index}`, {
+        version: 3,
+        allocations: {},
+        captureUnsupported: captureUnsupported(now),
+      });
+    }
+
+    const lease = await provisionWarmProfile(provider);
+
+    expect(store.entries()).toHaveLength(128);
+    expect(store.entries().filter(({ value }) => value.captureUnsupported)).toHaveLength(127);
+    expect(store.entries().some(({ value }) => value.allocations[lease.leaseId])).toBe(true);
+    expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
+  });
+
   it("deletes expired images through a healthy binary when another acquisition fails", async () => {
     const { provider, calls, warn } = createWarmProvider();
     vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => {
@@ -349,6 +441,11 @@ describe("Crabbox idle image maintenance", () => {
       });
       const store = openWarmImageStore();
       store.register("expired", expiredImage("chk_expired"));
+      store.register("expired-cold-only", {
+        version: 3,
+        allocations: {},
+        captureUnsupported: captureUnsupported(now - REFRESH_MS),
+      });
 
       await provider.maintain!(mixedContext());
 
@@ -362,11 +459,13 @@ describe("Crabbox idle image maintenance", () => {
       );
       if (elapsed < 60_000) {
         expect(store.lookup("expired")).toBeUndefined();
+        expect(store.lookup("expired-cold-only")).toBeUndefined();
       } else {
         expect(store.lookup("expired")?.operation).toEqual({
           type: "retire",
           checkpointId: "chk_expired",
         });
+        expect(store.lookup("expired-cold-only")?.captureUnsupported).toBeDefined();
       }
       expect(warn).not.toHaveBeenCalled();
     },

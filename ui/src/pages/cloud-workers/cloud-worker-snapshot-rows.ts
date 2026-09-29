@@ -37,6 +37,7 @@ export type SnapshotImage = {
     phase: "scrubbing" | "creating" | "uncertain";
     stale: boolean;
   };
+  captureUnsupported?: { atMs: number; provider: string; message: string };
 };
 export type SnapshotProfile = {
   id: string;
@@ -90,7 +91,13 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
   );
   const imageState =
     phase ??
-    (retiringCurrentImage ? "retiring" : image.state === "no-image" ? "noImage" : image.state);
+    (retiringCurrentImage
+      ? "retiring"
+      : image.state === "no-image"
+        ? image.captureUnsupported
+          ? "coldOnly"
+          : "noImage"
+        : image.state);
   const runtimeDigest = image.runtimeIdentity?.nodeBootstrapSha256.slice(0, 12);
   const facts = [
     ...(options.showMachineFacts ? [image.backend, image.machineClass, image.os] : []),
@@ -120,6 +127,14 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
       : t("cloudWorkersPage.snapshots.machineImage"),
     description: html`
       ${facts.filter(Boolean).join(" · ")}
+      ${
+        image.captureUnsupported
+          ? html`<div>
+              ${image.captureUnsupported.message.replace(/[.\s]+$/u, "")}.
+              ${t("cloudWorkersPage.snapshots.captureUnsupportedHint")}
+            </div>`
+          : nothing
+      }
       ${
         image.previous
           ? html`<div>

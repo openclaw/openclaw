@@ -63,6 +63,8 @@ export type WarmProfileRecord = {
   projectKey?: string;
   image?: WarmImageRecord;
   previous?: WarmImageRecord;
+  /** Crabbox refused native capture before submission; workers for this key provision cold until retry. */
+  captureUnsupported?: { atMs: number; provider: string; message: string };
   allocations: Record<string, WarmAllocationRecord>;
   operation?:
     | {
@@ -135,11 +137,24 @@ function requireCanonicalProfile(record: WarmProfileRecord | undefined) {
     typeof value.createdAtMs === "number" &&
     Number.isSafeInteger(value.createdAtMs) &&
     value.createdAtMs >= 0;
+  const validCaptureUnsupported = (value: unknown) =>
+    isRecord(value) &&
+    typeof value.atMs === "number" &&
+    Number.isSafeInteger(value.atMs) &&
+    value.atMs >= 0 &&
+    typeof value.provider === "string" &&
+    value.provider.length > 0 &&
+    value.provider.length <= 128 &&
+    typeof value.message === "string" &&
+    value.message.length > 0 &&
+    value.message.length <= 1024;
   if (
     record &&
     (!isRecord(record.allocations) ||
       (record.image && !validImage(record.image)) ||
       (record.previous && !validImage(record.previous)) ||
+      (record.captureUnsupported !== undefined &&
+        !validCaptureUnsupported(record.captureUnsupported)) ||
       Object.values(record.allocations).some(
         (allocation) =>
           !isRecord(allocation) ||
@@ -156,6 +171,19 @@ function requireCanonicalProfile(record: WarmProfileRecord | undefined) {
   }
   return record;
 }
+
+export const isCrabboxWarmImageCaptureUnsupported = (
+  record: WarmProfileRecord,
+  refreshAfterMs: number,
+): record is WarmProfileRecord & {
+  captureUnsupported: NonNullable<WarmProfileRecord["captureUnsupported"]>;
+} =>
+  record.captureUnsupported !== undefined &&
+  Date.now() < record.captureUnsupported.atMs + refreshAfterMs;
+
+/** Crabbox diagnostics follow Go error style without a final period. */
+export const crabboxCaptureUnsupportedSentence = (message: string) =>
+  `${message.replace(/[.\s]+$/u, "")}.`;
 
 export const sameCrabboxWarmImageGeneration = (
   left: WarmAllocationRecord["imageGeneration"] | undefined,
@@ -546,6 +574,7 @@ export function projectCrabboxWarmImage(key: string, value: WarmProfileRecord) {
       : undefined,
     allocations: value.allocations,
     capture: crabboxWarmImageCaptureStatus(value),
+    captureUnsupported: value.captureUnsupported,
     retirement:
       value.operation?.type === "retire"
         ? { checkpointId: value.operation.checkpointId }
