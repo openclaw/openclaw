@@ -146,6 +146,11 @@ export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
   return indexedSessionEntrySchema.safeParse(entry).success;
 }
 
+/** Message shape a durable transcript entry accepts. Callers that rewrite a message before persistence share this contract. */
+export function isReadableSessionMessage(value: unknown): boolean {
+  return readableMessageSchema.safeParse(value).success;
+}
+
 function isReadableContent(value: unknown): boolean {
   return readableContentSchema.safeParse(value).success;
 }

@@ -653,6 +653,24 @@ describe("tool_result_persist hook", () => {
     appendToolCallAndResult(sm);
     expectPersistedToolResultDetailsCapped(sm);
   });
+
+  it("keeps the original tool result when a hook returns a non-message replacement", () => {
+    initializeTempPlugin({
+      tmpPrefix: "openclaw-toolpersist-non-message-",
+      id: "persist-non-message",
+      body: `export default { id: "persist-non-message", register(api) {
+  api.on("tool_result_persist", () => ({ message: "not-a-message" }), { priority: 10 });
+} };`,
+    });
+
+    const sm = createGuardedSession();
+
+    appendToolCallAndResult(sm);
+
+    const toolResult = requirePersistedToolResult(sm);
+    expect(toolResult.role).toBe("toolResult");
+    expect(requireToolResultText(toolResult)).toBe("ok");
+  });
 });
 
 describe("before_message_write hook", () => {
@@ -733,5 +751,32 @@ describe("before_message_write hook", () => {
 
     appendToolCallAndResult(sm);
     expectPersistedToolResultTextCapped(sm);
+  });
+
+  it("keeps the original message when a hook returns a non-message replacement", () => {
+    initializeTempPlugin({
+      tmpPrefix: "openclaw-before-write-non-message-",
+      id: "before-write-non-message",
+      body: `export default { id: "before-write-non-message", register(api) {
+  api.on("before_message_write", () => ({ message: "not-a-message" }), { priority: 10 });
+} };`,
+    });
+
+    const sm = createGuardedSession();
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: Date.now(),
+    } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.role).toBe("user");
+    expect((messages[0] as { content?: unknown }).content).toBe("hello");
   });
 });
