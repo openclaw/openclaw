@@ -537,15 +537,13 @@ serveOwnedWorkerTasks(
             if (quarantine) {
               throw quarantine;
             }
+            const readOptions = { readOnly: true, resolvedScope: request.resolvedScope };
             if (request.kind === "active-stats") {
               const { readSessionTranscriptActiveStats } =
                 await import("./session-accessor.sqlite-active-events.js");
               return await withHistoryDatabase(request.database, request.kind, () => ({
                 kind: "active-stats" as const,
-                stats: readSessionTranscriptActiveStats(request.target, {
-                  readOnly: true,
-                  resolvedScope: request.resolvedScope,
-                }),
+                stats: readSessionTranscriptActiveStats(request.target, readOptions),
               }));
             }
             if (request.kind === "current-turn-entry") {
@@ -556,8 +554,7 @@ serveOwnedWorkerTasks(
                   entryId: request.entryId,
                   version: request.version,
                   includeEntry: request.includeEntry,
-                  readOnly: true,
-                  resolvedScope: request.resolvedScope,
+                  ...readOptions,
                 }),
               );
             }
@@ -574,8 +571,7 @@ serveOwnedWorkerTasks(
                     kind: "bounded" as const,
                     snapshot: readSessionTranscriptBoundedActiveContextCore(request.target, {
                       ...request.limits,
-                      readOnly: true,
-                      resolvedScope: request.resolvedScope,
+                      ...readOptions,
                     }),
                   };
                 }
