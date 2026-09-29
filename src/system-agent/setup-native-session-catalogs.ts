@@ -66,11 +66,13 @@ export function listSetupNativeSessionCatalogs(
     }
   }
   return [...catalogs.values()]
-    .map(({ pluginId, label, description }) => ({
-      pluginId,
-      label,
-      ...(description ? { detail: description } : {}),
-    }))
+    .map(({ pluginId, label, description }) => {
+      const option: SetupNativeSessionCatalogOption = { pluginId, label };
+      if (description) {
+        option.detail = description;
+      }
+      return option;
+    })
     .toSorted(
       (a, b) => a.label.localeCompare(b.label, "en") || a.pluginId.localeCompare(b.pluginId, "en"),
     );

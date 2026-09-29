@@ -197,12 +197,20 @@ export function listSetupInferenceEnableOptions(
         choice.assistantVisibility !== "detected-only" &&
         supportsSetupTextInference(choice.onboardingScopes),
     )
-    .map((choice): SetupInferenceAuthOption => ({
-      ...projectChoicePresentation(choice, choice.choiceId),
-      kind: "install",
-      featured: choice.onboardingFeatured === true,
-      ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
-    }))
+    .map((choice) => {
+      const option: SetupInferenceAuthOption = Object.assign(
+        projectChoicePresentation(choice, choice.choiceId),
+        {
+          kind: "install",
+          featured: choice.onboardingFeatured === true,
+        } as const,
+      );
+      const groupLabel = choice.groupLabel?.trim();
+      if (groupLabel) {
+        option.groupLabel = groupLabel;
+      }
+      return option;
+    })
     .toSorted(compareSetupInferenceOptions);
 }
 
