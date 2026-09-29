@@ -5,6 +5,7 @@ import {
   AWS_SECRET_ACCESS_KEY_MATCHER,
   DEFAULT_REDACT_STRING_PATTERNS,
 } from "./redact-patterns.js";
+import { redactSensitiveText } from "./redact.js";
 
 describe("default pattern table", () => {
   // A default pattern the safe-regex guard rejects is dropped silently at runtime, which disables
@@ -14,6 +15,39 @@ describe("default pattern table", () => {
       const compiled = compileConfigRegex(...parseRedactPatternSource(raw));
       expect(compiled?.regex, raw).not.toBeNull();
     }
+  });
+
+  describe("bare pass assignment boundary", () => {
+    it("keeps prose where pass: ends a clause but still masks pass as a config key", () => {
+      const prose =
+        "The boundary tests now pass: older clients receive compatible speed values. All checks pass: lint, types.";
+      expect(redactSensitiveText(prose, { mode: "tools" })).toBe(prose);
+      const value = "opaque-pass-secret-1234567890";
+      expect(redactSensitiveText(`smtp.pass: ${value}`, { mode: "tools" })).toBe(
+        "smtp.pass: opaque…7890",
+      );
+      expect(redactSensitiveText(`db-pass: ${value}`, { mode: "tools" })).toBe(
+        "db-pass: opaque…7890",
+      );
+      expect(redactSensitiveText(`pass: "${value}"`, { mode: "tools" })).toBe(
+        'pass: "opaque…7890"',
+      );
+      expect(redactSensitiveText(`pass = ${value}`, { mode: "tools" })).toBe("pass = opaque…7890");
+      expect(redactSensitiveText(`pass= ${value}`, { mode: "tools" })).toBe("pass= opaque…7890");
+      expect(redactSensitiveText(`pass: ${value}`, { mode: "tools" })).toBe("pass: opaque…7890");
+      expect(redactSensitiveText(`smtp:\n  pass: ${value}\n  user: bot`, { mode: "tools" })).toBe(
+        "smtp:\n  pass: opaque…7890\n  user: bot",
+      );
+      expect(redactSensitiveText(`{ user: bot, pass: ${value} }`, { mode: "tools" })).toBe(
+        "{ user: bot, pass: opaque…7890 }",
+      );
+      expect(
+        redactSensitiveText(`accounts:\n  - pass: ${value}\n  - user: bot`, { mode: "tools" }),
+      ).toBe("accounts:\n  - pass: opaque…7890\n  - user: bot");
+      expect(redactSensitiveText(`user=bot; pass: ${value}`, { mode: "tools" })).toBe(
+        "user=bot; pass: opaque…7890",
+      );
+    });
   });
 });
 
