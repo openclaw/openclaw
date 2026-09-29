@@ -143,6 +143,9 @@ function extractBindingsSpecificUnionIssue(
         branchBestIssue = issue;
       }
     }
+    if (!branchBestIssue) {
+      continue;
+    }
     if (matchingBranchIssue) {
       return null;
     }
