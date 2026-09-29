@@ -47,16 +47,21 @@ async function listDeepInfraGenerationCatalog(
   if (!catalog.live || models.length === 0) {
     return null;
   }
-  return models.map((model) => ({
-    kind,
-    provider: PROVIDER_ID,
-    model: model.id,
-    source: "live",
-    ...(model.name ? { label: model.name } : {}),
-    ...(kind === "video_generation"
-      ? { capabilities: buildDeepInfraVideoModelCapabilities() }
-      : {}),
-  }));
+  return models.map((model) => {
+    const entry: UnifiedModelCatalogEntry<VideoGenerationProviderCapabilities> = {
+      kind,
+      provider: PROVIDER_ID,
+      model: model.id,
+      source: "live",
+    };
+    if (model.name) {
+      entry.label = model.name;
+    }
+    if (kind === "video_generation") {
+      entry.capabilities = buildDeepInfraVideoModelCapabilities();
+    }
+    return entry;
+  });
 }
 
 export function listDeepInfraImageGenCatalog(ctx: UnifiedModelCatalogProviderContext) {
