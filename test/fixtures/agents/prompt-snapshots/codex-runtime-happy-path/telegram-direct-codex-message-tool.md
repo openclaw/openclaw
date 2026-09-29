@@ -258,8 +258,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 69052,
-    "roughTokens": 17263
+    "chars": 69280,
+    "roughTokens": 17320
   },
   "openClawDeveloperInstructions": {
     "chars": 2992,
@@ -274,8 +274,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6845
   },
   "totalWithDynamicToolsJson": {
-    "chars": 96432,
-    "roughTokens": 24108
+    "chars": 96660,
+    "roughTokens": 24165
   },
   "userInputText": {
     "chars": 879,
@@ -682,7 +682,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "final": {
-          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
+          "description": "For source replies, omit or set true for the completed send. Set false only when something needs the user's attention during ongoing work: a blocker, a finding that changes the task, or an answer to a status question. Put routine progress and notes about what you are about to do in commentary, not in this tool. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
           "type": "boolean"
         },
         "forceDocument": {
