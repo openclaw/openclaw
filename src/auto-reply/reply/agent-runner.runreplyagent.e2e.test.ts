@@ -3286,8 +3286,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     }
   });
 
-  // Waived for 2026.9.7 by the release lead under Peter's 2026-09-29 waiver decision; see #161141.
-  it.skip("fires onAdopted after restart recovery delivery context persist completes", async () => {
+  it("fires onAdopted after restart recovery delivery context persist completes", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
       provider: "discord",
