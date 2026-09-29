@@ -117,7 +117,12 @@ export function applySessionEntryMaintenanceInDatabase(
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
 ): SessionEntryMaintenancePlan {
-  return prepareSessionEntryMaintenanceInDatabase(database, params, readPreservation)(database);
+  let preservation: SessionMaintenancePreservationSnapshot | undefined;
+  return prepareSessionEntryMaintenanceInDatabase(
+    database,
+    params,
+    () => (preservation ??= readPreservation()),
+  )(database);
 }
 
 /** Prepare outside write admission; compare only selected rows and protection dependencies inside it. */
