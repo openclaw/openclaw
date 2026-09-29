@@ -47,6 +47,20 @@ describe("default pattern table", () => {
       expect(redactSensitiveText(`user=bot; pass: ${value}`, { mode: "tools" })).toBe(
         "user=bot; pass: opaque…7890",
       );
+      expect(redactSensitiveText(`user: bot\rpass: ${value}`, { mode: "tools" })).toBe(
+        "user: bot\rpass: opaque…7890",
+      );
+    });
+
+    it("keeps mid-sentence pass: prose when it lands on a bounded-replacement chunk start", () => {
+      // Inputs above 32 KiB are matched in 16 KiB chunks unless a pattern is registered as
+      // chunk-unsafe; a chunk start must not read as a record start for the `^` alternative.
+      const clause = "the tests now pass: older clients receive compatible speed values.";
+      const prefix = "prose ".repeat(4096).slice(0, 16_384 - "the tests now ".length);
+      const text = `${prefix}${clause} ${"more prose ".repeat(2000)}`;
+      expect(text.length).toBeGreaterThan(32_768);
+      expect(text.indexOf("pass:")).toBe(16_384);
+      expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
     });
   });
 });
