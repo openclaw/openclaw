@@ -6,6 +6,7 @@ import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MarkdownTableMode, MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { formatMSTeamsMarkdown } from "./format.js";
+import { flattenInformativeStatus } from "./informative-status.js";
 import { extractMessageId } from "./media-helpers.js";
 import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
@@ -59,7 +60,7 @@ function isStreamCancelledError(err: unknown): boolean {
  * - "progress": no per-token streaming; the preview card carries an
  *   informative status that updates as tools run (e.g. "Looking up the
  *   schema..." → "Generating SQL..."). When tool-progress streaming is also
- *   enabled, raw tool names appear as bullets above the label.
+ *   enabled, tool rows are joined onto the same status line.
  * - "block": disable native streaming entirely; the reply lands as a regular
  *   block message. We bypass the controller in that case.
  */
@@ -262,7 +263,7 @@ export function createTeamsReplyStreamController(params: {
         return false;
       }
       try {
-        stream.update(text.replace(/^• /gmu, "- "));
+        stream.update(flattenInformativeStatus(text));
         return true;
       } catch (err) {
         if (isStreamCancelledError(err)) {

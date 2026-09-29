@@ -200,17 +200,13 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
 
       try {
         await controller.pushPlanProgress(plan);
-        await expect
-          .poll(() => acknowledgements.at(-1)?.text)
-          .toBe(`${expectedLabel}\n\n▸ Inspect`);
+        await expect.poll(() => acknowledgements.at(-1)?.text).toBe(`${expectedLabel} · ▸ Inspect`);
 
         await controller.pushPlanProgress([]);
         await expect.poll(() => acknowledgements.at(-1)?.text).toBe(expectedLabel);
 
         await controller.pushPlanProgress(plan);
-        await expect
-          .poll(() => acknowledgements.at(-1)?.text)
-          .toBe(`${expectedLabel}\n\n▸ Inspect`);
+        await expect.poll(() => acknowledgements.at(-1)?.text).toBe(`${expectedLabel} · ▸ Inspect`);
       } finally {
         expect(controller.preparePayload({ text: "Done" })).toBeUndefined();
         await expect(controller.finalize()).resolves.toEqual({
