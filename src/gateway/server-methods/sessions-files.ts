@@ -16,7 +16,6 @@ import {
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { sqliteMessageEventWithSeq } from "../session-transcript-entry-message.js";
 import {
@@ -153,11 +152,6 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
   }
 }
 
-function addPatchFiles(files: Map<string, TouchedFile>, args: Record<string, unknown>) {
-  addRawPatchFiles(files, args.input);
-  addStructuredPatchFiles(files, args.changes);
-}
-
 function isToolCallBlockType(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
@@ -189,7 +183,8 @@ function collectTouchedFilesFromMessage(message: unknown, files: Map<string, Tou
     } else if (toolName === "write" || toolName === "edit") {
       addTouchedFile(files, readPathArg(args), "modified");
     } else if (toolName === "apply_patch") {
-      addPatchFiles(files, args);
+      addRawPatchFiles(files, args.input);
+      addStructuredPatchFiles(files, args.changes);
     }
   }
 }
@@ -263,23 +258,16 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }
-  const agentId = normalizeAgentId(
-    loaded.agentId ??
-      parseAgentSessionKey(loaded.canonicalKey)?.agentId ??
-      params.agentId ??
-      parseAgentSessionKey(params.sessionKey)?.agentId,
-  );
   if (loaded.entry.repositoryWorkspaceId) {
-    return { ...loaded, agentId, root: undefined, fileRoot: undefined, diffCwd: undefined };
+    return { ...loaded, root: undefined, fileRoot: undefined, diffCwd: undefined };
   }
   const { spawnedCwd, root, diffCwd } = resolveSessionWorkspaceRoots(
     loaded.cfg,
-    agentId,
+    loaded.agentId,
     loaded.entry,
   );
   return {
     ...loaded,
-    agentId,
     root,
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
     diffCwd,

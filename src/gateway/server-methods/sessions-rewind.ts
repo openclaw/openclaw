@@ -617,22 +617,15 @@ async function mutateSessionAtMessage(
       }
       respond(
         true,
-        action === "fork"
-          ? {
-              sessionKey: result.key,
+        action === "switch"
+          ? {}
+          : {
+              ...(action === "fork" ? { sessionKey: result.key } : {}),
               ...("editorText" in result && result.editorText
                 ? { editorText: result.editorText }
                 : {}),
               ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
-            }
-          : action === "rewind"
-            ? {
-                ...("editorText" in result && result.editorText
-                  ? { editorText: result.editorText }
-                  : {}),
-                ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
-              }
-            : {},
+            },
         undefined,
       );
       emitSessionsChanged(context, {

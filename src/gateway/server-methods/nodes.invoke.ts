@@ -644,13 +644,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             );
             return;
           }
-          if (
-            !respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
-              nodeCommandDispatched,
-            })
-          ) {
-            return;
-          }
+          respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
+            nodeCommandDispatched,
+          });
           return;
         }
         const payload = res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload;

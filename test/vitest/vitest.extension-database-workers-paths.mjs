@@ -11,6 +11,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/openai/tts.test.ts",
   "extensions/microsoft/speech-provider.test.ts",
   "extensions/discord/src/monitor/ingress.test.ts",
+  "extensions/discord/src/monitor/listeners.thread-delete.session-store.integration.test.ts",
   "extensions/discord/src/monitor/message-handler.ingress-recovery.test.ts",
   "extensions/discord/src/monitor/native-command.guild-guards.test.ts",
   "extensions/discord/src/monitor/native-command.reset.test.ts",

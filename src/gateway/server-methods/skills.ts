@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  type SkillsUpdateParams,
   validateSkillsBinsParams,
   validateSkillsDetailParams,
   validateSkillsProposalActionParams,
@@ -525,7 +524,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSkillsUpdateParams, "skills.update", respond)) {
       return;
     }
-    const p: SkillsUpdateParams = params;
+    const p = params;
     if ("source" in p) {
       if (!p.slug && !p.all) {
         respond(
@@ -546,7 +545,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const resolved = resolveSkillsAgentWorkspace(params, context);
+      const resolved = resolveSkillsAgentWorkspace(p, context);
       if (!resolved.ok) {
         respond(false, undefined, resolved.error);
         return;

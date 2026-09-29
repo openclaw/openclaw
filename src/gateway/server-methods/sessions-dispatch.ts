@@ -191,27 +191,6 @@ function respondWorkerPlacement(params: {
   );
 }
 
-function respondWorkerMove(params: {
-  respond: RespondFn;
-  key: string;
-  sessionId: string;
-  placement: Extract<WorkerSessionPlacementRecord, { state: "local" | "active" }>;
-}): void {
-  params.respond(
-    true,
-    {
-      ok: true,
-      key: params.key,
-      sessionId: params.sessionId,
-      placement: {
-        state: params.placement.state,
-        generation: params.placement.generation,
-      },
-    },
-    undefined,
-  );
-}
-
 function respondWorkerDispatchError(error: unknown, respond: RespondFn): void {
   if (error instanceof SessionMutationAuthorizationChangedError) {
     throw error;
@@ -597,12 +576,16 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           }),
         sessionMutationAuthorization?.assertCurrent,
       );
-      respondWorkerMove({
-        respond,
-        key: target.canonicalKey,
-        sessionId,
-        placement,
-      });
+      respond(
+        true,
+        {
+          ok: true,
+          key: target.canonicalKey,
+          sessionId,
+          placement: { state: placement.state, generation: placement.generation },
+        },
+        undefined,
+      );
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;

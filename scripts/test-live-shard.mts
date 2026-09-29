@@ -284,6 +284,42 @@ function isMoonshotLiveTest(file: string) {
   return file.startsWith("extensions/moonshot/");
 }
 
+// Release-lead waiver for 2026.9.7 (Peter, 2026-09-29 00:40 PT): these files' only
+// live case is skipped on the release branch, so selecting them would leave no passing
+// assertion. Scoped to the exact candidate version; restore after #161083/#161084 and
+// the subagent cold-restart follow-up land.
+const RELEASE_WAIVED_LIVE_FILES = new Map<string, ReadonlySet<string>>([
+  [
+    "2026.9.7",
+    new Set([
+      "src/gateway/gateway-progress-refresh.live.test.ts",
+      "src/agents/embedded-agent-runner.responses-output-limit.live.test.ts",
+      "test/gateway-subagent-restart.live.test.ts",
+    ]),
+  ],
+]);
+
+export function withoutReleaseWaivedLiveFiles(
+  files: string[],
+  candidateVersion: string | undefined,
+) {
+  const waived = candidateVersion ? RELEASE_WAIVED_LIVE_FILES.get(candidateVersion) : undefined;
+  return waived ? files.filter((file) => !waived.has(file)) : files;
+}
+
+function readCandidateVersion(repoRoot = process.cwd()) {
+  try {
+    const manifest: unknown = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
+    );
+    return isUnknownRecord(manifest) && typeof manifest.version === "string"
+      ? manifest.version
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Selects the live test files belonging to one shard name.
  */
@@ -748,7 +784,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
   let files;
   try {
-    files = selectLiveShardFiles(shard);
+    files = withoutReleaseWaivedLiveFiles(selectLiveShardFiles(shard), readCandidateVersion());
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     usage();
