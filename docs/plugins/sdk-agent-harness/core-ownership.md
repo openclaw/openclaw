@@ -127,11 +127,17 @@ preserves the existing 50 MiB staging allowance and higher configured limits.
 The host supplies `createBridge(assertCurrent, signal)` over its own backend;
 check that authority and signal before each transport command.
 
-A failed enabled transfer prevents dispatch. Bindings without this optional
-callback keep their existing input handling, including inline images; they do
-not gain automatic file transfer. Unconfigured local workspaces are unchanged. This interface does
-not provision a backend or acquire credentials. Each host adapter supplies its
-own authorized bridge.
+A failed enabled transfer prevents dispatch. Harnesses that require prepared
+files pass `requirePreparation: true` to `prepareAgentWorkspaceAttachments`.
+This resolves canonical attachment facts, including deferred transcript input,
+and rejects files with a path or URL when preparation returns no execution-path
+note. Text-only input still needs no attachment provider.
+
+When `requirePreparation` is omitted, bindings without the optional callback
+keep their existing input handling, including inline images; they do not gain
+automatic file transfer. Unconfigured local workspaces are unchanged. This
+interface does not provision a backend or acquire credentials. Each host
+adapter supplies its own authorized bridge.
 
 ### Host-only execution
 

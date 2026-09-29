@@ -158,9 +158,18 @@ for the executor to connect. Configure the controller to connect promptly;
 the API's longer connection window does not extend this deadline. Session
 connection events remain visible while it connects.
 Hosted environments support input
-attachments and output file transfers. Self-hosted environments do not support
-file transfers. Gateway function availability follows the configured OpenClaw
-tool policy. Native Agents API apps and connectors are not configured by this
+attachments and output file transfers. Self-hosted input attachments use the
+registered workspace provider's existing staging service. It prepares admitted
+originals on the executor workspace and returns execution-only paths without
+changing their Gateway media references or transcript provenance. Admission
+requires a completed preparation result; the harness does not infer availability
+from a path in the prompt. Repeated preparation reuses the same owned staging
+files. A self-hosted deployment without this provider must configure it or use
+an OpenAI-hosted environment for attachments. This does not add native image
+input or automatic self-hosted output transfer. See the
+[official files guide](https://developers.openai.com/api/docs/guides/agents-api/environments/files).
+Gateway function availability follows the configured OpenClaw tool policy.
+Native Agents API apps and connectors are not configured by this
 plugin, and the Gateway image-generation tool is not exposed.
 
 For self-hosted sessions, `hostExecutorSkillDirectories` lists absolute paths on

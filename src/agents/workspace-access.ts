@@ -415,16 +415,23 @@ export async function prepareAgentWorkspaceAttachments(params: {
   assertCurrent: () => void;
   /** Final attempt policy; omission retains the remote-adapter-only SDK contract. */
   localExecution?: LocalAttachmentExecutionContext;
+  /** Reject declared attachments that cannot be prepared for execution. */
+  requirePreparation?: boolean;
 }): Promise<string | undefined> {
   if (!params.turn.media?.length && !params.turn.userTurnTranscriptRecorder) {
     return undefined;
   }
   // Local preparation never substitutes for any registered remote workspace owner.
-  if (params.localExecution && bindings.has(path.resolve(params.workspaceDir))) {
+  const remoteOwned = bindings.has(path.resolve(params.workspaceDir));
+  if (params.localExecution && remoteOwned && !params.requirePreparation) {
     return undefined;
   }
-  const access = getAgentWorkspaceAccess(params.workspaceDir, "prepareTurnAttachments");
-  if (!access?.prepareTurnAttachments && !params.localExecution) {
+  const localExecution = remoteOwned ? undefined : params.localExecution;
+  const access = getAgentWorkspaceAccess(
+    params.workspaceDir,
+    params.requirePreparation ? undefined : "prepareTurnAttachments",
+  );
+  if (!access?.prepareTurnAttachments && !localExecution && !params.requirePreparation) {
     return undefined;
   }
   const assertCurrent = () => {
@@ -454,15 +461,20 @@ export async function prepareAgentWorkspaceAttachments(params: {
       },
       assertCurrent,
     );
-  } else if (params.localExecution) {
+  } else if (localExecution) {
     const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
     assertCurrent();
     note = await prepareLocalWorkspaceAttachments({
       media: facts,
-      execution: params.localExecution,
+      execution: localExecution,
       assertCurrent,
     });
   }
   assertCurrent();
+  if (params.requirePreparation && !note) {
+    throw new Error(
+      "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
+    );
+  }
   return note;
 }
