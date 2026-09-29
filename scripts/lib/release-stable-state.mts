@@ -11,8 +11,8 @@ export const RELEASE_PHASES = [
   "cut",
   "validate",
   "publish",
-  "sync-beta",
   "flip-github",
+  "sync-beta",
   "macos",
   "closeout",
 ] as const;

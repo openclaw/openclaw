@@ -42,7 +42,7 @@ import {
 import { MEMORY_INDEX_META_KEY } from "./manager-retrieval-read.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
-import type { MemorySyncProgressState } from "./manager-sync-base.js";
+import type { MemoryEmbeddingBatchConfig, MemorySyncProgressState } from "./manager-sync-base.js";
 import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
 import {
   markMemoryTargetArchiveFilesDirty,
@@ -99,7 +99,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
   protected abstract readonly createProvider: MemoryManagerProviderFactory;
   protected abstract releaseProvider(provider: EmbeddingProvider): void;
-  private fallbackProviderInitPromise: Promise<boolean> | null = null;
+  protected fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
   protected abstract beginSyncProviderGeneration(options?: { forceFtsOnly?: boolean }): void;
@@ -402,13 +402,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     return isMemoryEmbeddingOperationError(err);
   }
 
-  protected resolveBatchConfig(): {
-    enabled: boolean;
-    wait: boolean;
-    concurrency: number;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  } {
+  protected resolveBatchConfig(): MemoryEmbeddingBatchConfig {
     const batch = this.settings.remote?.batch;
     const enabled = Boolean(batch?.enabled && this.provider && this.providerRuntime?.batchEmbed);
     return {
@@ -437,10 +431,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         this.fallbackProviderInitPromise = null;
       }
     }
-  }
-
-  protected getPendingFallbackProviderInitialization(): Promise<boolean> | null {
-    return this.fallbackProviderInitPromise;
   }
 
   private async activateFallbackProviderOnce(reason: string): Promise<boolean> {

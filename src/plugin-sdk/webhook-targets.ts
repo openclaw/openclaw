@@ -2,11 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { canonicalizePathVariant } from "../gateway/security-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
-import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
-import {
-  beginWebhookRequestPipelineOrReject,
-  type WebhookInFlightLimiter,
-} from "./webhook-request-guards.js";
+import { beginWebhookRequestPipelineOrReject } from "./webhook-request-guards.js";
 
 /** Registration handle returned for one live webhook target. */
 export type RegisteredWebhookTarget<T> = {
@@ -100,16 +96,12 @@ export function registerWebhookTargetWithPluginRoute<T extends { path: string }>
 const pathTeardownByTargetMap = new WeakMap<object, Map<string, () => void>>();
 
 function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () => void> {
-  const mapKey = targetsByPath;
-  const existing = pathTeardownByTargetMap.get(mapKey);
-  if (existing) {
-    return existing;
+  let teardowns = pathTeardownByTargetMap.get(targetsByPath);
+  if (!teardowns) {
+    // Each caller-owned registry keeps its teardown independent of sibling plugins.
+    pathTeardownByTargetMap.set(targetsByPath, (teardowns = new Map()));
   }
-  const created = new Map<string, () => void>();
-  // Teardown is scoped to the caller-owned registry map so independent plugins using the same
-  // path do not unregister each other's HTTP routes.
-  pathTeardownByTargetMap.set(mapKey, created);
-  return created;
+  return teardowns;
 }
 
 /** Add a normalized target to a path bucket and clean up route state when the last target leaves. */
@@ -148,11 +140,10 @@ export function registerWebhookTarget<T extends { path: string }>(
     }
     targetsByPath.delete(key);
 
-    const teardown = getPathTeardownMap(targetsByPath).get(key);
-    if (teardown) {
-      getPathTeardownMap(targetsByPath).delete(key);
-      teardown();
-    }
+    const teardowns = pathTeardownByTargetMap.get(targetsByPath);
+    const teardown = teardowns?.get(key);
+    teardowns?.delete(key);
+    teardown?.();
     opts?.onLastPathTargetRemoved?.({ path: key });
   };
   return { target: normalizedTarget, unregister };
@@ -178,34 +169,16 @@ export function resolveWebhookTargets<T>(
 }
 
 /** Run common webhook guards, then dispatch only when the request path resolves to live targets. */
-export async function withResolvedWebhookRequestPipeline<T>(params: {
-  /** Incoming HTTP request whose pathname selects the target bucket. */
-  req: IncomingMessage;
-  /** HTTP response used by guard failures before handler dispatch. */
-  res: ServerResponse;
-  /** Caller-owned target registry keyed by normalized webhook path. */
-  targetsByPath: Map<string, T[]>;
-  /** Allowed methods for the common request guard. */
-  allowMethods?: readonly string[];
-  /** Optional per-key fixed-window limiter shared across requests. */
-  rateLimiter?: FixedWindowRateLimiter;
-  /** Explicit rate-limit key; defaults are owned by the request guard. */
-  rateLimitKey?: string;
-  /** Clock override for deterministic limiter tests. */
-  nowMs?: number;
-  /** Require JSON content type before dispatching to the webhook handler. */
-  requireJsonContentType?: boolean;
-  /** Optional in-flight limiter to cap concurrent handling for a key. */
-  inFlightLimiter?: WebhookInFlightLimiter;
-  /** Explicit or derived key for concurrent request limiting. */
-  inFlightKey?: string | ((args: { req: IncomingMessage; path: string; targets: T[] }) => string);
-  /** Status code returned when the in-flight guard rejects. */
-  inFlightLimitStatusCode?: number;
-  /** Response body returned when the in-flight guard rejects. */
-  inFlightLimitMessage?: string;
-  /** Handler invoked only after target resolution and common guards succeed. */
-  handle: (args: { path: string; targets: T[] }) => Promise<boolean | void> | boolean | void;
-}): Promise<boolean> {
+export async function withResolvedWebhookRequestPipeline<T>(
+  params: Omit<Parameters<typeof beginWebhookRequestPipelineOrReject>[0], "inFlightKey"> & {
+    /** Caller-owned target registry keyed by normalized webhook path. */
+    targetsByPath: Map<string, T[]>;
+    /** Explicit or derived key for concurrent request limiting. */
+    inFlightKey?: string | ((args: { req: IncomingMessage; path: string; targets: T[] }) => string);
+    /** Handler invoked only after target resolution and common guards succeed. */
+    handle: (args: { path: string; targets: T[] }) => Promise<boolean | void> | boolean | void;
+  },
+): Promise<boolean> {
   const resolved = resolveWebhookTargets(params.req, params.targetsByPath);
   if (!resolved) {
     return false;
@@ -244,19 +217,19 @@ export function resolveSingleWebhookTarget<T>(
   targets: readonly T[],
   isMatch: (target: T) => boolean,
 ): WebhookTargetMatchResult<T> {
-  let matched: T | undefined;
+  let match: WebhookTargetMatchResult<T> = { kind: "none" };
   for (const target of targets) {
     if (!isMatch(target)) {
       continue;
     }
     // Stop at the second match so auth callers can reject ambiguous secrets without inspecting
     // or accidentally selecting a later target.
-    if (matched) {
+    if (match.kind === "single") {
       return { kind: "ambiguous" };
     }
-    matched = target;
+    match = { kind: "single", target };
   }
-  return matched ? { kind: "single", target: matched } : { kind: "none" };
+  return match;
 }
 
 /** Async variant of single-target resolution for auth checks that need I/O. */
@@ -264,27 +237,22 @@ export async function resolveSingleWebhookTargetAsync<T>(
   targets: readonly T[],
   isMatch: (target: T) => Promise<boolean>,
 ): Promise<WebhookTargetMatchResult<T>> {
-  let matched: T | undefined;
+  let match: WebhookTargetMatchResult<T> = { kind: "none" };
   for (const target of targets) {
     if (!(await isMatch(target))) {
       continue;
     }
-    if (matched) {
+    if (match.kind === "single") {
       return { kind: "ambiguous" };
     }
-    matched = target;
+    match = { kind: "single", target };
   }
-  return matched ? { kind: "single", target: matched } : { kind: "none" };
+  return match;
 }
 
-/** Resolve an authorized target and send the standard unauthorized or ambiguous response on failure. */
-export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
-  /** Candidate targets for the already-resolved webhook path. */
-  targets: readonly T[];
+type WebhookAuthResponseOptions = {
   /** HTTP response used to send unauthorized or ambiguous failures. */
   res: ServerResponse;
-  /** Auth or routing predicate; exactly one target must match. */
-  isMatch: (target: T) => boolean | Promise<boolean>;
   /** Status code for no matching target. Defaults to 401. */
   unauthorizedStatusCode?: number;
   /** Response body for no matching target. */
@@ -293,7 +261,19 @@ export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
   ambiguousStatusCode?: number;
   /** Response body for multiple matching targets. */
   ambiguousMessage?: string;
-}): Promise<T | null> {
+};
+
+type WebhookTargetAuthOptions<T, MatchResult> = WebhookAuthResponseOptions & {
+  /** Candidate targets for the already-resolved webhook path. */
+  targets: readonly T[];
+  /** Auth or routing predicate; exactly one target must match. */
+  isMatch: (target: T) => MatchResult;
+};
+
+/** Resolve an authorized target and send the standard unauthorized or ambiguous response on failure. */
+export async function resolveWebhookTargetWithAuthOrReject<T>(
+  params: WebhookTargetAuthOptions<T, boolean | Promise<boolean>>,
+): Promise<T | null> {
   const match = await resolveSingleWebhookTargetAsync(params.targets, async (target) =>
     params.isMatch(target),
   );
@@ -301,34 +281,15 @@ export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
 }
 
 /** Synchronous variant of webhook auth resolution for cheap in-memory match checks. */
-export function resolveWebhookTargetWithAuthOrRejectSync<T>(params: {
-  /** Candidate targets for the already-resolved webhook path. */
-  targets: readonly T[];
-  /** HTTP response used to send unauthorized or ambiguous failures. */
-  res: ServerResponse;
-  /** Synchronous auth or routing predicate; exactly one target must match. */
-  isMatch: (target: T) => boolean;
-  /** Status code for no matching target. Defaults to 401. */
-  unauthorizedStatusCode?: number;
-  /** Response body for no matching target. */
-  unauthorizedMessage?: string;
-  /** Status code for multiple matching targets. Defaults to 401. */
-  ambiguousStatusCode?: number;
-  /** Response body for multiple matching targets. */
-  ambiguousMessage?: string;
-}): T | null {
+export function resolveWebhookTargetWithAuthOrRejectSync<T>(
+  params: WebhookTargetAuthOptions<T, boolean>,
+): T | null {
   const match = resolveSingleWebhookTarget(params.targets, params.isMatch);
   return resolveWebhookTargetMatchOrReject(params, match);
 }
 
 function resolveWebhookTargetMatchOrReject<T>(
-  params: {
-    res: ServerResponse;
-    unauthorizedStatusCode?: number;
-    unauthorizedMessage?: string;
-    ambiguousStatusCode?: number;
-    ambiguousMessage?: string;
-  },
+  params: WebhookAuthResponseOptions,
   match: WebhookTargetMatchResult<T>,
 ): T | null {
   if (match.kind === "single") {

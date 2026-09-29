@@ -402,6 +402,13 @@ export async function runReclamationWorkerPort(
                   clearNodeSqliteKyselyCacheForDatabase(database.db);
                 }
               },
+              request.type === "reclaim" && request.plan.kind === "maintenance-plan"
+                ? (protection) => {
+                    if (request.plan.kind === "maintenance-plan") {
+                      Object.assign(request.plan.input, protection);
+                    }
+                  }
+                : undefined,
             ).finally(() => maintenance?.release());
             return {
               type: "reclaimed",

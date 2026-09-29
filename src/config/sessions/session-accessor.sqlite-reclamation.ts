@@ -48,6 +48,7 @@ import {
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ReclamationDatabaseOptions,
+  SessionMaintenanceLiveProtection,
   ReclamationDeleteParams,
   SessionEntryMaintenanceInput,
   SessionEntryRemovalPlan,
@@ -429,6 +430,7 @@ function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOp
 export async function runSqliteSessionReclamation(params: {
   diagnostics?: SqliteSessionReclamationDiagnostics;
   assertCommitAllowed?: () => void;
+  refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
   forceInProcess: boolean;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (
@@ -450,6 +452,9 @@ export async function runSqliteSessionReclamation(params: {
     return await runExclusiveSqliteSessionWrite(
       params.plan.databaseOptions,
       async () => {
+        if (params.plan.kind === "maintenance-plan") {
+          Object.assign(params.plan.input, params.refreshMaintenanceProtection?.());
+        }
         params.assertCommitAllowed?.();
         return await withSqliteSessionDatabase(
           params.plan.databaseOptions,

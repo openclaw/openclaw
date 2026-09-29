@@ -4,7 +4,7 @@ import {
   createArtifactTransferService,
   type ArtifactTransferOptions,
 } from "./artifact-transfer-service.js";
-import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
@@ -20,7 +20,8 @@ export function createNodeWorkerBundleTransferService(options: ArtifactTransferO
       bundlePrewarm?: 1;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
-      onProgress?: () => void;
+      onProgress?: (servedBytes: number) => void;
+      onInterrupted?: (servedBytes: number, reason: string) => void;
     }): { token: string; input: NodeWorkerBundleInstallInput } {
       // The caller closes over this exact node proof; copied node IDs are not authority.
       const { token } = transfer.prepare({

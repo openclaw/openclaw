@@ -18,7 +18,9 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-openai",
     label: "package/update OpenAI and recovery",
-    timeout_minutes: 45,
+    // Five weight-3 npm lanes serialize at limit 5: 30m + 30m + 20m + 25m + 43m.
+    // The 10m chat lane overlaps; add 10m for setup/artifacts => 158m, round to 160m.
+    timeout_minutes: 160,
     profiles: "beta minimum stable full",
   },
   {
@@ -36,9 +38,9 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-self-upgrade",
     label: "package/update self-upgrade",
-    // Six 35m first-hop lanes need two waves at npm weight limit 5; the 20m
-    // survivor (weight 3) overlaps them. Add 10m for job setup and artifacts.
-    timeout_minutes: 80,
+    // Six 3500s first-hop lanes need two waves at npm weight limit 5; the 20m
+    // survivor (weight 3) overlaps. 2 x 3500s + 10m setup/artifacts ~= 127m => 130m.
+    timeout_minutes: 130,
     profiles: "beta minimum stable full",
   },
   {

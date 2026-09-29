@@ -42,7 +42,9 @@ Editing a Side chat draft does not interrupt loading its earlier answers. **Clea
 
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
-The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
+The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
+
+If the selection alone exceeds the context limit, Side chat opens without adding the selection and shows a notification. An empty question box still gets a short quote; an existing draft stays intact. If a comment or the combined selections exceed the limit, the editor stays open so you can shorten the comment or adjust the pending selections.
 
 Drop an image onto Side chat or paste one into its question box. You can send it
 with a written question or on its own. Side chat accepts image attachments, not
@@ -243,6 +245,16 @@ if that request fails, a waiting dashboard request retries once. If both model
 routes fail, the session uses a two-word crustacean-themed name.
 
 Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Completed answers stay visible outside collapsed work, including when a later Gateway notice arrives. The completed response footer keeps the final answer's timestamp when earlier tool activity is restored after a reload. Expand a tool row to inspect its command, path, or query. Inspect subagent status from the parent conversation with `/subagents list` and `/subagents info <id|#>`, or read recent child messages with `/subagents log <id|#>`. See [Sub-agent slash command](/tools/subagents/slash-command).
+
+While the agent works, its latest tool-activity disclosure shows the current
+operation's purpose instead of operation counts. Within that disclosure, each title
+gets three seconds to read before a newer title replaces it; rapid calls keep only the newest
+pending update. The last purpose stays visible between tools, without a running
+ellipsis after that operation ends. The row stays expandable throughout. Failed
+or blocked operations and the end of the run bypass the hold, and settled activity
+returns to counts. A new disclosure after inline narration starts with its own
+current purpose rather than moving an older operation across the narration.
+Reduced motion disables the title transition.
 
 Tool activity summaries count the operations inside a workflow rather than counting its wrapper again. Execution calls show the agent-provided purpose when available; titles describe intended work, while results determine success or failure. Recorded child calls appear under their operation instead of as separate peer rows. Expand the operation to inspect its children, then expand a child for its command, full output, and reported exit status. **Tool input** retains the wrapper's source and output. Collapsed operations include failures from their children, even when the wrapper or later calls succeed. Error messages and diagnostic paths stay inside the expandable tool details. Nested relationships use recorded call metadata from the same run and survive reloading; calls without an available, unambiguous parent stay separate. Untitled command previews flatten line breaks and truncate long commands; expanded details retain the original source.
 

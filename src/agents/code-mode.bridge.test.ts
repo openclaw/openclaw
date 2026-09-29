@@ -90,6 +90,34 @@ describe("Code Mode bridge settlement and cancellation", () => {
     },
   );
 
+  it("uses the fresh exec budget while preserving explicit timing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    const shell = pluginToolWithExecute("exec", "Run shell", async (_id, input) =>
+      jsonResult(input),
+    );
+    shell.parameters = Type.Object({
+      command: Type.String(),
+      yieldMs: Type.Optional(Type.Number()),
+      background: Type.Optional(Type.Boolean()),
+    });
+    const details = await bridge(
+      [shell],
+      10_000,
+    )(`return [
+      await exec({ command: "default" }),
+      await exec({ command: "explicit", yieldMs: 4_000 }),
+      await exec({ command: "background", background: true }),
+    ];`);
+    expect(details).toMatchObject({
+      status: "completed",
+      value: [
+        { command: "default", yieldMs: 9_500 },
+        { command: "explicit", yieldMs: 4_000 },
+        { command: "background", background: true },
+      ],
+    });
+  });
+
   it("bounds nested exec yield by the shared remaining deadline", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const consume = pluginToolWithExecute("consume", "Consume the shared deadline", async () => {
@@ -108,7 +136,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
       await bridge([consume, shell])('await consume({}); return await exec({ command: "late" });'),
     ).toMatchObject({
       status: "completed",
-      value: { command: "late", yieldMs: 100 },
+      value: { command: "late", yieldMs: 1 },
     });
     expect(consume.execute).toHaveBeenCalledOnce();
     expect(shell.execute).toHaveBeenCalledOnce();

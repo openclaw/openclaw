@@ -7,6 +7,8 @@ import type {
   patchSessionEntryCore,
   SessionEntryReadScope,
 } from "../../../config/sessions/session-accessor.js";
+import type { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import type { SessionEntryReadWorkerOwner } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
@@ -66,6 +68,24 @@ export function createSubagentRegistryMockState() {
         const next = options.replaceEntry ? (patch as SessionEntry) : { ...current, ...patch };
         mocks.entries[scope.sessionKey] = next;
         return next;
+      },
+    ),
+    applySessionEntryExactReplacements: vi.fn(
+      async <T>(
+        params: Parameters<typeof applySessionEntryExactReplacements<T>>[0],
+      ): Promise<T> => {
+        const entries = (params.sessionKeys ?? Object.keys(mocks.entries)).flatMap((sessionKey) => {
+          const entry = mocks.entries[sessionKey];
+          return entry ? [{ sessionKey, entry: structuredClone(entry) }] : [];
+        });
+        const operation = await params.update(entries);
+        params.assertCommitAllowed?.();
+        for (const { sessionKey, entry } of operation.replacements ?? []) {
+          if (mocks.entries[sessionKey]) {
+            mocks.entries[sessionKey] = entry;
+          }
+        }
+        return operation.result;
       },
     ),
     resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
@@ -128,7 +148,10 @@ export function createSubagentRegistryMockState() {
     withSessionEntryReadOnlyInWorker: async <T>(
       scope: SessionEntryReadScope,
       assertCurrent: () => void,
-      consume: (read: Result<SessionEntry | undefined, unknown>) => Promise<T>,
+      consume: (
+        read: Result<SessionEntry | undefined, unknown>,
+        owner: SessionEntryReadWorkerOwner,
+      ) => Promise<T>,
     ): Promise<T> => {
       assertCurrent();
       let read: Result<SessionEntry | undefined, unknown>;
@@ -137,7 +160,7 @@ export function createSubagentRegistryMockState() {
       } catch (error) {
         read = { ok: false, error };
       }
-      const result = await consume(read);
+      const result = await consume(read, { kind: "native", assertCurrent });
       assertCurrent();
       return result;
     },

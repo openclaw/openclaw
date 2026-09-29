@@ -7,6 +7,7 @@ import {
   normalizeDailyIngestionState,
   readDailyIngestionState,
   normalizeSessionIngestionState,
+  readSessionIngestionState,
 } from "../dreaming-ingestion-state.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
@@ -69,34 +70,9 @@ async function memoryCoreLegacySourceMatchesCanonical(
     );
   }
   if (source.label === "session ingestion") {
-    const [fileRows, seenRows] = await Promise.all([
-      readMemoryCoreWorkspaceEntries({
-        namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-        workspaceDir: source.workspaceDir,
-      }),
-      readMemoryCoreWorkspaceEntries<{ scope: string; index: number; hashes: string[] }>({
-        namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-        workspaceDir: source.workspaceDir,
-      }),
-    ]);
-    const chunksByScope = new Map<string, Array<{ index: number; hashes: string[] }>>();
-    for (const row of seenRows) {
-      const chunks = chunksByScope.get(row.value.scope) ?? [];
-      chunks.push({ index: row.value.index, hashes: row.value.hashes });
-      chunksByScope.set(row.value.scope, chunks);
-    }
     return isDeepStrictEqual(
       normalizeSessionIngestionState(raw),
-      normalizeSessionIngestionState({
-        version: 3,
-        files: Object.fromEntries(fileRows.map((row) => [row.key, row.value])),
-        seenMessages: Object.fromEntries(
-          [...chunksByScope].map(([scope, chunks]) => [
-            scope,
-            chunks.toSorted((left, right) => left.index - right.index).flatMap((row) => row.hashes),
-          ]),
-        ),
-      }),
+      await readSessionIngestionState(source.workspaceDir),
     );
   }
   const [entryRows, metaRows] = await Promise.all([

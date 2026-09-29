@@ -497,12 +497,42 @@ describe("runDoctorSessionSqlite", () => {
   });
 
   it("adopts only complete historical v1 recovery evidence", async () => {
-    const { store, imported, archivePath } = await createVerifiedRecoveryStore([
-      JSON.stringify({ type: "session", id: "session-1", version: 1 }),
-      JSON.stringify({ type: "message", message: { role: "user", content: "legacy IDs" } }),
-    ]);
+    const snapshots = {
+      sessionDiffBaseline: { version: 1, sessionId: "session-1", root: "/synthetic", files: [] },
+      skillsSnapshot: { prompt: "Retained skill instructions", skills: [] },
+      systemPromptReport: {
+        source: "run",
+        generatedAt: 1000,
+        sessionId: "session-1",
+        systemPrompt: { chars: 40, projectContextChars: 0, nonProjectContextChars: 40 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 27, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      },
+    };
+    const store = createLegacyStore({
+      entryOverrides: snapshots,
+      transcriptLines: [
+        JSON.stringify({ type: "session", id: "session-1", version: 1 }),
+        JSON.stringify({ type: "message", message: { role: "user", content: "legacy IDs" } }),
+      ],
+    });
+    const imported = await importLegacyStore(store);
+    expect(imported.targets[0]?.issues).toEqual([]);
+    expect(
+      loadSessionEntry({
+        agentId: "main",
+        env: store.env,
+        storePath: store.storePath,
+        sessionKey: "agent:main:main",
+      }),
+    ).toMatchObject(snapshots);
     const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
     const manifest = readMigrationManifest(manifestPath);
+    const archivePath = manifest.targets[0]!.completedMoves.find(
+      (move) => move.kind === "transcript",
+    )!.archivePath;
+    closeOpenClawAgentDatabasesForTest();
     manifest.manifestVersion = 1;
     for (const target of manifest.targets) {
       for (const move of [...target.plannedMoves, ...target.completedMoves]) {

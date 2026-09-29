@@ -4,7 +4,10 @@
  */
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getBrowserStateRuntime } from "../browser-runtime-state.js";
+import {
+  getBrowserStateRuntime,
+  type BrowserSessionTabAuthority,
+} from "../browser-runtime-state.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
@@ -17,7 +20,6 @@ import {
   sameBrowserSessionTabRecord,
   updateBrowserSessionTab,
   withoutBrowserSessionTabCleanup,
-  type BrowserSessionTabAuthority,
 } from "./session-tab-store.js";
 import type { DurableTab } from "./session-tab-tracking.js";
 

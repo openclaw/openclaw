@@ -444,9 +444,9 @@ export function registerSubagentRegistrationPersistenceTests({
       throw new Error("disk full");
     });
 
-    expect(() => mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toThrowError(
-      "disk full",
-    );
+    await expect(
+      mod.markSubagentRunTerminated({ runId, reason: "manual kill" }),
+    ).rejects.toThrowError("disk full");
 
     const run = findRequesterRun(runId);
     expect(run?.execution.endedAt).toBeUndefined();

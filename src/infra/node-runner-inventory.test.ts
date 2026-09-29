@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { availableWorkerSlots } from "../shared/node-list-parse.js";
+import { availableWorkerSlots } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   parseNodeRunnerInventoryDeclaration,

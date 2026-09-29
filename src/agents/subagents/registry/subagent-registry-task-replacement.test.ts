@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { persistSubagentRunsToDiskOrThrow, useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { setImmediate } from "node:timers/promises";
 import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import {
@@ -22,9 +23,14 @@ import {
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
 } from "../../../infra/agent-run-registry.js";
+import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
+import { createHookRunner } from "../../../plugins/hooks.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { onSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { AgentWaitResult } from "../../run-wait.js";
+import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
@@ -33,6 +39,9 @@ import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite
 import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
+
+vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
+vi.mock("../../../plugins/hook-runner-global.js", { spy: true });
 
 it.each(["end", "error"] as const)(
   "keeps a timeout successor running when its exact predecessor owner publishes its first %s terminal",
@@ -416,3 +425,126 @@ it("rearms native execution for an interrupted run's successor", async () => {
     }),
   ).toBe(true);
 });
+
+it.each(["committed", "caller retired", "source replaced"] as const)(
+  "settles the predecessor's pending ended-hook stamp before follow-up admission (%s)",
+  async (transition) => {
+    const { persistSubagentRunsToDiskAsyncOrThrow } = await vi.importActual<
+      typeof import("./subagent-registry-state.js")
+    >("./subagent-registry-state.js");
+    const { runOpenClawStateWorkerOperation: runWorker } = await vi.importActual<
+      typeof import("../../../state/openclaw-state-worker-store.js")
+    >("../../../state/openclaw-state-worker-store.js");
+    const childSessionKey = "agent:main:subagent:pending-ended-hook";
+    await registerSubagentRun({
+      runId: "pending-ended-hook",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "original work",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+    const original = subagentRuns.get("pending-ended-hook")!;
+    original.execution = {
+      status: "terminal",
+      startedAt: 1,
+      endedAt: 2,
+      outcome: { status: "ok" },
+    };
+    original.completion = { required: false, resultText: "done", capturedAt: 2 };
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [original.runId]);
+    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(
+      createHookRunner(createEmptyPluginRegistry()),
+    );
+    const cleanup = createSubagentRegistryContextCleanup({
+      persist: (...ids) => persistSubagentRunsToDiskOrThrow(subagentRuns, ids),
+      persistAsyncOrThrow: (context, callbacks, ...ids) =>
+        persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, ids, { context, ...callbacks }),
+      isEndedHookOwnerCurrent: (id, entry) => subagentRuns.get(id) === entry,
+      warn: () => {},
+    });
+    const entered = createDeferred();
+    const release = createDeferred();
+    let holdStamp = true;
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+      async (context, operation, options) => {
+        if (holdStamp && original.endedHookEmittedAt !== undefined) {
+          holdStamp = false;
+          entered.resolve();
+          await release.promise;
+        }
+        return runWorker(context, operation, options);
+      },
+    );
+    await import("./subagent-registry-runtime.js");
+    const hook = cleanup.emitSubagentEndedHookForRun({ entry: original });
+    let followup: Promise<unknown> | undefined;
+    let callerCurrent = true;
+    try {
+      await entered.promise;
+      expect(
+        loadSubagentRegistryFromSqlite().get(original.runId)?.endedHookEmittedAt,
+      ).toBeUndefined();
+      let settled = false;
+      followup = reactivateCompletedSubagentSession({
+        sessionKey: childSessionKey,
+        runId: "after-ended-hook",
+        task: "follow-up work",
+        assertCurrent: () => {
+          if (!callerCurrent) {
+            throw new Error("follow-up caller retired");
+          }
+        },
+      }).then(
+        (value) => {
+          settled = true;
+          return { value };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { error };
+        },
+      );
+      await setImmediate();
+      expect.soft(settled).toBe(false);
+      if (transition === "caller retired") {
+        callerCurrent = false;
+      } else if (transition === "source replaced") {
+        const replacement = structuredClone(original);
+        replacement.generation = original.generation! + 1;
+        replacement.task = "replacement owner";
+        delete replacement.endedHookEmittedAt;
+        subagentRuns.set(original.runId, replacement);
+        persistSubagentRunsToDiskOrThrow(subagentRuns, [replacement.runId]);
+      }
+      release.resolve();
+      await hook;
+      if (transition !== "committed") {
+        expect(await followup).toMatchObject({
+          error: new Error(
+            transition === "caller retired"
+              ? "follow-up caller retired"
+              : "subagent follow-up source changed while its writes settled",
+          ),
+        });
+        const stored = loadSubagentRegistryFromSqlite();
+        expect(stored.has("after-ended-hook")).toBe(false);
+        expect(stored.get(original.runId)?.task).toBe(
+          transition === "source replaced" ? "replacement owner" : "original work",
+        );
+        return;
+      }
+      expect(await followup).toEqual({ value: true });
+      expect(loadSubagentRegistryFromSqlite().get("after-ended-hook")).toMatchObject({
+        task: "follow-up work",
+        generation: original.generation! + 1,
+        execution: { status: "running" },
+      });
+      expect(loadSubagentRegistryFromSqlite().has(original.runId)).toBe(false);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([hook, followup]);
+    }
+  },
+);

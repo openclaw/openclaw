@@ -77,6 +77,8 @@ describe("subagent registry context cleanup", () => {
       });
       const cleanup = createSubagentRegistryContextCleanup({
         persist: vi.fn(),
+        persistAsyncOrThrow: vi.fn(async () => {}),
+        isEndedHookOwnerCurrent: () => false,
         warn: vi.fn(),
       });
       const pending = cleanup.runContextEngineSubagentEnded(
@@ -125,6 +127,8 @@ describe("subagent registry context cleanup", () => {
     const persist = vi.fn();
     const cleanup = createSubagentRegistryContextCleanup({
       persist,
+      persistAsyncOrThrow: vi.fn(async () => {}),
+      isEndedHookOwnerCurrent: () => true,
       warn,
     });
     const entry = createSubagentRunRecord({ runId: "run-ended", endedAt: 4_000 });

@@ -17,7 +17,6 @@ import {
   toDatabaseOptions,
   type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
-import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import type { SessionEntry } from "./types.js";
 
@@ -133,7 +132,7 @@ export function readSessionIdentityEvidenceInDatabase(
         db
           .selectFrom("session_nodes")
           .select(["current_session_id", "entry_valid", "session_key", "updated_at"])
-          .select(sessionEntryMetadataJson)
+          .select("entry_json")
           .where(column, "in", chunk),
       ).rows;
       for (const row of rows) {

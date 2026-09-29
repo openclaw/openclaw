@@ -41,12 +41,23 @@ describe("hasApprovalTurnSourceRoute", () => {
 
   it("passes plugin approval kind to the initiating surface check", () => {
     resolveApprovalInitiatingSurfaceStateMock.mockReturnValue({ kind: "disabled" });
+    const request = {
+      id: "plugin:calendar",
+      request: {
+        title: "Review",
+        description: "Calendar tool",
+        policySubject: { pluginKey: "calendar" },
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1,
+    };
 
     expect(
       hasApprovalTurnSourceRoute({
         turnSourceChannel: "whatsapp",
         turnSourceAccountId: "default",
         approvalKind: "plugin",
+        request,
       }),
     ).toBe(false);
     expect(resolveApprovalInitiatingSurfaceStateMock).toHaveBeenCalledWith({
@@ -54,6 +65,7 @@ describe("hasApprovalTurnSourceRoute", () => {
       accountId: "default",
       cfg: { loaded: true },
       approvalKind: "plugin",
+      request,
     });
   });
 

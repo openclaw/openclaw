@@ -34,7 +34,6 @@ import {
   isNodeWorkerSupervisorProofCurrent,
   resolveNodeRunnerInventoryIssue,
   resolveNodeWorkerSupervisorProof,
-  sameBundleStatusObservation,
   type NodeRunnerInventoryRecord,
   type NodeRunnerRegistrySession,
   type NodeRunnerStateChange,
@@ -174,19 +173,7 @@ function updateWorkerRunnerInventory(
     clientId: node.clientId,
     clientMode: "node",
     protocolFeatures: [...params.declaration.protocolFeatures],
-    ...(workerHost
-      ? {
-          workerHost: workerHost.enabled
-            ? {
-                ...workerHost,
-                capacity: { ...workerHost.capacity },
-                ...(workerHost.launchToolNames !== undefined
-                  ? { launchToolNames: [...workerHost.launchToolNames] }
-                  : {}),
-              }
-            : { enabled: false },
-        }
-      : {}),
+    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
   };
   const statusCleared =
     next.workerHost?.enabled !== true ||
@@ -492,7 +479,7 @@ export function registerNodeRegistryPrivateRuntime(
         } else {
           state.bundleStatusByConn.delete(node.connId);
         }
-        if (!sameBundleStatusObservation(previous, observation)) {
+        if (!isDeepStrictEqual(previous, observation)) {
           state.runnerState.reconcile(node.nodeId, true);
         }
         return true;

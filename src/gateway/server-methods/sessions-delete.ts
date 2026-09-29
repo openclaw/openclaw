@@ -365,7 +365,8 @@ export async function deleteGatewaySession({
       agentId: target.agentId,
       reason: "delete",
     });
-    emitSessionsChanged(context, { reason: "delete" });
+    // The storage owner published the exact removal; this notification refreshes the list.
+    emitSessionsChanged(context, { reason: "delete" }, { preparedPublication: true });
   }
   return { ok: true, result: response };
 }
