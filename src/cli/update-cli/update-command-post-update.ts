@@ -19,6 +19,7 @@ import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import {
   completePostUpdateMaintenance,
+  preparePostUpdateService,
   resumePostUpdateWindowsAutoStart,
 } from "./update-command-post-update-maintenance.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -29,7 +30,6 @@ import {
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
-  prepareUpdateServiceResult,
   recordServiceReconciliationWarning,
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -90,8 +90,8 @@ export async function finishUpdate(
   };
   assertCurrent();
   await assertUpdateCommandPackageFinalization(params);
+  const shouldRestart = await preparePostUpdateService(params, assertCurrent);
   assertCurrent();
-  const shouldRestart = prepareUpdateServiceResult(params);
   let gateway: TriageFailureContext["gateway"] = "preserve";
   let triageAllowed = true;
   const createFailure = (

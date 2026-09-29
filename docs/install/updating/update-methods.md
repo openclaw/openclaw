@@ -76,14 +76,19 @@ The candidate's temporary workspace settings are restored before checking for
 source changes; the live checkout's workspace settings are preserved.
 
 Before activating a package or Git update, the updater also checks discoverable
-managed Gateways that share the physical installation. A live sibling blocks
-publication; stop it through its own service manager or exact Startup entry,
+managed Gateways that share the physical installation. An observed live sibling
+blocks the update before the selected Gateway is stopped; the updater checks again
+at publication. Stop the sibling through its own service manager or exact Startup entry,
 then retry. The updater does not stop or restart sibling services. Package
 `--no-restart` still permits the selected service to keep running, but that
 exception does not cover another service or Startup entry using the same files.
+The Gateway's installation-change watcher can still restart it. If update Doctor
+maintenance stops the selected service, finalization restores the matching service
+and reports the maintenance restart, including with `--no-restart`. If its current
+identity cannot be inspected, recovery remains pending.
 This is a check of observed consumers, not a lock against new service starts;
 unavailable inspection does not prove that the installation has no consumers.
-Already-running older updaters retain their own activation behavior.
+Already-running older updaters retain their own activation and finalization behavior.
 
 For package installs with an owned managed Bun Gateway at a different root,
 `openclaw update` targets the Gateway's package root and leaves the invoking CLI

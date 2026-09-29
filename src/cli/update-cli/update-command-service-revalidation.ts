@@ -74,11 +74,13 @@ export async function assertManagedGatewayArtifactPublication(params: {
   selected?: PreManagedServiceStop;
   updateInstallKind: "git" | "package" | "unknown";
   shouldRestart: boolean;
+  phase?: "before-stop" | "publication";
 }): Promise<void> {
   params.assertCurrent();
   const serving = params.selected;
   const servingVerdict = serving?.serviceUpdateVerdict;
   if (
+    (params.phase !== "before-stop" || !params.shouldRestart) &&
     params.updateInstallKind === "git" &&
     serving?.running &&
     !serving.stopped &&
@@ -110,7 +112,10 @@ export async function assertManagedGatewayArtifactPublication(params: {
     params.assertCurrent();
     return state;
   };
-  const before = params.updateInstallKind !== "git" && !params.shouldRestart ? serving : undefined;
+  const before =
+    params.phase === "before-stop" || (params.updateInstallKind !== "git" && !params.shouldRestart)
+      ? serving
+      : undefined;
   const retained = before?.serviceUpdateVerdict;
   let selectedState: GatewayServiceState | undefined;
   const selectedConsumer = async (

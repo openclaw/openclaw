@@ -535,16 +535,24 @@ export async function executeMutableUpdate(
     if (opts.run) {
       recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
     }
-    await stopManagedServiceBeforeMutableUpdate(roots);
-    await recheckSchemas(admittedTargetSchemaVersions);
-    assertExecutionCurrent();
-    await assertManagedGatewayArtifactPublication({
+    const publication = {
       roots,
       env,
       timeoutMs: updateStepTimeoutMs,
       assertCurrent: assertExecutionCurrent,
       updateInstallKind: params.updateInstallKind,
       shouldRestart: params.shouldRestart,
+    };
+    await assertManagedGatewayArtifactPublication({
+      ...publication,
+      selected: preManagedServiceStop,
+      phase: "before-stop",
+    });
+    await stopManagedServiceBeforeMutableUpdate(roots);
+    await recheckSchemas(admittedTargetSchemaVersions);
+    assertExecutionCurrent();
+    await assertManagedGatewayArtifactPublication({
+      ...publication,
       selected: preManagedServiceStop,
     });
     // Both install paths enter mutation only after the post-stop schema/authority fence.

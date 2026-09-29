@@ -13,6 +13,7 @@ import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
+import * as verification from "./update-command-verification.js";
 
 type Fixtures = Pick<
   typeof import("./update-command-execution.test-support.js"),
@@ -97,10 +98,37 @@ export function registerNativeAdmissionTests({
     route?: "git";
     consumer?: "selected" | "same-profile-other-service";
     unreadableFirst?: boolean;
+    selectedRunning?: boolean;
+    startsDuringStop?: boolean;
   }> = [
     { name: "live shared root", shared: true, running: true, late: false, refused: true },
     { name: "stopped shared root", shared: true, running: false, late: false, refused: false },
     { name: "live disjoint root", shared: false, running: true, late: false, refused: false },
+    {
+      name: "live selected service with shared sibling",
+      shared: true,
+      running: true,
+      late: false,
+      refused: true,
+      selectedRunning: true,
+    },
+    {
+      name: "live selected service with disjoint sibling",
+      shared: false,
+      running: true,
+      late: false,
+      refused: false,
+      selectedRunning: true,
+    },
+    {
+      name: "sibling starts during selected stop",
+      shared: true,
+      running: true,
+      late: false,
+      refused: true,
+      selectedRunning: true,
+      startsDuringStop: true,
+    },
     {
       name: "disjoint package with shared resolved entrypoint",
       shared: false,
@@ -230,7 +258,16 @@ export function registerNativeAdmissionTests({
             : []),
           { profile: consumerEnv.OPENCLAW_PROFILE, env: consumerEnv, scope: "user" },
         ]);
-        let running = scenario.running && !scenario.late;
+        let running = scenario.running && !scenario.late && !scenario.startsDuringStop;
+        let selectedRunning = scenario.selectedRunning ?? false;
+        if (scenario.selectedRunning) {
+          vi.spyOn(verification, "verifyPreviousManagedGatewayForUpdate").mockImplementation(
+            async (params) => {
+              params.assertCurrent?.();
+              params.onVerification(true);
+            },
+          );
+        }
         const observedState = (
           env: Record<string, string>,
           live: boolean,
@@ -262,7 +299,7 @@ export function registerNativeAdmissionTests({
           const consumer = args?.env === consumerEnv;
           return observedState(
             consumer ? consumerEnv : selectedEnv,
-            consumer && running,
+            consumer ? running : selectedRunning,
             consumer ? otherRoot : root,
           );
         });
@@ -270,14 +307,25 @@ export function registerNativeAdmissionTests({
           root,
           state: observedState(selectedEnv, false, root),
         });
-        mocks.maybeStopService.mockResolvedValue({
-          inspected: true,
-          runtimeInspected: true,
-          stopped: false,
-          running: false,
-          serviceEnv: selectedEnv,
-          serviceUpdateVerdict: selectedVerdict,
-          serviceManagerUid: 501,
+        mocks.maybeStopService.mockImplementation(async ({ phase, shouldRestart }) => {
+          const wasRunning = selectedRunning;
+          const stopped = phase !== "inspect" && shouldRestart && selectedRunning;
+          if (stopped) {
+            selectedRunning = false;
+            mocks.serviceStopped = true;
+            if (scenario.startsDuringStop) {
+              running = true;
+            }
+          }
+          return {
+            inspected: true,
+            runtimeInspected: true,
+            stopped,
+            running: wasRunning,
+            serviceEnv: selectedEnv,
+            serviceUpdateVerdict: selectedVerdict,
+            serviceManagerUid: 501,
+          };
         });
         mocks.nativeSupport.mockResolvedValue(true);
         mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate, beforeActivate }) => {
@@ -320,6 +368,12 @@ export function registerNativeAdmissionTests({
         expect(refuseMutation).not.toHaveBeenCalled();
         expect(running).toBe(scenario.running);
         expect(selectedVerdict.kind).toBe("owned");
+        if (scenario.selectedRunning) {
+          expect(mocks.serviceStopped).toBe(
+            !scenario.refused || Boolean(scenario.startsDuringStop),
+          );
+          expect(selectedRunning).toBe(scenario.refused && !scenario.startsDuringStop);
+        }
         if (scenario.refused) {
           expect(execution?.mutationStarted).toBe(false);
           expect(execution?.result.steps).toEqual(
