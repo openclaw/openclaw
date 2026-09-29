@@ -872,7 +872,7 @@ describe("sqlite WAL maintenance", () => {
     },
   );
 
-  it("clamps oversized checkpoint intervals before arming timers", () => {
+  it("arms the checkpoint tick even for oversized reclaim intervals", () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const db = createMockDb();
@@ -882,7 +882,8 @@ describe("sqlite WAL maintenance", () => {
       checkpointIntervalMs: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
+    expect(10_000).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
     maintenance.close();
   });
 

@@ -43,11 +43,16 @@ export type { SqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
-const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
+// Inline autocheckpoints run on the committing connection, including the
+// Gateway main thread, and while readers keep the log from resetting every later
+// commit retries one and syncs the database file. The maintenance tick
+// checkpoints off the writers instead; this threshold only bounds a stalled owner.
+const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 16_384;
+const DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS = 10 * 1000;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
 // SQLite applies this ceiling when a fully checkpointed WAL resets on the next
-// commit. Keep it well above the usual ~4 MiB autocheckpoint window so only
-// pathological high-water marks pay the truncation cost.
+// commit. It matches the inline autocheckpoint threshold so only pathological
+// high-water marks pay the truncation cost.
 const DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
@@ -484,7 +489,12 @@ export function configureSqliteWalMaintenance(
     options.checkpointIntervalMs ?? DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
     "checkpointIntervalMs",
   );
-  const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
+  // Checkpoint-only ticks keep commits off the checkpoint; vacuum keeps the reclaim cadence.
+  const checkpointTickMs =
+    checkpointIntervalMs > 0
+      ? Math.min(DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS, checkpointIntervalMs)
+      : 0;
+  const timerIntervalMs = Math.min(checkpointTickMs, MAX_TIMER_TIMEOUT_MS);
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
   const periodicCheckpointMode = options.checkpointMode ?? "PASSIVE";
   const journalPolicy = options.databasePath
@@ -556,6 +566,7 @@ export function configureSqliteWalMaintenance(
   };
 
   let timer: IntervalHandle | null = null;
+  let lastReclaimAt: number | undefined;
   const maintainPeriodic = (
     request: SqliteWalPeriodicRequest,
     admit?: (stage: "transaction" | "commit") => void,
@@ -567,8 +578,11 @@ export function configureSqliteWalMaintenance(
       checkpointOwner.adopt(request.checkpoint);
     }
     let reclaimedPages = 0;
+    const quiet = request.maxPages === 0;
+    const runTickCheckpoint = (mode: SqliteWalCheckpointMode) =>
+      checkpointOwner.checkpoint(mode, { quiet });
     runMaintenance(() => {
-      const reclaimed = reclaimSqliteWalFreePages(db, runCheckpoint, {
+      const reclaimed = reclaimSqliteWalFreePages(db, runTickCheckpoint, {
         checkpointMode: request.checkpointMode,
         maxPages: request.maxPages,
         beforeMutation: () => admit?.("transaction"),
@@ -593,7 +607,7 @@ export function configureSqliteWalMaintenance(
         // A completed PASSIVE checkpoint need not recycle its high-water file
         // until another commit. Try once without waiting for readers or writers.
         admit?.("transaction");
-        runWithSqliteBusyTimeout(db, 0, () => runCheckpoint("TRUNCATE"));
+        runWithSqliteBusyTimeout(db, 0, () => runTickCheckpoint("TRUNCATE"));
       }
       return checkpointed;
     });
@@ -608,7 +622,15 @@ export function configureSqliteWalMaintenance(
         : undefined,
     checkpointOwner.adopt,
     (error) => checkpointOwner.recordError(error),
-    512,
+    () => {
+      // The first fire and every reclaim interval run the bounded vacuum pass;
+      // the ticks in between only checkpoint.
+      if (lastReclaimAt !== undefined && Date.now() - lastReclaimAt < checkpointIntervalMs) {
+        return 0;
+      }
+      lastReclaimAt = Date.now();
+      return 512;
+    },
   );
   if (timerIntervalMs > 0) {
     timer = runInSqliteMaintenanceContext(

@@ -94,7 +94,8 @@ export function reclaimSqliteWalFreePages(
     }
   };
   return runWithSqliteBusyTimeout(database, 0, () => {
-    if (!checkpoint()) {
+    // A zero page budget is a checkpoint-only pass; vacuum keeps its own cadence.
+    if (!checkpoint() || options.maxPages === 0) {
       return result;
     }
     const before = freePages();

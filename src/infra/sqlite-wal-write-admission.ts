@@ -48,14 +48,15 @@ export function createSqliteWalMaintenanceScheduler(
   prepare: (maxPages: number) => SqliteWalPeriodicRequest | undefined,
   observe: (snapshot: SqliteWalCheckpointSnapshot) => void,
   onError: (error: unknown) => void,
-  pageBudget: number,
+  pageBudget: () => number,
 ): () => Promise<void> {
   let pending: Promise<void> | undefined;
   return () => {
     if (!pending) {
       const run = async () => {
-        let remaining = pageBudget;
-        while (remaining > 0) {
+        // A zero budget runs one checkpoint-only pass without vacuum units.
+        let remaining = pageBudget();
+        while (true) {
           const request = prepare(remaining);
           if (!request) {
             return;
@@ -91,7 +92,7 @@ export function createSqliteWalMaintenanceScheduler(
       };
       pending = run()
         .catch((error: unknown) => {
-          if (prepare(pageBudget)) {
+          if (prepare(0)) {
             onError(error);
           }
         })

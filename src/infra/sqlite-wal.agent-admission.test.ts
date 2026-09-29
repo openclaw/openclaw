@@ -34,7 +34,7 @@ it.each(["keep", "close", "replace"] as const)(
       openOpenClawStateDatabase();
       const intervals = vi.spyOn(globalThis, "setInterval");
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const timers = intervals.mock.calls.filter(([, delay]) => delay === 30 * 60 * 1000);
+      const timers = intervals.mock.calls.filter(([, delay]) => delay === 10 * 1000);
       intervals.mockRestore();
       expect(timers).toHaveLength(1);
       const periodic = timers[0]?.[0];
@@ -194,7 +194,7 @@ const workerSource = String.raw`
     const nativeInterval = globalThis.setInterval;
     let periodic;
     globalThis.setInterval = (callback, delay, ...args) => {
-      if (delay === 30 * 60 * 1000) periodic = () => callback(...args);
+      if (delay === 10 * 1000) periodic = () => callback(...args);
       return nativeInterval(callback, delay, ...args);
     };
     let phase = "opening";
