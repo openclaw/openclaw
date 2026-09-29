@@ -193,6 +193,7 @@ export function registerUpdatePreflightTests({
           }),
         });
         expect(lastWriteJsonCall()).toMatchObject({
+          runId: record?.runId,
           status: "error",
           reason: "snapshot-capacity-insufficient",
           failedStep: snapshotFailure,
@@ -206,7 +207,14 @@ export function registerUpdatePreflightTests({
               prefix.includes("openclaw-update-canary-"),
           ),
         ).toBe(false);
-        expect(listUpdateRuns()).toEqual(historyBefore);
+        expect(listUpdateRuns()).toEqual([
+          expect.objectContaining({
+            status: "failed",
+            phase: "finished",
+            reason: "snapshot-capacity-insufficient",
+          }),
+          ...historyBefore,
+        ]);
         expect(getErrorOutput()).toContain("MiB needed");
         expect(getErrorOutput()).toContain("32 MiB free");
         expect(getErrorOutput()).toContain("Free space on a reported filesystem or set TMPDIR");

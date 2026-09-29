@@ -120,7 +120,8 @@ disabled because its update history can use an older database schema. Doctor
 can resume capture after preserving the originals and admitting the repaired
 schema. A successful update that skips Doctor can therefore leave local HTTP
 tracing disabled for that invocation.
-Direct updates report this limitation when debug capture is enabled.
+Direct updates, including `--dry-run`, report this limitation when debug capture
+is enabled.
 
 Use `openclaw update status --json` to inspect retained evidence. Runtime rollback
 does not prove that an earlier original capture was restored. Status reports that
