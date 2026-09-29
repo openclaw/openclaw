@@ -82,6 +82,8 @@ export type GuardedFetchOptions = {
    * Defaults to false.
    */
   allowCrossOriginUnsafeRedirectReplay?: boolean;
+  /** Reject cross-origin redirects that would replay an unsafe body. Mutually exclusive with allow. */
+  rejectCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   requireHttps?: boolean;
@@ -427,6 +429,12 @@ async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
   const assertCurrent = captureGuardedFetchRequestAuthority();
+  if (
+    params.allowCrossOriginUnsafeRedirectReplay === true &&
+    params.rejectCrossOriginUnsafeRedirectReplay === true
+  ) {
+    throw new TypeError("Cross-origin unsafe redirect replay cannot be both allowed and rejected");
+  }
   const globalFetch = globalThis.fetch;
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalFetch;
   if (!defaultFetch) {
@@ -694,8 +702,28 @@ async function fetchWithSsrFGuardInternal(
           hostnameAllowlist: params.retainAuthorizationRedirectHostnameAllowlist,
         });
         const crossOrigin = nextParsedUrl.origin !== parsedUrl.origin;
-        currentInit = rewriteRedirectInit({
+        const methodRedirectInit = rewriteRedirectInit({
           init: currentInit,
+          status: response.status,
+          crossOrigin: false,
+          allowUnsafeReplay: true,
+        });
+        if (crossOrigin) {
+          const redirectedMethod = methodRedirectInit?.method?.toUpperCase() ?? "GET";
+          const redirectedBody = methodRedirectInit?.body;
+          if (
+            params.rejectCrossOriginUnsafeRedirectReplay === true &&
+            redirectedMethod !== "GET" &&
+            redirectedMethod !== "HEAD" &&
+            redirectedBody != null
+          ) {
+            throw new Error(
+              `Refusing to follow cross-origin redirect for ${redirectedMethod} request body (${parsedUrl.origin} -> ${nextParsedUrl.origin})`,
+            );
+          }
+        }
+        currentInit = rewriteRedirectInit({
+          init: methodRedirectInit,
           status: response.status,
           crossOrigin,
           allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
