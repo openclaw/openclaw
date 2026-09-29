@@ -124,6 +124,9 @@ describe("queueDelegatedApproval authority", () => {
       await fs.writeFile(configPath, initialConfig);
       const mutationPath = target === "root" ? configPath : includePath;
       if (target === "include") {
+        if (process.platform !== "win32") {
+          await fs.chmod(stateDir, 0o755);
+        }
         await fs.writeFile(includePath, initialInclude);
       }
       await fs.writeFile(`${mutationPath}.bak`, initialBackup);
@@ -216,6 +219,9 @@ describe("queueDelegatedApproval authority", () => {
         await expect(fs.readFile(`${mutationPath}.bak.1`, "utf8")).rejects.toMatchObject({
           code: "ENOENT",
         });
+      }
+      if (target === "include" && process.platform !== "win32") {
+        expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o755);
       }
       releaseAgentRunDelegatedAuthority(authority);
     },

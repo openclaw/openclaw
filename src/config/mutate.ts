@@ -7,7 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage, isErrno, isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
@@ -588,12 +588,17 @@ function createRootBoundBackupFs(target: RootBoundIncludeFile, assertMutation?: 
     copyFile: async (from: string, to: string) => {
       const content = await target.root.readBytes(resolveRootBoundRelativePath(target, from));
       const destination = await target.root.resolve(resolveRootBoundRelativePath(target, to));
-      await replaceFileAtomic({
+      const directoryMode = (await fs.stat(path.dirname(destination))).mode & 0o777;
+      // The fs-safe replacement is synchronous after this live check, so its
+      // directory hardening, temp write, and publication cannot outlive the
+      // delegated authority in this process.
+      assertMutation?.();
+      replaceFileAtomicSync({
         filePath: destination,
         content,
         tempPrefix: path.basename(destination),
+        dirMode: directoryMode,
         mode: 0o600,
-        ...(assertMutation ? { beforeDestinationMutation: assertMutation } : {}),
       });
     },
     rename: async (from: string, to: string) => {
