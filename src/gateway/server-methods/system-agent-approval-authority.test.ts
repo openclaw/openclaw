@@ -11,7 +11,11 @@ import {
   resetAgentRunRegistryForTest,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import type {
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../../infra/system-agent-approvals.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { ChatTurnRouter } from "../../system-agent/chat-turn-router.js";
 import { ChatWizardHost } from "../../system-agent/chat-wizard-host.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
@@ -141,7 +145,10 @@ describe("queueDelegatedApproval authority", () => {
         resolveAllowedDecisions: (request) => request.allowedDecisions,
         validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
       });
-      const publishResolved = vi.fn();
+      const applicationResult = createDeferredCore<SystemAgentApprovalResolved>();
+      const publishResolved = vi.fn((_approvalKind: string, event: SystemAgentApprovalResolved) => {
+        applicationResult.resolve(event);
+      });
       const context = {
         systemAgentApprovalManager: manager,
         approvalEvents: { publishRequested: vi.fn(() => 1), publishResolved },
@@ -180,13 +187,12 @@ describe("queueDelegatedApproval authority", () => {
         decision === "allow-once" && revokeAtAuthorityCheck === undefined
           ? "applied"
           : "not-applied";
-      await vi.waitFor(
-        () =>
-          expect(publishResolved).toHaveBeenCalledWith(
-            "system-agent",
-            expect.objectContaining({ applicationStatus: expectedStatus }),
-          ),
-        { timeout: 10_000 },
+      await expect(applicationResult.promise).resolves.toMatchObject({
+        applicationStatus: expectedStatus,
+      });
+      expect(publishResolved).toHaveBeenCalledWith(
+        "system-agent",
+        expect.objectContaining({ applicationStatus: expectedStatus }),
       );
 
       if (expectedStatus === "applied") {
@@ -224,6 +230,7 @@ describe("queueDelegatedApproval authority", () => {
       }
       releaseAgentRunDelegatedAuthority(authority);
     },
+    30_000,
   );
 
   it("blocks the persistent effect when its delegated run closes after review", async () => {
