@@ -24,7 +24,7 @@ import type {
   QaSkillStatusEntry,
   QaSuiteRuntimeEnv,
 } from "./suite-runtime-types.js";
-import { readQaNestedToolActivity } from "./tool-activity.js";
+import { projectQaToolActivity, readQaNestedToolActivity } from "./tool-activity.js";
 
 type QaGatewayCallEnv = Pick<
   QaSuiteRuntimeEnv,
@@ -79,6 +79,7 @@ type QaSessionTranscriptSummary = {
 type QaSessionTranscriptSummaryOptions = {
   afterEventCursor?: number;
   allowEmpty?: boolean;
+  includeCodeModeControl?: boolean;
   pendingCodeModeExecNeedle?: string;
   probeText?: string;
 };
@@ -135,6 +136,7 @@ function summarizeSessionTranscriptEvents(
   sessionKey: string,
   eventCursor = events.length,
   pendingCodeModeExecNeedle?: string,
+  includeCodeModeControl = false,
 ): QaSessionTranscriptSummary {
   const scanner = createDirectReplyTranscriptSentinelScanner();
   const assistantMirrors: Array<{ identity: string; text: string }> = [];
@@ -146,11 +148,9 @@ function summarizeSessionTranscriptEvents(
   const successfulToolCallEvents: NonNullable<
     QaSessionTranscriptSummary["successfulToolCallEvents"]
   > = [];
-  const assistantToolNamesByCallId = new Map<string, string>();
   const codeModeExecCallIds = new Set<string>();
   const codeModeRunIds = new Set<string>();
   const completedToolCallIds = new Set<string>();
-  const successfulToolCallIds = new Set<string>();
   const waitRunIdsByCallId = new Map<string, string>();
   let finalText = "";
   let lastAssistantContentTypes: string[] = [];
@@ -184,13 +184,7 @@ function summarizeSessionTranscriptEvents(
     if (message.role === "toolResult" || nestedToolResult) {
       const toolCallId = nestedToolResult?.toolCallId ?? readNonEmptyString(message.toolCallId);
       const toolName = nestedToolResult?.toolName ?? readNonEmptyString(message.toolName);
-      const isError = nestedToolResult ? nestedToolResult.isError : message.isError;
-      const timestamp = nestedToolResult ? nestedToolResult.timestamp : message.timestamp;
       const details = isRecord(message.details) ? message.details : undefined;
-      if (nestedToolResult && toolCallId && toolName) {
-        assistantToolCallCounts[toolName] = (assistantToolCallCounts[toolName] ?? 0) + 1;
-        assistantToolNamesByCallId.set(toolCallId, toolName);
-      }
       if (toolName && details?.sourceReplyRoute === "current-source") {
         const receipt = isRecord(details.receipt) ? details.receipt : undefined;
         const threadId = readNonEmptyString(receipt?.threadId);
@@ -198,36 +192,6 @@ function summarizeSessionTranscriptEvents(
           toolName,
           ...(threadId ? { threadId } : {}),
         });
-      }
-      if (
-        toolCallId &&
-        toolName &&
-        assistantToolNamesByCallId.get(toolCallId) === toolName &&
-        !completedToolCallIds.has(toolCallId)
-      ) {
-        completedToolCallIds.add(toolCallId);
-        completedToolCallCounts[toolName] = (completedToolCallCounts[toolName] ?? 0) + 1;
-      }
-      if (
-        toolCallId &&
-        toolName &&
-        isError === false &&
-        assistantToolNamesByCallId.get(toolCallId) === toolName &&
-        !successfulToolCallIds.has(toolCallId)
-      ) {
-        successfulToolCallIds.add(toolCallId);
-        successfulToolCallCounts[toolName] = (successfulToolCallCounts[toolName] ?? 0) + 1;
-        if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
-          // Keep owner-authenticated result chronology bounded for long-lived QA sessions.
-          if (successfulToolCallEvents.length === MAX_SUCCESSFUL_TOOL_CALL_EVENTS) {
-            successfulToolCallEvents.shift();
-          }
-          successfulToolCallEvents.push({
-            name: toolName,
-            timestamp,
-            toolCallId,
-          });
-        }
       }
       if (
         pendingCodeModeExecNeedle &&
@@ -265,9 +229,7 @@ function summarizeSessionTranscriptEvents(
     const assistantToolCalls = readAssistantToolCalls(message);
     lastAssistantToolNames = assistantToolCalls.map((toolCall) => toolCall.name);
     for (const toolCall of assistantToolCalls) {
-      assistantToolCallCounts[toolCall.name] = (assistantToolCallCounts[toolCall.name] ?? 0) + 1;
       if (toolCall.id) {
-        assistantToolNamesByCallId.set(toolCall.id, toolCall.name);
         if (
           pendingCodeModeExecNeedle &&
           toolCall.name === "exec" &&
@@ -285,6 +247,41 @@ function summarizeSessionTranscriptEvents(
       }
     }
     scanner.recordMessage(message);
+  }
+
+  const activity = projectQaToolActivity(events);
+  for (const operation of activity) {
+    if (operation.completed && operation.toolCallId) {
+      completedToolCallIds.add(operation.toolCallId);
+    }
+  }
+  const operations = activity.filter(
+    (operation) => includeCodeModeControl || operation.kind === "tool",
+  );
+  for (const operation of operations) {
+    const name = operation.toolName;
+    assistantToolCallCounts[name] = (assistantToolCallCounts[name] ?? 0) + 1;
+    if (operation.completed) {
+      completedToolCallCounts[name] = (completedToolCallCounts[name] ?? 0) + 1;
+    }
+    if (operation.successful) {
+      successfulToolCallCounts[name] = (successfulToolCallCounts[name] ?? 0) + 1;
+    }
+  }
+  for (const operation of operations.toSorted(
+    (left, right) => (left.resultIndex ?? Infinity) - (right.resultIndex ?? Infinity),
+  )) {
+    if (!operation.successful || !operation.toolCallId || operation.timestamp === undefined) {
+      continue;
+    }
+    if (successfulToolCallEvents.length === MAX_SUCCESSFUL_TOOL_CALL_EVENTS) {
+      successfulToolCallEvents.shift();
+    }
+    successfulToolCallEvents.push({
+      name: operation.toolName,
+      timestamp: operation.timestamp,
+      toolCallId: operation.toolCallId,
+    });
   }
 
   if (events.length === 0) {
@@ -498,22 +495,21 @@ async function readRawQaSessionStore(
   throw new Error("QA session store read failed after FTS settle retries");
 }
 
-async function readSessionTranscriptSummary(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+async function readQaSessionTranscriptEvents(
+  env: Parameters<typeof readRawQaSessionStore>[0],
   sessionKey: string,
-  options: QaSessionTranscriptSummaryOptions = {},
-): Promise<QaSessionTranscriptSummary> {
+  options: Pick<QaSessionTranscriptSummaryOptions, "afterEventCursor" | "allowEmpty"> = {},
+) {
   const normalizedSessionKey = sessionKey.trim();
   if (!normalizedSessionKey) {
-    throw new Error("readSessionTranscriptSummary requires a session key");
+    throw new Error("QA transcript reader requires a session key");
   }
-  const pendingCodeModeExecNeedle = options.pendingCodeModeExecNeedle?.trim();
   const store = await readRawQaSessionStore(env);
   const entry = store[normalizedSessionKey];
   const sessionId = readNonEmptyString(entry?.sessionId);
   if (!sessionId) {
     if (options.allowEmpty === true) {
-      return emptySessionTranscriptSummary(0, pendingCodeModeExecNeedle);
+      return { normalizedSessionKey, events: [], selectedEvents: [], sessionId: undefined };
     }
     throw new Error(`session transcript entry not found for ${normalizedSessionKey}`);
   }
@@ -534,6 +530,26 @@ async function readSessionTranscriptSummary(
     );
   }
   const selectedEvents = events.slice(afterEventCursor);
+  return { normalizedSessionKey, events, selectedEvents, sessionId };
+}
+
+async function readSessionToolActivity(
+  env: Parameters<typeof readRawQaSessionStore>[0],
+  sessionKey: string,
+  options: Pick<QaSessionTranscriptSummaryOptions, "afterEventCursor" | "allowEmpty"> = {},
+) {
+  const { selectedEvents } = await readQaSessionTranscriptEvents(env, sessionKey, options);
+  return projectQaToolActivity(selectedEvents);
+}
+
+async function readSessionTranscriptSummary(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  sessionKey: string,
+  options: QaSessionTranscriptSummaryOptions = {},
+): Promise<QaSessionTranscriptSummary> {
+  const { normalizedSessionKey, events, selectedEvents, sessionId } =
+    await readQaSessionTranscriptEvents(env, sessionKey, options);
+  const pendingCodeModeExecNeedle = options.pendingCodeModeExecNeedle?.trim();
   if (selectedEvents.length === 0 && options.allowEmpty === true) {
     return emptySessionTranscriptSummary(events.length, pendingCodeModeExecNeedle);
   }
@@ -542,10 +558,11 @@ async function readSessionTranscriptSummary(
     normalizedSessionKey,
     events.length,
     pendingCodeModeExecNeedle,
+    options.includeCodeModeControl,
   );
   const probeText = options.probeText?.trim();
   let cutoff: unknown;
-  if (probeText) {
+  if (probeText && sessionId) {
     const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
     const storePath = resolveStorePath(undefined, { agentId: "qa", env: runtimeEnv });
     const transcriptEntry = await buildSessionEntry(
@@ -573,6 +590,7 @@ export {
   readEffectiveTools,
   readRawQaSessionStore,
   readSessionTranscriptSummary,
+  readSessionToolActivity,
   readSkillStatus,
   seedQaSessionEntries,
   seedQaSessionTranscript,

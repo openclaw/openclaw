@@ -168,7 +168,8 @@ class NodeWorkerSupervisor {
       this.retentions.size > 0 ||
       this.active.size > this.idleChildren().length ||
       this.stoppingEnvironments.size > 0 ||
-      this.workspace.processes.hasActiveWork();
+      this.workspace.processes.hasActiveWork() ||
+      this.workspace.quiescence.hasActiveWork();
     if (hasLocalWork()) {
       return true;
     }
@@ -1099,6 +1100,7 @@ class NodeWorkerSupervisor {
   private async settleClose(): Promise<void> {
     const initialization = this.initializationPromise;
     const errors: unknown[] = [];
+    await this.workspace.quiescence.close().catch((error: unknown) => errors.push(error));
     await this.workspace.processes.close().catch((error: unknown) => errors.push(error));
     await initialization?.catch((error: unknown) => errors.push(error));
     await Promise.allSettled([...this.admissions.values()].map((admission) => admission.done));

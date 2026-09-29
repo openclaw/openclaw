@@ -76,17 +76,24 @@ function parentStoreColumns(db: DatabaseSync) {
       ];
 }
 
-export function readSubagentRun(
-  database: OpenClawStateDatabase,
+export function readSubagentRunRow(
+  database: Pick<OpenClawStateDatabase, "db">,
   runId: string,
-): SubagentRunRecord | null {
-  const row = executeSqliteQuerySync(
+): SubagentRunSqliteRow | undefined {
+  return executeSqliteQuerySync(
     database.db,
     getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
       .selectFrom("subagent_runs")
       .selectAll()
       .where("run_id", "=", runId),
   ).rows[0];
+}
+
+export function readSubagentRun(
+  database: OpenClawStateDatabase,
+  runId: string,
+): SubagentRunRecord | null {
+  const row = readSubagentRunRow(database, runId);
   return row ? rowToSubagentRunRecord(row) : null;
 }
 

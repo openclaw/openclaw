@@ -188,6 +188,7 @@ export function createSqliteWalCheckpoint(
   const recordCheckpoint = (
     mode: SqliteWalCheckpointMode,
     row: Record<string, SQLOutputValue> | undefined,
+    quiet: boolean,
   ): boolean => {
     // Worker relays keep this same-process ordering fact even if the wall clock steps backward.
     const observedAtNs = process.hrtime.bigint();
@@ -239,7 +240,9 @@ export function createSqliteWalCheckpoint(
     if (observation.error !== undefined) {
       options.onCheckpointError?.(sizeError);
     }
-    if (busy || observation.warning) {
+    // Frequent checkpoint ticks expect readers to block some passes; only the
+    // reclaim cadence reports them, the health snapshot still records every one.
+    if ((busy || observation.warning) && !quiet) {
       const label = options.databaseLabel ?? "sqlite database";
       options.onCheckpointError?.(
         new Error(
@@ -261,9 +264,13 @@ export function createSqliteWalCheckpoint(
         notifyCheckpoint(options.databasePath, snapshot);
       }
     },
-    checkpoint(this: void, mode: SqliteWalCheckpointMode): boolean {
+    checkpoint(
+      this: void,
+      mode: SqliteWalCheckpointMode,
+      checkpointOptions: { quiet?: boolean } = {},
+    ): boolean {
       try {
-        return recordCheckpoint(mode, checkpoint(database, mode));
+        return recordCheckpoint(mode, checkpoint(database, mode), checkpointOptions.quiet === true);
       } catch (error) {
         recordCheckpointError(error);
         return false;

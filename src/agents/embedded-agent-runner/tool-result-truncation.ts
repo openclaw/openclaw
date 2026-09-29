@@ -544,16 +544,12 @@ export function truncateToolResultMessage(
     return msg;
   }
 
-  const blockTextChars = content.map((block) => {
-    if (!isToolResultTextBlock(block)) {
-      return 0;
-    }
-    const text = block.text;
-    return (
-      readPreparedToolResultTextChars(block, text, budgetOptions.minimumRawWeight ?? 1) ??
-      estimateToolResultTextChars(text, budgetOptions)
-    );
-  });
+  const blockTextChars = content.map((block) =>
+    isToolResultTextBlock(block)
+      ? (readPreparedToolResultTextChars(block, block.text, budgetOptions.minimumRawWeight ?? 1) ??
+        estimateToolResultTextChars(block.text, budgetOptions))
+      : 0,
+  );
   const totalTextChars = blockTextChars.reduce((sum, chars) => sum + chars, 0);
   if (totalTextChars <= maxChars) {
     return msg;
@@ -561,46 +557,42 @@ export function truncateToolResultMessage(
 
   // A caller's raw-text safety floor changes cost, not which semantic blocks
   // are short. Reserve their actual weighted cost before shrinking larger text.
-  const smallBlocks = content.map(
-    (block, index) =>
-      (blockTextChars[index] ?? 0) > 0 &&
-      isToolResultTextBlock(block) &&
-      block.text.length <= minKeepChars &&
-      estimateToolResultTextChars(block.text) <= minKeepChars,
-  );
-  const blockNoticeChars = content.map((block, index) =>
-    (blockTextChars[index] ?? 0) > 0 && isToolResultTextBlock(block)
-      ? estimateToolResultTextChars(suffixFactory(Math.max(1, block.text.length)), budgetOptions)
-      : 0,
-  );
-  const smallBlockChars = blockTextChars.reduce(
-    (sum, chars, index) => sum + (smallBlocks[index] ? chars : 0),
-    0,
-  );
-  const largeBlockNoticeChars = blockNoticeChars.reduce(
-    (sum, chars, index) => sum + (smallBlocks[index] ? 0 : chars),
-    0,
-  );
+  let smallBlockChars = 0;
+  let largeBlockNoticeChars = 0;
+  let totalNoticeChars = 0;
+  const blocks = content.map((block, index) => {
+    const textChars = blockTextChars[index] ?? 0;
+    const text = textChars > 0 && isToolResultTextBlock(block) ? block.text : undefined;
+    const small =
+      text !== undefined &&
+      text.length <= minKeepChars &&
+      estimateToolResultTextChars(text) <= minKeepChars;
+    const noticeChars =
+      text === undefined
+        ? 0
+        : estimateToolResultTextChars(suffixFactory(Math.max(1, text.length)), budgetOptions);
+    smallBlockChars += small ? textChars : 0;
+    largeBlockNoticeChars += small ? 0 : noticeChars;
+    totalNoticeChars += noticeChars;
+    return { block, textChars, small, noticeChars };
+  });
   // Preserve short semantic blocks when larger ones can retain a complete truncation notice.
   const preserveSmallBlocks = smallBlockChars + largeBlockNoticeChars <= maxChars;
   const preservedChars = preserveSmallBlocks ? smallBlockChars : 0;
   const remainingBudget = Math.max(0, maxChars - preservedChars);
   const reducibleChars = totalTextChars - preservedChars;
-  const reducibleNoticeChars = preserveSmallBlocks
-    ? largeBlockNoticeChars
-    : blockNoticeChars.reduce((sum, chars) => sum + chars, 0);
+  const reducibleNoticeChars = preserveSmallBlocks ? largeBlockNoticeChars : totalNoticeChars;
   const noticeScale =
     reducibleNoticeChars > 0 ? Math.min(1, remainingBudget / reducibleNoticeChars) : 0;
   const distributableBudget = Math.max(0, remainingBudget - reducibleNoticeChars);
 
-  const newContent = content.map((block: unknown, index) => {
+  const newContent = blocks.map(({ block, textChars, small, noticeChars }) => {
     if (!isToolResultTextBlock(block)) {
       return block;
     }
-    const textChars = blockTextChars[index] ?? 0;
-    const preserveBlock = preserveSmallBlocks && smallBlocks[index];
+    const preserveBlock = preserveSmallBlocks && small;
     const blockShare = reducibleChars > 0 ? textChars / reducibleChars : 0;
-    const noticeBudget = (blockNoticeChars[index] ?? 0) * noticeScale;
+    const noticeBudget = noticeChars * noticeScale;
     const blockBudget = preserveBlock
       ? textChars
       : Math.floor(noticeBudget + distributableBudget * blockShare);

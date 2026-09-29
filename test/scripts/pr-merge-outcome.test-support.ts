@@ -346,7 +346,7 @@ if(s.restMainReads>0&&args[0]==="api"&&args.includes("repos/fixture/repo/pulls/1
 }
 const quotaRead=s.quotaAt==="checks"&&args[0]==="pr"&&args[1]==="checks"||
   s.quotaAt==="preview"&&args.some(arg=>arg.includes("viewerMergeBodyText"))||
-  s.quotaAt==="observe"&&s.observationReads>=s.quotaAfterObservations&&args.includes("graphql")&&!args.includes("--input")&&!args.some(arg=>arg.includes("viewerMergeBodyText"));
+  s.quotaAt==="observe"&&s.observationReads>=s.quotaAfterObservations&&args.includes(${JSON.stringify(landingSnapshotQuery)});
 if(quotaRead&&s.quotaFailuresRemaining!==0) {
   if(s.quotaFailuresRemaining!==null) s.quotaFailuresRemaining--;
   quota();

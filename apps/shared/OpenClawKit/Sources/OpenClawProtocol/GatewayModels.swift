@@ -15723,6 +15723,7 @@ public struct SessionRow: Codable, Sendable {
     public let participantcount: Int?
     public let visibility: SessionVisibility?
     public let sharingrole: SessionSharingRole?
+    public let senddisabledreason: AnyCodable?
     public let createdat: Double?
     public let forksource: [String: AnyCodable]?
     public let previoussessionid: String?
@@ -15817,6 +15818,7 @@ public struct SessionRow: Codable, Sendable {
         participantcount: Int? = nil,
         visibility: SessionVisibility? = nil,
         sharingrole: SessionSharingRole? = nil,
+        senddisabledreason: AnyCodable? = nil,
         createdat: Double? = nil,
         forksource: [String: AnyCodable]? = nil,
         previoussessionid: String? = nil,
@@ -15910,6 +15912,7 @@ public struct SessionRow: Codable, Sendable {
         self.participantcount = participantcount
         self.visibility = visibility
         self.sharingrole = sharingrole
+        self.senddisabledreason = senddisabledreason
         self.createdat = createdat
         self.forksource = forksource
         self.previoussessionid = previoussessionid
@@ -16005,6 +16008,7 @@ public struct SessionRow: Codable, Sendable {
         case participantcount = "participantCount"
         case visibility
         case sharingrole = "sharingRole"
+        case senddisabledreason = "sendDisabledReason"
         case createdat = "createdAt"
         case forksource = "forkSource"
         case previoussessionid = "previousSessionId"

@@ -153,10 +153,8 @@ import {
   splitMockConversationContext,
   hasToolOutput,
   extractToolOutput,
-  extractToolOutputValue,
   extractToolOutputStructuredError,
   extractToolOutputCallId,
-  extractLatestToolOutput,
   extractAllToolOutputText,
   extractUserTextAfterLatestToolOutput,
   buildSlackMpimHistoryReply,
@@ -181,18 +179,13 @@ import {
 import { resolveMockSubagentHandoff } from "./mock-openai-subagent-completion.js";
 import {
   QA_CODE_MODE_TARGET_MARKER,
-  stringifyScenarioToolOutput,
   encodeCodeModeTarget,
   resolveCodeModeExecSurface,
   canCallScenarioTool,
-  readScenarioCompletedToolName,
   readProgressCommand,
-  unwrapScenarioCatalogOutput,
+  readScenarioToolCompletion,
   resolveCurrentToolDeclarationSurface,
-  findToolCallByCallId,
-  parseNativeCodeModeOutput,
   readRestartCheckpointProgress,
-  isCodeModeControlToolOutput,
   buildScenarioToolCallEvents,
   extractScenarioPlannedTool,
 } from "./mock-openai-tool-routing.js";
@@ -472,22 +465,17 @@ async function buildResponsesPayload(
   const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
   const hasCompletedToolOutput = hasToolOutput(input);
-  const rawToolOutput = extractToolOutput(input);
-  const codeModeSurface = resolveCodeModeExecSurface(toolDeclarationBody);
-  const hasCodeModeControlOutput = isCodeModeControlToolOutput(toolDeclarationBody, input);
-  const codeModeControlJson = hasCodeModeControlOutput
-    ? codeModeSurface === "native"
-      ? parseNativeCodeModeOutput(extractToolOutputValue(input))
-      : parseToolOutputJson(rawToolOutput)
-    : null;
-  const toolOutput =
-    codeModeControlJson?.status === "completed" && Object.hasOwn(codeModeControlJson, "value")
-      ? stringifyScenarioToolOutput(codeModeControlJson.value)
-      : codeModeSurface === "native" && hasCodeModeControlOutput
-        ? ""
-        : unwrapScenarioCatalogOutput(input, rawToolOutput);
-  const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
-  const completedToolName = readScenarioCompletedToolName(completedToolCall);
+  const allInputText = extractAllRequestTexts(input, body);
+  const {
+    rawToolOutput,
+    hasCodeModeControlOutput,
+    codeModeControlJson,
+    toolOutput,
+    completedToolName,
+    scenarioToolOutput,
+    toolJson,
+    hasCompletedStructuredWrite,
+  } = readScenarioToolCompletion(toolDeclarationBody, input, allInputText);
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
   const pendingCommandProgress = (
@@ -513,7 +501,6 @@ async function buildResponsesPayload(
       ? buildAssistantEvents("BUG-TOOL-FAILED")
       : null;
   };
-  const allInputText = extractAllRequestTexts(input, body);
   const hasCompactionRetryDurableContext = allInputText.includes(
     QA_COMPACTION_RETRY_DURABLE_MARKER,
   );
@@ -549,13 +536,6 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
-  const scenarioToolOutput =
-    toolOutput ||
-    (/thread memory check|session memory ranking check|memory tools check|repo contract followthrough check/i.test(
-      allInputText,
-    )
-      ? extractLatestToolOutput(input)
-      : "");
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.
   if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
@@ -570,7 +550,6 @@ async function buildResponsesPayload(
   if (QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText)) {
     return buildFailedResponseEvents();
   }
-  const toolJson = parseToolOutputJson(scenarioToolOutput);
   // The hard-kill fixture shares the first real checkpoint below, but recovery
   // must settle without scheduling the repeated-restart fixture's later waits.
   if (
@@ -1531,7 +1510,10 @@ async function buildResponsesPayload(
     const evidence = fixture.includeUserFollowup
       ? extractFollowthroughEvidenceText(input)
       : extractAllToolOutputText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(evidence)) {
+    if (
+      hasCompletedStructuredWrite ||
+      /successfully (?:wrote|created|updated|replaced)/i.test(evidence)
+    ) {
       return buildAssistantEvents(fixture.reply);
     }
     const hasRequest = evidence.includes(fixture.requestMarker);
@@ -1895,6 +1877,7 @@ async function buildResponsesPayload(
   if (/repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = extractFollowthroughEvidenceText(input);
     if (
+      hasCompletedStructuredWrite ||
       /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
       /status:\s*complete/i.test(repoEvidenceText)
     ) {
@@ -1931,7 +1914,10 @@ async function buildResponsesPayload(
   }
   if (/personal task followthrough check/i.test(allInputText)) {
     const taskEvidenceText = extractFollowthroughEvidenceText(input);
-    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
+    if (
+      hasCompletedStructuredWrite ||
+      /successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)
+    ) {
       return buildAssistantEvents(
         [
           "Pending: maintainer feedback before publishing",

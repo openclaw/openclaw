@@ -248,20 +248,22 @@ function mergeSenderIntoLeadingConversationInfo(
 
 function prependContextToUserMessage(message: AgentMessage, sender: PersistedSender): AgentMessage {
   const context = formatContextJsonBlock(CONVERSATION_INFO_LABEL, { sender });
+  const projectText = (text: string): string | undefined => {
+    const { body, envelope } = splitLeadingTimestampEnvelope(text);
+    if (body === context || body.startsWith(`${context}\n\n`)) {
+      return undefined;
+    }
+    return (
+      mergeSenderIntoLeadingConversationInfo(text, sender) ??
+      `${envelope}${body ? `${context}\n\n${body}` : context}`
+    );
+  };
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") {
-    const { body, envelope } = splitLeadingTimestampEnvelope(content);
-    if (body === context || body.startsWith(`${context}\n\n`)) {
-      return message;
-    }
-    const merged = mergeSenderIntoLeadingConversationInfo(content, sender);
-    if (merged !== undefined) {
-      return merged === content ? message : ({ ...message, content: merged } as AgentMessage);
-    }
-    return {
-      ...message,
-      content: `${envelope}${body ? `${context}\n\n${body}` : context}`,
-    } as AgentMessage;
+    const text = projectText(content);
+    return text === undefined || text === content
+      ? message
+      : ({ ...message, content: text } as AgentMessage);
   }
   if (!Array.isArray(content)) {
     return message;
@@ -275,16 +277,12 @@ function prependContextToUserMessage(message: AgentMessage, sender: PersistedSen
     } as AgentMessage;
   }
   const textBlock = content[textIndex] as { text: string };
-  const { body, envelope } = splitLeadingTimestampEnvelope(textBlock.text);
-  if (body === context || body.startsWith(`${context}\n\n`)) {
+  const text = projectText(textBlock.text);
+  if (text === undefined) {
     return message;
   }
-  const merged = mergeSenderIntoLeadingConversationInfo(textBlock.text, sender);
   const nextContent = content.slice();
-  nextContent[textIndex] = {
-    ...textBlock,
-    text: merged ?? `${envelope}${body ? `${context}\n\n${body}` : context}`,
-  };
+  nextContent[textIndex] = { ...textBlock, text };
   return { ...message, content: nextContent } as AgentMessage;
 }
 

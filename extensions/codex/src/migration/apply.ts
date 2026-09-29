@@ -129,7 +129,6 @@ export async function applyCodexMigrationPlan(params: {
       : plan.source;
   const authSource: CodexAuthSource = {
     codexHome,
-    authPath: path.join(codexHome, "auth.json"),
     modelsCachePath: path.join(codexHome, "models_cache.json"),
   };
   const runtime = withCachedMigrationConfigRuntime(
