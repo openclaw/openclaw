@@ -4,14 +4,18 @@
 // seam fires the hook and folds the same-backend override into the run's model.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { makePluginLoaderTempDir, writePlugin } from "../../plugins/loader.test-fixtures.js";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  makePluginLoaderTempDir,
+  writePlugin,
+} from "../../plugins/loader.test-fixtures.js";
 import { applyCliModelResolveHookForRun } from "./model-resolve-hook.js";
 
 // The bundled plugin set registers the claude-cli backend binding the override
@@ -45,6 +49,10 @@ const CLI_CONFIG: OpenClawConfig = {
 afterEach(() => {
   resetGlobalHookRunner();
 });
+
+// The trace file and plugin root live under the fixture root; drop the whole
+// tree once this suite is done instead of leaking a temp dir per run.
+afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("applyCliModelResolveHookForRun with a real loaded plugin", () => {
   it("fires before_model_resolve on a CLI-backed turn and applies the same-backend override", async () => {
