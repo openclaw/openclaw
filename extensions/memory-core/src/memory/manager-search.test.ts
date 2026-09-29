@@ -1,7 +1,7 @@
 // Memory Core tests cover manager search plugin behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { bm25RankToScore, buildFtsQuery, buildStrictFtsQuery } from "./keyword-query.js";
 import { searchKeyword } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
 
@@ -21,6 +21,7 @@ function searchKeywordFixture(
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
     buildFtsQuery,
+    buildStrictFtsQuery,
     bm25RankToScore,
     ...options,
   });
@@ -399,6 +400,39 @@ describe("searchKeyword natural-language questions", () => {
       db.close();
     }
   });
+
+  itWithFts(
+    "keeps a complete match inside the bounded window filled with partial hits",
+    async () => {
+      const db = createFtsDb();
+      try {
+        // A long complete match surrounded by many short partial matches: plain
+        // BM25 over a single ranked LIMIT could evict it, so the complete-match
+        // tier must be reserved before the window fills.
+        insertKeywordFixture(db, {
+          id: "complete",
+          path: "notes/complete.md",
+          text: "Alpha deploy preference. " + "Padding context around the entry. ".repeat(8),
+          endLine: 3,
+        });
+        for (let index = 0; index < 30; index += 1) {
+          insertKeywordFixture(db, {
+            id: `partial-${index}`,
+            path: `notes/partial-${index}.md`,
+            text: "deploy preference.",
+            endLine: 3,
+          });
+        }
+
+        const results = await searchKeywordFixture(db, "Alpha deploy preference", { limit: 5 });
+
+        expect(results[0]?.id).toBe("complete");
+        expect(results.filter((row) => row.id === "complete")).toHaveLength(1);
+      } finally {
+        db.close();
+      }
+    },
+  );
 });
 
 describe("searchKeyword ranked limits", () => {

@@ -307,6 +307,7 @@ export async function searchKeyword(params: {
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: MemorySource[] };
   buildFtsQuery: (raw: string) => string | null;
+  buildStrictFtsQuery?: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
   rankingQuery?: string;
@@ -322,6 +323,10 @@ export async function searchKeyword(params: {
   if (!plan.matchQuery && plan.substringTerms.length === 0) {
     return [];
   }
+
+  // Reserve a complete-match tier so partial OR hits can never push a row
+  // matching every query token out of the bounded candidate window.
+  const strictMatchQuery = params.buildStrictFtsQuery?.(params.query) ?? null;
 
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
@@ -339,16 +344,25 @@ export async function searchKeyword(params: {
     const matchClause = matchQuery
       ? `${params.ftsTable} MATCH ? AND ${params.ftsTable}.rank MATCH 'bm25()'`
       : "1=1";
+    const tiered = Boolean(matchQuery && strictMatchQuery && strictMatchQuery !== matchQuery);
     return params.db
       .prepare(
         `SELECT id, path, source, start_line, end_line, text,\n` +
-          `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank\n` +
-          `  FROM ${params.ftsTable}\n` +
+          `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank` +
+          (tiered
+            ? `,\n       CASE WHEN id IN (SELECT id FROM ${params.ftsTable} WHERE ${params.ftsTable} MATCH ?) THEN 0 ELSE 1 END AS coverage_tier`
+            : "") +
+          `\n  FROM ${params.ftsTable}\n` +
           ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}\n` +
-          (matchQuery ? ` ORDER BY rank ASC\n` : "") +
+          (matchQuery
+            ? tiered
+              ? ` ORDER BY coverage_tier ASC, rank ASC\n`
+              : ` ORDER BY rank ASC\n`
+            : "") +
           ` LIMIT ?`,
       )
       .all(
+        ...(tiered ? [strictMatchQuery] : []),
         ...(matchQuery ? [matchQuery] : []),
         ...terms,
         ...params.sourceFilter.params,
