@@ -36,6 +36,80 @@ const permissiveRemoteCdpPolicy = {
 };
 
 describe("browser remote profile tab ops via Playwright", () => {
+  it("resolves an explicit tab even when the short CDP health probe would time out", async () => {
+    const healthProbe = vi.spyOn(deps.chromeModule, "isChromeCdpReady").mockResolvedValue(false);
+    const listPagesViaPlaywright = vi.fn(async () => [page("T1")]);
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const { state } = deps.createRemoteRouteHarness();
+    const remote = deps.createBrowserRouteContext({ getState: () => state }).forProfile("remote");
+
+    await expect(remote.ensureTabAvailable("T1")).resolves.toMatchObject({ targetId: "T1" });
+    expect(listPagesViaPlaywright).toHaveBeenCalled();
+    expect(healthProbe).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing explicit tab without mistaking it for an unavailable profile", async () => {
+    const healthProbe = vi.spyOn(deps.chromeModule, "isChromeCdpReady").mockResolvedValue(false);
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright: vi.fn(async () => [page("T1")]),
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const { state } = deps.createRemoteRouteHarness();
+    const remote = deps.createBrowserRouteContext({ getState: () => state }).forProfile("remote");
+
+    await expect(remote.ensureTabAvailable("STALE_TARGET")).rejects.toThrow(/tab not found/i);
+    expect(healthProbe).not.toHaveBeenCalled();
+  });
+
+  it("preserves the full enumeration budget after a short first attempt fails", async () => {
+    const healthProbe = vi.spyOn(deps.chromeModule, "isChromeCdpReady").mockResolvedValue(false);
+    const listPagesViaPlaywright = vi
+      .fn(async () => [page("T1")])
+      .mockRejectedValueOnce(new Error("short enumeration timed out"));
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const { state } = deps.createRemoteRouteHarness();
+    const remote = deps.createBrowserRouteContext({ getState: () => state }).forProfile("remote");
+
+    await expect(remote.ensureTabAvailable("T1")).resolves.toMatchObject({ targetId: "T1" });
+    expect(listPagesViaPlaywright).toHaveBeenCalledTimes(2);
+    expect(listPagesViaPlaywright).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ timeoutMs: 5_000 }),
+    );
+    expect(listPagesViaPlaywright).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+    expect(healthProbe).not.toHaveBeenCalled();
+  });
+
+  it("uses at most one full enumeration budget for an unavailable remote profile", async () => {
+    const healthProbe = vi.spyOn(deps.chromeModule, "isChromeCdpReady").mockResolvedValue(false);
+    const listPagesViaPlaywright = vi.fn(async () => {
+      throw new Error("CDP connection timed out");
+    });
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const { state } = deps.createRemoteRouteHarness();
+    const remote = deps.createBrowserRouteContext({ getState: () => state }).forProfile("remote");
+
+    await expect(remote.ensureTabAvailable("T1")).rejects.toThrow(/not running/i);
+    expect(listPagesViaPlaywright).toHaveBeenCalledTimes(2);
+    expect(listPagesViaPlaywright).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ timeoutMs: 5_000 }),
+    );
+    expect(listPagesViaPlaywright).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+    expect(healthProbe).toHaveBeenCalledOnce();
+  });
+
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
       { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },

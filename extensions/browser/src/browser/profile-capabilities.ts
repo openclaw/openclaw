@@ -11,6 +11,14 @@ export function getBrowserProfileCapabilities(
   return resolveBrowserEngine(profile.engine).capabilities(profile);
 }
 
+/** External CDP endpoints may be attached on loopback as well as over a network. */
+export function isExternallyManagedCdpProfile(profile: ResolvedBrowserProfile): boolean {
+  return (
+    getBrowserProfileCapabilities(profile).isRemote ||
+    (profile.driver === "openclaw" && profile.attachOnly)
+  );
+}
+
 /** Resolve the default snapshot format for a profile and available drivers. */
 export function resolveDefaultSnapshotFormat(params: {
   profile: ResolvedBrowserProfile;
