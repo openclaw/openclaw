@@ -911,6 +911,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     emitLifecycleEvent("run-capped", { phase: "end", endedAt: Date.now() });
     await flushAsync();
+    await agentCallWaits.settle();
 
     const run = await waitForFrozenResult("run-capped", (resultText) =>
       resultText.includes("[truncated: frozen completion output exceeded 100KB"),
@@ -951,6 +952,7 @@ describe("subagent registry lifecycle error grace", () => {
 
     await vi.advanceTimersByTimeAsync(15_000);
     await flushAsync();
+    await agentCallWaits.settle();
 
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)

@@ -109,6 +109,16 @@ export const TSGO_CORE_TEST_SHARDS = [
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.services-cron.json",
   },
+  {
+    name: "ui-app",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-app.json",
+  },
+  {
+    name: "ui-components",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-components.json",
+  },
 ] as const;
 
 // Root tests remain one CI inventory graph; execution partitions its checker heap.

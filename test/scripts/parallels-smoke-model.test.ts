@@ -674,10 +674,10 @@ ensure_vm_running`,
 
   it("resets Linux product state before both install lanes", () => {
     for (const lane of ["fresh", "upgrade"]) {
-      const restoreIndex = linux.indexOf(`this.phase("${lane}.restore-snapshot"`);
-      const resetIndex = linux.indexOf(`this.phase("${lane}.reset-state"`);
+      const restoreIndex = linux.indexOf(`"${lane}.restore-snapshot"`);
+      const resetIndex = linux.indexOf(`"${lane}.reset-state"`);
       const installIndex = linux.indexOf(
-        `this.phase("${lane}.${lane === "fresh" ? "install-main" : "install-latest"}"`,
+        `"${lane}.${lane === "fresh" ? "install-main" : "install-latest"}"`,
       );
       expect(restoreIndex).toBeGreaterThanOrEqual(0);
       expect(resetIndex).toBeGreaterThan(restoreIndex);
@@ -963,9 +963,7 @@ ensure_vm_running`,
       const script = readFileSync(scriptPath, "utf8");
 
       expect(script, scriptPath).toContain("resolveSnapshot");
-      expect(script, scriptPath).toContain(
-        scriptPath === TS_PATHS.macos ? "runSmokeLane" : "SmokeRunController",
-      );
+      expect(script, scriptPath).toContain("SmokeRunController");
       expect(script, scriptPath).not.toContain("def aliases(name: str)");
     }
   });
@@ -1692,7 +1690,7 @@ if (commandArgs[0] === "list") {
 
       expect(script, scriptPath).toContain("PhaseRunner");
       expect(script, scriptPath).toContain("validateSnapshotRestoreMode(this.options.mode");
-      expect(script, scriptPath).toContain("remainingPhaseTimeoutMs");
+      expect(script, scriptPath).toContain("this.phases.remainingTimeoutMs");
       expect(script, scriptPath).toContain("timeoutMs:");
     }
 
@@ -1700,10 +1698,10 @@ if (commandArgs[0] === "list") {
     expect(macos).toContain("shouldSkipSnapshotRestore()");
     expect(macos).toContain("Skip snapshot restore; using current running VM");
 
-    expect(linux).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
-    expect(windows).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
-    expect(macos).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
-    expect(macos).toContain("timeoutMs: this.remainingPhaseTimeoutMs(360_000)");
+    expect(linux).toContain("probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000)");
+    expect(windows).toContain("probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000)");
+    expect(macos).toContain("probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000)");
+    expect(macos).toContain("timeoutMs: this.phases.remainingTimeoutMs(360_000)");
   });
 
   it("cleans POSIX guest scripts after the phase deadline is exhausted", () => {

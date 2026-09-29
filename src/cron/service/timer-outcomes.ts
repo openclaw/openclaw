@@ -265,7 +265,6 @@ export function applyJobResult(
     } else if (job.schedule.kind === "at" && isJobEnabled(job)) {
       if (shouldRetryDisabledHeartbeatOneShot(job, result)) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
-          cronConfig: state.deps.cronConfig,
           consecutiveSkipped: job.state.consecutiveSkipped,
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
@@ -300,7 +299,6 @@ export function applyJobResult(
         job.state.nextRunAtMs = undefined;
       } else if (result.status === "error") {
         const retryDecision = resolveTransientCronRetryDecision({
-          cronConfig: state.deps.cronConfig,
           error: result.error,
           errorClassification: result.errorClassification,
           lastErrorReason: job.state.lastErrorReason,
@@ -371,7 +369,6 @@ export function applyJobResult(
       );
     } else if (result.status === "error" && isJobEnabled(job)) {
       const retryDecision = resolveTransientCronRetryDecision({
-        cronConfig: state.deps.cronConfig,
         error: result.error,
         errorClassification: result.errorClassification,
         lastErrorReason: job.state.lastErrorReason,

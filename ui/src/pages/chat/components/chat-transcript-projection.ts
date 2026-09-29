@@ -202,7 +202,6 @@ export function projectChatTranscript(
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
     session: activeSession,
-    stream: props.stream ?? null,
   });
   const { collapsedItems, transcriptItems } = transcriptChain;
   const replyNavigationId = props.replyMessageAccess?.navigationId;
@@ -688,6 +687,7 @@ export function projectChatTranscript(
         props.announceTranscript !== false && !state.searchOpen && !props.loading,
         overlay,
         header,
+        Boolean(replyNavigationId),
       ),
   };
 }

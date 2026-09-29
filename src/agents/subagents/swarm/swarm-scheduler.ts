@@ -363,7 +363,7 @@ export function releaseSwarmRun(runId: string): boolean {
   return true;
 }
 
-export function removeQueuedSwarmRun(runId: string): boolean {
+function removeQueuedSwarmRun(runId: string): boolean {
   const location = runLocations.get(runId);
   if (!location || location.state !== "queued") {
     return false;

@@ -429,32 +429,6 @@ export function collectDownloadableInstallCandidates(params: {
   );
 }
 
-function addLegacyNpmDeclarationInstallCandidate(params: {
-  candidates: Map<string, DownloadableInstallCandidate>;
-  pluginDir: string;
-  configuredPluginIds: ReadonlySet<string>;
-  missingPluginIds: ReadonlySet<string>;
-  blockedPluginIds?: ReadonlySet<string>;
-}): void {
-  const declaration = readLegacyNpmPluginDeclaration(params.pluginDir);
-  if (!declaration) {
-    return;
-  }
-  if (
-    params.blockedPluginIds?.has(declaration.pluginId) ||
-    (!params.configuredPluginIds.has(declaration.pluginId) &&
-      !params.missingPluginIds.has(declaration.pluginId))
-  ) {
-    return;
-  }
-  params.candidates.set(declaration.pluginId, {
-    pluginId: declaration.pluginId,
-    label: declaration.pluginId,
-    npmSpec: declaration.npmSpec,
-    defaultChoice: "npm",
-  });
-}
-
 function collectLegacyNpmDeclarationInstallCandidates(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -463,6 +437,23 @@ function collectLegacyNpmDeclarationInstallCandidates(params: {
   blockedPluginIds?: ReadonlySet<string>;
 }): DownloadableInstallCandidate[] {
   const candidates = new Map<string, DownloadableInstallCandidate>();
+  const addCandidate = (pluginDir: string) => {
+    const declaration = readLegacyNpmPluginDeclaration(pluginDir);
+    if (
+      !declaration ||
+      params.blockedPluginIds?.has(declaration.pluginId) ||
+      (!params.configuredPluginIds.has(declaration.pluginId) &&
+        !params.missingPluginIds.has(declaration.pluginId))
+    ) {
+      return;
+    }
+    candidates.set(declaration.pluginId, {
+      pluginId: declaration.pluginId,
+      label: declaration.pluginId,
+      npmSpec: declaration.npmSpec,
+      defaultChoice: "npm",
+    });
+  };
   const env = params.env ?? process.env;
   const loadPaths = params.cfg.plugins?.load?.paths;
   if (Array.isArray(loadPaths)) {
@@ -470,13 +461,7 @@ function collectLegacyNpmDeclarationInstallCandidates(params: {
       if (typeof rawPath !== "string" || !rawPath.trim()) {
         continue;
       }
-      addLegacyNpmDeclarationInstallCandidate({
-        candidates,
-        pluginDir: resolveUserPath(rawPath, env),
-        configuredPluginIds: params.configuredPluginIds,
-        missingPluginIds: params.missingPluginIds,
-        blockedPluginIds: params.blockedPluginIds,
-      });
+      addCandidate(resolveUserPath(rawPath, env));
     }
   }
 
@@ -487,13 +472,7 @@ function collectLegacyNpmDeclarationInstallCandidates(params: {
   ]);
   for (const pluginId of configuredOrMissingPluginIds) {
     try {
-      addLegacyNpmDeclarationInstallCandidate({
-        candidates,
-        pluginDir: resolvePluginInstallDir(pluginId, extensionsDir),
-        configuredPluginIds: params.configuredPluginIds,
-        missingPluginIds: params.missingPluginIds,
-        blockedPluginIds: params.blockedPluginIds,
-      });
+      addCandidate(resolvePluginInstallDir(pluginId, extensionsDir));
     } catch {
       continue;
     }

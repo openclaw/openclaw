@@ -27,6 +27,7 @@ import {
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
 } from "./delivery-result.js";
+import { withDurableDeliveryRuntime } from "./durable-delivery-runtime.js";
 import type { ChannelDeliveryInfo, ChannelDeliveryResult } from "./types.js";
 
 /** Options controlling durable final delivery for inbound channel replies. */
@@ -37,6 +38,8 @@ export type DurableInboundReplyDeliveryOptions = Pick<
   to?: string | null;
   replyToId?: string | null;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
+  /** Validate the admitted sender and pin its resolved credential before a registry handoff. */
+  prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
 
 /** Full context required to deliver one inbound final reply through durable message sending. */
@@ -189,6 +192,20 @@ async function deliverInboundReplyWithMessageSendContext(
     return { status: "not_applicable", reason: "non_final" };
   }
 
+  try {
+    return await withDurableDeliveryRuntime(input, (cfg, assertCurrent) =>
+      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent),
+    );
+  } catch (error) {
+    return { status: "failed", error };
+  }
+}
+
+async function deliverAdmittedInboundReply(
+  input: DurableInboundReplyDeliveryParams,
+  sendBatch: typeof sendDurableMessageBatchCore,
+  assertCurrent?: () => void,
+): Promise<DurableInboundReplyDeliveryResult> {
   const group = getGroupThreadDispatchContext();
   const params = group
     ? {
@@ -252,7 +269,9 @@ async function deliverInboundReplyWithMessageSendContext(
     requesterSenderUsername: params.ctxPayload.SenderUsername,
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
+  assertCurrent?.();
   const send = await sendBatch({
+    assertDirectAdapterHandoff: assertCurrent,
     cfg: params.cfg,
     channel,
     to,

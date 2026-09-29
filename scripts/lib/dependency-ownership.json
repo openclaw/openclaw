@@ -240,6 +240,11 @@
       "class": "plugin-runtime",
       "risk": ["tts", "network"]
     },
+    "npm": {
+      "owner": "core:plugin-install",
+      "class": "core-runtime",
+      "risk": ["package-manager", "network", "filesystem"]
+    },
     "openai": {
       "owner": "provider:openai",
       "class": "default-runtime-initially",

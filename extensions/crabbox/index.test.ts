@@ -84,7 +84,7 @@ describe("Crabbox plugin generation lifecycle", () => {
   beforeEach(() => {
     vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
       binary: params?.binary ?? "crabbox",
-      version: "0.55.0",
+      version: "999.0.0",
     }));
   });
   afterEach(async () => {
@@ -355,7 +355,7 @@ describe("Crabbox plugin generation lifecycle", () => {
           started.resolve(params.signal);
           await finish.promise;
           params.signal.throwIfAborted();
-          return { binary: params.binary ?? "crabbox", version: "0.55.0" };
+          return { binary: params.binary ?? "crabbox", version: "999.0.0" };
         });
       }
       const generation = registerCrabboxGeneration();

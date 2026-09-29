@@ -21,7 +21,7 @@ import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { ChatSplitLayout, ChatSplitColumn, ChatSplitPane } from "./split-layout-types.ts";
-import { splitRatio } from "./split-layout.ts";
+import { findPane, splitRatio } from "./split-layout.ts";
 
 type ChatPagePaneRenderOptions = {
   active: boolean;
@@ -217,14 +217,21 @@ export function renderChatPageSplitLayout(
   layout: ChatSplitLayout,
   options: {
     narrow: boolean;
+    activePaneId?: string;
     renderPane: (column: ChatSplitColumn, pane: ChatSplitPane, weight: number) => unknown;
     onResizePanes: (columnId: string, paneIndex: number, ratio: number) => void;
     onResizeColumns: (columnIndex: number, ratio: number) => void;
     onResizeEnd: () => void;
   },
 ) {
+  const hasActiveCell =
+    options.activePaneId !== undefined && findPane(layout, options.activePaneId) !== null;
   return html`
-    <div class="chat-split-view ${options.narrow ? "chat-split-view--narrow" : ""}">
+    <div
+      class="chat-split-view ${options.narrow ? "chat-split-view--narrow" : ""} ${
+        hasActiveCell ? "chat-split-view--active-cell" : ""
+      }"
+    >
       ${repeat(
         layout.columns,
         (column) => column.id,

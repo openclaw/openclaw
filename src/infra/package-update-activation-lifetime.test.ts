@@ -31,7 +31,7 @@ import {
   assertNoPendingPackageActivation,
 } from "./package-update-activation.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
-import { swapStagedPackageInstall } from "./package-update-swap.js";
+import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 
 const fixtures = createPackageActivationLifetimeFixture();
@@ -53,6 +53,44 @@ afterEach(async () => {
 describe.skipIf(process.platform === "win32")(
   "package activation custody and surviving completion",
   () => {
+    it("retires original database snapshots only after verified journaled activation", async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        let transaction: PackageUpdateTransaction | undefined;
+        const result = await swapStagedPackageInstall({
+          ...f.params,
+          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          onTransaction: async (value) => {
+            transaction = value;
+            expect(value.databaseBackupRoot).toBeDefined();
+            expect(value.databaseBackupRoot).not.toBe(value.backupRoot);
+            const snapshots = `${value.databaseBackupRoot}.databases`;
+            await fsp.mkdir(snapshots);
+            await fsp.writeFile(path.join(snapshots, "snapshot.sqlite"), "pre-migration bytes");
+          },
+        });
+        expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+        const snapshots = `${transaction!.databaseBackupRoot}.databases`;
+        expect(
+          await transaction!.complete({ activationVerified: false }, fence.assertCurrent),
+        ).toMatchObject({
+          exitCode: 1,
+        });
+        expect(await fsp.readFile(path.join(snapshots, "snapshot.sqlite"), "utf8")).toBe(
+          "pre-migration bytes",
+        );
+        expect(
+          await transaction!.complete({ activationVerified: true }, fence.assertCurrent),
+        ).toBeUndefined();
+        expect(fs.existsSync(snapshots)).toBe(false);
+        expect(
+          await transaction!.complete({ activationVerified: true }, fence.assertCurrent),
+        ).toBeUndefined();
+      });
+    });
+
     it("keeps automatic retirement resumable after the previous package is removed", async () => {
       const f = await createPackageSwapFixture(root);
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
@@ -825,7 +863,7 @@ describe.skipIf(process.platform === "win32")(
         installKind: "package",
         packageManager: "npm",
       });
-      vi.spyOn(runs, "readUpdateRunStatus").mockReturnValue({});
+      vi.spyOn(runs, "readUpdateRunStatus").mockResolvedValue({});
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const { updateStatusCommand } = await import("../cli/update-cli/status.js");
       await updateStatusCommand({ json: true });

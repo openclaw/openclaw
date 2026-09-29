@@ -11,6 +11,7 @@ import {
 import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import {
+  canOverlapTelegramSingletonProcesses,
   createExtensionTestTimingKey,
   DATABASE_WORKER_CONFIG,
   DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
@@ -142,19 +143,22 @@ export function createChangedExtensionConfigShards(
     const partitionSeconds = Math.ceil(
       estimateExtensionTestCost(config, testFiles.length, testFiles) / chunks.length,
     );
-    return chunks.map((includePatterns, index) =>
-      Object.assign(
+    return chunks.map((includePatterns, index) => {
+      const env = canOverlapTelegramSingletonProcesses(config, includePatterns)
+        ? { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" }
+        : undefined;
+      return Object.assign(
         {
           config,
           pretestBuildMode: splitProcesses
             ? mergeVitestPretestBuildModes(includePatterns.map((file) => buildModes.get(file)))
             : configBuildMode,
           predictedSeconds: splitProcesses
-            ? estimateExtensionTestCost(config, includePatterns.length, includePatterns)
+            ? estimateExtensionTestCost(config, includePatterns.length, includePatterns, env)
             : partitionSeconds,
         },
         splitProcesses
-          ? { includePatterns }
+          ? { includePatterns, ...(env ? { env } : {}) }
           : chunks.length > 1
             ? {
                 // Counts size jobs only. Vitest owns the complete config inventory,
@@ -169,8 +173,8 @@ export function createChangedExtensionConfigShards(
         // Native-sharded configs keep their process contract while every shard
         // consumes the same selected inventory before Vitest partitions it.
         !splitProcesses && runtimeFiltered ? { includePatterns: testFiles } : {},
-      ),
-    );
+      );
+    });
   });
   return plans.map(
     ({ config, env, includePatterns, pretestBuildMode, predictedSeconds }, index) => {

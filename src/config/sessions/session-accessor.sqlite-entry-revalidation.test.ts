@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -96,6 +98,113 @@ describe("SQLite session entry patch commit revalidation", () => {
       "agent:main:main",
     );
   }
+
+  it("yields to the event loop while another connection holds the entry write lock", async () => {
+    const other = new DatabaseSync(database.path);
+    // Bound the defective synchronous path without a timer or a timing assertion.
+    database.db.exec("PRAGMA busy_timeout = 250");
+    let release: Promise<void> | undefined;
+    try {
+      const result = await patchEntry("ordinary", () => {
+        other.exec("BEGIN IMMEDIATE");
+        release = setImmediate().then(() => other.exec("ROLLBACK"));
+        return { label: "after contention" };
+      });
+      expect(result?.label).toBe("after contention");
+      expect(loadExactSessionEntry(scope)?.entry.label).toBe("after contention");
+    } finally {
+      await release;
+      other.close();
+    }
+  });
+
+  it("restores the connection's commit wait after admitting a rollback-journal patch", async () => {
+    expect(database.db.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode).toBe("delete");
+    database.db.exec("PRAGMA busy_timeout = 37");
+    const reader = new DatabaseSync(database.path);
+    try {
+      reader.exec("BEGIN");
+      reader.prepare("SELECT session_key FROM session_nodes").get();
+      const patched = await patchSessionEntryCore(scope, () => ({ label: "after reader" }), {
+        skipMaintenance: true,
+        assertCommitAllowed: () => {
+          expect(database.db.isTransaction).toBe(true);
+          expect(reader.isTransaction).toBe(true);
+          expect(readSqliteBusyTimeout(database.db)).toBe(37);
+          reader.exec("ROLLBACK");
+        },
+      });
+      expect(patched?.label).toBe("after reader");
+      expect(
+        reader
+          .prepare(
+            "SELECT json_extract(entry_json, '$.label') AS label FROM session_nodes WHERE session_key = ?",
+          )
+          .get(sessionKey),
+      ).toEqual({ label: "after reader" });
+    } finally {
+      if (reader.isTransaction) {
+        reader.exec("ROLLBACK");
+      }
+      reader.close();
+    }
+  });
+
+  it.each(["authority", "row", "connection"] as const)(
+    "rejects a changed %s after yielding for the entry write lock",
+    async (changed) => {
+      const other = new DatabaseSync(database.path);
+      let current = true;
+      let updates = 0;
+      let release: Promise<void> | undefined;
+      try {
+        const patch = patchSessionEntryCore(
+          scope,
+          () => {
+            updates += 1;
+            other.exec("BEGIN IMMEDIATE");
+            release = setImmediate().then(() => {
+              if (changed === "row") {
+                other
+                  .prepare(
+                    "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'foreign') WHERE session_key = ?",
+                  )
+                  .run(sessionKey);
+              }
+              other.exec("COMMIT");
+              current = false;
+              if (changed === "connection") {
+                closeOpenClawAgentDatabaseByPath(database.path);
+              }
+            });
+            return { label: "must not commit" };
+          },
+          {
+            skipMaintenance: true,
+            assertCommitAllowed: () => {
+              if (changed === "authority" && !current) {
+                throw new Error("patch authority revoked");
+              }
+            },
+          },
+        );
+        await expect(patch).rejects.toThrow(
+          changed === "authority"
+            ? "patch authority revoked"
+            : changed === "row"
+              ? /changed/
+              : /closed|replaced|not open/,
+        );
+        expect(updates).toBe(1);
+        expect(loadExactSessionEntry(scope)?.entry.label).toBe(
+          changed === "row" ? "foreign" : "original",
+        );
+      } finally {
+        await release;
+        other.close();
+      }
+    },
+  );
 
   describe("prepared session mutation guard", () => {
     function ownerPredicate() {

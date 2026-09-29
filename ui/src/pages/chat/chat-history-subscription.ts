@@ -2,7 +2,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -72,9 +72,32 @@ async function retryPendingSessionMessageSubscriptionReleases(
   );
 }
 
+async function releaseDetachedSessionMessageSubscription(
+  unsubscribeMessages: SessionCapability["unsubscribeMessages"],
+  subscription: SessionMessageSubscription,
+  isCurrent?: () => boolean,
+): Promise<void> {
+  let retryDelayMs = SESSION_MESSAGE_RELEASE_RETRY_MS;
+  for (let attempt = 0; attempt < MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS; attempt += 1) {
+    try {
+      await unsubscribeMessages(subscription);
+      return;
+    } catch (error) {
+      if (isCurrent?.() || attempt + 1 === MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS) {
+        throw error;
+      }
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, retryDelayMs);
+      });
+      retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+    }
+  }
+}
+
 export function disposeSelectedSessionMessageSubscription(state: ChatState): void {
   const requests = chatHistoryRequests(state);
   requests.subscriptionGeneration += 1;
+  requests.subscriptionReady = Promise.resolve(false);
   const subscriptions = new Set(requests.pendingSubscriptionReleases);
   requests.pendingSubscriptionReleases.clear();
   if (state.chatSessionMessageSubscription) {
@@ -89,40 +112,53 @@ export function disposeSelectedSessionMessageSubscription(state: ChatState): voi
   }
   const unsubscribeMessages = sessions.unsubscribeMessages.bind(sessions);
   for (const subscription of subscriptions) {
-    // A detached pane cannot drain another queue. Retry on its longer-lived
-    // session owner, but stop after terminal failures so timers cannot leak.
-    void (async () => {
-      let retryDelayMs = SESSION_MESSAGE_RELEASE_RETRY_MS;
-      for (let attempt = 0; attempt < MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS; attempt += 1) {
-        try {
-          await unsubscribeMessages(subscription);
-          return;
-        } catch {
-          if (attempt + 1 === MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS) {
-            return;
-          }
-          await new Promise<void>((resolve) => {
-            globalThis.setTimeout(resolve, retryDelayMs);
-          });
-          retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
-        }
-      }
-    })();
+    void releaseDetachedSessionMessageSubscription(unsubscribeMessages, subscription).catch(
+      () => undefined,
+    );
   }
 }
 
-export async function syncSelectedSessionMessageSubscription(
+export function syncSelectedSessionMessageSubscription(
   state: ChatSessionMessageSubscriptionState,
   opts?: { force?: boolean },
-) {
+): Promise<boolean> {
+  const requests = chatHistoryRequests(state);
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const requestedKey = state.sessionKey.trim();
+  const requestedAgentId = resolveSelectedSessionMessageSubscriptionAgentId(state, requestedKey);
+  const pending = synchronizeSelectedSessionMessageSubscription(state, opts);
+  const generation = requests.subscriptionGeneration;
+  const ready = pending.then(
+    (admitted) =>
+      admitted &&
+      client !== null &&
+      isCurrentSelectedSessionMessageSubscriptionSync(state, {
+        generation,
+        client,
+        connectionEpoch,
+        requestedKey,
+        requestedAgentId,
+      }) &&
+      state.chatSessionMessageSubscriptionRequestedKey === requestedKey &&
+      state.chatSessionMessageSubscription != null,
+  );
+  requests.subscriptionReady = ready;
+  return ready;
+}
+
+async function synchronizeSelectedSessionMessageSubscription(
+  state: ChatSessionMessageSubscriptionState,
+  opts?: { force?: boolean },
+): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const nextKey = state.sessionKey.trim();
   if (!nextKey) {
-    return;
+    return false;
   }
   const previousRequestedKey = normalizeNullableString(
     state.chatSessionMessageSubscriptionRequestedKey,
@@ -189,7 +225,7 @@ export async function syncSelectedSessionMessageSubscription(
     ) {
       clearRecoveredError();
     }
-    return;
+    return isCurrent() && previousSubscription !== null;
   }
   try {
     let unsubscribePromise: Promise<void> = Promise.resolve();
@@ -214,7 +250,11 @@ export async function syncSelectedSessionMessageSubscription(
     if (unsubscribeResult.status === "rejected") {
       if (subscribeResult.status === "fulfilled" && subscribeResult.value) {
         try {
-          await state.sessions.unsubscribeMessages(subscribeResult.value);
+          await releaseDetachedSessionMessageSubscription(
+            state.sessions.unsubscribeMessages.bind(state.sessions),
+            subscribeResult.value,
+            isCurrent,
+          );
         } catch (replacementReleaseError) {
           if (isCurrent()) {
             if (previousSubscription) {
@@ -227,16 +267,16 @@ export async function syncSelectedSessionMessageSubscription(
             publishError(
               `${formatUiError(unsubscribeResult.reason)}; replacement release failed: ${formatUiError(replacementReleaseError)}`,
             );
-          } else {
-            paneRequests.pendingSubscriptionReleases.add(subscribeResult.value);
+            return true;
           }
-          return;
+          paneRequests.pendingSubscriptionReleases.add(subscribeResult.value);
+          return false;
         }
       }
       if (isCurrent()) {
         publishError(unsubscribeResult.reason);
       }
-      return;
+      return false;
     }
     const subscribed = subscribeResult.status === "fulfilled" ? subscribeResult.value : null;
     if (!subscribed) {
@@ -247,18 +287,21 @@ export async function syncSelectedSessionMessageSubscription(
       if (subscribeResult.status === "rejected") {
         throw subscribeResult.reason;
       }
-      return;
+      return false;
     }
     if (!isCurrent()) {
       // Generation advances before awaiting, so only the newest lease can reach assignment below.
       try {
-        await state.sessions.unsubscribeMessages(subscribed);
+        await releaseDetachedSessionMessageSubscription(
+          state.sessions.unsubscribeMessages.bind(state.sessions),
+          subscribed,
+        );
       } catch {
         // A rejected release still owns its live Gateway observer; retain the
         // exact handle so the next sync can complete the original unsubscribe.
         paneRequests.pendingSubscriptionReleases.add(subscribed);
       }
-      return;
+      return false;
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
     state.chatSessionMessageSubscription = subscribed;
@@ -272,9 +315,11 @@ export async function syncSelectedSessionMessageSubscription(
       state.chatSessionApprovalQueue = [];
     }
     clearRecoveredError();
+    return true;
   } catch (err) {
     if (isCurrent()) {
       publishError(err);
     }
+    return false;
   }
 }

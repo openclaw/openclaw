@@ -1,5 +1,6 @@
 // Slack tests cover provider identity recovery from trusted Bolt event context.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getSlackInstallationTeamId } from "../installation-identity-state.js";
 import {
   disposeSlackTestRuntime,
   getSlackClient,
@@ -277,6 +278,7 @@ describe("auth.test event identity recovery", () => {
       lastError: null,
     });
     expect(getSlackHandlers().has("reaction_added")).toBe(true);
+    expect(getSlackInstallationTeamId("default")).toBe("T12345678");
     await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
 
     await runSlackHandlerWithDispatch(handler, {

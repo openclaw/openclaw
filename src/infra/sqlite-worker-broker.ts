@@ -4,6 +4,7 @@ import { getChildLogger } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
+import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
 import {
   assertSqliteWorkerActorReusable,
   captureSqliteWorkerOpen,
@@ -235,7 +236,7 @@ export class SqliteWorkerBroker {
           ...(options.existingOnly ? { existingIdentity: key } : {}),
           input,
           ...(options.preparation ? { preparation: options.preparation } : {}),
-          ...(/\.[cm]?ts$/.test(modulePath)
+          ...(runtimeNeedsTypeScriptLoader(modulePath)
             ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
             : {}),
         },
@@ -388,9 +389,10 @@ export class SqliteWorkerBroker {
     return this.lifecycle.retireActor(identity);
   }
 
-  getActorIdentity(store: object): object {
+  getActorIdentity(store: object): Readonly<Pick<Actor, "key" | "databasePath">> {
     const client = this.stores.get(store);
-    if (!client || client.sealed || !client.actor.stateContext || !client.isAvailable()) {
+    // Retained facts remain readable after worker failure; dispatch owns liveness.
+    if (!client || client.sealed || !client.actor.stateContext) {
       throw new SqliteWorkerError("SQLite shared actor binding is unavailable", "closed");
     }
     return client.actor;

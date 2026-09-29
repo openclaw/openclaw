@@ -247,6 +247,9 @@ describe("repository workspace result ownership", () => {
         publishAcceptedWorkspace,
       });
     const environments: WorkerDispatchEnvironmentService = {
+      fenceWorkerTurnForRecovery: () => {
+        throw new Error("Repository result fixture does not synthesize startup claims");
+      },
       prepareProjectIntent: async () => {
         throw new Error("unexpected local-project preparation");
       },
@@ -740,6 +743,8 @@ describe("repository workspace result ownership", () => {
       changed: true,
       verifyStable: async () => {},
       verifyLocalStable: async () => {},
+      publishStagedResult: async () => {},
+      discardPreparedStagedResult: async () => {},
     });
     await expect(
       f.mutations.mutate({

@@ -58,8 +58,9 @@ run_abandoned_update_survivor() {
     "$ARTIFACT_ROOT/full-repair-service-before.json"
   repair_status=0
   status_status=0
+  # Keep the full-repair outcome in the diagnostic owner's retained filenames.
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair --yes --json \
-    >"$ARTIFACT_ROOT/full-repair.json" 2>"$ARTIFACT_ROOT/full-repair.err" || repair_status=$?
+    >"$ARTIFACT_ROOT/recovery-update.json" 2>"$ARTIFACT_ROOT/recovery-update.err" || repair_status=$?
   printf '%s\n' "$repair_status" >"$ARTIFACT_ROOT/full-repair.exit"
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update status --json \
     >"$ARTIFACT_ROOT/full-repair-status.json" 2>"$ARTIFACT_ROOT/full-repair-status.err" || status_status=$?

@@ -213,4 +213,6 @@ export function readAcpSessionEntry(params: {
 export { listAcpSessionEntries } from "./session-meta-list.js";
 
 export { readAcpSessionEntryAsync, readAcpSessionMetaAsync } from "./session-meta-read.js";
-export { upsertAcpSessionMeta } from "./session-meta-write.js";
+export { upsertAcpSessionMeta, upsertAcpSessionMetaForControl } from "./session-meta-write.js";
+
+export { prepareAcpSessionControlRead } from "./session-meta-control.js";

@@ -19,27 +19,6 @@ import {
 
 const OPENROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 
-type OpenRouterCreditsData = {
-  total_credits?: unknown;
-  total_usage?: unknown;
-};
-
-type OpenRouterKeyData = {
-  label?: unknown;
-  limit?: unknown;
-  limit_remaining?: unknown;
-  limit_reset?: unknown;
-  usage?: unknown;
-  usage_daily?: unknown;
-  usage_weekly?: unknown;
-  usage_monthly?: unknown;
-  byok_usage?: unknown;
-  byok_usage_daily?: unknown;
-  byok_usage_weekly?: unknown;
-  byok_usage_monthly?: unknown;
-  include_byok_in_limit?: unknown;
-};
-
 type EndpointResult =
   | { ok: true; data: Record<string, unknown> }
   | { ok: false; status: number }
@@ -52,7 +31,7 @@ function resolveLimitReset(value: unknown): OpenRouterLimitReset | undefined {
 }
 
 function resolveKeyBudget(
-  data: OpenRouterKeyData | undefined,
+  data: Record<string, unknown> | undefined,
 ): { used: number; limit: number; period?: OpenRouterLimitReset } | undefined {
   const limit = parseProviderUsageNonNegativeNumber(data?.limit);
   if (limit === undefined) {
@@ -191,8 +170,8 @@ export async function fetchOpenRouterUsage(params: {
     };
   }
 
-  const credits = creditsResult.ok ? (creditsResult.data as OpenRouterCreditsData) : undefined;
-  const key = keyResult.ok ? (keyResult.data as OpenRouterKeyData) : undefined;
+  const credits = creditsResult.ok ? creditsResult.data : undefined;
+  const key = keyResult.ok ? keyResult.data : undefined;
   const totalCredits = parseProviderUsageNonNegativeNumber(credits?.total_credits);
   const totalUsage = parseProviderUsageNonNegativeNumber(credits?.total_usage);
   const keyUsage = parseProviderUsageNonNegativeNumber(key?.usage);

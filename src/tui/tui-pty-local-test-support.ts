@@ -22,6 +22,7 @@ export function registerIdempotentCleanup(
 
 type ObservedChatTerminal = {
   errorMessage?: string;
+  message?: unknown;
   runId: string;
   sessionKey: string;
   state: "aborted" | "error" | "final";
@@ -40,6 +41,7 @@ export function createChatTerminalObserver() {
       }
       const chatEvent = payload as {
         errorMessage?: unknown;
+        message?: unknown;
         runId?: unknown;
         sessionKey?: unknown;
         state?: unknown;
@@ -57,17 +59,31 @@ export function createChatTerminalObserver() {
         ...(typeof chatEvent.errorMessage === "string"
           ? { errorMessage: chatEvent.errorMessage }
           : {}),
+        message: chatEvent.message,
         runId: chatEvent.runId,
         sessionKey: chatEvent.sessionKey,
         state: chatEvent.state,
       });
     },
-    waitForFinal: async (params: { runId: string; sessionKey: string; timeoutMs: number }) => {
+    readFinals: (sessionKey: string) =>
+      [...terminals.values()].filter(
+        (terminal) => terminal.sessionKey === sessionKey && terminal.state === "final",
+      ),
+    waitForFinal: async (params: {
+      runId: string;
+      sessionKey: string;
+      timeoutMs: number;
+      onTimeout?: () => Error;
+    }) => {
       const terminal = await waitFor({
         timeoutMs: params.timeoutMs,
         read: () => terminals.get(keyFor(params.sessionKey, params.runId)) ?? null,
-        onTimeout: () =>
-          new Error(`chat run ${params.runId} did not reach a terminal event before history load`),
+        onTimeout:
+          params.onTimeout ??
+          (() =>
+            new Error(
+              `chat run ${params.runId} did not reach a terminal event before history load`,
+            )),
       });
       terminals.delete(keyFor(params.sessionKey, params.runId));
       if (terminal.state !== "final") {

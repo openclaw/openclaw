@@ -46,6 +46,32 @@ describe("check-composite-action-input-interpolation", () => {
     expect(result.stdout).toContain("Use env: and reference shell variables instead.");
   });
 
+  it.each([
+    { name: "first step key", using: "composite", firstKey: true },
+    { name: "double-quoted using", using: '"composite"', firstKey: false },
+    { name: "single-quoted using", using: "'composite'", firstKey: false },
+    { name: "quoted using with a comment", using: '"composite" # runtime', firstKey: true },
+  ])("rejects direct interpolation with $name", ({ using, firstKey }) => {
+    const rootDir = createTempDir("openclaw-composite-action-inputs-");
+    writeAction(
+      rootDir,
+      "unsafe",
+      [
+        "name: unsafe",
+        "runs:",
+        `  using: ${using}`,
+        "  steps:",
+        ...(firstKey
+          ? ["    - run: |", '        echo "${{ inputs.value }}"', "      shell: bash"]
+          : ["    - shell: bash", '      run: echo "${{ inputs.value }}"']),
+      ].join("\n"),
+    );
+    const result = runCheck(rootDir);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(".github/actions/unsafe/action.yml:6");
+    expect(result.stdout).toContain("Disallowed direct inputs interpolation");
+  });
+
   it("allows env indirection and ignores non-composite actions", () => {
     const rootDir = createTempDir("openclaw-composite-action-inputs-");
     writeAction(
@@ -56,11 +82,11 @@ describe("check-composite-action-input-interpolation", () => {
         "runs:",
         "  using: composite",
         "  steps:",
-        "    - shell: bash",
+        "    - run: |",
+        '        echo "$TOKEN"',
+        "      shell: bash",
         "      env:",
         "        TOKEN: ${{ inputs.token }}",
-        "      run: |",
-        '        echo "$TOKEN"',
       ].join("\n"),
     );
     writeAction(

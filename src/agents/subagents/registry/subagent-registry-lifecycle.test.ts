@@ -83,12 +83,12 @@ import {
   registerPrivateCompletionSettlementTests,
   registerNativeCompletionAuthorityTest,
 } from "./subagent-registry-lifecycle-completion.test-support.js";
-import {
+import { createLifecycleControllerFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
+import type {
   SubagentLifecycleController,
-  type SubagentLifecycleOptions,
+  SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
@@ -434,54 +434,14 @@ function buildExpectedAnnounceIdempotencyKey(entry: SubagentRunRecord): string {
   );
 }
 
-function createLifecycleController({
-  entry,
-  runs = new Map([[entry.runId, entry]]),
-  ...overrides
-}: {
-  entry: SubagentRunRecord;
-  runs?: Map<string, SubagentRunRecord>;
-} & Partial<SubagentLifecycleOptions>) {
-  const params: LifecycleControllerParams = {
-    runs,
-    resumedRuns: new Set(),
-    subagentAnnounceTimeoutMs: 1_000,
-    getRuntimeConfig: () => ({}),
-    persist: vi.fn(),
-    persistOrThrow: vi.fn(),
-    clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
-    getLatestRunForChildSession: (key, matches) =>
-      getLatestSubagentRunByChildSessionKeyFromRuns(runs, key, matches) ?? null,
-    suppressAnnounceForSteerRestart: () => false,
-    shouldEmitEndedHookForRun: () => false,
-    emitSubagentEndedHookForRun: vi.fn(async () => {}),
-    emitSubagentProgressEndedForRun: vi.fn(async () => {}),
-    notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-    retireSupersededRun: vi.fn(async () => {}),
-    resumeSubagentRun: vi.fn(),
+function createLifecycleController(params: Parameters<typeof createLifecycleControllerFixture>[0]) {
+  return createLifecycleControllerFixture(params, {
     callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> =>
       (await gatewayMocks.callGateway(opts)) as T,
-    captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd:
       browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
-    runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-    maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
-      async (wakeParams: {
-        settledEntry: SubagentRunRecord;
-        completeBatch: RequesterSettleWakeParams["completeBatch"];
-      }) => {
-        await wakeParams.completeBatch([wakeParams.settledEntry]);
-        return false;
-      },
-    ),
-    warn: vi.fn(),
-  };
-  Object.assign(params, overrides);
-  for (const run of runs.values()) {
-    completionDeliveryMocks.runsByEntry.set(run, runs);
-  }
-  return new SubagentLifecycleController(params);
+    runsByEntry: completionDeliveryMocks.runsByEntry,
+  });
 }
 
 function completeRun(
@@ -2788,12 +2748,13 @@ describe("subagent registry lifecycle hardening", () => {
   it("rechecks session ownership inside a delayed timing write", async () => {
     const entry = createRunEntry({ generation: 1, createdAt: 1_000, startedAt: 1_000 });
     const runs = new Map([[entry.runId, entry]]);
-    let releaseTiming: (() => void) | undefined;
+    const timingEntered = createDeferredCore();
+    const timingRelease = createDeferredCore();
+    const originalTiming = helperMocks.persistSubagentSessionTiming.getMockImplementation();
     let timingWriteStillOwned: boolean | undefined;
     helperMocks.persistSubagentSessionTiming.mockImplementationOnce(async (...args: unknown[]) => {
-      await new Promise<void>((resolve) => {
-        releaseTiming = resolve;
-      });
+      timingEntered.resolve();
+      await timingRelease.promise;
       const options = args[1] as { isCurrentGeneration?: () => boolean } | undefined;
       timingWriteStillOwned = options?.isCurrentGeneration?.();
     });
@@ -2803,23 +2764,39 @@ describe("subagent registry lifecycle hardening", () => {
     const controller = createLifecycleController({ entry, runs, retireSupersededRun });
 
     const completion = completeRun(controller, entry, { triggerCleanup: true });
-    await waitForLifecycleState(() =>
-      expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce(),
-    );
-    const newer = createRunEntry({
-      runId: "run-same-millisecond-newer",
-      generation: 2,
-      createdAt: entry.createdAt,
-      startedAt: entry.execution.startedAt,
-    });
-    runs.set(newer.runId, newer);
-    releaseTiming?.();
-    await completion;
+    try {
+      await Promise.race([
+        timingEntered.promise,
+        completion.then(() => {
+          throw new Error("Completion settled before entering timing persistence");
+        }),
+      ]);
+      expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
+      const newer = createRunEntry({
+        runId: "run-same-millisecond-newer",
+        generation: 2,
+        createdAt: entry.createdAt,
+        startedAt: entry.execution.startedAt,
+      });
+      runs.set(newer.runId, newer);
+      timingRelease.resolve();
+      await completion;
 
-    expect(timingWriteStillOwned).toBe(false);
-    expect(retireSupersededRun).toHaveBeenCalledWith(entry.runId, entry);
-    expect(runs.get(newer.runId)).toBe(newer);
-    expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
+      expect(timingWriteStillOwned).toBe(false);
+      expect(retireSupersededRun).toHaveBeenCalledWith(entry.runId, entry);
+      expect(runs.get(newer.runId)).toBe(newer);
+      expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
+    } finally {
+      timingRelease.resolve();
+      try {
+        await completion;
+      } finally {
+        helperMocks.persistSubagentSessionTiming.mockReset();
+        if (originalTiming) {
+          helperMocks.persistSubagentSessionTiming.mockImplementation(originalTiming);
+        }
+      }
+    }
   });
 
   it("finalizes restored completion text that predates capturedAt", async () => {
@@ -4609,6 +4586,8 @@ describe("requester settle wake trigger", () => {
       const warn = vi.fn();
       const cleanup = createSubagentRegistryContextCleanup({
         persist: vi.fn(),
+        persistAsyncOrThrow: vi.fn(async () => {}),
+        isEndedHookOwnerCurrent: () => false,
         warn,
       });
       const entry = makeRunModeCleanupEntry("closed-cleanup-caller", { generation: 1 });

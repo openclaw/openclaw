@@ -108,6 +108,18 @@ export function createPluginApprovalHandlers(
         return;
       }
 
+      if (p.policySubject && !trustedAgentRuntime) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "plugin approval policy subject requires agent runtime authority",
+          ),
+        );
+        return;
+      }
+
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;
 
@@ -175,6 +187,9 @@ export function createPluginApprovalHandlers(
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
+        ...(trustedAgentRuntime && p.policySubject
+          ? { policySubject: { ...p.policySubject } }
+          : {}),
         ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
         ...(Array.isArray(p.allowedDecisions)
           ? {

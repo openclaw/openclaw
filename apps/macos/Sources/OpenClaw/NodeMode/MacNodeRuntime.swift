@@ -484,15 +484,21 @@ actor MacNodeRuntime {
 extension MacNodeRuntime {
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawCanvasCommand.present.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
-                OpenClawCanvasPresentParams()
-            let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let url = urlTrimmed.isEmpty ? nil : urlTrimmed
-            let effectiveURL = try await resolveCanvasTarget(url)
-            let placement = params.placement.map {
-                CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+        case OpenClawCanvasCommand.present.rawValue, OpenClawCanvasCommand.navigate.rawValue:
+            let target: String?
+            let placement: CanvasPlacement?
+            if req.command == OpenClawCanvasCommand.present.rawValue {
+                let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
+                    OpenClawCanvasPresentParams()
+                target = params.url
+                placement = params.placement.map {
+                    CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+                }
+            } else {
+                target = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON).url
+                placement = nil
             }
+            let effectiveURL = try await resolveCanvasTarget(target)
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
                 _ = try CanvasManager.shared.show(
@@ -505,16 +511,6 @@ extension MacNodeRuntime {
             let sessionKey = self.mainSessionKey
             await MainActor.run {
                 CanvasManager.shared.hide(sessionKey: sessionKey)
-            }
-            return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.navigate.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            let effectiveURL = try await resolveCanvasTarget(params.url)
-            let sessionKey = self.mainSessionKey
-            try await MainActor.run {
-                _ = try CanvasManager.shared.show(
-                    sessionKey: sessionKey,
-                    path: effectiveURL)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         default:

@@ -1,3 +1,4 @@
+import { availableWorkerSlots } from "../../../../packages/gateway-protocol/src/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { DraftEnvironment } from "./discovery.ts";
@@ -40,6 +41,10 @@ function unavailableReason(
       restartCommand: updateIssue.headlessReconnectCommand,
     });
   }
+  const hostIssue = environment.issues?.find((issue) => issue.code === "worker-host-unavailable");
+  if (hostIssue) {
+    return hostIssue.message;
+  }
   if (environment.status !== "available") {
     return t("newSession.deviceUnavailable");
   }
@@ -50,6 +55,9 @@ function unavailableReason(
     const requiredCommand = environment.requiredNodeCommand;
     if (!requiredCommand) {
       return t("newSession.placementNotReady");
+    }
+    if (requiredCommand.state !== "invocable" && requiredCommand.message) {
+      return requiredCommand.message;
     }
     if (requiredCommand.state === "pending-approval") {
       return t("newSession.nodeCommandPendingApproval", { command: requiredCommand.command });
@@ -67,7 +75,9 @@ function unavailableReason(
   if (!environment.workerSlots) {
     return t("newSession.deviceCapacityUnavailable");
   }
-  return environment.workerSlots.available === 0 ? t("newSession.deviceNoSlots") : undefined;
+  return availableWorkerSlots(environment.workerSlots) === 0
+    ? t("newSession.deviceNoSlots")
+    : undefined;
 }
 
 /** One projection owns device presentation, restore eligibility, and submit eligibility. */
@@ -111,7 +121,9 @@ export function projectDevicePlacements(
             ? undefined
             : environment.issues?.some((issue) => issue.code === "update-required")
               ? "update-device"
-              : environment.status === "available" && environment.sessionHost !== true
+              : environment.status === "available" &&
+                  environment.sessionHost !== true &&
+                  !environment.issues?.length
                 ? "enable-session-hosting"
                 : undefined,
           facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
@@ -152,11 +164,13 @@ export function resolveAutomaticDevicePlacementDisabledReason(
       .map((environment) => environment.id),
   );
   if (sessionHostIds.size === 0) {
-    const outdated = (environments ?? []).find((environment) =>
-      environment.issues?.some((issue) => issue.code === "update-required"),
+    const unavailable = (environments ?? []).find((environment) =>
+      environment.issues?.some(
+        (issue) => issue.code === "update-required" || issue.code === "worker-host-unavailable",
+      ),
     );
-    return outdated
-      ? unavailableReason(outdated, DEFAULT_DEVICE_PLACEMENT)
+    return unavailable
+      ? unavailableReason(unavailable, DEFAULT_DEVICE_PLACEMENT)
       : t("newSession.noSessionHosts");
   }
   return devices.some((device) => device.selectable)

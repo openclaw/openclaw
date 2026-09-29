@@ -40,8 +40,6 @@ describe("sidebar routed-lineage freshness", () => {
       };
       const initialParent = deferred<{ session: GatewaySessionRow }>();
       const freshSelected = deferred<{ session: GatewaySessionRow }>();
-      const freshParent = deferred<{ session: GatewaySessionRow }>();
-      let filterChanged = false;
       const request = vi.fn(async (method, raw) => {
         const params = raw && typeof raw === "object" ? raw : {};
         if (method === "sessions.list") {
@@ -56,7 +54,7 @@ describe("sidebar routed-lineage freshness", () => {
             return freshSelected.promise;
           }
           if (key === mainKey) {
-            return filterChanged ? freshParent.promise : initialParent.promise;
+            return initialParent.promise;
           }
           throw new Error(`Unexpected describe key: ${String(key)}`);
         }
@@ -76,7 +74,7 @@ describe("sidebar routed-lineage freshness", () => {
         sidebar.activeRouteId = "chat";
         sidebar.sessionKey = selected.key;
         if (kind === "main child") {
-          // Keep the original ancestry pending so the filter starts a fresh lookup.
+          // Keep the shared ancestry read pending across the roster filter change.
           await waitForFast(() =>
             expect(request).toHaveBeenCalledWith("sessions.describe", { key: mainKey }),
           );
@@ -87,7 +85,6 @@ describe("sidebar routed-lineage freshness", () => {
         }
         await waitForFast(() => expect(row()).not.toBeNull());
 
-        filterChanged = true;
         sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
         expect(sidebar.sessionData.childSessionRowsByParent).toEqual({});
         await waitForFast(() =>
@@ -105,14 +102,7 @@ describe("sidebar routed-lineage freshness", () => {
 
         freshSelected.resolve({ session: selected });
         if (kind === "main child") {
-          await waitForFast(() =>
-            expect(
-              request.mock.calls.filter(
-                ([method, params]) => method === "sessions.describe" && params?.key === mainKey,
-              ),
-            ).toHaveLength(2),
-          );
-          freshParent.resolve({ session: parent });
+          initialParent.resolve({ session: parent });
         }
         await waitForFast(() =>
           expect(sidebar.sessionData.activeSessionLineageRoot?.key).toBe(
@@ -120,6 +110,13 @@ describe("sidebar routed-lineage freshness", () => {
           ),
         );
         await sidebar.updateComplete;
+        if (kind === "main child") {
+          expect(
+            request.mock.calls.filter(
+              ([method, params]) => method === "sessions.describe" && params?.key === mainKey,
+            ),
+          ).toHaveLength(1);
+        }
         expect(sidebar.sessionKey).toBe(selected.key);
         expect(sidebar.activeRouteId).toBe("chat");
         expect(sidebar.sessionData.activeSessionLineageSelectedRow?.key).toBe(selected.key);
@@ -144,7 +141,6 @@ describe("sidebar routed-lineage freshness", () => {
         sessions.dispose();
         initialParent.resolve({ session: parent });
         freshSelected.resolve({ session: selected });
-        freshParent.resolve({ session: parent });
         await sidebar.updateComplete;
       }
     },

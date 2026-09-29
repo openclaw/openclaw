@@ -235,7 +235,7 @@ export async function writeSessionIngestionState(
       }),
     ),
   );
-  await Promise.all([
+  const writes = [
     writeMemoryCoreWorkspaceEntries({
       namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
       workspaceDir,
@@ -246,5 +246,11 @@ export async function writeSessionIngestionState(
       workspaceDir,
       entries: seenEntries,
     }),
-  ]);
+  ];
+  try {
+    await Promise.all(writes);
+  } finally {
+    // Checkpoint writes must settle before a failed sweep releases its workspace lock.
+    await Promise.allSettled(writes);
+  }
 }

@@ -11,6 +11,7 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { showToast } from "../../lib/toast.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import "../../components/web-awesome-popover.ts";
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
@@ -158,7 +159,9 @@ export class PaletteSessionDraft implements ReactiveController {
       uploadConfig: this.read().context?.config,
       attachments: attachmentDraft.attachments,
       attachmentReads: attachmentDraft.reads,
-      attachmentLimits: this.read().context?.gateway.snapshot.hello?.policy?.attachments,
+      attachmentLimits: resolveChatAttachmentLimits(
+        this.read().context?.gateway.snapshot.hello?.policy,
+      ),
       disabled: this.messageLocked,
       getAttachments: () => attachmentDraft.attachments,
       readSignal,

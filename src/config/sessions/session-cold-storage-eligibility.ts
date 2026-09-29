@@ -11,7 +11,6 @@ import {
   hasPendingInputConsumptionColumn,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
-import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 
@@ -35,7 +34,7 @@ export function readSessionColdStorageProtection(
         "status",
         "last_activity_at",
         "last_interaction_at",
-        sessionEntryMetadataJson,
+        "entry_json",
       ]),
   )) {
     const record = parseSqliteSessionEntryRecord(row);

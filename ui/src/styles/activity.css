@@ -5,11 +5,11 @@
 /* The route host must hand the bounded shell height to the fill-height
    workspace; otherwise a populated stream expands the main page and defeats
    its own scroll/auto-follow owner. */
-.content:has(openclaw-activity-page) {
+main.content:where(.content--activity-page) {
   overflow: hidden;
 }
 
-.content:has(openclaw-activity-page) > openclaw-router-outlet {
+main.content:where(.content--activity-page) > openclaw-router-outlet {
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -22,7 +22,7 @@ openclaw-activity-page {
   display: contents;
 }
 
-.content:has(openclaw-activity-page) .content-header {
+main.content:where(.content--activity-page) .content-header {
   flex: 0 0 auto;
 }
 
@@ -255,7 +255,7 @@ a.activity-current-work__row:hover {
 }
 
 .activity-feed__presence-dot[data-presence-activity="idle"] {
-  background: var(--warn);
+  background: var(--presence-idle);
 }
 
 .activity-feed__presence-dot[data-presence-activity="unknown"] {
@@ -1226,11 +1226,11 @@ a.activity-current-work__row:hover {
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .content:has(openclaw-activity-page) {
+  main.content:where(.content--activity-page) {
     overflow-y: auto;
   }
 
-  .content:has(openclaw-activity-page) > openclaw-router-outlet {
+  main.content:where(.content--activity-page) > openclaw-router-outlet {
     display: block;
     width: auto;
     height: auto;

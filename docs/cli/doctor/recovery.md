@@ -124,6 +124,12 @@ coordinators and agent-database lease checks. Shutdown and restart remain with
 the deployment owner. A failed native probe is never treated as proof that the
 Gateway is stopped.
 
+Health diagnostics also leave native service inspection to that external owner.
+They still check the selected port, live Gateway ownership, and startup migration
+activity. With none present, Doctor reports the unavailable Gateway promptly
+instead of waiting for an unrelated native service manager. A live or starting
+Gateway retains the shared readiness budget.
+
 For a system template such as `openclaw@.service` with `User=%i`, inspection
 follows the current account's instance (`openclaw@<user>.service`) while
 preserving the shared template. Run Doctor as that account after the system

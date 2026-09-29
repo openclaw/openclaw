@@ -23,6 +23,7 @@ import {
   assertCanonicalSqliteSessionKeysCurrent,
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 
 type SummaryCandidate = {
@@ -76,6 +77,7 @@ export function readSessionStoreSummaryReadOnly(
                 db
                   .selectFrom("session_nodes")
                   .selectAll()
+                  .select(sessionEntrySnapshotColumns)
                   .where("session_key", "in", sqliteStringSet(rows.map((row) => row.sessionKey))),
               ).rows.map((row) => [row.session_key, row]),
             );

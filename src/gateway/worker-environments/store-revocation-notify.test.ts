@@ -1,13 +1,7 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
@@ -22,21 +16,16 @@ const SSH_ENDPOINT: WorkerSshEndpoint = {
 const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 
 describe("worker environment store credential-revocation listeners", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let store: WorkerEnvironmentStore;
   let nowMs: number;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-env-"));
+    root = tempDirs.make("openclaw-worker-env-");
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = await createWorkerEnvironmentStore({ database, now: () => nowMs });
-  });
-
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   async function seedReady(environmentId: string, leaseId: string, credentialHash: string) {

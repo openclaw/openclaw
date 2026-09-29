@@ -47,7 +47,6 @@ import { bindCronRunReceiptExecution } from "./run-receipt-execution-binding.js"
 import {
   assertCronRunReceiptCurrent,
   activateCronRunReceiptInDatabase,
-  claimCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
@@ -58,6 +57,8 @@ import {
 } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
   makeCronReceiptJob,
 } from "./run-receipt-store.test-support.js";
 import {
@@ -523,6 +524,23 @@ describe("cron run receipt store", () => {
     },
   );
 
+  it("refuses a current receipt guard without recreating missing receipt storage", async () => {
+    const { storePath, job } = await storeJob(makeCronReceiptJob("missing-guard-storage"));
+    const handle = claimCronRunReceiptForTest(storePath, job, Date.now());
+    const database = openOpenClawStateDatabase().db;
+    database.exec("DROP TABLE cron_run_receipts");
+    try {
+      expect(() =>
+        assertCronRunReceiptCurrent({ handle, resolveAgentId: () => job.agentId! }),
+      ).toThrow(CronRunReceiptRevisionError);
+      expect(
+        database.prepare("SELECT name FROM sqlite_schema WHERE name = 'cron_run_receipts'").get(),
+      ).toBeUndefined();
+    } finally {
+      releaseLocalCronRunReceiptOwnership(handle);
+    }
+  });
+
   it.each(["present", "absent"] as const)(
     "keeps trigger-state retirement atomic with %s storage",
     async (storage) => {
@@ -753,6 +771,7 @@ describe("cron run receipt store", () => {
       job,
       agentId: job.agentId!,
       startedAtMs: Date.now(),
+      observed: inspectActiveCronRunReceipt({ storePath, jobId: job.id }),
     });
     const running = runOpenClawStateWriteTransaction(({ db }) =>
       activateCronRunReceiptInDatabase({
@@ -765,9 +784,8 @@ describe("cron run receipt store", () => {
 
     expect(() =>
       runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({
+        claimCronRunReceiptInDatabaseForTest({
           database: db,
-          receiptSchema: prepareCronRunReceiptWriteSchema(db),
           prepared,
           resolveAgentId: () => job.agentId!,
         }),

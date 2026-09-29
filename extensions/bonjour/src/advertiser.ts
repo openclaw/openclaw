@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { classifyCiaoProcessError } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
 
@@ -23,8 +24,6 @@ type GatewayBonjourAdvertiseOpts = {
   cliPath?: string;
   minimal?: boolean;
 };
-
-type BonjourServices = Array<{ label: string; svc: CiaoService }>;
 
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
@@ -50,26 +49,6 @@ const defaultLogger = {
   warn: (_msg: string) => {},
   debug: (_msg: string) => {},
 };
-
-function readBonjourDisableOverride(): boolean | null {
-  const raw = process.env.OPENCLAW_DISABLE_BONJOUR;
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  if (isTruthyEnvValue(raw)) {
-    return true;
-  }
-  switch (normalized) {
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return false;
-    default:
-      return null;
-  }
-}
 
 function isContainerEnvironment() {
   if (process.env.FLY_MACHINE_ID?.trim() && process.env.FLY_APP_NAME?.trim()) {
@@ -103,14 +82,7 @@ function isDisabledByEnv() {
   if (process.env.VITEST) {
     return true;
   }
-  const envOverride = readBonjourDisableOverride();
-  if (envOverride !== null) {
-    return envOverride;
-  }
-  if (isContainerEnvironment()) {
-    return true;
-  }
-  return false;
+  return parseBooleanValue(process.env.OPENCLAW_DISABLE_BONJOUR) ?? isContainerEnvironment();
 }
 
 function resolveSystemMdnsHostname(): string | null {
@@ -136,22 +108,11 @@ function resolveSystemMdnsHostname(): string | null {
 }
 
 const MAX_DNS_LABEL_BYTES = 63;
-const utf8Encoder = new TextEncoder();
-
 function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
-  const encoded = utf8Encoder.encode(name);
-  if (encoded.byteLength <= MAX_DNS_LABEL_BYTES) {
+  if (Buffer.byteLength(name) <= MAX_DNS_LABEL_BYTES) {
     return name;
   }
-  for (let end = MAX_DNS_LABEL_BYTES; end > 0; end -= 1) {
-    try {
-      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(encoded.subarray(0, end));
-      return decoded.replace(/-+$/, "").trim() || fallback;
-    } catch {
-      // Try the next shorter prefix until the byte slice ends on a UTF-8 boundary.
-    }
-  }
-  return fallback;
+  return truncateUtf8Prefix(name, MAX_DNS_LABEL_BYTES).replace(/-+$/, "").trim() || fallback;
 }
 
 function safeServiceName(name: string) {
@@ -307,59 +268,6 @@ export async function startGatewayBonjourAdvertiser(
 
     const responder = getResponder();
 
-    function createServices(): BonjourServices {
-      const services: BonjourServices = [];
-
-      const gateway = responder.createService({
-        name: safeServiceName(instanceName),
-        type: "openclaw-gw",
-        port: opts.gatewayPort,
-        domain: "local",
-        hostname,
-        txt: gatewayTxt,
-      });
-      services.push({
-        label: "gateway",
-        svc: gateway,
-      });
-
-      return services;
-    }
-
-    async function stopServices(services: BonjourServices) {
-      for (const { svc } of services) {
-        try {
-          await svc.destroy();
-        } catch {
-          /* ignore */
-        }
-      }
-      try {
-        await responder.shutdown();
-      } catch {
-        /* ignore */
-      }
-    }
-
-    function attachConflictListeners(services: BonjourServices) {
-      for (const { label, svc } of services) {
-        try {
-          svc.on("name-change", (name) => {
-            logger.warn(
-              `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(name)}`,
-            );
-          });
-          svc.on("hostname-change", (nextHostname) => {
-            logger.warn(
-              `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
-            );
-          });
-        } catch (err) {
-          logger.debug(`bonjour: failed to attach listeners for ${label}: ${String(err)}`);
-        }
-      }
-    }
-
     function handleAdvertiseFailure(
       label: string,
       svc: CiaoService,
@@ -381,38 +289,59 @@ export async function startGatewayBonjourAdvertiser(
       );
     }
 
-    function startAdvertising(services: BonjourServices) {
-      for (const { label, svc } of services) {
-        try {
-          void svc
-            .advertise()
-            .then(() => {
-              logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
-            })
-            .catch((err: unknown) => {
-              handleAdvertiseFailure(label, svc, err, "failed");
-            });
-        } catch (err) {
-          handleAdvertiseFailure(label, svc, err, "threw");
-        }
-      }
-    }
-
     logger.debug(
       `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
         safeServiceName(instanceName),
       )}, gatewayPort=${opts.gatewayPort}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
     );
 
-    const services = createServices();
-    attachConflictListeners(services);
-    startAdvertising(services);
+    const gateway = responder.createService({
+      name: safeServiceName(instanceName),
+      type: "openclaw-gw",
+      port: opts.gatewayPort,
+      domain: "local",
+      hostname,
+      txt: gatewayTxt,
+    });
+    try {
+      gateway.on("name-change", (name) => {
+        logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
+      });
+      gateway.on("hostname-change", (nextHostname) => {
+        logger.warn(
+          `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
+        );
+      });
+    } catch (err) {
+      logger.debug(`bonjour: failed to attach listeners for gateway: ${String(err)}`);
+    }
+    try {
+      void gateway
+        .advertise()
+        .then(() => {
+          logger.info(`bonjour: advertised ${serviceSummary("gateway", gateway)}`);
+        })
+        .catch((err: unknown) => {
+          handleAdvertiseFailure("gateway", gateway, err, "failed");
+        });
+    } catch (err) {
+      handleAdvertiseFailure("gateway", gateway, err, "threw");
+    }
     let stopPromise: Promise<void> | null = null;
 
     return {
       stop: () => {
         stopPromise ??= (async () => {
-          await stopServices(services);
+          try {
+            await gateway.destroy();
+          } catch {
+            /* ignore */
+          }
+          try {
+            await responder.shutdown();
+          } catch {
+            /* ignore */
+          }
           restoreConsoleLog();
           cleanupProcessHandlers();
         })();

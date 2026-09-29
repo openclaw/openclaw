@@ -162,24 +162,31 @@ describe("plugin async iterable protocol", () => {
     await iterator.return();
   });
 
-  it.each(["inner", "outer"] as const)(
-    "fences nested result readers and callable chunks when the %s consumer closes",
-    async (closed) => {
+  it.each([
+    { closed: "inner", terminal: false },
+    { closed: "outer", terminal: false },
+    { closed: "inner", terminal: true },
+    { closed: "outer", terminal: true },
+  ])(
+    "fences nested callable results when $closed closes (terminal=$terminal)",
+    async ({ closed, terminal }) => {
       const instance = owner();
       const inner = instance.retainConsumer();
       const outer = instance.retainConsumer();
       const called = vi.fn(() => "chunk");
       const source = instance.wrap({
         async *[Symbol.asyncIterator]() {
-          yield { read: called };
+          const chunk = { read: called };
+          if (!terminal) {
+            yield chunk;
+          }
+          return chunk;
         },
       });
       const iterator = outer.wrap(inner.wrap(source))[Symbol.asyncIterator]();
       try {
         const next = await iterator.next();
-        if (next.done) {
-          throw new Error("Expected a callable chunk");
-        }
+        expect(next.done).toBe(terminal);
         const chunk = next.value;
         expect(chunk.read()).toBe("chunk");
         (closed === "inner" ? inner : outer).release();
@@ -193,6 +200,43 @@ describe("plugin async iterable protocol", () => {
       }
     },
   );
+
+  it("classifies data once per nested read and fences methods added between reads", async () => {
+    const instance = owner();
+    const inner = instance.retainConsumer();
+    const outer = instance.retainConsumer();
+    const payload: { text: string; read?: () => string } = { text: "chunk" };
+    const source = instance.wrap(
+      (async function* () {
+        yield payload;
+      })(),
+    );
+    const iterator = outer.wrap(inner.wrap(source))[Symbol.asyncIterator]();
+    try {
+      const next = await iterator.next();
+      if (next.done) {
+        throw new Error("Expected a data chunk");
+      }
+      const ownKeys = vi.spyOn(Reflect, "ownKeys");
+      try {
+        expect(next.value).toBe(payload);
+        // Payload traversal must not multiply with the number of managed readers.
+        expect(ownKeys.mock.calls.filter(([value]) => value === payload)).toHaveLength(1);
+      } finally {
+        ownKeys.mockRestore();
+      }
+      payload.read = () => "updated";
+      const changed = next.value;
+      expect(changed.read?.()).toBe("updated");
+      await iterator.return();
+      outer.release();
+      expect(() => changed.read?.()).toThrow(/closed/);
+    } finally {
+      await iterator.return();
+      inner.release();
+      outer.release();
+    }
+  });
 
   it("preserves fixed result-view identity when a callable payload becomes plain data", async () => {
     const instance = owner();

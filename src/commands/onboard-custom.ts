@@ -1,3 +1,4 @@
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
@@ -151,7 +152,7 @@ async function promptBaseUrlAndKey(params: {
     initialValue: params.initialBaseUrl,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
-      return URL.canParse(val) ? undefined : t("wizard.customProvider.validUrl");
+      return isHttpUrl(val) ? undefined : t("wizard.customProvider.validUrl");
     },
   });
   const baseUrl = baseUrlInput.trim();
@@ -177,19 +178,6 @@ async function promptBaseUrlAndKey(params: {
     apiKey: normalizeOptionalProviderApiKey(apiKeyInput),
     resolvedApiKey: normalizeSecretInput(resolvedApiKey),
   };
-}
-
-type CustomApiRetryChoice = "baseUrl" | "model" | "both";
-
-async function promptCustomApiRetryChoice(prompter: WizardPrompter): Promise<CustomApiRetryChoice> {
-  return await prompter.select({
-    message: t("wizard.customProvider.retryChoice"),
-    options: [
-      { value: "baseUrl", label: t("wizard.customProvider.changeBaseUrl") },
-      { value: "model", label: t("wizard.customProvider.changeModel") },
-      { value: "both", label: t("wizard.customProvider.changeBaseUrlAndModel") },
-    ],
-  });
 }
 
 async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
@@ -299,7 +287,14 @@ export async function promptCustomApiConfig(params: {
         );
       }
     }
-    const retryChoice = await promptCustomApiRetryChoice(prompter);
+    const retryChoice = await prompter.select<"baseUrl" | "model" | "both">({
+      message: t("wizard.customProvider.retryChoice"),
+      options: [
+        { value: "baseUrl", label: t("wizard.customProvider.changeBaseUrl") },
+        { value: "model", label: t("wizard.customProvider.changeModel") },
+        { value: "both", label: t("wizard.customProvider.changeBaseUrlAndModel") },
+      ],
+    });
     if (retryChoice === "baseUrl" || retryChoice === "both") {
       ({ baseUrl, apiKey, resolvedApiKey } = await promptBaseUrlAndKey({
         prompter,

@@ -498,13 +498,13 @@ export class ChatTurnRouter {
       return await this.startWizard(this.wizard.startChannel(recordedOperation.channel));
     }
     if (recordedOperation.kind === "skills-setup") {
-      return await this.startWizard(this.wizard.startSkills());
+      return await this.startWizard(this.wizard.startSetup("skills"));
     }
     if (recordedOperation.kind === "search-setup") {
-      return await this.startWizard(this.wizard.startSearch());
+      return await this.startWizard(this.wizard.startSetup("search"));
     }
     if (recordedOperation.kind === "gateway-config-setup") {
-      return await this.startWizard(this.wizard.startGateway());
+      return await this.startWizard(this.wizard.startSetup("gateway"));
     }
     if (recordedOperation.kind === "memory-import") {
       return await this.startWizard(this.wizard.startMemoryImport());

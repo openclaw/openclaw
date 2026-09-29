@@ -1,10 +1,4 @@
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
-// Typed Control UI wrapper over the `browser.request` gateway method.
-//
-// The gateway method speaks an HTTP-shaped envelope ({method, path, body})
-// that is dispatched against the browser plugin's control routes, either
-// locally or via a browser-capable node. This module narrows the handful of
-// routes the browser panel needs and keeps route-path knowledge in one place.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
@@ -533,13 +527,12 @@ export async function inspectBrowserElementAt(
 ): Promise<BrowserInspectedNode | null> {
   const x = Math.max(0, Math.round(params.x));
   const y = Math.max(0, Math.round(params.y));
-  const result = asRecord(
+  return readBrowserInspectedNode(
     await evaluateInBrowser(client, {
       targetId: params.targetId,
       fn: `() => { ${browserInspectScript}\nreturn openclawInspectBrowserElement(${x}, ${y}); }`,
     }),
   );
-  return readBrowserInspectedNode(result);
 }
 
 export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode | null {
