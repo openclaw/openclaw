@@ -28,6 +28,7 @@ vi.mock("../cli/runtime-cleanup-scope.js", () => ({
   withCliProcessScope: async (run: () => Promise<void>) => run(),
 }));
 vi.mock("../cli/update-cli/update-command-executor.js", () => ({
+  captureUpdateCommandExecutorAuthority: () => ({ installKey: "/synthetic" }),
   withDelegatedUpdateCommandExecutor: async (
     _executor: unknown,
     _runId: string,
@@ -586,7 +587,7 @@ it.each([
   if (uncertain) {
     expect(doctor).not.toHaveBeenCalled();
   } else {
-    expect(doctor).toHaveBeenCalledExactlyOnceWith(
+    expect(doctor, stderr.join("\n")).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),

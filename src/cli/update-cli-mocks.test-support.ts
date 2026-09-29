@@ -293,6 +293,18 @@ vi.mock("../config/config.js", () => {
   };
 });
 
+vi.mock("../config/io.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/io.js")>();
+  const mocked = await import("../config/config.js");
+  return {
+    ...actual,
+    createConfigIO: (options: Parameters<typeof actual.createConfigIO>[0] = {}) => ({
+      ...actual.createConfigIO(options),
+      readConfigFileSnapshotForWrite: mocked.createConfigIO(options).readConfigFileSnapshotForWrite,
+    }),
+  };
+});
+
 vi.mock("../infra/update-check.js", async (importOriginal) => ({
   formatGitInstallLabel: (await importOriginal<typeof import("../infra/update-check.js")>())
     .formatGitInstallLabel,

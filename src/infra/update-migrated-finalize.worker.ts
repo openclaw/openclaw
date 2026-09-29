@@ -3,6 +3,7 @@ import path from "node:path";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import {
+  captureUpdateCommandExecutorAuthority,
   withDelegatedUpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
@@ -260,6 +261,7 @@ async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
           ...input.opts,
           run: {
             runId: input.runId,
+            originalRecoveryCapture: input.originalRecoveryCapture,
             env: { ...process.env },
             executorFence: fence,
             ...(requesterAuthority ? { requesterAuthority } : {}),
@@ -353,6 +355,11 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         {
           inputHash: input.configInputHash,
           assertCurrent,
+          originalRecoveryCapture: {
+            runId: input.runId,
+            installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
+            ref: input.originalRecoveryCapture,
+          },
           ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }

@@ -568,11 +568,11 @@ export function createGitHubPublicationCoordinator(params: {
         ? repository.requestPersonalForSession(...args)
         : personal.requestPersonalForSession(...args);
     },
-    sharedStatus(...args: Parameters<typeof methods.sharedStatus>) {
-      return repository.sharedStatus(...args) ?? methods.sharedStatus(...args);
+    async sharedStatus(...args: Parameters<typeof methods.sharedStatus>) {
+      return (await repository.sharedStatus(...args)) ?? (await methods.sharedStatus(...args));
     },
-    latestShared(...args: Parameters<typeof methods.latestShared>) {
-      return repository.latestShared(...args) ?? methods.latestShared(...args);
+    async latestShared(...args: Parameters<typeof methods.latestShared>) {
+      return (await repository.latestShared(...args)) ?? (await methods.latestShared(...args));
     },
     preparePersonalStatus: repository.preparePersonalStatus,
     personalStatus(...args: Parameters<typeof repository.personalStatus>) {

@@ -1220,6 +1220,7 @@ src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
 src/proxy-capture/paths.ts
 src/proxy-capture/runtime-cleanup.ts
+src/proxy-capture/runtime-deferral.ts
 src/proxy-capture/runtime-fetch-patch.ts
 src/proxy-capture/runtime-owner.ts
 src/proxy-capture/runtime-response-body.ts

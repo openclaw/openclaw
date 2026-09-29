@@ -569,7 +569,7 @@ export async function beginDoctorMaintenance(
       retainStoppedInstallation =
         stopped?.serviceUpdateVerdict?.kind === "owned" &&
         stopped.serviceUpdateVerdict.requiresInstallRootRefresh === true;
-      await state.relocateLegacyRoot();
+      await state.prepareRepair();
     });
   } catch (error) {
     try {
