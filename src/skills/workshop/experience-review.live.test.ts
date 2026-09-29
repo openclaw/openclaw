@@ -33,7 +33,6 @@ import { listSkillProposals } from "./service.js";
 const LIVE =
   isLiveTestEnabled(["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]) &&
   Boolean(process.env.OPENAI_API_KEY?.trim());
-const describeLive = LIVE ? describe : describe.skip;
 const modelId = process.env.OPENCLAW_LIVE_SKILL_EXPERIENCE_MODEL ?? "gpt-5.6-luna";
 const {
   learnableMessages: positiveMessages,
@@ -189,7 +188,9 @@ describe("skill experience review transcript fixture", () => {
   });
 });
 
-describeLive("skill experience draft-only review live OpenAI eval", () => {
+// Waived for 2026.9.7 by the release lead under Peter's 2026-09-29 waiver decision for live
+// failures that cannot be repaired before release; see #161199. Release branch only.
+describe.skip("skill experience draft-only review live OpenAI eval", () => {
   beforeAll(async () => {
     // Warm the plugin runtime outside the review lane: the first load compiles
     // extensions synchronously and can exceed the lane's no-progress watchdog
