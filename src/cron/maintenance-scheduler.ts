@@ -1,4 +1,4 @@
-import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import {
   isGatewayRestartDrainError,
   runWithGatewayIndependentRootWorkAdmission,
@@ -10,17 +10,15 @@ export function createCronMaintenanceScheduler(
   run: () => Promise<void>,
   onError: (error: unknown) => void,
 ) {
-  let sweepJob: GatewayScheduledJob | undefined;
-  let scheduledSweep: { completion: Promise<void>; cancelAdmission: () => void } | null = null;
+  let scope: GatewaySchedulerScope | undefined;
+  let scheduledSweep: Promise<void> | undefined;
 
-  function startScheduledSweep(schedulerSignal: AbortSignal) {
+  function startScheduledSweep(signal: AbortSignal) {
     if (scheduledSweep) {
-      return scheduledSweep.completion;
+      return scheduledSweep;
     }
-    const admission = new AbortController();
-    const signal = AbortSignal.any([admission.signal, schedulerSignal]);
     let admitted = false;
-    const completion = runWithGatewayIndependentRootWorkAdmission(
+    scheduledSweep = runWithGatewayIndependentRootWorkAdmission(
       async () => {
         admitted = true;
         await run();
@@ -35,31 +33,27 @@ export function createCronMaintenanceScheduler(
         }
       })
       .finally(() => {
-        scheduledSweep = null;
+        scheduledSweep = undefined;
       });
-    scheduledSweep = { completion, cancelAdmission: () => admission.abort() };
-    return completion;
+    return scheduledSweep;
   }
 
   return {
     start(scheduler: GatewayScheduler) {
-      if (sweepJob) {
+      if (scope && !scope.signal.aborted) {
         return;
       }
-      sweepJob = scheduler.schedule({
+      scope = scheduler.scope();
+      const { signal } = scope;
+      scope.schedule({
         id: "cron-maintenance",
-        atMs: scheduler.now() + 5_000,
+        delayMs: 5_000,
         everyMs: CRON_SWEEP_INTERVAL_MS,
-        run: () => startScheduledSweep(scheduler.signal),
+        run: () => startScheduledSweep(signal),
       });
     },
     async stop(): Promise<void> {
-      sweepJob?.cancel();
-      sweepJob = undefined;
-      const pending = scheduledSweep;
-      pending?.cancelAdmission();
-      // Admission cancellation leaves already-started work owned until it settles.
-      await pending?.completion;
+      await Promise.all([scope?.stop(), scheduledSweep]);
     },
   };
 }
