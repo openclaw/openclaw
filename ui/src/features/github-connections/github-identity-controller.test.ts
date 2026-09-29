@@ -563,6 +563,8 @@ describe("GitHubIdentityController", () => {
   });
 
   it.each([
+    { label: "selected agent changes", overrides: { agentId: "reviewer" } },
+    { label: "connection generation changes", overrides: { clientRevision: 2 } },
     { label: "administrator access is lost", overrides: { authorizable: false } },
     { label: "selected scope changes", overrides: { scope: "agent" as const } },
   ])("cancels the exact authorization when $label", async ({ overrides }) => {

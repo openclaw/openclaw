@@ -94,7 +94,13 @@ describe("deepinfra speech provider", () => {
     });
 
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "deepinfra", capability: "audio", transport: "http" }),
+      expect.objectContaining({
+        provider: "deepinfra",
+        capability: "audio",
+        transport: "http",
+        defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
+        allowPrivateNetwork: false,
+      }),
     );
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
     const postRequest = requireFirstPostJsonRequest(

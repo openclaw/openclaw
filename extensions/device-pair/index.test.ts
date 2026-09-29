@@ -895,6 +895,30 @@ describe("device-pair notify pending formatting", () => {
 });
 
 describe("device-pair /pair approve", () => {
+  it.each([
+    {
+      label: "internal caller without pairing scope",
+      context: { channel: "webchat", gatewayClientScopes: ["operator.write"] },
+    },
+    {
+      label: "internal caller without scopes",
+      context: { channel: "webchat", gatewayClientScopes: undefined },
+    },
+    {
+      label: "external non-owner",
+      context: { channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: false },
+    },
+  ])("rejects approval from $label before reading or approving requests", async ({ context }) => {
+    const result = await runPair({
+      ...context,
+      args: "approve latest",
+      commandBody: "/pair approve latest",
+    });
+    expect(result).toEqual({ text: PAIRING_REQUIRED });
+    expect(listDevicePairing).not.toHaveBeenCalled();
+    expect(approveDevicePairing).not.toHaveBeenCalled();
+  });
+
   it.each`
     name                                                                    | context                                                                                       | approved                      | expectedCall               | expectedText
     ${"allows internal gateway callers with operator.pairing"}              | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                       | ${makeApprovedPairingResult}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
