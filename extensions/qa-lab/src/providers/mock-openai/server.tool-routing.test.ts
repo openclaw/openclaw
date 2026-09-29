@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
 import {
   QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
@@ -122,6 +123,23 @@ it("plans runtime-fixture sessions_spawn happy and failure calls deterministical
     ),
   );
   expect(callArgs(outputToolCall(await turn.request(), "sessions_spawn"))).toEqual({ task: "" });
+});
+
+it("routes the directory fixture through ls with valid happy and missing-directory inputs", async () => {
+  const config = readQaScenarioExecutionConfig("runtime-tool-fs-list") ?? {};
+  const turn = await startTurn("", {
+    tools: ["ls", "read"].map((name) => ({ type: "function", name })),
+  });
+  for (const [prompt, expectedPath] of [
+    [config.happyPrompt ?? `tool search qa check target=${config.toolName}`, "."],
+    [
+      config.failurePrompt ?? `tool search qa failure target=${config.toolName}`,
+      "runtime-tool-fixture-missing-directory",
+    ],
+  ]) {
+    turn.input.splice(0, 1, makeUserInput(String(prompt)));
+    expect(callArgs(outputToolCall(await turn.request(), "ls"))).toEqual({ path: expectedPath });
+  }
 });
 
 it("does not mistake shell exec or discovery without invocation for spawn authority", async () => {
