@@ -8,6 +8,7 @@ import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-co
 export const CI_PROOF_TEST_FILES = [
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
+  "test/e2e/qa-lab/runtime/gateway-yielded-parent-cancel-restart.e2e.test.ts",
   "test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/frv.release.test.ts",
