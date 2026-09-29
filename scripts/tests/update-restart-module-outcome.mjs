@@ -181,6 +181,8 @@ async function fixture({
       events.push("command:" + command);
       assert.equal(command, "restart");
       activation.assertCurrent?.();
+      // The command owner reports activation before awaiting the restart child.
+      activation.onGatewayStartAttempted?.();
       if (commandFailure) {
         throw commandFailure;
       }

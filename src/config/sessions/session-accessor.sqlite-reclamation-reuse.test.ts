@@ -1,13 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
-import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Worker, WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   conversation,
   queueConversationDeliveryForTest,
@@ -19,6 +17,10 @@ import type { MessageActionResult } from "../../infra/outbound/message-action-co
 import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -67,14 +69,17 @@ import { loadTranscriptEvents } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
-import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
-import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import {
-  createLifecycleArtifactReclamationPlan,
-  runSqliteSessionReclamation,
-} from "./session-accessor.sqlite-reclamation.js";
+  createFixture,
+  leasesFor,
+  observeReclamationWorkers,
+  tempDirs,
+} from "./session-accessor.sqlite-reclamation-reuse.test-support.js";
+import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
+import type { SqliteReclamationWorkerMessage } from "./session-accessor.sqlite-reclamation-worker.types.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
 
 const validation = vi.hoisted(() => ({
@@ -113,9 +118,9 @@ function fullChecks() {
   return Atomics.load(new Int32Array(validation.checks), 0);
 }
 
-const tempDirs = createTempDirTracker();
 afterEach(async () => {
   vi.useRealTimers();
+  resetGatewayWorkAdmission();
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
@@ -124,48 +129,6 @@ afterEach(async () => {
   tempDirs.cleanup();
   vi.unstubAllEnvs();
 });
-
-function createFixture(sessionIds = ["first", "second"], agentId = "main") {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("reclamation-reuse-")) };
-  const options = { agentId, env };
-  const scopes = sessionIds.map((sessionId) => ({
-    agentId: options.agentId,
-    env,
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-  }));
-  for (const scope of scopes) {
-    ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  }
-  const database = openOpenClawAgentDatabase(options);
-  const plans = scopes.map((scope) =>
-    createLifecycleArtifactReclamationPlan({
-      agentId: "main",
-      databaseOptions: { ...options, path: database.path },
-      entries: [{ sessionKey: scope.sessionKey, expectedEntry: loadSessionEntryReadOnly(scope) }],
-      materializedPlans: [],
-    }),
-  );
-  return { options, scopes, database, plans };
-}
-
-function observeReclamationWorkers(onSpawn?: (worker: Worker) => void) {
-  const spawned: Worker[] = [];
-  const create = archiveWorker.createSqliteTranscriptArchiveWorker;
-  vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-    const worker = create(data);
-    spawned.push(worker);
-    onSpawn?.(worker);
-    return worker;
-  });
-  return spawned;
-}
-
-function leasesFor(fixture: ReturnType<typeof createFixture>) {
-  return openOpenClawStateDatabase({ env: fixture.options.env })
-    .db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?")
-    .all(fixture.database.path);
-}
 
 test.each([
   "current",
@@ -460,16 +423,13 @@ test("warm Worker results cannot revive proof invalidated after a competing pare
     parent?: OpenClawAgentDatabaseValidation;
   } = {};
   const spawned = observeReclamationWorkers((worker) => {
-    worker.prependListener(
-      "message",
-      (message: reclamationWorker.SqliteReclamationWorkerMessage) => {
-        if (message.type === "reclaimed" && message.operationId === 1) {
-          observed.worker = message.validation;
-          // A concurrent canonical opener can finish before the first Worker result is adopted.
-          observed.parent = setOpenClawAgentDatabaseValidation(database);
-        }
-      },
-    );
+    worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
+      if (message.type === "reclaimed" && message.operationId === 1) {
+        observed.worker = message.validation;
+        // A concurrent canonical opener can finish before the first Worker result is adopted.
+        observed.parent = setOpenClawAgentDatabaseValidation(database);
+      }
+    });
   });
   await runSqliteSessionReclamation({ forceInProcess: false, plan: plans[0]! });
   expect(observed.worker).toBeDefined();
@@ -839,6 +799,55 @@ test("joins explicit Worker retirement before opening a different agent store", 
   expect(loadSessionEntryReadOnly(second.scopes[1]!)).toMatchObject({ sessionId: "second" });
 });
 
+test.each(["idle", "active"] as const)(
+  "retires a retained %s writer on Gateway drain and preserves its clean witness",
+  async (timing) => {
+    const fixture = createFixture(["first", "second", "third"]);
+    closeOpenClawAgentDatabasesForTest(fixture.options.env.OPENCLAW_STATE_DIR);
+    clearOpenClawAgentIntegrityVerification(fixture.database.path, fixture.options.env);
+    const close = vi.spyOn(reclamationWorker.SqliteReclamationWorker.prototype, "close");
+    let drainOnCommit = false;
+    let closesAtDrain: number | undefined;
+    const spawned = observeReclamationWorkers((worker) => {
+      worker.prependListener("message", (message: SqliteReclamationWorkerMessage) => {
+        if (drainOnCommit && message.type === "commit-request") {
+          drainOnCommit = false;
+          markGatewayRestartDraining("restart (SIGTERM)");
+          closesAtDrain = close.mock.calls.length;
+        }
+      });
+    });
+    await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
+    expect(leasesFor(fixture)).toHaveLength(1);
+    expect(fullChecks()).toBe(1);
+    if (timing === "active") {
+      drainOnCommit = true;
+      await expect(
+        runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[1]! }),
+      ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
+      expect(closesAtDrain).toBe(0);
+      expect(loadSessionEntryReadOnly(fixture.scopes[1]!)).toBeUndefined();
+    } else {
+      markGatewayRestartDraining("restart (SIGTERM)");
+    }
+    // Join the real native retirement without a timer or a whole-Gateway close.
+    expect(close).toHaveBeenCalledOnce();
+    await close.mock.results[0]?.value;
+    expect(spawned[0]?.threadId).toBe(-1);
+    expect(leasesFor(fixture)).toHaveLength(0);
+    expect(
+      readOpenClawAgentIntegrityVerification(fixture.database.path, fixture.options.env)
+        ?.clean_close,
+    ).toBe(1);
+    resetGatewayWorkAdmission();
+    await expect(
+      runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[2]! }),
+    ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
+    expect(spawned).toHaveLength(2);
+    expect(fullChecks()).toBe(1);
+  },
+);
+
 test("retires after thirty idle minutes and opens a new Worker for the next request", async () => {
   const fixture = createFixture(["first", "second", "third"]);
   invalidateOpenClawAgentDatabaseValidation(fixture.database.path);
@@ -916,7 +925,7 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
   );
   const received: { receipt?: OpenClawAgentDatabaseWorkerLeaseReceipt } = {};
   const spawned = observeReclamationWorkers((worker) => {
-    worker.on("message", (message: reclamationWorker.SqliteReclamationWorkerMessage) => {
+    worker.on("message", (message: SqliteReclamationWorkerMessage) => {
       if (message.type === "lease") {
         received.receipt = message.receipt;
       }
