@@ -50,7 +50,6 @@ interface ToolConfig {
   binaryName: string; // Name of the binary inside the archive
   systemBinaryNames?: string[]; // Alternative system command names to try before downloading
   tagPrefix: string; // Prefix for tags (e.g., "v" for v1.0.0, "" for 1.0.0)
-  getAssetName: (version: string, plat: string, architecture: string) => string | null;
 }
 
 const TOOLS: Record<"fd" | "rg", ToolConfig> = {
@@ -60,40 +59,12 @@ const TOOLS: Record<"fd" | "rg", ToolConfig> = {
     binaryName: "fd",
     systemBinaryNames: ["fd", "fdfind"],
     tagPrefix: "v",
-    getAssetName: (version, plat, architecture) => {
-      if (plat === "darwin") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `fd-v${version}-${archStr}-apple-darwin.tar.gz`;
-      } else if (plat === "linux") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `fd-v${version}-${archStr}-unknown-linux-gnu.tar.gz`;
-      } else if (plat === "win32") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `fd-v${version}-${archStr}-pc-windows-msvc.zip`;
-      }
-      return null;
-    },
   },
   rg: {
     name: "ripgrep",
     repo: "BurntSushi/ripgrep",
     binaryName: "rg",
     tagPrefix: "",
-    getAssetName: (version, plat, architecture) => {
-      if (plat === "darwin") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `ripgrep-${version}-${archStr}-apple-darwin.tar.gz`;
-      } else if (plat === "linux") {
-        if (architecture === "arm64") {
-          return `ripgrep-${version}-aarch64-unknown-linux-gnu.tar.gz`;
-        }
-        return `ripgrep-${version}-x86_64-unknown-linux-musl.tar.gz`;
-      } else if (plat === "win32") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `ripgrep-${version}-${archStr}-pc-windows-msvc.zip`;
-      }
-      return null;
-    },
   },
 };
 
@@ -242,10 +213,17 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
     version = "10.3.0";
   }
 
-  const assetName = config.getAssetName(version, plat, architecture);
-  if (!assetName) {
+  const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+  const targets: Partial<Record<NodeJS.Platform, string>> = {
+    darwin: "apple-darwin.tar.gz",
+    linux: `unknown-linux-${tool === "rg" && architecture !== "arm64" ? "musl" : "gnu"}.tar.gz`,
+    win32: "pc-windows-msvc.zip",
+  };
+  const target = targets[plat];
+  if (!target) {
     throw new Error(`Unsupported platform: ${plat}/${architecture}`);
   }
+  const assetName = `${config.name}-${config.tagPrefix}${version}-${archStr}-${target}`;
 
   mkdirSync(toolsDir, { recursive: true });
 

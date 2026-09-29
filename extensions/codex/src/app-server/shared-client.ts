@@ -837,20 +837,16 @@ export async function createIsolatedCodexAppServerClient(
       abandonSignal,
       assertCurrent: options?.assertCurrent,
       onStartedClient: (client) => {
-        trackIsolatedCodexAppServerClient(client);
+        const state = getSharedCodexAppServerClientState();
+        state.isolatedClients.add(client);
+        client.addTransportExitHandler((exitedClient) => {
+          state.isolatedClients.delete(exitedClient);
+          notifyDesktopGenerationDrainChecks(state);
+        });
         options?.onStartedClient?.(client);
       },
     }),
   );
-}
-
-function trackIsolatedCodexAppServerClient(client: CodexAppServerClient): void {
-  const state = getSharedCodexAppServerClientState();
-  state.isolatedClients.add(client);
-  client.addTransportExitHandler((exitedClient) => {
-    state.isolatedClients.delete(exitedClient);
-    notifyDesktopGenerationDrainChecks(state);
-  });
 }
 
 function startInitializedCodexAppServerClient(params: CodexAppServerClientStartupOptions) {
@@ -1025,7 +1021,9 @@ async function startInitializedCodexAppServerClientOnce(
         );
       } catch (error) {
         if (
-          shouldTryManagedFallbackStartOption(error, startOptions, index, startOptionsCandidates)
+          startOptions.commandSource === "resolved-managed" &&
+          index < startOptionsCandidates.length - 1 &&
+          isUnsupportedCodexAppServerVersionError(error)
         ) {
           continue;
         }
@@ -1174,19 +1172,6 @@ function resolveManagedFallbackStartOptions(
   return candidates;
 }
 
-function shouldTryManagedFallbackStartOption(
-  error: unknown,
-  startOptions: CodexAppServerStartOptions,
-  index: number,
-  startOptionsCandidates: readonly CodexAppServerStartOptions[],
-): boolean {
-  return (
-    startOptions.commandSource === "resolved-managed" &&
-    index < startOptionsCandidates.length - 1 &&
-    isUnsupportedCodexAppServerVersionError(error)
-  );
-}
-
 export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   state.startup.controller.abort();
@@ -1329,7 +1314,12 @@ function hasLiveOlderDesktopGenerationClient(params: {
 }): boolean {
   for (const clients of [params.state.liveClients, params.state.isolatedClients]) {
     for (const client of clients) {
-      if (isOlderDesktopGenerationClientForHome(client, params.generation, params.targetHome)) {
+      const metadata = params.state.startMetadata.get(client);
+      if (
+        metadata?.desktopGeneration &&
+        metadata.desktopGeneration.epoch < params.generation.epoch &&
+        resolveCodexNativeConfigFenceKey({ client }) === params.targetHome
+      ) {
         return true;
       }
     }
@@ -1337,25 +1327,9 @@ function hasLiveOlderDesktopGenerationClient(params: {
   return false;
 }
 
-function isOlderDesktopGenerationClientForHome(
-  client: CodexAppServerClient,
-  generation: CodexDesktopGeneration,
-  targetHome: string,
-): boolean {
-  const metadata = getSharedCodexAppServerClientState().startMetadata.get(client);
-  return Boolean(
-    metadata?.desktopGeneration &&
-    metadata.desktopGeneration.epoch < generation.epoch &&
-    resolveCodexNativeConfigFenceKey({ client }) === targetHome,
-  );
-}
-
 export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   client: CodexAppServerClient | undefined,
-  options?: {
-    exitTimeoutMs?: number;
-    forceKillDelayMs?: number;
-  },
+  options?: Parameters<CodexAppServerClient["closeAndWait"]>[0],
 ): Promise<boolean> {
   if (!client) {
     return false;
@@ -1370,10 +1344,9 @@ export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   return true;
 }
 
-export async function clearSharedCodexAppServerClientAndWait(options?: {
-  exitTimeoutMs?: number;
-  forceKillDelayMs?: number;
-}): Promise<void> {
+export async function clearSharedCodexAppServerClientAndWait(
+  options?: Parameters<CodexAppServerClient["closeAndWait"]>[0],
+): Promise<void> {
   const state = getSharedCodexAppServerClientState();
   const lifetime = state.startup;
   lifetime.controller.abort();

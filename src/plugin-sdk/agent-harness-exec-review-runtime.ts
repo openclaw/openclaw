@@ -50,12 +50,12 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
   const [
     { commandRequiresSecurityAuditSuppressionApproval, evaluateShellAllowlistWithAuthorization },
     { detectUnsafeExecControlShellCommand },
-    { detectPolicyInlineEval },
+    { detectInlineEvalInSegments },
     { isBlockedShellWrapperCommand },
   ] = await Promise.all([
     import("../infra/exec-approvals.js"),
     import("../infra/exec-control-command-guard.js"),
-    import("../infra/command-analysis/policy.js"),
+    import("../infra/command-analysis/risks.js"),
     import("../infra/exec-wrapper-resolution.js"),
   ]);
   const command = params.command.trim();
@@ -95,7 +95,7 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
   if ((await detectUnsafeExecControlShellCommand(command)) !== null) {
     return undefined;
   }
-  const inlineEval = detectPolicyInlineEval(allowlistEval.segments) !== null;
+  const inlineEval = detectInlineEvalInSegments(allowlistEval.segments) !== null;
   const heredoc = segment.argv.some((token) => token.startsWith("<<"));
   return {
     command,

@@ -60,7 +60,7 @@ async function installStatefulOpenCode(initialSessions: StatefulOpenCodeSession[
   await writeState({ sessions: initialSessions });
   await fs.writeFile(logFile, "");
   await fs.writeFile(
-    executable,
+    `${executable}.js`,
     "#!/usr/bin/env node\n" +
       `const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -124,7 +124,8 @@ if (args[0] === "--pure" && args[1] === "db") {
 }
 `,
   );
-  await fs.chmod(executable, 0o755);
+  // Keep generated payload writers out of the kernel's executable inode check.
+  await fs.symlink(new URL("./test-fixtures/opencode-command.sh", import.meta.url), executable);
   process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
   return {
     writeState,

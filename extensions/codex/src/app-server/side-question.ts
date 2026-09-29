@@ -61,7 +61,6 @@ import {
 } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
-  resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
@@ -134,6 +133,7 @@ import {
   CodexThreadPolicyHandoffError,
   refreshCodexThreadPolicy,
 } from "./thread-policy.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 import { buildCodexUserInput } from "./user-input.js";

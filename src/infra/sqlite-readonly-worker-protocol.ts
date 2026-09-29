@@ -33,10 +33,13 @@ export type SqliteReadOnlyWorkerResult =
   | { ok: false; message: string };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
+export class SqliteSnapshotAllocationRefusedError extends Error {}
 
 // Released updater parents require exactly { ok, message }. A negotiated worker
 // protocol can replace this owner-generated tag when those parents are retired.
 export const SQLITE_INSPECTION_CONTENTION_PREFIX = "Retryable SQLite inspection contention: ";
+export const SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX =
+  "SQLite snapshot directory creation refused: ";
 
 export type SqliteAuthProfileRows = { store: unknown; state: unknown; cacheable: boolean };
 export type SqliteAuthProfileReadOptions = {
@@ -154,14 +157,23 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (params.failure || !result.ok) {
     const contention = !result.ok && result.message.startsWith(SQLITE_INSPECTION_CONTENTION_PREFIX);
+    const allocationRefused =
+      !params.failure &&
+      !result.ok &&
+      (mode === "staging-create" || mode === "staging-create-legacy") &&
+      result.message.startsWith(SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX);
+    const prefix = allocationRefused
+      ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX
+      : contention
+        ? SQLITE_INSPECTION_CONTENTION_PREFIX
+        : "";
     const error = createSqliteReadOnlyWorkerError(
-      !result.ok
-        ? contention
-          ? result.message.slice(SQLITE_INSPECTION_CONTENTION_PREFIX.length)
-          : result.message
-        : (params.failure ?? "failed"),
+      !result.ok ? result.message.slice(prefix.length) : (params.failure ?? "failed"),
       params.stderr,
     );
+    if (allocationRefused) {
+      throw new SqliteSnapshotAllocationRefusedError(error.message);
+    }
     if (contention) {
       throw new SqliteReadOnlyInspectionContentionError(error.message);
     }

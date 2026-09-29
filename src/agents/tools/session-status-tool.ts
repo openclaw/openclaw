@@ -82,8 +82,6 @@ import {
   shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
 
-type SessionStatusStateChanges = ReturnType<typeof listSessionStateEventsSince>;
-
 function compactSessionStateEventPayload(
   payload: Record<string, unknown> | undefined,
 ): { outcome?: "error" | "timeout" | "cancelled"; channel?: string; turns?: number } | undefined {
@@ -108,7 +106,7 @@ function compactSessionStateEventPayload(
     : undefined;
 }
 
-function compactSessionStateChanges(stateChanges: SessionStatusStateChanges) {
+function compactSessionStateChanges(stateChanges: ReturnType<typeof listSessionStateEventsSince>) {
   return {
     ...stateChanges,
     events: stateChanges.events.map((event) => {
@@ -254,16 +252,13 @@ function resolveActiveStatusModelIdentity(params: {
   requesterAgentId: string;
 }): ActiveStatusModelIdentity | undefined {
   const activeModelId = params.activeModelId?.trim();
-  if (!activeModelId || params.modelRaw !== undefined) {
-    return undefined;
-  }
-  if (!params.isSemanticCurrentRequest && !params.isImplicitCurrentRequest) {
-    return undefined;
-  }
-  if (params.resolvedAgentId !== params.requesterAgentId) {
-    return undefined;
-  }
-  if (!params.liveSessionKeys.has(params.resolvedKey.trim())) {
+  if (
+    !activeModelId ||
+    params.modelRaw !== undefined ||
+    (!params.isSemanticCurrentRequest && !params.isImplicitCurrentRequest) ||
+    params.resolvedAgentId !== params.requesterAgentId ||
+    !params.liveSessionKeys.has(params.resolvedKey.trim())
+  ) {
     return undefined;
   }
   const activeModelProvider = params.activeModelProvider?.trim();
@@ -356,9 +351,6 @@ export function createSessionStatusTool(opts?: {
       };
       const normalizeVisibilityTargetSessionKey = (sessionKey: string, sessionAgentId: string) => {
         const trimmed = sessionKey.trim();
-        if (!trimmed) {
-          return trimmed;
-        }
         // Preserve legacy bare main keys for requester tree checks.
         const isMain = trimmed.startsWith("agent:")
           ? parseAgentSessionKey(trimmed)?.rest === mainKey
@@ -772,9 +764,11 @@ export function createSessionStatusTool(opts?: {
           const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
           const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
           const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
-          const isLiveRouteSession = activeRouteRunSessionKey
-            ? agentId === requesterAgentId && scopedResolved.key.trim() === activeRouteRunSessionKey
-            : agentId === requesterAgentId && liveSessionKeys.has(scopedResolved.key.trim());
+          const isLiveRouteSession =
+            agentId === requesterAgentId &&
+            (activeRouteRunSessionKey
+              ? scopedResolved.key.trim() === activeRouteRunSessionKey
+              : liveSessionKeys.has(scopedResolved.key.trim()));
           const routeDetails = buildSessionStatusRouteDetails({
             entry: statusSessionEntry,
             sessionKey: scopedResolved.key,
@@ -794,8 +788,7 @@ export function createSessionStatusTool(opts?: {
             routeContextText,
             stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
           ].filter((block): block is string => Boolean(block));
-          const visibleStatusText =
-            extraBlocks.length > 0 ? `${statusText}\n\n${extraBlocks.join("\n\n")}` : statusText;
+          const visibleStatusText = [statusText, ...extraBlocks].join("\n\n");
           const modelOverrideForResult =
             modelRaw === undefined
               ? undefined

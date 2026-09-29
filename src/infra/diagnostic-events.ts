@@ -60,6 +60,9 @@ type DiagnosticBaseEvent = {
   trace?: DiagnosticTraceContext;
 };
 
+type DiagnosticSessionEvent = DiagnosticBaseEvent &
+  Pick<DiagnosticRunScopeFields, "sessionKey" | "sessionId">;
+
 /** Payload-free facts from authenticated Gateway WebSocket request owners. */
 type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & {
   type: "gateway.rpc";
@@ -87,10 +90,8 @@ type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & {
       }
   );
 
-export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
+export type DiagnosticUsageEvent = DiagnosticSessionEvent & {
   type: "model.usage";
-  sessionKey?: string;
-  sessionId?: string;
   channel?: string;
   agentId?: string;
   provider?: string;
@@ -118,10 +119,8 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   durationMs?: number;
 };
 
-export type DiagnosticFailoverEvent = DiagnosticBaseEvent & {
+export type DiagnosticFailoverEvent = DiagnosticSessionEvent & {
   type: "model.failover";
-  sessionId?: string;
-  sessionKey?: string;
   lane?: string;
   fromProvider?: string;
   fromModel?: string;
@@ -222,37 +221,29 @@ export type DiagnosticWebhookErrorEvent = DiagnosticBaseEvent & {
   error: string;
 };
 
-export type DiagnosticMessageQueuedEvent = DiagnosticBaseEvent & {
+export type DiagnosticMessageQueuedEvent = DiagnosticSessionEvent & {
   type: "message.queued";
-  sessionKey?: string;
-  sessionId?: string;
   channel?: string;
   source: string;
   queueDepth?: number;
 };
 
-export type DiagnosticMessageReceivedEvent = DiagnosticBaseEvent & {
+export type DiagnosticMessageReceivedEvent = DiagnosticSessionEvent & {
   type: "message.received";
-  sessionKey?: string;
-  sessionId?: string;
   channel?: string;
   messageId?: number | string;
   chatId?: number | string;
   source: string;
 };
 
-export type DiagnosticMessageDispatchStartedEvent = DiagnosticBaseEvent & {
+export type DiagnosticMessageDispatchStartedEvent = DiagnosticSessionEvent & {
   type: "message.dispatch.started";
-  sessionKey?: string;
-  sessionId?: string;
   channel?: string;
   source: string;
 };
 
-export type DiagnosticMessageDispatchCompletedEvent = DiagnosticBaseEvent & {
+export type DiagnosticMessageDispatchCompletedEvent = DiagnosticSessionEvent & {
   type: "message.dispatch.completed";
-  sessionKey?: string;
-  sessionId?: string;
   channel?: string;
   source: string;
   durationMs: number;
@@ -261,13 +252,11 @@ export type DiagnosticMessageDispatchCompletedEvent = DiagnosticBaseEvent & {
   error?: string;
 };
 
-export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
+export type DiagnosticMessageProcessedEvent = DiagnosticSessionEvent & {
   type: "message.processed";
   channel: string;
   messageId?: number | string;
   chatId?: number | string;
-  sessionKey?: string;
-  sessionId?: string;
   agentId?: string;
   durationMs?: number;
   outcome: "completed" | "skipped" | "error";
@@ -314,10 +303,8 @@ export type DiagnosticTalkEvent = DiagnosticBaseEvent & {
   byteLength?: number;
 };
 
-export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
+export type DiagnosticSessionStateEvent = DiagnosticSessionEvent & {
   type: "session.state";
-  sessionKey?: string;
-  sessionId?: string;
   prevState?: DiagnosticSessionState;
   state: DiagnosticSessionState;
   reason?: string;
@@ -332,9 +319,7 @@ export type DiagnosticSessionAttentionClassification =
   | "stalled_agent_run"
   | "stale_session_state";
 
-type DiagnosticSessionAttentionBaseEvent = DiagnosticBaseEvent & {
-  sessionKey?: string;
-  sessionId?: string;
+type DiagnosticSessionAttentionBaseEvent = DiagnosticSessionEvent & {
   state: DiagnosticSessionState;
   ageMs: number;
   queueDepth?: number;
@@ -372,9 +357,7 @@ export type DiagnosticSessionRecoveryStatus =
   | "noop"
   | "failed";
 
-type DiagnosticSessionRecoveryBaseEvent = DiagnosticBaseEvent & {
-  sessionKey?: string;
-  sessionId?: string;
+type DiagnosticSessionRecoveryBaseEvent = DiagnosticSessionEvent & {
   state: DiagnosticSessionState;
   stateGeneration?: number;
   ageMs: number;
@@ -397,11 +380,9 @@ export type DiagnosticSessionRecoveryCompletedEvent = DiagnosticSessionRecoveryB
   stale?: boolean;
 };
 
-export type DiagnosticSessionTurnCreatedEvent = DiagnosticBaseEvent & {
+export type DiagnosticSessionTurnCreatedEvent = DiagnosticSessionEvent & {
   type: "session.turn.created";
   runId: string;
-  sessionKey?: string;
-  sessionId?: string;
   agentId?: string;
   channel?: string;
   trigger: "user" | "heartbeat";
@@ -420,18 +401,14 @@ export type DiagnosticLaneDequeueEvent = DiagnosticBaseEvent & {
   waitMs: number;
 };
 
-export type DiagnosticRunAttemptEvent = DiagnosticBaseEvent & {
+export type DiagnosticRunAttemptEvent = DiagnosticSessionEvent & {
   type: "run.attempt";
-  sessionKey?: string;
-  sessionId?: string;
   runId: string;
   attempt: number;
 };
 
-export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
+export type DiagnosticRunProgressEvent = DiagnosticSessionEvent & {
   type: "run.progress";
-  sessionKey?: string;
-  sessionId?: string;
   runId?: string;
   reason: string;
 };
@@ -525,10 +502,8 @@ export type DiagnosticPhaseCompletedEvent = DiagnosticBaseEvent &
     type: "diagnostic.phase.completed";
   };
 
-export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
+export type DiagnosticToolLoopEvent = DiagnosticSessionEvent & {
   type: "tool.loop";
-  sessionKey?: string;
-  sessionId?: string;
   agentId?: string;
   toolName: string;
   level: "warning" | "critical";
@@ -554,10 +529,8 @@ export type DiagnosticToolParamsSummary =
 export type DiagnosticToolSource = "channel" | "core" | "mcp" | "plugin";
 export type DiagnosticToolTerminalReason = "failed" | "cancelled" | "timed_out";
 
-type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
+type DiagnosticToolExecutionBaseEvent = DiagnosticSessionEvent & {
   runId?: string;
-  sessionKey?: string;
-  sessionId?: string;
   agentId?: string;
   /** Authoritative lifecycle time from the tool runtime, when it exposes one. */
   sourceTimestampMs?: number;
@@ -596,11 +569,9 @@ export type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEve
 export type DiagnosticSkillTelemetrySource = "bundled" | "unknown" | "workspace";
 export type DiagnosticSkillActivation = "command" | "read";
 
-export type DiagnosticSkillUsedEvent = DiagnosticBaseEvent & {
+export type DiagnosticSkillUsedEvent = DiagnosticSessionEvent & {
   type: "skill.used";
   runId?: string;
-  sessionKey?: string;
-  sessionId?: string;
   agentId?: string;
   skillName: string;
   skillSource: DiagnosticSkillTelemetrySource;
@@ -687,12 +658,10 @@ export type DiagnosticHarnessRunErrorEvent = DiagnosticHarnessRunBaseEvent & {
   cleanupFailed?: boolean;
 };
 
-type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
+type DiagnosticModelCallBaseEvent = DiagnosticSessionEvent & {
   runId: string;
   agentId?: string;
   callId: string;
-  sessionKey?: string;
-  sessionId?: string;
   provider: string;
   model: string;
   api?: string;
@@ -750,11 +719,9 @@ type DiagnosticModelCallUsage = Readonly<{
   total?: number;
 }>;
 
-export type DiagnosticContextAssembledEvent = DiagnosticBaseEvent & {
+export type DiagnosticContextAssembledEvent = DiagnosticSessionEvent & {
   type: "context.assembled";
   runId: string;
-  sessionKey?: string;
-  sessionId?: string;
   provider: string;
   model: string;
   channel?: string;

@@ -44,12 +44,6 @@ import {
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
 
-function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
-  // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
-  // (avoids reading Undici's non-public `.options` field)
-  return fromParams !== undefined ? fromParams : globalUndiciStreamTimeoutMs;
-}
-
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export const GUARDED_FETCH_MODE = {
@@ -292,11 +286,7 @@ function isAmbientGlobalFetch(params: {
   );
 }
 
-export function retainSafeHeadersForCrossOriginRedirectHeaders(
-  headers?: HeadersInit,
-): Record<string, string> | undefined {
-  return retainSafeRedirectHeaders(headers);
-}
+export { retainSafeHeadersForCrossOriginRedirect as retainSafeHeadersForCrossOriginRedirectHeaders } from "./redirect-headers.js";
 
 async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl: FetchLike) {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
@@ -556,7 +546,8 @@ async function fetchWithSsrFGuardInternal(
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
-      const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+      const timeoutMs =
+        params.timeoutMs !== undefined ? params.timeoutMs : globalUndiciStreamTimeoutMs;
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.

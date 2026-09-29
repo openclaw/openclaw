@@ -51,9 +51,7 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
   subagentRegistryRuntimeMock: {
     shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
     isSubagentSessionRunActive: vi.fn(() => true),
-    countActiveDescendantRuns: vi.fn(() => 0),
     countPendingDescendantRuns: vi.fn(() => 0),
-    hasDescendantRunAwaitingSettle: vi.fn(() => false),
     getLatestSubagentRunByChildSessionKey: vi.fn(() => undefined),
     listSubagentRunsForRequester: vi.fn<() => SubagentRunRecord[]>(() => []),
     replaceSubagentRunAfterSteer: vi.fn(() => true),
@@ -294,12 +292,8 @@ describe("subagent announce seam flow", () => {
     subagentRegistryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(false);
     subagentRegistryRuntimeMock.isSubagentSessionRunActive.mockReset();
     subagentRegistryRuntimeMock.isSubagentSessionRunActive.mockReturnValue(true);
-    subagentRegistryRuntimeMock.countActiveDescendantRuns.mockReset();
-    subagentRegistryRuntimeMock.countActiveDescendantRuns.mockReturnValue(0);
     subagentRegistryRuntimeMock.countPendingDescendantRuns.mockReset();
     subagentRegistryRuntimeMock.countPendingDescendantRuns.mockReturnValue(0);
-    subagentRegistryRuntimeMock.hasDescendantRunAwaitingSettle.mockReset();
-    subagentRegistryRuntimeMock.hasDescendantRunAwaitingSettle.mockReturnValue(false);
     subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReset();
     subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([]);
     subagentRegistryRuntimeMock.replaceSubagentRunAfterSteer.mockReset();

@@ -21,7 +21,7 @@ import type { RuntimeId } from "./runtime-id.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
-export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
+const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
   "http://localhost:18789",
   "http://127.0.0.1:43124",
@@ -34,7 +34,7 @@ export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
 const QA_LAB_PLUGIN_ID = "qa-lab";
 const QA_DIRECT_FRONTIER_PLUGIN_IDS = new Set<string>(QA_FRONTIER_PROVIDER_IDS);
 
-export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
+function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);

@@ -545,9 +545,10 @@ async function resolveSecretInputWithEnvFallback(params: {
   };
 }
 
-function setResolvedWebSearchApiKey(params: {
+function setResolvedWebProviderApiKey(params: {
+  kind: "search" | "fetch";
   resolvedConfig: OpenClawConfig;
-  provider: PluginWebSearchProviderEntry;
+  provider: PluginWebSearchProviderEntry | PluginWebFetchProviderEntry;
   value: string;
 }): void {
   if (params.provider.setConfiguredCredentialValue) {
@@ -556,8 +557,7 @@ function setResolvedWebSearchApiKey(params: {
   }
   const tools = ensureConfigObject(params.resolvedConfig as Record<string, unknown>, "tools");
   const web = ensureConfigObject(tools, "web");
-  const search = ensureConfigObject(web, "search");
-  params.provider.setCredentialValue(search, params.value);
+  params.provider.setCredentialValue(ensureConfigObject(web, params.kind), params.value);
 }
 
 async function resolveBundledWebSearchProviders(params: {
@@ -656,21 +656,6 @@ function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): strin
   return provider.inactiveSecretPaths?.length
     ? provider.inactiveSecretPaths
     : [provider.credentialPath];
-}
-
-function setResolvedWebFetchApiKey(params: {
-  resolvedConfig: OpenClawConfig;
-  provider: PluginWebFetchProviderEntry;
-  value: string;
-}): void {
-  if (params.provider.setConfiguredCredentialValue) {
-    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
-    return;
-  }
-  const tools = ensureConfigObject(params.resolvedConfig as Record<string, unknown>, "tools");
-  const web = ensureConfigObject(tools, "web");
-  const fetch = ensureConfigObject(web, "fetch");
-  params.provider.setCredentialValue(fetch, params.value);
 }
 
 function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): string[] {
@@ -816,7 +801,8 @@ export async function resolveRuntimeWebTools(params: {
           providerFailuresByRefKey,
           forceColdRefKeys: params.forceColdRefKeys,
         }),
-      setResolvedCredential: setResolvedWebSearchApiKey,
+      setResolvedCredential: (credential) =>
+        setResolvedWebProviderApiKey({ ...credential, kind: "search" }),
       inactivePathsForProvider,
       mergeRuntimeMetadata: async ({ provider, metadata, toolConfig, selectedResolution }) => {
         if (!provider.resolveRuntimeMetadata) {
@@ -926,7 +912,8 @@ export async function resolveRuntimeWebTools(params: {
           restrictEnvRefsToEnvVars: true,
           forceColdRefKeys: params.forceColdRefKeys,
         }),
-      setResolvedCredential: setResolvedWebFetchApiKey,
+      setResolvedCredential: (credential) =>
+        setResolvedWebProviderApiKey({ ...credential, kind: "fetch" }),
       inactivePathsForProvider: inactivePathsForFetchProvider,
       mergeRuntimeMetadata: async ({ provider, metadata, toolConfig, selectedResolution }) => {
         if (!provider.resolveRuntimeMetadata) {

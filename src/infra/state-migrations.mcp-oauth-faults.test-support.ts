@@ -1,5 +1,4 @@
 import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -16,8 +15,7 @@ export function observeLegacyMcpOAuthImport(
   let importCount = 0;
   let importInputBytes = 0;
   const restore: Array<() => void> = [];
-  if (mode !== "observe") {
-    const preload = `
+  const preload = `
       import { MessagePort, workerData, threadId } from "node:worker_threads";
       const post = MessagePort.prototype.postMessage;
       MessagePort.prototype.postMessage = function(message, ...args) {
@@ -34,53 +32,58 @@ export function observeLegacyMcpOAuthImport(
         return result;
       };
     `;
-    const create = workerCpu.createCpuTrackedWorker;
-    const created = vi
-      .spyOn(workerCpu, "createCpuTrackedWorker")
-      .mockImplementation((filename, options) =>
-        create(filename, {
-          ...options,
-          execArgv: [
-            ...(options?.execArgv ?? []),
-            "--import",
-            `data:text/javascript,${encodeURIComponent(preload)}`,
-          ],
-          workerData: {
-            ...options?.workerData,
-            mcpMigrationSourceKey: sourceKey,
-            mcpMigrationFaultMode: mode,
-            mcpMigrationExit: exit.buffer,
-          },
-        }),
+  const create = workerCpu.createCpuTrackedWorker;
+  const created = vi
+    .spyOn(workerCpu, "createCpuTrackedWorker")
+    .mockImplementation((filename, options) => {
+      const worker = create(
+        filename,
+        mode === "observe"
+          ? options
+          : {
+              ...options,
+              execArgv: [
+                ...(options?.execArgv ?? []),
+                "--import",
+                `data:text/javascript,${encodeURIComponent(preload)}`,
+              ],
+              workerData: {
+                ...options?.workerData,
+                mcpMigrationSourceKey: sourceKey,
+                mcpMigrationFaultMode: mode,
+                mcpMigrationExit: exit.buffer,
+              },
+            },
       );
-    restore.push(() => created.mockRestore());
-  }
-  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply retains the original Worker receiver.
-  const post = Worker.prototype.postMessage;
-  const posted = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    ...args: Parameters<Worker["postMessage"]>
-  ) {
-    const message: unknown = args[0];
-    if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
-      const command: unknown = deserialize(message.input);
-      if (
-        isRecord(command) &&
-        command.type === "legacyMcpOAuth.import" &&
-        isRecord(command.input) &&
-        command.input.sourceKey === sourceKey
-      ) {
-        if (typeof message.id !== "number") {
-          throw new Error("Import request has no transport id");
+      const post = worker.postMessage.bind(worker);
+      const posted = vi.spyOn(worker, "postMessage").mockImplementation((...args) => {
+        const message: unknown = args[0];
+        if (
+          isRecord(message) &&
+          message.type === "execute" &&
+          message.input instanceof Uint8Array
+        ) {
+          const command: unknown = deserialize(message.input);
+          if (
+            isRecord(command) &&
+            command.type === "legacyMcpOAuth.import" &&
+            isRecord(command.input) &&
+            command.input.sourceKey === sourceKey
+          ) {
+            if (typeof message.id !== "number") {
+              throw new Error("Import request has no transport id");
+            }
+            writerThreadId = worker.threadId;
+            importInputBytes = message.input.byteLength;
+            importCount++;
+          }
         }
-        writerThreadId = this.threadId;
-        importInputBytes = message.input.byteLength;
-        importCount++;
-      }
-    }
-    return Reflect.apply(post, this, args);
-  });
-  restore.push(() => posted.mockRestore());
+        return post(...args);
+      });
+      restore.push(() => posted.mockRestore());
+      return worker;
+    });
+  restore.push(() => created.mockRestore());
 
   return {
     importCount: () => importCount,

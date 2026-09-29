@@ -86,19 +86,15 @@ export function invalidateComputerFrameIfMissing(params: {
     return invalidateComputerFrame(params.contextEpoch);
   }
 
-  let frameImageIdentity: string | undefined;
-  for (let index = params.messages.length - 1; index >= 0; index -= 1) {
-    const message = params.messages[index];
-    if (
-      message?.role !== "toolResult" ||
-      message.toolName !== "computer" ||
-      message.toolCallId !== frameToolCallId
-    ) {
-      continue;
-    }
-    frameImageIdentity = computerFrameImageIdentity(message.content);
-    break;
-  }
+  const frameMessage = params.messages.findLast(
+    (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
+      message?.role === "toolResult" &&
+      message.toolName === "computer" &&
+      message.toolCallId === frameToolCallId,
+  );
+  const frameImageIdentity = frameMessage
+    ? computerFrameImageIdentity(frameMessage.content)
+    : undefined;
 
   if (
     frameImageIdentity !== undefined &&

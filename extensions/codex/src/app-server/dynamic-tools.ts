@@ -42,6 +42,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
@@ -77,7 +78,7 @@ import {
   failedToolResult,
   type CodexDynamicToolRuntimeResponse,
 } from "./dynamic-tool-response-state.js";
-import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
+import { invalidInlineImageText } from "./image-payload-sanitizer.js";
 import type {
   CodexDynamicToolCallOutputContentItem,
   CodexDynamicToolCallParams,
@@ -149,9 +150,8 @@ function applyCurrentMessageProvider(
   currentProvider: string | undefined,
 ): Record<string, unknown> {
   const hasProvider =
-    typeof args.provider === "string" && args.provider.trim().length > 0
-      ? true
-      : typeof args.channel === "string" && args.channel.trim().length > 0;
+    (typeof args.provider === "string" && args.provider.trim().length > 0) ||
+    (typeof args.channel === "string" && args.channel.trim().length > 0);
   const provider = currentProvider?.trim();
   if (toolName !== "message" || hasProvider || !provider) {
     return args;
