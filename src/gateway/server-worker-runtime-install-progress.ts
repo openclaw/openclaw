@@ -11,7 +11,7 @@ export function createWorkerRuntimeInstallProgressPublisher(params: {
   placements: Pick<WorkerSessionPlacementStore, "readProjection">;
   readInstall: (
     nodeId: string,
-  ) => Pick<GatewayNodeWorkerBundleInstallObservation, "bundleHash" | "environmentIds"> | undefined;
+  ) => Pick<GatewayNodeWorkerBundleInstallObservation, "environmentIds"> | undefined;
   warn: (message: string) => void;
 }) {
   // Transfer callbacks can inherit a caller's temporary read admission.
@@ -71,26 +71,18 @@ export function createWorkerRuntimeInstallProgressPublisher(params: {
               ) {
                 continue;
               }
-              const observation =
-                (environment.nodeDeviceId
-                  ? observations.get(environment.nodeDeviceId)
-                  : undefined) ??
-                [...observations.values()].find((candidate) =>
-                  candidate?.environmentIds.includes(environment.environmentId),
-                );
               if (
                 !(environment.nodeDeviceId && nodeIds.has(environment.nodeDeviceId)) &&
                 !notifiedEnvironments.has(environment.environmentId)
               ) {
                 continue;
               }
+              // Turn admission reports progress for runs waiting on an active refresh.
               if (
-                observation &&
-                ((placement.state === "provisioning" &&
-                  observation.environmentIds.includes(environment.environmentId)) ||
-                  (placement.state === "active" &&
-                    placement.workerBundleHash !== observation.bundleHash &&
-                    !placement.turnClaim))
+                placement.state === "provisioning" &&
+                [...observations.values()].some((observation) =>
+                  observation?.environmentIds.includes(environment.environmentId),
+                )
               ) {
                 markDiagnosticRunProgress({
                   sessionId: placement.sessionId,

@@ -22,13 +22,17 @@ afterEach(() => {
 });
 
 async function mountComments(additional: ChatAttachment[] = []) {
-  const attachment = createChatSelectionAttachment({
-    text: "Selected passage",
-    comment: "Original comment",
-    sessionKey: "agent:main:main",
-    start: 0,
-    end: 16,
-  })!;
+  const attachment = createChatSelectionAttachment(
+    {
+      text: "Selected passage",
+      comment: "Original comment",
+      sessionKey: "agent:main:main",
+      start: 0,
+      end: 16,
+    },
+    undefined,
+    0,
+  )!;
   let attachments: ChatAttachment[] = [attachment, ...additional];
   for (const item of attachments) {
     payloads.add(item.id);
@@ -104,13 +108,17 @@ describe("comment actions outside the transcript", () => {
 
   it("removes all current-session comments while retaining other attachments and their payloads", async () => {
     const createComment = (sessionKey: string) =>
-      createChatSelectionAttachment({
-        text: "Another passage",
-        comment: "Keep its context",
-        sessionKey,
-        start: 0,
-        end: 15,
-      })!;
+      createChatSelectionAttachment(
+        {
+          text: "Another passage",
+          comment: "Keep its context",
+          sessionKey,
+          start: 0,
+          end: 15,
+        },
+        undefined,
+        0,
+      )!;
     const second = createComment("agent:main:main");
     const otherSession = createComment("agent:main:other");
     const file: ChatAttachment = {

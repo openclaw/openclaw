@@ -30,12 +30,15 @@ export type GatewayNodeWorkerBundleInstall = (params: {
   reason: "provision" | "refresh";
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  onProgress?: () => void;
 }) => Promise<NodeWorkerBundleInstallResult>;
 
 type ActiveInstall = {
   observation: GatewayNodeWorkerBundleInstallObservation;
   references: number;
   environmentReferences: Map<string, number>;
+  // Callers share one node download, so every joined caller hears its progress.
+  progressListeners: Set<() => void>;
   lastProgressLogAtMs: number;
   lastPublicationAtMs: number;
   serve?: {
@@ -57,6 +60,13 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
   const now = options.now ?? Date.now;
   const active = new Map<string, ActiveInstall>();
   let version = 0;
+  const notifyProgress = (listener: () => void) => {
+    try {
+      listener();
+    } catch {
+      // Run-progress observers do not own installation success.
+    }
+  };
   const publish = (entry: ActiveInstall, environmentIds = entry.observation.environmentIds) => {
     entry.lastPublicationAtMs = now();
     try {
@@ -64,6 +74,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     } catch {
       // Session projection observers do not own installation success.
     }
+    entry.progressListeners.forEach(notifyProgress);
   };
   const install: GatewayNodeWorkerBundleInstall = async (params) => {
     let startedAtMs = now();
@@ -116,6 +127,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           },
           references: 0,
           environmentReferences: new Map(),
+          progressListeners: new Set(),
           lastProgressLogAtMs: startedAtMs,
           lastPublicationAtMs: startedAtMs,
         };
@@ -125,6 +137,11 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
         );
       }
       entry.references++;
+      // A per-caller wrapper keeps shared callbacks from unsubscribing each other.
+      const progressListener = params.onProgress && (() => params.onProgress?.());
+      if (progressListener) {
+        entry.progressListeners.add(progressListener);
+      }
       const environmentReferences = entry.environmentReferences.get(params.environmentId) ?? 0;
       entry.environmentReferences.set(params.environmentId, environmentReferences + 1);
       if (environmentReferences === 0) {
@@ -134,6 +151,9 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
         };
         version++;
         publish(entry);
+      } else if (progressListener) {
+        // Joining an environment's in-flight install is progress even without a new publication.
+        notifyProgress(progressListener);
       }
       const currentEntry = entry;
       startedAtMs = currentEntry.observation.startedAtMs;
@@ -251,6 +271,9 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           options.transfer.revoke(prepared.token);
         }
         currentEntry.references--;
+        if (progressListener) {
+          currentEntry.progressListeners.delete(progressListener);
+        }
         const remaining = currentEntry.environmentReferences.get(params.environmentId)! - 1;
         if (remaining === 0) {
           currentEntry.environmentReferences.delete(params.environmentId);

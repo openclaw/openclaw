@@ -13,6 +13,7 @@ import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js"
 import {
   ArtifactTransferBusyError,
   createArtifactTransferService,
+  type ArtifactTransferService,
 } from "./artifact-transfer-service.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
 import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
@@ -98,7 +99,13 @@ describe("artifact transfer response settlement", () => {
     vi.useRealTimers();
   });
 
-  async function serve(options: ResponseOptions & { artifactKey?: string; range?: string } = {}) {
+  async function serve(
+    options: ResponseOptions & {
+      artifactKey?: string;
+      range?: string;
+      transfer?: Omit<ArtifactTransferService, "prepare">;
+    } = {},
+  ) {
     const { socket, req, res } = createResponse(options);
     req.method = "GET";
     req.url = `/__openclaw__/worker-bootstrap/artifacts/${options.artifactKey ?? artifact.tarballSha256}`;
@@ -111,7 +118,7 @@ describe("artifact transfer response settlement", () => {
         req,
         res,
         clientIp: "127.0.0.1",
-        callback: createArtifactTransferHttpCallback(service),
+        callback: createArtifactTransferHttpCallback(options.transfer ?? service),
         rateLimiter,
       });
       const wire = Buffer.concat(socket.chunks).toString("utf8");
@@ -120,6 +127,36 @@ describe("artifact transfer response settlement", () => {
       socket.destroy();
     }
   }
+
+  it("reports progress only for authorized bytes and isolates observer failures", async ({
+    onTestFinished,
+  }) => {
+    const transfer = createArtifactTransferService({ now: () => now });
+    onTestFinished(() => transfer.closeAll());
+    const onProgress = vi.fn(() => {
+      throw new Error("synthetic progress observer failure");
+    });
+    const prepare = () =>
+      transfer.prepare({
+        artifact,
+        artifactKey: artifact.tarballSha256,
+        ttlMs: 60_000,
+        maxServes: 1,
+        isAuthorized: () => authorized,
+        onProgress,
+      });
+    ({ token } = prepare());
+    transfer.revoke(token);
+    expect((await serve({ transfer })).res.statusCode).toBe(404);
+    expect(onProgress).not.toHaveBeenCalled();
+
+    ({ token } = prepare());
+    const completed = await serve({ transfer });
+    expect(completed.res.statusCode).toBe(200);
+    expect(completed.res.writableFinished).toBe(true);
+    expect(completed.body).toBe(contents);
+    expect(onProgress).toHaveBeenCalled();
+  });
 
   it.each([0, 4, contents.length - 1])(
     "serves exactly the bytes from offset %i",

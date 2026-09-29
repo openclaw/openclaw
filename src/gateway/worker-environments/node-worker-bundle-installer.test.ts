@@ -68,7 +68,11 @@ function observedInstaller() {
     advance: (milliseconds: number) => {
       clock += milliseconds;
     },
-    async start(reason: "provision" | "refresh" = "refresh", environmentId = "environment-1") {
+    async start(
+      reason: "provision" | "refresh" = "refresh",
+      environmentId = "environment-1",
+      onProgress?: () => void,
+    ) {
       const dispatched = createDeferredCore<ReturnType<typeof transfer.authorize>>();
       const result =
         createDeferredCore<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
@@ -87,6 +91,7 @@ function observedInstaller() {
         prewarm: true,
         reason,
         environmentId,
+        ...(onProgress ? { onProgress } : {}),
       });
       const capability = (await dispatched.promise)?.capability;
       if (!capability?.onProgress || !capability.onInterrupted) {
@@ -180,9 +185,15 @@ describe("Gateway node worker bundle installer", () => {
 
   it("refcounts each environment sharing an install until its callers settle", async () => {
     const h = observedInstaller();
-    const provision = await h.start("provision", "environment-1");
-    const duplicate = await h.start("refresh", "environment-1");
-    const refresh = await h.start("refresh", "environment-2");
+    const provisionProgress = vi.fn();
+    const refreshProgress = vi.fn();
+    const duplicateProgress = vi.fn();
+    const provision = await h.start("provision", "environment-1", provisionProgress);
+    const duplicate = await h.start("refresh", "environment-1", duplicateProgress);
+    expect(duplicateProgress).toHaveBeenCalledOnce();
+    const refresh = await h.start("refresh", "environment-2", refreshProgress);
+    expect(provisionProgress).toHaveBeenCalled();
+    expect(refreshProgress).toHaveBeenCalled();
     expect(h.ensure.readInstall(node.nodeId)?.environmentIds).toEqual([
       "environment-1",
       "environment-2",
@@ -202,8 +213,13 @@ describe("Gateway node worker bundle installer", () => {
     expect(h.ensure.readInstallForEnvironment("environment-1")?.phase).toBe("installing");
     const version = h.ensure.version();
     const changes = h.changed.mock.calls.length;
+    provisionProgress.mockClear();
+    refreshProgress.mockClear();
     duplicate.fail(new Error("caller cancelled"));
     await expect(duplicate.pending).rejects.toThrow("caller cancelled");
+    // A settled caller stops hearing the shared transfer; a remaining caller still does.
+    expect(provisionProgress).not.toHaveBeenCalled();
+    expect(refreshProgress).toHaveBeenCalledOnce();
     expect(h.ensure.readInstallForEnvironment("environment-1")).toBeUndefined();
     expect(h.ensure.readInstall(node.nodeId)?.environmentIds).toEqual(["environment-2"]);
     expect(h.ensure.version()).toBe(version + 1);

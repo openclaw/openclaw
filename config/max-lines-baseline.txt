@@ -448,7 +448,6 @@ src/commands/models/list.status.test.ts
 src/commands/onboard-channels.e2e.test.ts
 src/commands/onboarding-plugin-install.test.ts
 src/commands/onboarding-plugin-install.ts
-src/commands/status.test.ts
 src/config/config-misc.test.ts
 src/config/config.plugin-validation.test.ts
 src/config/io.write-config.test.ts
@@ -463,7 +462,6 @@ src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
-src/config/sessions/transcript.ts
 src/config/zod-schema.core.ts
 src/context-engine/context-engine.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
@@ -568,7 +566,6 @@ src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allow-always.test.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
-src/infra/heartbeat-runner.returns-default-unset.test.ts
 src/infra/host-env-security.test.ts
 src/infra/infra-runtime.test.ts
 src/infra/net/fetch-guard.ssrf.test.ts

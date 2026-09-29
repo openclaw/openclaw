@@ -1,5 +1,6 @@
 // Crabbox owns provider admission and execution; the shared remote-shell backend
 // owns workspace seeding, skills, workdir validation, and file operations.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
   createRemoteShellSandboxBackend,
@@ -74,10 +75,9 @@ async function runCrabbox(
       timeoutMs,
     });
   } catch (error) {
-    throw new Error(
-      `Crabbox sandbox ${action} could not start: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+    throw new Error(`Crabbox sandbox ${action} could not start: ${coerceErrorMessage(error)}`, {
+      cause: error,
+    });
   }
   if (result.code !== 0) {
     // Warmup can print token-bearing SSH commands even when a later step fails.

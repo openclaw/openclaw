@@ -2,6 +2,8 @@
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { UrbitSSEClient } from "./urbit/sse-client.js";
 
+export const TLON_PENDING_APPROVAL_LIMIT = 100;
+
 /** Pending approval request stored for persistence */
 export type PendingApproval = {
   id: string;

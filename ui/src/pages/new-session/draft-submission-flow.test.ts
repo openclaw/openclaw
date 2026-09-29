@@ -6,6 +6,7 @@ import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import * as terminalStart from "../../lib/sessions/catalog-terminal.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
+import * as toast from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
@@ -46,6 +47,39 @@ describe("DraftSubmissionFlow", () => {
     expect(flow.attachmentDraft.attachments).toEqual([attachment]);
     expect(flow.error).toContain("uploads are disabled");
     flow.disconnect();
+  });
+
+  it("retains an oversized attachment draft before creating a session", async () => {
+    const takePreparedTitle = vi.fn(() => "Review files");
+    const { context, flow } = createDraftFixture({ takePreparedTitle });
+    const hello = expectDefined(context.gateway.snapshot.hello, "connected hello");
+    hello.policy = {
+      maxPayload: 256 * 1024 + 2,
+      attachments: { maxBytes: 10, maxImageBytes: 10 },
+    };
+    const attachments = ["first.txt", "second.txt"].map((fileName) => ({
+      id: fileName,
+      fileName,
+      mimeType: "text/plain",
+      dataUrl: "data:text/plain;base64,aQ==",
+    }));
+    const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
+    flow.setMessage("@Alex review these", mentions);
+    flow.attachmentDraft.replace(attachments);
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+
+    await flow.submit();
+
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    expect(flow.message).toBe("@Alex review these");
+    expect(flow.mentions).toEqual(mentions);
+    expect(flow.attachmentDraft.attachments).toEqual(attachments);
+    expect(flow.submitting).toBe(false);
+    expect(takePreparedTitle).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Too large to send: second.txt",
+    });
   });
 
   it.each(["navigation", "reconnect"])("retires only the captured draft after %s", async (mode) => {

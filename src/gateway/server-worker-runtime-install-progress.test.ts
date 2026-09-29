@@ -73,10 +73,7 @@ function placement(
 function createHarness(
   environments: WorkerEnvironmentRecord[],
   records: WorkerSessionPlacementRecord[],
-  observations: ReadonlyMap<
-    string,
-    { bundleHash: string; environmentIds: readonly string[] }
-  > = new Map(),
+  observations: ReadonlyMap<string, { environmentIds: readonly string[] }> = new Map(),
 ) {
   const entered = createDeferredCore<readonly string[]>();
   const release = createDeferredCore();
@@ -178,63 +175,46 @@ it("stops pending publication and ignores later changes", async () => {
   }
 });
 
-it("touches existing activity only for unclaimed stale placements on the observed node", async () => {
-  const activePlacement = (
-    id: string,
-    bundleHash = "old-build",
-  ): Extract<WorkerSessionPlacementRecord, { state: "active" }> => ({
-    ...placement(id),
+it("touches only observed provisioning activity and leaves refresh waits to turn admission", async () => {
+  const waiting: Extract<WorkerSessionPlacementRecord, { state: "active" }> = {
+    ...placement("waiting"),
     state: "active",
-    environmentId: id,
+    environmentId: "waiting",
     activeOwnerEpoch: 1,
-    workerBundleHash: bundleHash,
+    workerBundleHash: "old-build",
     workspaceBaseManifestRef: "sha256:base",
     remoteWorkspaceDir: "/workspace",
-  });
-  const waiting = activePlacement("waiting");
-  const claimed = activePlacement("claimed");
-  claimed.turnClaim = {
-    owner: "worker",
-    claimId: "claim",
-    runId: "running",
-    generation: 1,
-    ownerEpoch: 1,
   };
-  const current = activePlacement("current", "new-build");
-  const other = activePlacement("other");
-  const idle = activePlacement("idle");
-  const provisioning = placement("provisioning");
-  const tracked = [waiting, claimed, current, other, provisioning];
-  for (const record of tracked) {
+  const observed = placement("observed");
+  const unobserved = placement("unobserved");
+  const records = [waiting, observed, unobserved];
+  for (const record of records) {
     markDiagnosticRunProgress({
       sessionId: record.sessionId,
       sessionKey: record.sessionKey,
       reason: "global_lane:waiting",
     });
   }
-  const records = [...tracked, idle];
   const harness = createHarness(
-    records.map(({ sessionId }) =>
-      environment(sessionId, sessionId === "other" ? "node-2" : "node-1"),
-    ),
+    records.map(({ sessionId }) => environment(sessionId)),
     records,
-    new Map([["node-1", { bundleHash: "new-build", environmentIds: ["waiting"] }]]),
+    new Map([["node-1", { environmentIds: ["observed"] }]]),
   );
   try {
-    harness.publisher.changed("node-1", ["waiting"]);
+    harness.publisher.changed("node-1", ["observed"]);
     await harness.entered.promise;
     harness.release.resolve();
     await harness.published.promise;
     await harness.publisher.stop();
-    expect(getDiagnosticSessionActivitySnapshot(waiting)).toMatchObject({
+    expect(harness.events).toHaveBeenCalledTimes(3);
+    expect(getDiagnosticSessionActivitySnapshot(observed)).toMatchObject({
       lastProgressReason: "worker:runtime_install",
     });
-    for (const record of [claimed, current, other, provisioning]) {
+    for (const record of [waiting, unobserved]) {
       expect(getDiagnosticSessionActivitySnapshot(record)).toMatchObject({
         lastProgressReason: "global_lane:waiting",
       });
     }
-    expect(getDiagnosticSessionActivitySnapshot(idle)).toEqual({});
   } finally {
     await harness.close();
   }
@@ -266,9 +246,7 @@ it.each([
       ],
       [record, placement("unrelated")],
       // A completed install has no observation left to name its environments.
-      inFlight
-        ? new Map([["node-1", { bundleHash: "new-build", environmentIds: ["provisioning"] }]])
-        : new Map(),
+      inFlight ? new Map([["node-1", { environmentIds: ["provisioning"] }]]) : new Map(),
     );
     try {
       harness.release.resolve();

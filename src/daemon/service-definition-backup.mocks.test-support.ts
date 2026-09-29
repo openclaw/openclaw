@@ -74,8 +74,6 @@ vi.mock("./exec-file.js", async (original) => ({
 vi.mock("./schtasks-runtime.js", async (original) => ({
   ...(await original<typeof import("./schtasks-runtime.js")>()),
   readScheduledTaskRuntime: async () => ({ status: "running" }),
-  resolveFallbackRuntime: async () => ({ status: "stopped" }),
-  waitForScheduledTaskRunningEvidence: async () => true,
 }));
 vi.mock("../infra/ports-inspect.js", async (original) => ({
   ...(await original<typeof import("../infra/ports-inspect.js")>()),

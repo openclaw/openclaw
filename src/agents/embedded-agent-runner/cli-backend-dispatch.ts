@@ -258,6 +258,7 @@ async function runEmbeddedAgentViaCliBackend(
       // behind, and no implicit message sends without an explicit target.
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
+      runtimeFactsInTurn: true,
       requireExplicitMessageTarget: true,
       cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     });
