@@ -513,7 +513,10 @@ async function scanGatewayServices(
                 managedGateway: marker !== "clawdbot",
               });
             }
-          } catch {
+          } catch (error) {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
             errors.push({
               source: scope === "user" ? "systemctl --user" : "systemctl --system",
               message: "Loaded systemd services could not be inspected.",
@@ -521,7 +524,10 @@ async function scanGatewayServices(
           }
         }
       }
-    } catch {
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
       errors.push({ source: "systemd", message: "Gateway service discovery could not finish." });
     }
     return inventory;
