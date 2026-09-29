@@ -34,6 +34,7 @@ import {
 import {
   cancelSqliteWalWriteAdmission,
   createSqliteWalMaintenanceScheduler,
+  SQLITE_WAL_INLINE_CHECKPOINT_VALVE_PAGES,
   type SqliteWalPeriodicRequest,
   type SqliteWalPeriodicResult,
 } from "./sqlite-wal-write-admission.js";
@@ -43,11 +44,9 @@ export type { SqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
-// Inline autocheckpoints run on the committing connection, including the
-// Gateway main thread, and while readers keep the log from resetting every later
-// commit retries one and syncs the database file. The maintenance tick
-// checkpoints off the writers instead; this threshold only bounds a stalled owner.
-const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 16_384;
+// Worker-maintained writers disable inline checkpoints when they register their
+// owner; every other connection keeps the bounded valve.
+const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = SQLITE_WAL_INLINE_CHECKPOINT_VALVE_PAGES;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS = 10 * 1000;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
 // SQLite applies this ceiling when a fully checkpointed WAL resets on the next
@@ -566,7 +565,12 @@ export function configureSqliteWalMaintenance(
   };
 
   let timer: IntervalHandle | null = null;
-  let lastReclaimAt: number | undefined;
+  const ticksPerReclaim = Math.max(
+    1,
+    Math.round(checkpointIntervalMs / Math.max(1, timerIntervalMs)),
+  );
+  let ticksUntilReclaim = 0;
+  let nextPageBudget = 512;
   const maintainPeriodic = (
     request: SqliteWalPeriodicRequest,
     admit?: (stage: "transaction" | "commit") => void,
@@ -622,21 +626,23 @@ export function configureSqliteWalMaintenance(
         : undefined,
     checkpointOwner.adopt,
     (error) => checkpointOwner.recordError(error),
-    () => {
-      // The first fire and every reclaim interval run the bounded vacuum pass;
-      // the ticks in between only checkpoint.
-      if (lastReclaimAt !== undefined && Date.now() - lastReclaimAt < checkpointIntervalMs) {
-        return 0;
-      }
-      lastReclaimAt = Date.now();
-      return 512;
-    },
+    () => nextPageBudget,
   );
   if (timerIntervalMs > 0) {
     timer = runInSqliteMaintenanceContext(
       () =>
         setInterval(() => {
           if (!timer || invalidated) {
+            return;
+          }
+          // The first fire and every reclaim interval run the bounded vacuum pass and the
+          // split-brain inspection; the checkpoint-only ticks in between skip both.
+          // Counting fires keeps the cadence independent of wall-clock adjustments.
+          const reclaimDue = ticksUntilReclaim === 0;
+          ticksUntilReclaim = reclaimDue ? ticksPerReclaim - 1 : ticksUntilReclaim - 1;
+          nextPageBudget = reclaimDue ? 512 : 0;
+          if (!reclaimDue) {
+            void maintain();
             return;
           }
           // Inspect the published handle before identity admission or synchronous cleanup.

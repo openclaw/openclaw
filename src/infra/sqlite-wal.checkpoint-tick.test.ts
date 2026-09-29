@@ -5,6 +5,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import {
+  cancelSqliteWalWriteAdmission,
+  registerSqliteWalWorkerMaintenance,
+} from "./sqlite-wal-write-admission.js";
 import { configureSqlitePreSchemaPragmas, configureSqliteWalMaintenance } from "./sqlite-wal.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,8 +41,48 @@ describe("sqlite WAL checkpoint tick", () => {
     }
   });
 
+  it("disables inline checkpoints on a worker-maintained writer", () => {
+    const sqlite = requireNodeSqlite();
+    const dir = tempDirs.make("openclaw-sqlite-wal-worker-writer-");
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const db = new sqlite.DatabaseSync(dbPath);
+    const autocheckpoint = () =>
+      Number(
+        (db.prepare("PRAGMA wal_autocheckpoint;").get() as { wal_autocheckpoint: number | bigint })
+          .wal_autocheckpoint,
+      );
+    let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
+    try {
+      maintenance = configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databaseLabel: "wal-worker-writer",
+        databasePath: dbPath,
+      });
+      expect(autocheckpoint()).toBe(16 * 1024);
+
+      let cancelled = 0;
+      registerSqliteWalWorkerMaintenance(
+        db,
+        async () => undefined,
+        () => {
+          cancelled += 1;
+        },
+      );
+      expect(autocheckpoint()).toBe(0);
+
+      // Without its worker the writer falls back to the bounded inline valve.
+      void cancelSqliteWalWriteAdmission(db);
+      expect(cancelled).toBe(1);
+      expect(autocheckpoint()).toBe(16 * 1024);
+    } finally {
+      maintenance?.close();
+      db.close();
+    }
+  });
+
   it("checkpoints on the maintenance tick and vacuums only at the reclaim interval", async () => {
-    vi.useFakeTimers();
+    // The reclaim cadence reads the monotonic clock; fake it with the timers.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date", "performance"] });
     const sqlite = requireNodeSqlite();
     const dir = tempDirs.make("openclaw-sqlite-wal-tick-");
     const dbPath = path.join(dir, "openclaw.sqlite");

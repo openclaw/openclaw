@@ -7465,7 +7465,8 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(readSqliteNumberPragma(database.db, "synchronous")).toBe(1);
     expect(readSqliteNumberPragma(database.db, "auto_vacuum")).toBe(2);
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(readSqliteNumberPragma(database.db, "wal_autocheckpoint")).toBe(16384);
+    // The published shared-state writer delegates checkpoints to its maintenance worker.
+    expect(readSqliteNumberPragma(database.db, "wal_autocheckpoint")).toBe(0);
     expect(readSqliteNumberPragma(database.db, "journal_size_limit")).toBe(64 * 1024 * 1024);
     const journalMode = database.db.prepare("PRAGMA journal_mode").get() as
       | { journal_mode?: string }
