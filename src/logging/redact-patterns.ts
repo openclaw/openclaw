@@ -79,10 +79,12 @@ const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_CO
 // and a YAML `- ` sequence marker allowed), right after `{`, `,`, `;`, `(`, `[`, `|`, `&` or a quote, or after an
 // inline `key=value` (spaces around `=` allowed) or `key:value` field. A `pass:` that follows a plain word
 // mid-sentence stays prose, including after a spaced `key: value` phrase, which is how prose introduces lists.
+// The inline-field key and value are length-bounded: this rule scans the full text (chunk-unsafe), so each
+// start position must cost a constant amount even inside a long unbroken token.
 // Written as flat alternatives: an optional `(?:-[ \t]+)?` after `[ \t]*` is rejected by the safe-regex
 // guard as nested repetition, which would silently drop the whole pattern. The `^` alternative needs the
 // full text, so the pattern is also listed in CHUNK_UNSAFE_PATTERN_SOURCES.
-const CONFIG_BARE_PASS_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^[ \t]*|[\r\n][ \t]*|[,{;(\[|&"'\x60][ \t]*|(?:^|[\r\n])[ \t]*-[ \t]+|[A-Za-z0-9_.-]+(?:[ \t]*=[ \t]*|:)[^\s]+[ \t]+)pass\s*:\s*([^\s#"'\x60<>]+)/g`;
+const CONFIG_BARE_PASS_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^[ \t]*|[\r\n][ \t]*|[,{;(\[|&"'\x60][ \t]*|(?:^|[\r\n])[ \t]*-[ \t]+|[A-Za-z0-9_.-]{1,64}(?:[ \t]{0,4}=[ \t]{0,4}|:)[^\s]{1,256}[ \t]+)pass\s*:\s*([^\s#"'\x60<>]+)/g`;
 const CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS})=([^\s#"'\x60<>]+)/g`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
 const CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;

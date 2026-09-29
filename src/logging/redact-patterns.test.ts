@@ -79,6 +79,17 @@ describe("default pattern table", () => {
       expect(text.indexOf("pass:")).toBe(16_384);
       expect(redactSensitiveText(text, { mode: "tools" })).toBe(text);
     });
+
+    it("stays linear on a long unbroken token before pass:", () => {
+      // The inline-field branch runs over the full text; a bounded key/value keeps each start cheap.
+      const token = "a".repeat(200_000);
+      const prose = `${token} pass: still prose`;
+      expect(redactSensitiveText(prose, { mode: "tools" })).toBe(prose);
+      // The bounded key still matches the token tail, so a record shape stays masked at linear cost.
+      expect(
+        redactSensitiveText(`${token}=v pass: opaque-pass-secret-1234567890`, { mode: "tools" }),
+      ).toBe(`${token}=v pass: opaque…7890`);
+    });
   });
 });
 
