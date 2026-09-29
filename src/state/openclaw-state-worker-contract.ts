@@ -67,6 +67,7 @@ import type {
 } from "../infra/sqlite-wal-write-admission.js";
 import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
+import type { LegacyMcpOAuthWorkerOperations } from "../infra/state-migrations.mcp-oauth.worker-contract.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-worker-contract.js";
 import type {
   InterruptedUpdateSettlement,
@@ -127,6 +128,7 @@ export type OpenClawStateWorkerOperations = UpdateRunReconciliationOperations &
   SkillWorkshopExecutionOperations &
   CurrentConversationBindingWorkerOperations &
   McpOAuthWriteOperations &
+  LegacyMcpOAuthWorkerOperations &
   WebPushWorkerOperations &
   ApnsRegistrationWorkerOperations &
   DevicePairingWorkerOperations &
