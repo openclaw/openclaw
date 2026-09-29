@@ -742,9 +742,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
         released.resolve();
         try {
           await blocker;
+          await fixture.settle();
           // Settle the original untracked deletion too when the ownership assertion fails.
           await vi.waitFor(() => expect(loadExactSessionEntry(retired)).toBeUndefined());
-          await fixture.settle();
         } finally {
           if (getActiveGatewayRootWorkCount() === 0) {
             resetGatewayWorkAdmission();
