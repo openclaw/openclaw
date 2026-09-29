@@ -145,7 +145,7 @@ class CronPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.agents,
       (agents, notify) => agents.subscribe(notify),
-      () => this.syncAgentsState(),
+      () => (this.agentsList = this.context.agents.state.agentsList),
     )
     .watch(
       () => this.context?.channels,
@@ -204,10 +204,6 @@ class CronPage extends OpenClawLightDomElement {
     this.deliveryDirectory.retireEditor();
     this.modelSuggestionsError = null;
     this.modelSuggestionsRequest = null;
-  }
-
-  private syncAgentsState() {
-    this.agentsList = this.context.agents.state.agentsList;
   }
 
   private canRefreshCron(cron: CronState = this.cron) {

@@ -32,7 +32,7 @@ function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | 
   if (!panel) {
     return null;
   }
-  if (panel.querySelector("openclaw-memory-dreaming")) {
+  if (panel.querySelector("openclaw-agent-memory-panel")) {
     return "dreams";
   }
   if (panel.querySelector("openclaw-memory-memories")) {
@@ -607,7 +607,11 @@ describe("MemorySettingsPage tab routing", () => {
 
   it("renders every canonical tab path and honors browser history restoration", async () => {
     const navigate = vi.fn();
-    const { element } = createPage({ configObject: {}, catalog: [], navigate });
+    const { element, settingsAgentSelection } = createPage({
+      configObject: {},
+      catalog: [],
+      navigate,
+    });
     element.routeData = memoryTabRoute("settings");
     document.body.append(element);
     try {
@@ -633,6 +637,11 @@ describe("MemorySettingsPage tab routing", () => {
       element.routeData = memoryTabRoute("dreams");
       await element.updateComplete;
       expect(visibleTab(element)).toBe("dreams");
+      expect(element.querySelector("openclaw-agent-select")).toBeNull();
+      expect(element.textContent).not.toContain("Dreaming frequency");
+      settingsAgentSelection.setScope(null);
+      await element.updateComplete;
+      expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
     } finally {
       element.remove();
     }

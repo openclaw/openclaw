@@ -49,7 +49,6 @@ export class SystemsController {
   private subscriptions: Array<() => void> = [];
   private request: AbortController | undefined;
   private telemetryRequest: AbortController | undefined;
-  private generation = 0;
   private presented = false;
   private refreshQueued?: "automatic" | "manual";
 
@@ -314,7 +313,6 @@ export class SystemsController {
   }
 
   private cancelRefresh(): void {
-    this.generation += 1;
     this.request?.abort();
     this.telemetryRequest?.abort();
     this.request = undefined;
@@ -356,14 +354,10 @@ export class SystemsController {
       return;
     }
     this.cancelRefresh();
-    const generation = this.generation;
     const request = new AbortController();
     this.request = request;
     const isCurrent = () =>
-      this.presented &&
-      this.current &&
-      generation === this.generation &&
-      this.lifecycle.isCurrent(scope);
+      this.presented && this.current && this.request === request && this.lifecycle.isCurrent(scope);
     this.loading = true;
     this.error = null;
     this.notify();
@@ -433,14 +427,12 @@ export class SystemsController {
     }
     const request = new AbortController();
     this.telemetryRequest = request;
-    const generation = this.generation;
     const id = this.selectedId;
     const isCurrent = () =>
       this.presented &&
       this.current &&
       this.lifecycle.isCurrent(scope) &&
       this.telemetryRequest === request &&
-      generation === this.generation &&
       this.selectedId === id;
     try {
       if (gatewayHost) {

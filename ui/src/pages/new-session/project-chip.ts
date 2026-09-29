@@ -10,7 +10,9 @@ import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
+import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { folderDisplayName, parentFolderDisplayName } from "./path.ts";
+import { renderPickerLabel } from "./picker-label.ts";
 import type { PlaceBrowserState } from "./place-browser-state.ts";
 import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate } from "./place-labels.ts";
@@ -85,48 +87,44 @@ export function resolveProjectChip(params: {
   };
 }
 
-export function renderProjectChip(params: {
-  idPrefix?: string;
-  state: ProjectChipState;
-  browseAvailable: boolean;
-  isAdmin: boolean;
-  canWrite: boolean;
-  folder: string;
-  workspace: string;
-  projects: readonly ProjectRecord[];
-  projectQuery: string;
-  projectSearchAvailable: boolean;
-  projectAddAvailable: boolean;
-  remoteProjects: readonly RemoteProject[];
-  selectedRemoteProject: DraftRemoteProject | null;
-  projectSearchCredentialMissing: boolean;
-  projectSearchLoading: boolean;
-  projectSearchError: string | null;
-  projectId: string;
-  freshWorkspace?: boolean;
-  onNewWorkspace?: () => void;
-  gatewayLabel: string;
-  submitting: boolean;
-  pendingPlacement: boolean;
-  popoverOpen: boolean;
-  popoverHiding: boolean;
-  browserOpen: boolean;
-  browser: PlaceBrowserState;
-  registerProjectPath: string | null;
-  registeringProject: boolean;
-  onGuardTransition: (event: MouseEvent) => void;
-  onPopoverShow: () => void;
-  onPopoverHide: () => void;
-  onPopoverAfterHide: () => void;
-  onSelectProject: (projectId: string) => void;
-  onProjectQueryInput: (query: string) => void;
-  onSelectRemoteProject: (project: DraftRemoteProject) => void;
-  onApplyFolder: (folder: string) => void;
-  onBrowse: () => void;
-  onBrowserBack: () => void;
-  onRegisterProject: (path: string) => void;
-  onClose: () => void;
-}) {
+export function renderProjectChip(
+  params: ReturnType<DraftPlaceBrowser["popoverCallbacks"]> & {
+    idPrefix?: string;
+    state: ProjectChipState;
+    browseAvailable: boolean;
+    isAdmin: boolean;
+    canWrite: boolean;
+    folder: string;
+    workspace: string;
+    projects: readonly ProjectRecord[];
+    projectQuery: string;
+    projectSearchAvailable: boolean;
+    projectAddAvailable: boolean;
+    remoteProjects: readonly RemoteProject[];
+    selectedRemoteProject: DraftRemoteProject | null;
+    projectSearchCredentialMissing: boolean;
+    projectSearchLoading: boolean;
+    projectSearchError: string | null;
+    projectId: string;
+    freshWorkspace?: boolean;
+    onNewWorkspace?: () => void;
+    gatewayLabel: string;
+    submitting: boolean;
+    pendingPlacement: boolean;
+    browserOpen: boolean;
+    browser: PlaceBrowserState;
+    registerProjectPath: string | null;
+    registeringProject: boolean;
+    onSelectProject: (projectId: string) => void;
+    onProjectQueryInput: (query: string) => void;
+    onSelectRemoteProject: (project: DraftRemoteProject) => void;
+    onApplyFolder: (folder: string) => void;
+    onBrowse: () => void;
+    onBrowserBack: () => void;
+    onRegisterProject: (path: string) => void;
+    onClose: () => void;
+  },
+) {
   const folder = params.folder.trim();
   const cloneInput = projectCloneInput(params.projectQuery);
   const query = params.projectQuery.trim();
@@ -176,20 +174,7 @@ export function renderProjectChip(params: {
         ?disabled=${params.submitting || params.pendingPlacement}
         @click=${params.onGuardTransition}
       >
-        <span class="new-session-page__target-icon" aria-hidden="true"
-          >${params.projectId ? icons.gitBranch : icons.folder}</span
-        >
-        <span class="new-session-page__trigger-label">${params.state.label}</span>
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
-          aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
-          aria-hidden="true"
-          >${icons.chevronsUpDown}</span
-        >
+        ${renderPickerLabel(params.projectId ? icons.gitBranch : icons.folder, params.state.label)}
       </button>
     </span>
     <wa-popover
