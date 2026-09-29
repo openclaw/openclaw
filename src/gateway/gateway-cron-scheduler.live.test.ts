@@ -160,7 +160,7 @@ describeLive("cron scheduling through an isolated Gateway", () => {
             "--expected-revision",
             "1",
           ]),
-        ).toEqual({ ok: true, currentRevision: 2 });
+        ).toEqual({ ok: true, scratch: null, currentRevision: 2, maxBytes: 262_144 });
         const staleScratch = await instance.cli([
           "cron",
           "scratch",
@@ -183,7 +183,7 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           watcher.id,
         ]);
         expect(clearedScratch.currentRevision).toBe(2);
-        expect(clearedScratch.scratch).toBeUndefined();
+        expect(clearedScratch.scratch).toBeNull();
         const second = await waitForJob(
           instance,
           watcher.id,
