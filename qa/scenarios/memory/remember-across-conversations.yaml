@@ -491,29 +491,43 @@ flow:
                         expr: "disabledRequests.length > 0 && disabledRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
                         message:
                           expr: "`disabled setting received private recall context: ${JSON.stringify(disabledRequests)}`"
+            catchAs: scenarioError
             finally:
-              - if:
-                  expr: "typeof lastInbound !== 'undefined'"
-                  then:
-                    - call: waitForQaInboundCompletion
-                      args:
-                        - ref: state
-                        - ref: lastInbound
-                        - expr: liveTurnTimeoutMs(env, 60000)
-              - call: patchConfig
-                args:
-                  - env:
-                      ref: env
-                    patch:
-                      memory:
-                        search:
-                          expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
-              - call: waitForGatewayHealthy
-                args:
-                  - ref: env
-                  - 60000
-              - call: waitForQaChannelReady
-                args:
-                  - ref: env
-                  - 60000
+              - try:
+                  actions:
+                    - if:
+                        expr: "typeof lastInbound !== 'undefined'"
+                        then:
+                          - call: waitForQaInboundCompletion
+                            args:
+                              - ref: state
+                              - ref: lastInbound
+                              - expr: liveTurnTimeoutMs(env, 60000)
+                  catchAs: completionError
+                  finally:
+                    - try:
+                        actions:
+                          - call: patchConfig
+                            args:
+                              - env:
+                                  ref: env
+                                patch:
+                                  memory:
+                                    search:
+                                      expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
+                          - call: waitForGatewayHealthy
+                            args:
+                              - ref: env
+                              - 60000
+                          - call: waitForQaChannelReady
+                            args:
+                              - ref: env
+                              - 60000
+                        finally:
+                          # Cleanup must restore config without replacing the first failure.
+                          - if:
+                              expr: "typeof scenarioError !== 'undefined' || typeof completionError !== 'undefined'"
+                              then:
+                                - throw:
+                                    expr: "typeof scenarioError !== 'undefined' ? scenarioError : completionError"
       detailsExpr: "[`sourceSession=${sourceSessionKey}`, `targetSession=${targetSessionKey}`, `groupSession=${groupSessionKey}`, `reply=${targetOutbound.text}`, `helperTranscript=${helperTranscriptPath}`, `visibility=${String(afterSessionsVisibility)}`].join('\\n')"
