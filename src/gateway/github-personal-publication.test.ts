@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
@@ -738,15 +739,25 @@ describe("personal publication authority and recovery", () => {
       coordinator.confirmPersonal(confirm, { ...action, owner: otherOwner }),
     ).rejects.toThrow("original request");
     const originalSession = mocks.loadSession.getMockImplementation()!;
+    const replacementEntry = {
+      ...originalSession(SESSION_KEY).entry,
+      sessionId: "replacement-incarnation",
+    };
+    // Keep the facade and the retained session reader on the same incarnation.
+    await upsertSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY }, replacementEntry);
     mocks.loadSession.mockImplementation((key: string) => ({
       ...originalSession(key),
-      entry: { sessionId: "replacement-incarnation" },
+      entry: replacementEntry,
     }));
     expect((await rpc("sessions.github.options"))[1].pendingPersonal).toMatchObject({
       result: { status: "failed", code: "session_changed", requestId: result.requestId },
       confirmation: null,
     });
     expect((await rpc("sessions.github.confirm", confirm))[0]).toBe(false);
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: SESSION_KEY },
+      originalSession(SESSION_KEY).entry,
+    );
     mocks.loadSession.mockImplementation(originalSession);
     recovering = true;
     const confirmed = await rpc("sessions.github.confirm", confirm);

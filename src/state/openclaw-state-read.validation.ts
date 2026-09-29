@@ -195,6 +195,15 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.input.now === "number" &&
         (typeof input.command.input.runId === "string" ||
           typeof input.command.input.executionId === "string")) ||
+      (input.command.type === "githubPublication.sharedObservation" &&
+        isRecord(input.command.input) &&
+        (input.command.input.kind === "repository" || input.command.input.kind === "worktree") &&
+        isRecord(input.command.input.session) &&
+        typeof input.command.input.session.agentId === "string" &&
+        typeof input.command.input.session.sessionKey === "string" &&
+        typeof input.command.input.session.sessionId === "string" &&
+        isRecord(input.command.input.selector) &&
+        isRecord(input.command.input.entry)) ||
       (input.command.type === "sessionRepositoryWorkspaces.find" &&
         Array.isArray(input.command.owners) &&
         input.command.owners.every(

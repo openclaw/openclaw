@@ -233,7 +233,7 @@ merge_outcome_load_local() {
              .route == "auto" and .method == "squash" and .cancellation.state == "confirmed" and
              $next.priorCiAdmin.dispatchTransport == "rest" and
              $next.recovery.preDispatchRefusal == null and
-             $next.recovery.replacementHead == $next.head and .head != $next.head
+             $next.recovery.replacementHead == $next.head
            else
              ((.accepted == false and (.route == "immediate" or
                 (.route == "auto" and $next.recovery.preDispatchRefusal != null))) or
@@ -801,7 +801,7 @@ merge_outcome_find_comment() {
 }
 
 merge_outcome_comment_body() {
-  local pr="$1" head landed method route label
+  local pr="$1" head landed method route label ci_url
   head=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head) || return 1
   landed=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .landed) || return 1
   method=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .method) || return 1
@@ -825,6 +825,21 @@ merge_outcome_comment_body() {
   esac
   printf 'Merged via %s.\n\n- Prepared head SHA: [%s](%s/pull/%s/commits/%s)\n- Landed commit: [%s](%s/commit/%s)' \
     "$label" "$head" "$MERGE_REPO_URL" "$pr" "$head" "$landed" "$MERGE_REPO_URL" "$landed"
+  if [ "$route" = admin ] && printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("priorCiAdmin")' >/dev/null; then
+    ci_url=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -er '
+      def positive: type == "number" and . > 0 and floor == .;
+      . as $record | .priorCiAdmin | select(
+        (.changeKind | IN("pre-existing-failure","conflict-resolution")) and
+        (.runId | positive) and (.runAttempt | positive) and
+        .ciUrl == ($record.repo.url + "/actions/runs/" + (.runId|tostring) + "/attempts/" + (.runAttempt|tostring))) |
+      .ciUrl
+    ') || { merge_outcome_stop "incomplete retained prior-CI completion evidence"; return 1; }
+    if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .priorCiAdmin.changeKind)" = pre-existing-failure ]; then
+      printf '\n- CI with explicitly attributed pre-existing failures: %s\n- Exact prepared head: `%s`; source attribution and independent qualification retained as operator evidence. Cancelled jobs remain unrun coverage. No current-head CI success is claimed.' "$ci_url" "$head"
+    else
+      printf '\n- Prior successful CI: %s\n- Subsequent conflict changes: reviewed at `%s`; scoped validation retained as operator evidence. No current-head CI success is claimed.' "$ci_url" "$head"
+    fi
+  fi
 }
 
 merge_outcome_post_comment() {
@@ -881,7 +896,7 @@ merge_outcome_require_cleanup_absent() {
 }
 
 merge_complete() {
-  local pr="$1" expected_oid="$2" phase body
+  local pr="$1" expected_oid="$2" phase body="" audit
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION
   local MERGE_HEAD_REF MERGE_HEAD_REPO MERGE_COMPLETION_COMMENT_URL
@@ -897,17 +912,29 @@ merge_complete() {
     echo "merge-complete already complete for PR #$pr; no side effects."
     return 0
   fi
+  if [ "$phase" = merged ] && [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .route)" = admin ]; then
+    if ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("priorCiAdmin")' >/dev/null; then
+      echo "Delayed admin completion requires retained prior-CI evidence; preserve the original audit and receipt for owner review." >&2
+      return 1
+    fi
+    audit=$(read_admin_landing_parent_audit \
+      "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .landed)" \
+      "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .main)") || return 1
+    body=$(merge_outcome_comment_body "$pr") || return 1
+    printf -v body '%s\n- Reconstructed after merge landing-parent audit: %s (retained admission main `%s`, actual parent `%s`). No original at-landing audit is claimed.' \
+      "$body" "$(printf '%s\n' "$audit" | jq -r .status)" \
+      "$(printf '%s\n' "$audit" | jq -r .expectedParentSha)" \
+      "$(printf '%s\n' "$audit" | jq -r .actualParentSha)"
+    # Prove the historical audit before asking the owner to remove source/evidence.
+    echo "Reconstructed after merge landing-parent audit: $(printf '%s\n' "$audit" | jq -c .)"
+  fi
   # Delayed completion only observes cleanup; it never deletes recreated resources.
   merge_outcome_require_cleanup_absent "$pr" || return 1
-  if [ "$phase" = merged ] && [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .route)" = admin ]; then
-    echo "Admin completion requires its original landing audit before a first comment; preserve the receipt for owner review." >&2
-    return 1
-  fi
   merge_outcome_find_comment "$pr" || return 1
   if [ -n "$MERGE_COMPLETION_COMMENT_URL" ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="commented"')" || return 1
   elif [ "$phase" = merged ]; then
-    body=$(merge_outcome_comment_body "$pr") || return 1
+    [ -n "$body" ] || body=$(merge_outcome_comment_body "$pr") || return 1
     merge_outcome_post_comment "$pr" "$body" || return 1
   else
     echo "Completion comment is missing or uncertain; no second POST. Inspect the recorded attempt marker." >&2

@@ -20,6 +20,10 @@ import {
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+import {
+  consumeGatewayFastPathRootOptionToken,
+  consumeGatewayRunOptionToken,
+} from "./gateway-run-argv.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
@@ -29,6 +33,53 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
+
+export function isGatewayRunFastPathArgv(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion) {
+    return false;
+  }
+  const args = argv.slice(2);
+  let sawGateway = false;
+  let sawRun = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return false;
+    }
+    if (!sawGateway) {
+      const consumed = consumeGatewayFastPathRootOptionToken(args, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+      if (arg !== "gateway") {
+        return false;
+      }
+      sawGateway = true;
+      continue;
+    }
+
+    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
+    const consumed = consumeGatewayRunOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    if (!sawRun && arg === "run") {
+      sawRun = true;
+      continue;
+    }
+    return false;
+  }
+
+  return sawGateway;
+}
 
 export function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
   return primary === "agent" && !argv.includes("--local");

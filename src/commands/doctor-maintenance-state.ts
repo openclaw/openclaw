@@ -101,7 +101,14 @@ export function createDoctorMaintenanceState(options: {
       );
       await enterResources(acquired);
     },
-    async relocateLegacyRoot() {
+    async prepareRepair() {
+      const beforeStateMutation = params.beforeStateMutation;
+      if (beforeStateMutation) {
+        await resources!.run(() =>
+          beforeStateMutation({ env: selectedEnv, signal: options.signal }),
+        );
+        resources!.assertAdmission();
+      }
       const { resolvePendingLegacyStateDirMigrationPaths, prepareLegacyStateDirMigration } =
         await import("../infra/state-migrations.state-dir.js");
       const pending = resolvePendingLegacyStateDirMigrationPaths({ env });
