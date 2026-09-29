@@ -84,8 +84,7 @@ export function showSessionPlacementTargetDialog(
         finish(selected);
         return;
       }
-      const machineClass = cloudMachines.resolve(selected.profileId);
-      const os = cloudMachines.resolveOs(selected.profileId);
+      const { machineClass, os } = cloudMachines.selection(selected.profileId, catalog.profiles);
       finish({
         ...selected,
         ...(machineClass ? { machineClass } : {}),
@@ -193,14 +192,13 @@ export function showSessionPlacementTargetDialog(
                                       selected.profileId === profile.id;
                                     const machines = cloudMachines.machines(profile);
                                     const operatingSystems = profile.operatingSystems ?? [];
-                                    const selectedMachineId =
-                                      cloudMachines.resolve(profile.id) ||
-                                      machines.find((machine) => machine.default === true)?.id ||
-                                      "";
+                                    const selection = cloudMachines.selection(profile.id, profiles);
                                     return html`
                                       ${renderCloudProfileMenuItems({
                                         profiles: [profile],
                                         selectedId: profileSelected ? profile.id : "",
+                                        selectedMachine: selection.machineClass,
+                                        selectedOs: selection.os,
                                         submitting: false,
                                         profileDisabledReason: options.profileDisabledReason,
                                         onSelect: (profileId) =>
@@ -236,7 +234,7 @@ export function showSessionPlacementTargetDialog(
                                               </div>
                                               ${renderCloudMachineMenuItems({
                                                 machines,
-                                                selectedId: selectedMachineId,
+                                                selectedId: selection.machineClass,
                                                 submitting: false,
                                                 onSelect: (machineId) =>
                                                   cloudMachines.select(
