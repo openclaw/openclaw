@@ -619,19 +619,21 @@ async function writeRootBoundJsonFile(params: {
 }): Promise<void> {
   params.assertConfigPathForWrite();
   params.assertConfigMutationAuthority?.();
+  if (params.assertConfigMutationAuthority) {
+    // oxlint-disable-next-line no-warning-comments -- required deferred-capability marker
+    // TODO(approval authority): Allow delegated included-file writes when FsSafeRoot
+    // can enforce live approval authority at its final publication boundary.
+    throw new Error(
+      "OpenClaw change cancelled: delegated writes to included config files are unavailable until rooted publication can enforce live approval authority.",
+    );
+  }
   const targetBeforeBackup = await resolveExpectedRootBoundIncludeFile({
     configPath: params.configPath,
     includePath: params.includePath,
     allowedRoots: params.allowedRoots,
     expectedAbsolutePath: params.expectedTargetPath,
   });
-  if (
-    !params.assertConfigMutationAuthority &&
-    (await targetBeforeBackup.root.exists(targetBeforeBackup.relativePath))
-  ) {
-    // oxlint-disable-next-line no-warning-comments -- required deferred-capability marker
-    // TODO(approval authority): Re-enable delegated included-file backups when
-    // FsSafeRoot can enforce a live-authority hook at its final mutation boundary.
+  if (await targetBeforeBackup.root.exists(targetBeforeBackup.relativePath)) {
     await maintainConfigBackups(
       targetBeforeBackup.absolutePath,
       createRootBoundBackupFs(targetBeforeBackup),
@@ -651,12 +653,10 @@ async function writeRootBoundJsonFile(params: {
     throw new ConfigMutationConflictError("included config changed while preparing write");
   }
   const content = formatJsonFileValue(params.value);
-  // The include fast path bypasses writeConfigFile(); keep its authority guard
-  // and comment warning on the final conflict-checked target. No later await may
-  // run before the write.
+  // The include fast path bypasses writeConfigFile(); delegated calls are rejected
+  // above. Keep the config path guard on the final conflict-checked target.
   await params.preCommitRuntimePreflight?.();
   params.assertConfigPathForWrite();
-  params.assertConfigMutationAuthority?.();
   warnIfJSON5CommentsWillBeStripped({
     raw: currentRaw,
     filePath: targetAtCommit.absolutePath,
@@ -669,7 +669,6 @@ async function writeRootBoundJsonFile(params: {
   });
   try {
     params.assertConfigPathForWrite();
-    params.assertConfigMutationAuthority?.();
   } catch (error) {
     await rollbackJsonFileWriteIfUnchanged({
       target: targetAtCommit,

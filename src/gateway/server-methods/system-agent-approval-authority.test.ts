@@ -184,7 +184,7 @@ describe("queueDelegatedApproval authority", () => {
 
       expect(manager.resolve(approvalId, decision, "operator-ui")).toBe(true);
       const expectedStatus =
-        decision === "allow-once" && revokeAtAuthorityCheck === undefined
+        decision === "allow-once" && revokeAtAuthorityCheck === undefined && target === "root"
           ? "applied"
           : "not-applied";
       await expect(applicationResult.promise).resolves.toMatchObject({
