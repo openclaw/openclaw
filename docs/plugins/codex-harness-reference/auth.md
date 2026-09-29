@@ -78,10 +78,13 @@ per-agent directory under that agent's OpenClaw state. That keeps Codex
 config, accounts, plugin cache/data, and thread state scoped to the OpenClaw
 agent instead of leaking in from the operator's personal `~/.codex` home.
 
-Set `appServer.homeScope: "user"` to share native Codex state with Codex
-Desktop and the CLI. This local user-home mode supports managed stdio and
-explicit Unix transport. It uses `$CODEX_HOME` when set and `~/.codex`
-otherwise, including native auth, config, plugins, and threads.
+Set `appServer.homeScope: "user"` when the app-server owns the native Codex
+account. Managed stdio and explicit Unix transport use the local `$CODEX_HOME`
+when set and `~/.codex` otherwise. An authenticated WebSocket connection uses
+the remote app-server's home and account, not the Gateway host's Codex home.
+OpenClaw verifies the account route instead of sending `account/login/start`.
+Use this opt-in only for an app-server dedicated to the intended owner; the
+WebSocket capability token authenticates the connection, not the model account.
 OpenClaw skips its auth-profile bridge for the app-server. Verified owner
 turns can use `codex_threads` to list (with an optional `search` filter),
 read, fork, rename, archive, and unarchive those threads. Fork a thread before

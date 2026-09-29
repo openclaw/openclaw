@@ -270,11 +270,6 @@ export function createCodexAppServerConfig({
         "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
       );
     }
-    if (transport === "websocket" && homeScope === "user") {
-      throw new Error(
-        "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio or unix",
-      );
-    }
     if (transport === "unix" && homeScope !== "user") {
       throw new Error(
         "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
