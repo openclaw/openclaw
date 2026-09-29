@@ -1850,7 +1850,6 @@ src/channels/plugins/setup-wizard-proxy.ts	1
 src/channels/plugins/setup-wizard.ts	3
 src/channels/plugins/threading-helpers.ts	1
 src/channels/read-only-account-inspect.ts	1
-src/channels/registry-lookup.ts	1
 src/channels/registry.ts	1
 src/channels/status/read-model.ts	1
 src/channels/streaming-config-readers.ts	1
@@ -2987,7 +2986,7 @@ src/tts/tts-provider-resolution.ts	2
 src/tts/tts-request.ts	1
 src/tts/tts-settings.ts	3
 src/tts/tts-telephony.ts	1
-src/tts/voice-models.ts	4
+src/tts/voice-models.ts	3
 src/tui/components/chat-log.ts	2
 src/tui/embedded-backend.ts	2
 src/tui/gateway-chat.ts	2

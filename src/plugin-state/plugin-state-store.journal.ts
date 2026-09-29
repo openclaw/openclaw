@@ -104,25 +104,23 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
   params: PluginStateSequencedJournalParams,
 ): number {
   const now = Date.now();
-  deleteExpiredPluginStateEntries(store.db, now, {
+  const cursorScope = {
     pluginId: params.pluginId,
     namespace: params.cursorNamespace,
-  });
-  deleteExpiredPluginStateEntries(store.db, now, {
+    maxEntries: params.cursorMaxEntries,
+  };
+  const journalScope = {
     pluginId: params.pluginId,
     namespace: params.journalNamespace,
-  });
-  const cursor = selectPluginStateEntry(store.db, {
-    pluginId: params.pluginId,
-    namespace: params.cursorNamespace,
-    key: params.cursorKey,
-    now,
-  });
+    maxEntries: params.journalMaxEntries,
+  };
+  deleteExpiredPluginStateEntries(store.db, now, cursorScope);
+  deleteExpiredPluginStateEntries(store.db, now, journalScope);
+  const cursor = selectPluginStateEntry(store.db, { ...cursorScope, key: params.cursorKey, now });
   const cursorSequence = cursor ? readCursorSequence(cursor.value_json) : undefined;
   // Cursor eviction must not let an admitted append reuse a retained sequence.
   const tail = selectPluginStateEntriesInKeyRange(store.db, {
-    pluginId: params.pluginId,
-    namespace: params.journalNamespace,
+    ...journalScope,
     ...params.journalKeyRange,
     limit: 1,
     order: "desc",
@@ -166,8 +164,7 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
     });
   }
   const existingJournalEntry = hasPluginStateEntry(store.db, {
-    pluginId: params.pluginId,
-    namespace: params.journalNamespace,
+    ...journalScope,
     key: prepared.journalKey,
     now,
   });
@@ -182,8 +179,7 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
   upsertPluginStateEntry(
     store.db,
     bindPluginStateEntry({
-      pluginId: params.pluginId,
-      namespace: params.cursorNamespace,
+      ...cursorScope,
       key: params.cursorKey,
       valueJson: prepared.cursorValueJson,
       createdAt: now,
@@ -192,9 +188,7 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
   );
   enforcePostRegisterLimits({
     store,
-    pluginId: params.pluginId,
-    namespace: params.cursorNamespace,
-    maxEntries: params.cursorMaxEntries,
+    ...cursorScope,
     overflowPolicy: "evict-oldest",
     now,
     protectedKey: params.cursorKey,
@@ -202,13 +196,11 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
   upsertPluginStateEntry(
     store.db,
     bindPluginStateEntry({
-      pluginId: params.pluginId,
-      namespace: params.journalNamespace,
+      ...journalScope,
       key: prepared.journalKey,
       valueJson: prepared.journalValueJson,
       createdAt: allocatePluginStateNamespaceCreatedAt(store.db, {
-        pluginId: params.pluginId,
-        namespace: params.journalNamespace,
+        ...journalScope,
         now,
       }),
       expiresAt: null,
@@ -216,9 +208,7 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
   );
   enforcePostRegisterLimits({
     store,
-    pluginId: params.pluginId,
-    namespace: params.journalNamespace,
-    maxEntries: params.journalMaxEntries,
+    ...journalScope,
     overflowPolicy: "evict-oldest",
     now,
     protectedKey: prepared.journalKey,

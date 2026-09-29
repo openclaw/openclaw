@@ -1,15 +1,7 @@
-/**
- * Built-in chat channel ids and aliases.
- *
- * Derives canonical ids from generated bundled channel metadata with runtime catalog fallback.
- */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 import { GENERATED_BUNDLED_CHANNEL_IDS } from "./bundled-channel-ids.generated.js";
 
-/**
- * Canonical chat channel id used by core routing, plugin config, and channel catalogs.
- */
 export type ChatChannelId = string;
 
 type BundledChatChannelEntry = {
@@ -48,9 +40,6 @@ export const CHAT_CHANNEL_ORDER = Object.freeze(
  */
 export const CHANNEL_IDS = CHAT_CHANNEL_ORDER;
 
-/**
- * Maps configured built-in channel aliases to canonical chat channel ids.
- */
 const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
   Object.fromEntries(
     BUNDLED_CHAT_CHANNEL_ENTRIES.flatMap((entry) =>
@@ -78,9 +67,6 @@ function normalizeRuntimeBundledChatChannelId(normalized: string): ChatChannelId
   return null;
 }
 
-/**
- * Normalizes a raw chat channel id or alias to a known canonical built-in channel id.
- */
 export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
