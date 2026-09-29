@@ -4824,10 +4824,16 @@ function createCompactNodeTestShardBundles(
     const usesBlacksmithRunner = usesBlacksmithCapacity(groups[0].runner);
     // Admit the final groups with their shared prerequisite. Rebalancing after
     // this check can break build sharing and exceed a bin's admitted cap.
+    // Place serial Gateway work first: flexible parallel groups can fill its
+    // remaining space without stranding same-family stripes in the final repack.
     const sortedGroups = groups
       .flatMap((group) => expandCompactGroup(group, options.runnerBackend))
       .toSorted(
         (a, b) =>
+          (options.runnerBackend === "hybrid"
+            ? Number(b.configs.some(isExclusiveCiTestConfig)) -
+              Number(a.configs.some(isExclusiveCiTestConfig))
+            : 0) ||
           estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
           runnerRank(b) - runnerRank(a) ||
           a.shard_name.localeCompare(b.shard_name),
