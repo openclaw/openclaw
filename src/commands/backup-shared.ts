@@ -511,7 +511,8 @@ export async function canonicalizePathForContainment(targetPath: string): Promis
   }
 }
 
-export async function resolveBackupAgentRoot(
+/** Resolve one configured agent's canonical backup root and owner database path. */
+async function resolveBackupAgentRoot(
   config: OpenClawConfig,
   agentId: string,
 ): Promise<BackupAgentRoot> {
