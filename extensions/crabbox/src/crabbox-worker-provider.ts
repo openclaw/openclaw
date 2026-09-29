@@ -396,7 +396,6 @@ export function createCrabboxWorkerProvider(
               signal?.throwIfAborted();
               assertCurrent();
               const setup = createCrabboxNodeRuntimeSetup({
-                bootstrapTimeoutMs: runtime.bootstrapTimeoutMs,
                 nodeBootstrap: runtime.nodeBootstrap,
                 workerBundle: runtime.workerBundle,
                 leaseId,

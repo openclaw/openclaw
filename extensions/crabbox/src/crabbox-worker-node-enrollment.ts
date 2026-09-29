@@ -7,6 +7,8 @@ import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const CLOUD_SETUP_CODE_ENV = "CRABBOX_WORKER_SETUP_CODE";
 const CLOUD_BOOTSTRAP_TOKEN_ENV = "CRABBOX_WORKER_BOOTSTRAP_TOKEN";
+// Tolerate brief network pauses while resuming stalls well before the command deadline.
+const CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
 
 export type CrabboxWorkerNodeEnrollment = Awaited<
   ReturnType<
@@ -31,7 +33,6 @@ export type CrabboxWorkerNodeRuntimePreparation = Awaited<
 >;
 
 export function createCrabboxNodeRuntimeSetup(params: {
-  bootstrapTimeoutMs?: number;
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
   workerBundle: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
   leaseId: string;
@@ -40,7 +41,6 @@ export function createCrabboxNodeRuntimeSetup(params: {
 }
 
 function createCrabboxNodeSetup(params: {
-  bootstrapTimeoutMs?: number;
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
   leaseId: string;
   enrollment?: CrabboxWorkerNodeEnrollment;
@@ -183,7 +183,7 @@ setPhase("preparation");
     if (pin && !/^[a-f0-9]{64}$/.test(pin)) throw new Error("Cloud worker bootstrap TLS fingerprint is invalid");
     const transport = url.protocol === "https:" ? https : http;
     const request = transport.request(url, {
-      agent: false, headers: { authorization: "Bearer " + token, ...(offset ? { range: "bytes=" + offset + "-" } : {}) }, signal: AbortSignal.any([downloadAbort.signal, AbortSignal.timeout(${params.bootstrapTimeoutMs ?? enrollment?.bootstrapTimeoutMs ?? 600_000})]),
+      agent: false, headers: { authorization: "Bearer " + token, ...(offset ? { range: "bytes=" + offset + "-" } : {}) }, signal: downloadAbort.signal,
       ...(pin ? { rejectUnauthorized: false, session: Buffer.alloc(0) } : {}),
     });
     // The response/body readers still reject; keep errors observed between their awaits.
@@ -191,6 +191,7 @@ setPhase("preparation");
     request.once("response", (response) => response.on("error", () => {}));
     // Observe transport progress without changing when the pinned request may send credentials.
     request.once("socket", (socket) => {
+      socket.setTimeout(${CLOUD_BOOTSTRAP_DOWNLOAD_IDLE_TIMEOUT_MS}, () => request.destroy(Object.assign(new Error("Cloud worker bootstrap download stalled"), { code: "ETIMEDOUT" })));
       socket.once("connect", () => { reportPhase(url.protocol === "https:" ? "download TLS" : "download HTTP response"); });
       socket.once("secureConnect", () => { if (!pin) reportPhase("download HTTP response"); });
     });

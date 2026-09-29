@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { isNativeError } from "node:util/types";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCrabboxNodeRuntimeSetup } from "./crabbox-worker-node-enrollment.js";
@@ -13,10 +14,13 @@ import {
 } from "./crabbox-worker-node-enrollment.test-support.js";
 
 const require = createRequire(import.meta.url);
-const archive = Buffer.from("verified worker archive");
-const runtimeArchive = Buffer.from("verified runtime archive");
+const archive = Buffer.from("verified worker archive".repeat(3));
+const runtimeArchive = Buffer.from("verified runtime archive".repeat(3));
 
-type DownloadOutcome = string | number | { durationMs: number; failure?: string };
+type DownloadOutcome =
+  | string
+  | number
+  | { durationMs: number; failure?: string; progress?: boolean; stall?: "headers" | "body" };
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -29,7 +33,7 @@ function waitForDownload(ms: number, signal?: AbortSignal) {
     const abort = () => {
       clearTimeout(timer);
       const reason = signal?.reason;
-      reject(reason instanceof Error ? reason : new Error("download aborted", { cause: reason }));
+      reject(isNativeError(reason) ? reason : new Error("download aborted", { cause: reason }));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", abort);
@@ -62,7 +66,6 @@ async function download(
   });
   const setup = createCrabboxNodeRuntimeSetup({
     leaseId: "cbx_download_fixture",
-    bootstrapTimeoutMs,
     nodeBootstrap,
     workerBundle,
   });
@@ -107,26 +110,53 @@ async function download(
           : 0;
       const split = Math.min(offset + Math.floor(content.length * 0.4), content.length);
       const grant = grants.get(options.headers.authorization)!;
-      const signal = AbortSignal.any([options.signal, grant]);
+      const destroyed = new AbortController();
+      const signal = AbortSignal.any([options.signal, grant, destroyed.signal]);
       const unavailable = grant.aborted;
       let finished = false;
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const socket = Object.assign(new EventEmitter(), {
+        getPeerCertificate: () => ({ fingerprint256: "b".repeat(64) }),
+        setTimeout: (ms: number, callback: () => void) => {
+          idleTimer = setTimeout(() => socket.emit("timeout"), ms);
+          socket.once("timeout", callback);
+        },
+      });
       signal.addEventListener(
         "abort",
         () => {
           if (!finished) {
             aborted.push(options.headers.authorization);
           }
+          clearTimeout(idleTimer);
+          request.emit("error", signal.reason);
         },
         { once: true },
       );
       const request = Object.assign(new EventEmitter(), {
-        destroy: (error: Error) => request.emit("error", error),
+        destroy: (error: unknown) => destroyed.abort(error),
         end: () => {
           const response = Object.assign(
             Readable.from(
               (async function* () {
                 if (typeof outcome === "object") {
-                  await waitForDownload(outcome.durationMs, signal);
+                  if (outcome.progress) {
+                    const startedAt = Date.now();
+                    for (let index = offset; index < content.length; index++) {
+                      const arrival = Math.round(
+                        (outcome.durationMs * (index + 1 - offset)) / (content.length - offset),
+                      );
+                      await waitForDownload(startedAt + arrival - Date.now(), signal);
+                      idleTimer?.refresh();
+                      yield content.subarray(index, index + 1);
+                    }
+                    finished = true;
+                    completedAt.push(Date.now());
+                    return;
+                  }
+                  if (!outcome.stall) {
+                    await waitForDownload(outcome.durationMs, signal);
+                  }
                   if (outcome.failure) {
                     throw new Error(outcome.failure);
                   }
@@ -136,7 +166,11 @@ async function download(
                   return;
                 }
                 signal.throwIfAborted();
+                idleTimer?.refresh();
                 yield content.subarray(offset, split);
+                if (typeof outcome === "object" && outcome.stall === "body") {
+                  await waitForDownload(outcome.durationMs, signal);
+                }
                 if (outcome === "short") {
                   return;
                 }
@@ -154,6 +188,7 @@ async function download(
                   throw Object.assign(new Error("transport interrupted"), { code: outcome });
                 }
                 signal.throwIfAborted();
+                idleTimer?.refresh();
                 yield outcome === "digest"
                   ? Buffer.alloc(content.length - split)
                   : content.subarray(split);
@@ -184,13 +219,20 @@ async function download(
                 : {},
             },
           );
-          request.emit("response", response);
+          response.once("close", () => clearTimeout(idleTimer));
+          void (async () => {
+            // Native requests receive their socket before response headers.
+            await Promise.resolve();
+            if (typeof outcome === "object" && outcome.stall === "headers") {
+              await waitForDownload(outcome.durationMs, signal);
+            }
+            signal.throwIfAborted();
+            idleTimer?.refresh();
+            request.emit("response", response);
+          })().catch((error: unknown) => request.destroy(error));
         },
       });
       queueMicrotask(() => {
-        const socket = Object.assign(new EventEmitter(), {
-          getPeerCertificate: () => ({ fingerprint256: "b".repeat(64) }),
-        });
         let listeners = 0;
         socket.on("newListener", (event) => {
           if (event === "secureConnect" && ++listeners === (outcome === "pin" ? 2 : 1)) {
@@ -352,12 +394,15 @@ describe("bootstrap artifact download retries", () => {
   it.each([
     { runtimeMinutes: 9, workerMinutes: 8, bootstrapTimeoutMs: undefined },
     { runtimeMinutes: 8, workerMinutes: 9, bootstrapTimeoutMs: undefined },
-    { runtimeMinutes: 34, workerMinutes: 33, bootstrapTimeoutMs: 45 * 60_000 },
+    { runtimeMinutes: 48, workerMinutes: 46, bootstrapTimeoutMs: 60 * 60_000 },
   ])(
     "completes $runtimeMinutes/$workerMinutes-minute downloads before both grants expire",
     async ({ runtimeMinutes, workerMinutes, bootstrapTimeoutMs }) => {
       const result = await download(
-        [{ durationMs: runtimeMinutes * 60_000 }, { durationMs: workerMinutes * 60_000 }],
+        [
+          { durationMs: runtimeMinutes * 60_000, progress: true },
+          { durationMs: workerMinutes * 60_000, progress: true },
+        ],
         true,
         { durationMs: 2 * 60_000, exitCode: 0 },
         bootstrapTimeoutMs,
@@ -377,6 +422,24 @@ describe("bootstrap artifact download retries", () => {
       expect(result.installations).toEqual([runtimeMinutes * 60_000]);
       expect(result.published).toEqual([archive]);
       expect(result.output).toContain("CRABBOX_PHASE:openclaw-bootstrap-complete");
+    },
+  );
+
+  it.each(["headers", "body"] as const)(
+    "retries a stalled %s attempt after two idle minutes, retaining received bytes",
+    async (stall) => {
+      const result = await download([{ durationMs: 5 * 60_000, stall }, "success"]);
+      expect(result.code, result.output).toBe(0);
+      expect(result.elapsedMs).toBe(2 * 60_000 + 250);
+      expect(result.requests).toEqual(Array(2).fill("Bearer synthetic-worker-archive-token"));
+      expect(result.ranges).toEqual([
+        undefined,
+        stall === "body" ? `bytes=${Math.floor(archive.length * 0.4)}-` : undefined,
+      ]);
+      expect(result.aborted).toEqual(["Bearer synthetic-worker-archive-token"]);
+      expect(result.output).toContain("failed (ETIMEDOUT); retrying download attempt 2/3");
+      expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
+      expect(result.published).toEqual([archive]);
     },
   );
 
