@@ -56,18 +56,23 @@ function outcome(storeKey: string, receipt: string): CronRunHistoryWrite {
 }
 
 it.each(["asc", "desc"] as const)("orders history timestamps and ties %s", (sortDir) => {
-  const records: CronRunRecord[] = [
-    { id: "tie-a", createdAt: 5, endedAt: 20 },
-    { id: "created-only", createdAt: 15 },
-    { id: "ended", createdAt: 10, endedAt: 20, lastEventAt: 90 },
-    { id: "tie-b", createdAt: 5, endedAt: 20 },
-    { id: "last-event", createdAt: 0, lastEventAt: 30 },
-  ].map((record) => ({
-    ...record,
+  const run = (
+    id: string,
+    timestamps: Pick<CronRunRecord, "createdAt" | "endedAt" | "lastEventAt">,
+  ): CronRunRecord => ({
+    id,
+    ...timestamps,
     jobId: "job",
     status: "succeeded",
-    detail: { kind: "cron-run", storeKey: "store", status: "ok", runId: record.id },
-  }));
+    detail: { kind: "cron-run", storeKey: "store", status: "ok", runId: id },
+  });
+  const records: CronRunRecord[] = [
+    run("tie-a", { createdAt: 5, endedAt: 20 }),
+    run("created-only", { createdAt: 15 }),
+    run("ended", { createdAt: 10, endedAt: 20, lastEventAt: 90 }),
+    run("tie-b", { createdAt: 5, endedAt: 20 }),
+    run("last-event", { createdAt: 0, lastEventAt: 30 }),
+  ];
   const newestFirst = ["last-event", "ended", "tie-b", "tie-a", "created-only"];
 
   const page = projectCronRunHistoryPage(records, { storeKey: "store", sortDir });

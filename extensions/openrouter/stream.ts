@@ -50,12 +50,6 @@ function mergeOpenRouterAuthHeaders(options: Parameters<StreamFn>[2]): Parameter
   if (!headers.has("authorization")) {
     headers.set("Authorization", `Bearer ${apiKey}`);
   }
-  if (!headers.has("http-referer")) {
-    headers.set("HTTP-Referer", "https://openclaw.ai");
-  }
-  if (!headers.has("x-openrouter-title")) {
-    headers.set("X-OpenRouter-Title", "OpenClaw");
-  }
   return {
     ...options,
     headers: Object.fromEntries(headers.entries()),

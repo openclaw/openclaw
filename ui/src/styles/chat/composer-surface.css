@@ -299,6 +299,10 @@
   z-index: 1;
 }
 
+.agent-chat__input--disabled {
+  opacity: 0.6;
+}
+
 @media (forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
   .agent-chat__input {
     background: var(--chat-composer-surface);

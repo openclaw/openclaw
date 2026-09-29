@@ -12,7 +12,11 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import { bindCapturedSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import {
+  bindCapturedSubagentRunRecord,
+  bindSubagentRunRecord,
+  rowToSubagentRunRecord,
+} from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type PendingRegistryWrite = {
@@ -138,6 +142,8 @@ export function supersedePendingSubagentRegistryWrites(runIds?: readonly string[
 
 export type SubagentRegistryPublication = "published" | "superseded";
 
+export class SubagentRegistryPreimageChangedError extends Error {}
+
 export class SubagentRegistryWriteError extends Error {
   constructor(
     readonly outcome: "not-committed" | "committed" | "unknown",
@@ -157,6 +163,20 @@ export class SubagentRegistryWriteError extends Error {
       cause: failure,
     });
     this.name = "SubagentRegistryWriteError";
+  }
+}
+
+/** Native commit is known, but only canonical restoration can recover its unreadable facts. */
+export class SubagentRegistryCommitReceiptError extends SubagentRegistryWriteError {
+  constructor(cause: unknown) {
+    // Preserve existing restore-only error handling without losing the known native commit.
+    const unreadable = new SqliteWorkerError(
+      "Committed registry receipt is unreadable",
+      "outcome-unknown",
+    );
+    unreadable.cause = cause;
+    super("committed", unreadable);
+    this.name = "SubagentRegistryCommitReceiptError";
   }
 }
 
@@ -217,8 +237,9 @@ export async function withSubagentRegistryWriteAuthority<T>(
     });
   } catch (error) {
     if (
-      hasSqliteWorkerOutcomeUnknown(error) &&
-      !(error instanceof SubagentRegistryWriteError && error.outcome === "committed")
+      error instanceof SubagentRegistryCommitReceiptError ||
+      (hasSqliteWorkerOutcomeUnknown(error) &&
+        !(error instanceof SubagentRegistryWriteError && error.outcome === "committed"))
     ) {
       pending.uncertain =
         error instanceof SubagentRegistryWriteError
@@ -351,6 +372,165 @@ export type SubagentRegistryPostimageResult = {
   publication: SubagentRegistryPublication;
 };
 
+function replaceSubagentRunRecord(entry: SubagentRunRecord, value: SubagentRunRecord): void {
+  for (const key of Object.keys(entry)) {
+    Reflect.deleteProperty(entry, key);
+  }
+  Object.assign(entry, value);
+}
+
+function matchesSubagentRunPreimages(
+  runs: ReadonlyMap<string, SubagentRunRecord>,
+  previous: ReadonlyMap<SubagentRunRecord, SubagentRunRecord>,
+  retired?: ReadonlySet<SubagentRunRecord>,
+): boolean {
+  return [...previous].every(
+    ([entry, snapshot]) =>
+      runs.get(snapshot.runId) === (retired?.has(entry) ? undefined : entry) &&
+      isDeepStrictEqual(entry, snapshot),
+  );
+}
+
+function retainUnchangedSubagentOwners(
+  previous: SubagentRunRecord,
+  next: SubagentRunRecord,
+  runtime: {
+    terminalReply: NonNullable<SubagentRunRecord["completion"]>["terminalReply"];
+    delivery: SubagentRunRecord["delivery"];
+  },
+  retainDeliveryReceipt: boolean,
+): SubagentRunRecord {
+  const canonical = rowToSubagentRunRecord(bindSubagentRunRecord(previous));
+  if (!canonical) {
+    throw new Error("Subagent publication has an invalid preimage");
+  }
+  const retain = <
+    K extends "execution" | "killIntent" | "killReconciliation" | "requesterSettleWake",
+  >(
+    key: K,
+  ): SubagentRunRecord[K] =>
+    isDeepStrictEqual(canonical[key], next[key]) ? previous[key] : next[key];
+  return {
+    ...next,
+    ...(runtime.terminalReply &&
+    next.completion &&
+    isDeepStrictEqual(canonical.completion?.terminalReply, next.completion.terminalReply)
+      ? { completion: { ...next.completion, terminalReply: runtime.terminalReply } }
+      : {}),
+    delivery:
+      retainDeliveryReceipt &&
+      runtime.delivery &&
+      isDeepStrictEqual(canonical.delivery, next.delivery)
+        ? runtime.delivery
+        : next.delivery,
+    execution: retain("execution"),
+    killIntent: retain("killIntent"),
+    killReconciliation: retain("killReconciliation"),
+    requesterSettleWake: retain("requesterSettleWake"),
+  };
+}
+
+/** Native receipts and staged writes publish through the same live preimage authority. */
+export function captureSubagentRunPostimagePublication(params: {
+  runs: Map<string, SubagentRunRecord>;
+  previous: ReadonlyMap<SubagentRunRecord, SubagentRunRecord>;
+  /** Already published native retirements, retained by their original receipt owner. */
+  retiredPreimages?: ReadonlySet<SubagentRunRecord>;
+  context: OpenClawStateWorkerContext;
+  assertCurrent: () => void;
+  onPublished?: () => void;
+  fromWorker?: { deliveryReceipt: "retain-unchanged" | "replace" };
+}) {
+  const originals = new Map(params.previous);
+  // Findings and cleanup retain these identities independently of staged field snapshots.
+  const runtimeOwners = new Map(
+    [...originals.keys()].map(
+      (entry) =>
+        [
+          entry,
+          {
+            execution: entry.execution,
+            killIntent: entry.killIntent,
+            killReconciliation: entry.killReconciliation,
+            requesterSettleWake: entry.requesterSettleWake,
+            terminalReply: entry.completion?.terminalReply,
+            delivery: entry.delivery,
+          },
+        ] as const,
+    ),
+  );
+  const retired = new Set(params.retiredPreimages);
+  const snapshots = new Map(
+    [...originals].map(([entry, previous]) => [entry, structuredClone(previous)] as const),
+  );
+  let published = false;
+  const assertCurrent = () => {
+    assertSubagentRegistryWriteSourceCurrent(params.context);
+    params.assertCurrent();
+    if (
+      !matchesSubagentRunPreimages(params.runs, snapshots, retired) ||
+      (params.fromWorker &&
+        [...runtimeOwners].some(
+          ([entry, owner]) =>
+            entry.execution !== owner.execution ||
+            entry.killIntent !== owner.killIntent ||
+            entry.killReconciliation !== owner.killReconciliation ||
+            entry.requesterSettleWake !== owner.requesterSettleWake ||
+            entry.completion?.terminalReply !== owner.terminalReply ||
+            entry.delivery !== owner.delivery,
+        ))
+    ) {
+      throw new SubagentRegistryPreimageChangedError(
+        "Subagent publication lost its original preimage",
+      );
+    }
+  };
+  return {
+    assertCurrent,
+    get published() {
+      return published;
+    },
+    publish(postimages: ReadonlyMap<SubagentRunRecord, SubagentRunRecord | null>): void {
+      if (
+        postimages.size !== snapshots.size ||
+        [...snapshots.keys()].some((entry) => !postimages.has(entry))
+      ) {
+        throw new SubagentRegistryWriteError(
+          "committed",
+          new Error("Subagent publication does not cover its captured rows"),
+        );
+      }
+      try {
+        assertCurrent();
+      } catch (error) {
+        throw new SubagentRegistryWriteError("committed", error, "superseded");
+      }
+      // Prepare all records before installing any row; decoding failure is not partial publication.
+      const selected = [...postimages].map(([entry, next]) => ({
+        entry,
+        next:
+          next && params.fromWorker
+            ? retainUnchangedSubagentOwners(
+                originals.get(entry)!,
+                next,
+                runtimeOwners.get(entry)!,
+                params.fromWorker.deliveryReceipt === "retain-unchanged",
+              )
+            : next,
+      }));
+      for (const { entry, next } of selected) {
+        if (next === null) {
+          params.runs.delete(entry.runId);
+        } else {
+          replaceSubagentRunRecord(entry, next);
+        }
+      }
+      published = true;
+      params.onPublished?.();
+    },
+  };
+}
+
 /** The existing writer captures staged rows synchronously; live preimages remain until ACK. */
 export async function publishSubagentRunPostimages(params: {
   runs: Map<string, SubagentRunRecord>;
@@ -371,28 +551,23 @@ export async function publishSubagentRunPostimages(params: {
   const selected = [...params.previous].map(([entry, previous]) => ({
     entry,
     previous,
-    previousSnapshot: structuredClone(previous),
     next: { ...entry },
-    nextSnapshot: structuredClone(entry),
     retire: params.retire?.has(entry) === true,
   }));
-  const replace = (entry: SubagentRunRecord, value: SubagentRunRecord) => {
-    for (const key of Object.keys(entry)) {
-      Reflect.deleteProperty(entry, key);
-    }
-    Object.assign(entry, value);
-  };
+  const previousSnapshots = new Map(
+    selected.map(({ entry, previous }) => [entry, structuredClone(previous)] as const),
+  );
+  const nextSnapshots = new Map(
+    selected.map(({ entry, next }) => [entry, structuredClone(next)] as const),
+  );
+  const postimages = new Map(
+    selected.map(({ entry, next, retire }) => [entry, retire ? null : next] as const),
+  );
+  const owner = captureSubagentRunPostimagePublication({
+    ...params,
+    assertCurrent: params.assertPublicationCurrent ?? params.assertCurrent,
+  });
   let capturing = true;
-  let published = false;
-  const matches = (next: boolean) =>
-    selected.every(
-      (selection) =>
-        params.runs.get(selection.entry.runId) === selection.entry &&
-        isDeepStrictEqual(
-          selection.entry,
-          next ? selection.nextSnapshot : selection.previousSnapshot,
-        ),
-    );
   let publication: Promise<void>;
   try {
     params.assertCurrent();
@@ -403,37 +578,21 @@ export async function publishSubagentRunPostimages(params: {
         retireRunIds: selected.filter(({ retire }) => retire).map(({ entry }) => entry.runId),
         assertCurrent() {
           params.assertCurrent();
-          if (!matches(capturing)) {
+          const expected = capturing ? nextSnapshots : previousSnapshots;
+          if (!matchesSubagentRunPreimages(params.runs, expected)) {
             throw new Error("Subagent mutation lost its original registry row");
           }
         },
         onCommitted() {
-          try {
-            assertSubagentRegistryWriteSourceCurrent(params.context);
-            (params.assertPublicationCurrent ?? params.assertCurrent)();
-            if (!matches(false)) {
-              throw new Error("Subagent publication lost its original preimage");
-            }
-          } catch (error) {
-            throw new SubagentRegistryWriteError("committed", error, "superseded");
-          }
-          for (const selection of selected) {
-            if (selection.retire) {
-              params.runs.delete(selection.entry.runId);
-            } else {
-              replace(selection.entry, selection.next);
-            }
-          }
-          published = true;
-          params.onPublished?.();
+          owner.publish(postimages);
         },
       },
       ...selected.map(({ entry }) => entry.runId),
     );
   } finally {
-    if (matches(true)) {
+    if (matchesSubagentRunPreimages(params.runs, nextSnapshots)) {
       for (const selection of selected) {
-        replace(selection.entry, selection.previous);
+        replaceSubagentRunRecord(selection.entry, selection.previous);
       }
     }
     capturing = false;
@@ -442,16 +601,16 @@ export async function publishSubagentRunPostimages(params: {
     await publication;
   } catch (error) {
     if (error instanceof SubagentRegistryWriteError && error.outcome === "committed") {
-      if (!published && error.publication === "superseded") {
+      if (!owner.published && error.publication === "superseded") {
         return { outcome: "committed", publication: "superseded" };
       }
       throw new SubagentRegistryWriteError(
         "committed",
         error,
-        published ? "published" : error.publication,
+        owner.published ? "published" : error.publication,
       );
     }
     throw error;
   }
-  return { outcome: "committed", publication: published ? "published" : "superseded" };
+  return { outcome: "committed", publication: owner.published ? "published" : "superseded" };
 }

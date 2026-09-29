@@ -4,6 +4,7 @@ import type { callGateway as defaultCallGateway } from "../../../gateway/call.js
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 // This type-only leaf exists solely to keep lifecycle sibling modules from importing the controller.
 // Keeping the controller out of their dependency graph satisfies the architecture cycle gate.
+import type { RequesterWakeCommittedWrite } from "../completion/subagent-completion-mutation.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SubagentRegistryWriteOptions } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord, SubagentSessionEffects } from "./subagent-registry.types.js";
@@ -109,7 +110,17 @@ export interface SubagentLifecycleAnnounceCleanupContext
 export type PendingRequesterSettleWakeCommit = {
   entries: readonly SubagentRunRecord[];
   isCurrent(entry: SubagentRunRecord): boolean;
-  commit(entries: readonly SubagentRunRecord[]): boolean | Promise<boolean>;
+  commit(
+    entries: readonly SubagentRunRecord[],
+    pending: PendingRequesterSettleWakeCommit,
+  ): boolean | Promise<boolean>;
+  generation: number | undefined;
+  committedWake?: RequesterWakeCommittedWrite;
+  /** One current retry caller must resume the published transition. */
+  needsWakeContinuation?: boolean;
+  stateContext?: OpenClawStateWorkerContext;
+  isPublishedRetirement(entry: SubagentRunRecord): boolean;
+  adoptPublished(entries: readonly SubagentRunRecord[]): void;
   retryWholeBatch: boolean;
   inFlight?: Promise<void>;
   failures: number;
@@ -133,11 +144,16 @@ export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonCon
     PendingRequesterSettleWakeCommit
   >;
   resumeAncestorCleanup(settledEntry: SubagentRunRecord): void;
-  runRequesterSettleWake(entry: SubagentRunRecord, run: () => Promise<unknown>): Promise<unknown>;
+  runRequesterSettleWake(
+    entry: SubagentRunRecord,
+    run: () => Promise<unknown>,
+    isCurrent: () => boolean,
+  ): Promise<unknown>;
   unmarkRequesterSettleWakeRunScheduled(entry: SubagentRunRecord): void;
 }
 
 export type CleanupBookkeepingParams = {
+  stateContext?: OpenClawStateWorkerContext;
   runId: string;
   entry: SubagentRunRecord;
   cleanup: "delete" | "keep";
@@ -152,4 +168,5 @@ export type ScheduledRequesterSettleWake = {
   timer: ReturnType<typeof setTimeout>;
   deadline: number;
   rearmGeneration?: number;
+  stateContext: OpenClawStateWorkerContext;
 };

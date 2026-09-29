@@ -5227,13 +5227,16 @@ function createCompactNodeTestShardBundles(
           estimateStripeSeconds(b) - estimateStripeSeconds(a) ||
           a.shard_name.localeCompare(b.shard_name),
       );
-    const bins = packNodeTestGroups(groups, (candidate, group) =>
-      admitsCompactBin(
-        [...candidate, group],
-        COMPACT_FINAL_PARALLEL_NODE_TEST_JOB_SECONDS,
-        estimateBinSeconds,
-        { parallel: true },
-      ),
+    const bins = packNodeTestGroups(
+      groups,
+      (candidate, group) =>
+        admitsCompactBin(
+          [...candidate, group],
+          COMPACT_FINAL_PARALLEL_NODE_TEST_JOB_SECONDS,
+          estimateBinSeconds,
+          { parallel: true },
+        ),
+      options.runnerBackend === "hybrid",
     );
     if (bins.length < parallelJobs.length) {
       parallelJobs.forEach((job, index) => {

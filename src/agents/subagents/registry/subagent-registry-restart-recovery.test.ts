@@ -70,7 +70,7 @@ describe("subagent registry restart recovery", () => {
       for (let index = 0; index < 30; index++) {
         clearAgentRunContext(`owner-${index}`);
       }
-      sweeper.reset();
+      await sweeper.reset();
     }
   });
 
@@ -110,7 +110,7 @@ describe("subagent registry restart recovery", () => {
         expect(mocks.loadSessionEntry).toHaveBeenCalled();
         expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
       } finally {
-        sweeper.reset();
+        await sweeper.reset();
         lease?.release();
         clearAgentRunContext("retained-owner");
         vi.useRealTimers();

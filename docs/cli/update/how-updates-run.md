@@ -120,18 +120,25 @@ validation, installation, and Doctor finalization continue in the invoking
 installation. Doctor leaves unverified service records unchanged and reports an
 advisory; state coordinators and database leases still protect active writers.
 
-The baseline package fingerprint is best effort. If its bounded scan times out,
-the update records a warning and continues with the retained package copy.
+The baseline package fingerprint is best effort. If its bounded scan times out
+or reaches its byte or entry limit, the update records a warning and continues
+with the retained package directory.
 Rollback then verifies the restored directory identity, package version, and
 affected launchers, and records that full fingerprint verification was unavailable.
-A baseline scan timeout alone does not fail the update or rollback; detected
-changes to the retained copy still refuse restoration. Once a complete baseline
+A scan budget alone does not fail the update or rollback; unavailable or changed
+directory identity, invalid package metadata, and affected-launcher failures still
+refuse restoration. Once a complete baseline
 fingerprint is available, recovery checks must match it. These checks use the
 caller's per-step allowance without a separate thirty-second scan cap.
 If a retained or restored package changes, the failure names the exact package
 path to inspect before retrying recovery. Sibling `.openclaw.update-stage-*`
 directories are outside that package fingerprint; do not remove stages that
 another updater may still be using.
+
+An older installed updater that stops with `Package rollback verification byte
+limit exceeded` cannot obtain this repair from its staged candidate. Use the
+installation's [manual package update method](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+with a verified backup and the managed Gateway stopped during replacement.
 
 Interrupting a fresh local update before activation records a failed,
 `interrupted` history entry while its installation owner is still held.

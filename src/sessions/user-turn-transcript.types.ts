@@ -194,6 +194,12 @@ export type CreateUserTurnTranscriptRecorderParams = {
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 };
 
+type UserTurnPersistenceOptions = {
+  target?: UserTurnTranscriptTargetResolver;
+  updateMode?: UserTurnTranscriptUpdateMode;
+  cwd?: string;
+};
+
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
@@ -234,27 +240,20 @@ export type UserTurnTranscriptRecorder = {
   isBlocked: () => boolean;
   hasRuntimePersistencePending: () => boolean;
   waitForRuntimePersistence: () => Promise<void>;
-  persistApproved: (params?: {
-    target?: UserTurnTranscriptTargetResolver;
-    updateMode?: UserTurnTranscriptUpdateMode;
-    cwd?: string;
-    expectedSessionId?: string;
-    expectedSessionState?: SessionTranscriptTurnExpectedState;
-    sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
-    /** Allow a later explicit persistence attempt when this attempt appends nothing. */
-    retryIfUnpersisted?: boolean;
-  }) => Promise<UserTurnTranscriptPersistResult | undefined>;
-  persistBlocked: (
-    message: PersistedUserTurnMessage,
-    params?: {
-      target?: UserTurnTranscriptTargetResolver;
-      updateMode?: UserTurnTranscriptUpdateMode;
-      cwd?: string;
+  persistApproved: (
+    params?: UserTurnPersistenceOptions & {
+      expectedSessionId?: string;
+      expectedSessionState?: SessionTranscriptTurnExpectedState;
+      sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+      /** Allow a later explicit persistence attempt when this attempt appends nothing. */
+      retryIfUnpersisted?: boolean;
     },
   ) => Promise<UserTurnTranscriptPersistResult | undefined>;
-  persistFallback: (params?: {
-    target?: UserTurnTranscriptTargetResolver;
-    updateMode?: UserTurnTranscriptUpdateMode;
-    cwd?: string;
-  }) => Promise<UserTurnTranscriptPersistResult | undefined>;
+  persistBlocked: (
+    message: PersistedUserTurnMessage,
+    params?: UserTurnPersistenceOptions,
+  ) => Promise<UserTurnTranscriptPersistResult | undefined>;
+  persistFallback: (
+    params?: UserTurnPersistenceOptions,
+  ) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };

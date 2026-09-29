@@ -61,11 +61,6 @@ function normalizeCommandTurnSource(value: unknown): CommandTurnSource | undefin
   return value === "native" || value === "text" || value === "message" ? value : undefined;
 }
 
-/** Maps source metadata back to the closed turn kind used by command checks. */
-function commandTurnSourceToKind(source: CommandTurnSource): CommandTurnKind {
-  return source === "native" ? "native" : source === "text" ? "text-slash" : "normal";
-}
-
 /** Builds a normalized command-turn context and forces normal messages to unauthorized. */
 export function createCommandTurnContext(
   source: CommandTurnSource,
@@ -113,22 +108,17 @@ function normalizeExplicitCommandTurn(
   const kind = normalizeCommandTurnKind(record.kind);
   const source =
     normalizeCommandTurnSource(record.source) ?? (kind ? commandTurnKindToSource(kind) : undefined);
-  const resolvedKind = kind ?? (source ? commandTurnSourceToKind(source) : undefined);
   // Explicit metadata must describe one turn source; mixed kind/source pairs are ignored.
   if (kind && source && commandTurnKindToSource(kind) !== source) {
     return undefined;
   }
-  if (!resolvedKind || !source) {
+  if (!source) {
     return undefined;
   }
   const body = normalizeOptionalString(record.body) ?? resolveCommandBody(input);
   return createCommandTurnContext(source, {
     authorized:
-      resolvedKind === "normal"
-        ? false
-        : typeof record.authorized === "boolean"
-          ? record.authorized
-          : input.CommandAuthorized === true,
+      typeof record.authorized === "boolean" ? record.authorized : input.CommandAuthorized === true,
     commandName: normalizeOptionalString(record.commandName) ?? parseCommandName(body),
     body,
   });

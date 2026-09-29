@@ -55,6 +55,7 @@ type WizardRunnerOptions = {
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
+  gatewayNotRespondingMessage: () => string;
 };
 
 type WizardSession = {
@@ -110,14 +111,22 @@ export class ModelSetupWizardRunner {
     return this.session?.admitted === true;
   }
 
-  suspend(): void {
+  suspend(notice?: string): void {
     const session = this.session;
     if (!session) {
       return;
     }
     session.suspended = true;
     session.abortController.abort();
-    this.setState({ phase: "starting", authChoice: session.authChoice });
+    // A suspended wizard cannot receive its sign-in URL; a resumed step still
+    // offers that URL as an explicit link.
+    session.reservedWindow?.close();
+    session.reservedWindow = null;
+    this.setState({
+      phase: "starting",
+      authChoice: session.authChoice,
+      ...(notice ? { notice } : {}),
+    });
   }
 
   restore(recovery: ModelSetupWizardRecovery, onTerminalResult: WizardTerminalObserver): void {
@@ -313,17 +322,8 @@ export class ModelSetupWizardRunner {
   }
 
   async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
-    this.pendingSignIn?.window?.close();
-    this.pendingSignIn = undefined;
     const session = this.session;
-    session?.reservedWindow?.close();
-    clearTimeout(session?.externalInputTimer);
-    if (!options.settleActiveRequest) {
-      session?.abortController.abort();
-    }
-    this.session = null;
-    this.authLabel = undefined;
-    this.setState({ phase: "idle" });
+    this.clearSession(!options.settleActiveRequest);
     if (session) {
       await this.cancelSession(session);
     }
@@ -395,11 +395,17 @@ export class ModelSetupWizardRunner {
     if (options.retireOwner) {
       this.retirementGeneration += 1;
     }
+    this.clearSession();
+  }
+
+  private clearSession(abortRequest = true): void {
     this.pendingSignIn?.window?.close();
     this.pendingSignIn = undefined;
     this.session?.reservedWindow?.close();
     clearTimeout(this.session?.externalInputTimer);
-    this.session?.abortController.abort();
+    if (abortRequest) {
+      this.session?.abortController.abort();
+    }
     this.session = null;
     this.authLabel = undefined;
     this.setState({ phase: "idle" });
@@ -435,11 +441,7 @@ export class ModelSetupWizardRunner {
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             timedOut = true;
-            reject(
-              new Error(
-                `gateway request timed out after ${MODEL_SETUP_AUTH_START_TIMEOUT_MS}ms: ${session.startMethod}`,
-              ),
-            );
+            reject(new Error(this.options.gatewayNotRespondingMessage()));
           }, MODEL_SETUP_AUTH_START_TIMEOUT_MS);
         }),
       ]);

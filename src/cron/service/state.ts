@@ -420,7 +420,12 @@ export type CronRunResult =
 
 /** Remove result, including deferred base-session cleanup after durable deletion. */
 export type CronRemoveResult =
-  | { ok: true; removed: boolean; sessionCleanup?: "pending" }
+  | {
+      ok: true;
+      removed: boolean;
+      activeRunCancellationRequested?: true;
+      sessionCleanup?: "pending";
+    }
   | { ok: false; removed: false };
 
 type CronDeclarativeAddResult = CronStoredJob & {

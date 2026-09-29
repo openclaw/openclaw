@@ -71,8 +71,6 @@ type SidebarPanelDefinitionParams = {
   renderDetail: (content: SidebarContent) => TemplateResult;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
-  startedAt: number | undefined;
-  lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
   companionPresented: boolean;
@@ -80,7 +78,6 @@ type SidebarPanelDefinitionParams = {
   onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;
   onCompanionDraftChange: (draft: string) => void;
   onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
-  onCompanionVisibilityChange: (visible: boolean) => void;
   connected: boolean;
   onClearCompanion: () => void;
   discussion: SessionDiscussionPanelConfig | null;
@@ -194,15 +191,12 @@ export function sidebarPanelDefinitions(
     : null;
   const companion = params
     ? html`<openclaw-chat-session-rail
-        embedded
         .presented=${params.companionPresented}
         .focusRequest=${params.companionFocusRequest}
         .sessionKey=${state?.sessionKey}
         .digest=${params.digest}
         .running=${Boolean(params.activeRunId)}
         .activeRunId=${params.activeRunId}
-        .startedAt=${params.startedAt}
-        .lastReadAt=${params.lastReadAt}
         .pullRequests=${params.pullRequests}
         .companion=${params.companion}
         .connected=${state?.connected === true}
@@ -212,7 +206,6 @@ export function sidebarPanelDefinitions(
         .onAttachmentsChange=${params.onCompanionAttachmentsChange}
         .uploadConfig=${state?.uploadConfig}
         .attachmentLimits=${resolveChatAttachmentLimits(state?.hello?.policy)}
-        .onVisibilityChange=${params.onCompanionVisibilityChange}
       ></openclaw-chat-session-rail>`
     : null;
   const desktop =

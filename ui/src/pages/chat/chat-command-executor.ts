@@ -141,9 +141,9 @@ export async function executeSlashCommand(
     case "think":
       return await executeThink(client, sessionKey, args, context);
     case "fast":
-      return await executeFast(client, sessionKey, args, context);
+      return await executeFast(sessionKey, args, context);
     case "verbose":
-      return await executeVerbose(client, sessionKey, args, context);
+      return await executeVerbose(sessionKey, args, context);
     case "usage":
       return await executeUsage(sessionKey, context);
     case "agents":
@@ -157,8 +157,6 @@ export async function executeSlashCommand(
       };
   }
 }
-
-// ── Command Implementations ──
 
 function executeHelp(): SlashCommandResult {
   const lines = [`**${t("chat.commandResults.help.availableCommands")}**\n`];
@@ -236,11 +234,8 @@ async function executeModel(
       );
       const model = session?.model || defaults?.model || "default";
       const available = models
-        .filter(
-          (entry: ModelCatalogEntry) =>
-            entry.available !== false && entry.manualSelectionAllowed !== false,
-        )
-        .map((entry: ModelCatalogEntry) => entry.id);
+        .filter((entry) => entry.available !== false && entry.manualSelectionAllowed !== false)
+        .map((entry) => entry.id);
       const lines = [t("chat.commandResults.model.current", { model: `\`${model}\`` })];
       if (available.length > 0) {
         const remaining =
@@ -251,7 +246,7 @@ async function executeModel(
           `${t("chat.commandResults.model.available", {
             models: available
               .slice(0, 10)
-              .map((m: string) => `\`${m}\``)
+              .map((m) => `\`${m}\``)
               .join(", "),
           })}${remaining}`,
         );
@@ -359,7 +354,6 @@ async function executeThink(
 }
 
 async function executeVerbose(
-  _client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
@@ -368,7 +362,7 @@ async function executeVerbose(
 
   if (!rawLevel) {
     try {
-      const session = await loadCurrentSession(context, sessionKey);
+      const { session } = await loadCurrentSessionState(context, sessionKey);
       return {
         content: formatDirectiveOptions(
           t("chat.commandResults.verbose.current", {
@@ -409,7 +403,6 @@ function formatFastModeOptions(session: GatewaySessionRow | undefined): string {
 }
 
 async function executeFast(
-  _client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
@@ -418,7 +411,7 @@ async function executeFast(
 
   if (!rawMode || rawMode === "status") {
     try {
-      const session = await loadCurrentSession(context, sessionKey);
+      const { session } = await loadCurrentSessionState(context, sessionKey);
       return {
         content: formatDirectiveOptions(
           resolveChatFastModeStatus(session),
@@ -556,9 +549,7 @@ function selectedAgentListScope(
   sessionKey: string,
   context: SlashCommandContext,
 ): { agentId?: string } {
-  const parsedAgentId = parseAgentSessionKey(
-    normalizeOptionalLowercaseString(sessionKey) ?? "",
-  )?.agentId;
+  const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const agentId = parsedAgentId ?? normalizeOptionalLowercaseString(context.agentId);
   return agentId ? { agentId } : {};
 }
@@ -615,13 +606,6 @@ async function listSessions(
   return result;
 }
 
-async function loadCurrentSession(
-  context: SlashCommandContext,
-  sessionKey: string,
-): Promise<GatewaySessionRow | undefined> {
-  return (await loadCurrentSessionState(context, sessionKey)).session;
-}
-
 async function loadCurrentSessionState(
   context: SlashCommandContext,
   sessionKey: string,
@@ -668,7 +652,7 @@ function resolveCurrentSession(
   const aliases = normalizedSessionKey
     ? resolveEquivalentSessionKeys(normalizedSessionKey, currentAgentId)
     : new Set<string>();
-  return sessions?.sessions?.find((session: GatewaySessionRow) => {
+  return sessions?.sessions?.find((session) => {
     const key = normalizeOptionalLowercaseString(session.key);
     return key ? aliases.has(key) : false;
   });
@@ -687,9 +671,8 @@ async function loadModelCommandState(
       ? Promise.resolve(modelCatalog)
       : loadModelCatalog(client, { agentId, sessionKey }).then((result) => result.models),
   ]);
-  const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {
-    ...state,
+    ...resolveCommandSessionState(context, sessionKey, sessions),
     models,
   };
 }

@@ -5,8 +5,7 @@ import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent
 import { truncateUtf16Safe } from "../../utils.js";
 
 export function resolveSubagentLabel(entry: SubagentRunRecord, fallback = "subagent") {
-  const raw = normalizeOptionalString(entry.label) || normalizeOptionalString(entry.task) || "";
-  return raw || fallback;
+  return normalizeOptionalString(entry.label) ?? normalizeOptionalString(entry.task) ?? fallback;
 }
 
 export function formatRunLabel(entry: SubagentRunRecord, options?: { maxLength?: number }) {

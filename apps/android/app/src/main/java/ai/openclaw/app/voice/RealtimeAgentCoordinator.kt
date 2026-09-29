@@ -1,5 +1,6 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.asJsonStringOrNull
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -168,7 +169,7 @@ internal class RealtimeAgentCoordinator(
           job.invokeOnCompletion {
             supervisor.cancel()
             synchronized(lock) { correlationJobs.remove(job) }
-            finishPending(pendingCall).unhandled.forEach(onUnhandledCompletion)
+            finishPending(pendingCall)
           }
           val shouldStart =
             synchronized(lock) {
@@ -259,16 +260,14 @@ internal class RealtimeAgentCoordinator(
         }
       val response = requestGateway("talk.client.toolCall", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
       val ack = runCatching { json.parseToJsonElement(response) as? JsonObject }.getOrNull()
-      val runId = ack?.get("runId").asStringOrNull()
+      val runId = ack?.get("runId").asJsonStringOrNull()
       if (runId.isNullOrBlank()) {
-        val finish = finishPending(pendingCall)
-        finish.unhandled.forEach(onUnhandledCompletion)
-        if (finish.canSubmitError) submitError(session, callId, "tool call returned no run id")
+        if (finishPending(pendingCall)) submitError(session, callId, "tool call returned no run id")
         return
       }
       // Stable v2026.8.1 Gateways omit the target; newer ACKs own chat correlation
       // while the original session key continues to identify the voice relay.
-      val run = RealtimeAgentRun(callId, session, ack?.get("agentSessionKey").asStringOrNull() ?: session.sessionKey)
+      val run = RealtimeAgentRun(callId, session, ack?.get("agentSessionKey").asJsonStringOrNull() ?: session.sessionKey)
       if (!isPending(pendingCall)) {
         synchronized(lock) { retireRunLocked(runId) }
         return
@@ -325,16 +324,12 @@ internal class RealtimeAgentCoordinator(
         dispatchCompletion(run, registration.completion)
       }
     } catch (err: TimeoutCancellationException) {
-      val finish = finishPending(pendingCall)
-      finish.unhandled.forEach(onUnhandledCompletion)
-      if (finish.canSubmitError) submitError(session, callId, "tool call timed out")
+      if (finishPending(pendingCall)) submitError(session, callId, "tool call timed out")
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
       val message = err.message ?: "tool call failed"
-      val finish = finishPending(pendingCall)
-      finish.unhandled.forEach(onUnhandledCompletion)
-      if (finish.canSubmitError) {
+      if (finishPending(pendingCall)) {
         onError(session, "realtime toolCall failed: $message")
         submitError(session, callId, message)
       }
@@ -351,13 +346,13 @@ internal class RealtimeAgentCoordinator(
       val text =
         argsObject
           ?.get("text")
-          .asStringOrNull()
+          .asJsonStringOrNull()
           ?.trim()
           .orEmpty()
       val mode =
         argsObject
           ?.get("mode")
-          .asStringOrNull()
+          .asJsonStringOrNull()
           ?.trim()
           ?.takeIf(String::isNotEmpty)
       val params =
@@ -490,14 +485,18 @@ internal class RealtimeAgentCoordinator(
     return drainUnclaimedCompletionsLocked()
   }
 
-  private fun finishPending(call: RealtimeAgentPendingCall): RealtimeAgentPendingFinish =
-    synchronized(lock) {
-      val removed = pendingCalls.remove(call)
-      RealtimeAgentPendingFinish(
-        canSubmitError = removed && !call.failed && activeSession == call.session,
-        unhandled = if (removed) drainUnclaimedCompletionsLocked() else emptyList(),
-      )
-    }
+  private fun finishPending(call: RealtimeAgentPendingCall): Boolean {
+    val finish =
+      synchronized(lock) {
+        val removed = pendingCalls.remove(call)
+        RealtimeAgentPendingFinish(
+          canSubmitError = removed && !call.failed && activeSession == call.session,
+          unhandled = if (removed) drainUnclaimedCompletionsLocked() else emptyList(),
+        )
+      }
+    finish.unhandled.forEach(onUnhandledCompletion)
+    return finish.canSubmitError
+  }
 
   private fun drainUnclaimedCompletionsLocked(): List<RealtimeAgentUnhandledCompletion> {
     val ready = earlyCompletions.filterValues { completion -> completion.pendingCalls.none(::isPendingLocked) }
@@ -544,5 +543,3 @@ private fun RealtimeAgentCompletion.toUnhandled(runId: String) =
     state = state,
     message = message,
   )
-
-private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content

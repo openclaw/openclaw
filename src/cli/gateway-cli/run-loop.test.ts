@@ -4,10 +4,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createTempDirTracker,
-  useAutoCleanupTempDirTracker,
-} from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import type { GatewayServer, GatewayStartupOperation } from "../../gateway/server-public.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
@@ -22,7 +19,10 @@ import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
 import { registerHostedUpdateStopTests } from "./run-loop-hosted-stop.test-support.js";
 import { registerGatewayRequestTests } from "./run-loop-request.test-support.js";
 import { registerShutdownBudgetTests } from "./run-loop-shutdown-budget.test-support.js";
-import { registerShutdownCompletionTests } from "./run-loop-shutdown-completion.test-support.js";
+import {
+  registerGracefulGatewayShutdownTest,
+  registerShutdownCompletionTests,
+} from "./run-loop-shutdown-completion.test-support.js";
 import { registerGatewayStartupFailureTests } from "./run-loop-startup.test-support.js";
 import { registerUpdateRespawnTests } from "./run-loop-update-respawn.test-support.js";
 import {
@@ -1123,79 +1123,14 @@ describe("runGatewayLoop", () => {
 
   registerGatewayStartupFailureTests();
 
-  it("exits 0 on SIGTERM after graceful close", async () => {
-    vi.clearAllMocks();
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, runtime, exited } = await createSignaledLoopHarness();
-      let finishLocalServiceStop: (() => void) | undefined;
-      const localServiceStopStarted = new Promise<void>((resolveStarted) => {
-        stopManagedProviderLocalServices.mockImplementationOnce(
-          () =>
-            new Promise<void>((resolveStop) => {
-              finishLocalServiceStop = resolveStop;
-              resolveStarted();
-            }),
-        );
-      });
-      hasManagedProviderLocalServices.mockReturnValueOnce(true);
-      const sigterm = captureSignal("SIGTERM");
-      const { emitDiagnosticsTimelineEvent, flushDiagnosticsTimeline } =
-        await import("../../infra/diagnostics-timeline.js");
-      const tempDirs = createTempDirTracker();
-      const timelinePath = join(tempDirs.make("openclaw-gateway-stop-"), "timeline.jsonl");
-      let timelineAtLogFlush: string | undefined;
-      close.mockImplementationOnce(async () => {
-        emitDiagnosticsTimelineEvent(
-          { type: "mark", name: "gateway.stop" },
-          {
-            env: {
-              OPENCLAW_DIAGNOSTICS: "timeline",
-              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
-            },
-          },
-        );
-      });
-      flushLogger.mockImplementationOnce(async () => {
-        expect(runtime.exit).not.toHaveBeenCalled();
-        timelineAtLogFlush = existsSync(timelinePath)
-          ? readFileSync(timelinePath, "utf8")
-          : undefined;
-      });
-
-      try {
-        sigterm();
-        await localServiceStopStarted;
-
-        expect(close).toHaveBeenCalledWith({
-          reason: "gateway stopping",
-          restartExpectedMs: null,
-        });
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(flushLogger).not.toHaveBeenCalled();
-        if (!finishLocalServiceStop) {
-          throw new Error("managed local service stop did not start");
-        }
-        finishLocalServiceStop();
-
-        await expect(exited).resolves.toBe(0);
-        expect(start).toHaveBeenCalledWith({
-          processStartedAt: expect.any(Number),
-          startupStartedAt: expect.any(Number),
-          requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
-          hostLifecycle: expect.objectContaining({ request: expect.any(Function) }),
-          startupOperation: expect.any(Function),
-        });
-        expect(runtime.exit).toHaveBeenCalledWith(0);
-        expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
-        expect(flushLogger).toHaveBeenCalledOnce();
-        expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
-        expect(armShutdownHardExitWatchdog).not.toHaveBeenCalled();
-      } finally {
-        flushDiagnosticsTimeline();
-        tempDirs.cleanup();
-      }
-    });
+  registerGracefulGatewayShutdownTest({
+    acquireGatewayLock,
+    createSignaledLoopHarness,
+    hasManagedProviderLocalServices,
+    stopManagedProviderLocalServices,
+    flushLogger,
+    requestGatewayRestartWithSignalAdmission,
+    armShutdownHardExitWatchdog,
   });
 
   it("passes the process origin to the initial startup only", async () => {
@@ -2450,8 +2385,10 @@ describe("runGatewayLoop", () => {
     await withIsolatedSignals(async ({ captureSignal }) => {
       const close = vi.fn(async () => {});
       const startupNeverReturns = new Promise<void>(() => {});
+      const started = createDeferredCore();
       const { runtime, exited } = createRuntimeWithExitSignal();
       const start = vi.fn(async () => {
+        started.resolve();
         await startupNeverReturns;
         return createGatewayServer(close);
       });
@@ -2461,7 +2398,7 @@ describe("runGatewayLoop", () => {
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
       });
-      await waitForLoopTurn();
+      await started.promise;
       const restartSignal = captureSignal("SIGUSR2");
       const sigint = captureSignal("SIGINT");
 
@@ -2476,6 +2413,9 @@ describe("runGatewayLoop", () => {
       await expect(exited).resolves.toBe(0);
       expect(close).not.toHaveBeenCalled();
       expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
+      await expect(
+        gatewayWorkAdmissionActual.runWithGatewayIndependentRootWorkAdmission(async () => {}),
+      ).rejects.toThrow("Gateway is shutting down. Please try again once it is back online.");
       expect(start).toHaveBeenCalledTimes(1);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(1);
       expect(gatewayLog.info).toHaveBeenCalledWith(

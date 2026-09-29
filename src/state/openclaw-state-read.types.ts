@@ -482,7 +482,7 @@ export type OpenClawStateReadReply = (
       error: OpenClawStateWorkerErrorPayload | undefined;
     }
 ) & {
-  /** A best-effort admission read completed without confirmed native cleanup. */
+  /** Native cleanup requires worker exit, possibly after a successful read. */
   nativeCleanupFailure?: { error: OpenClawStateWorkerErrorPayload | undefined };
 };
 

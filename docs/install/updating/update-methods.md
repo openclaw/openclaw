@@ -75,6 +75,21 @@ so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for
 source changes; the live checkout's workspace settings are preserved.
 
+Before activating a package or Git update, the updater also checks discoverable
+managed Gateways that share the physical installation. An observed live sibling
+blocks the update before the selected Gateway is stopped; the updater checks again
+at publication. Stop the sibling through its own service manager or exact Startup entry,
+then retry. The updater does not stop or restart sibling services. Package
+`--no-restart` still permits the selected service to keep running, but that
+exception does not cover another service or Startup entry using the same files.
+The Gateway's installation-change watcher can still restart it. If update Doctor
+maintenance stops the selected service, finalization restores the matching service
+and reports the maintenance restart, including with `--no-restart`. If its current
+identity cannot be inspected, recovery remains pending.
+This is a check of observed consumers, not a lock against new service starts;
+unavailable inspection does not prove that the installation has no consumers.
+Already-running older updaters retain their own activation and finalization behavior.
+
 For package installs with an owned managed Bun Gateway at a different root,
 `openclaw update` targets the Gateway's package root and leaves the invoking CLI
 installation unchanged. It validates the service's actual Bun executable for
@@ -109,7 +124,9 @@ openclaw gateway start
 
 Stop every listed sibling before building and start each one afterward. Preserve
 its profile and custom service overrides, or use the matching native service
-commands. A Startup-only sibling must be stopped using the exact Startup-file
+commands. For a listed launchd job, use its named domain, job, and loaded plist
+to select those controls; the profile name alone can identify a different definition.
+A Startup-only sibling must be stopped using the exact Startup-file
 guidance and restarted through that same Startup entry; updating the selected
 service cannot stop that sibling. Start services only after the build succeeds.
 If this checkout's built runtime is missing and the CLI cannot run, use those
@@ -130,8 +147,9 @@ Discovery uses installed service definitions and the invoking service selector.
 A bare systemd template is checked for the current OS account. Other active
 template instances without an installed instance definition or an explicit
 selector are not enumerated. Stop those instances with their native service
-commands before building. System LaunchDaemon runtime inspection is also outside
-this check.
+commands before building. Discovered macOS LaunchDaemons are inspected in the
+`system` domain; global LaunchAgents remain in the invoking user’s GUI domain.
+This observation does not grant the updater control of a system LaunchDaemon.
 
 Teams running a gateway directly from a git checkout on a server can update it
 with `scripts/update-gateway.sh` from inside that checkout. It is the reference

@@ -92,6 +92,7 @@ it("attributes a NOCOW physical replacement to the retained Doctor maintenance i
   expect(rewrite).toHaveBeenCalledOnce();
   expect(maintenance!.databaseWrites).toEqual({
     unchanged: true,
+    fromGenerations: generations,
     generations: readUpdateDatabaseGenerations([pathname]),
   });
   expect(maintenance!.databaseWrites?.generations[pathname]).not.toBe(generations[pathname]);

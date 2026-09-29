@@ -1,72 +1,23 @@
-import type { DatabaseSync } from "node:sqlite";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
-import {
-  inspectNewerRecoveryHistory,
-  inspectUpdateRunAbandonment,
-  needsPostCoreRepair,
-} from "./update-run-activity.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { inspectNewerRecoveryHistory, needsPostCoreRepair } from "./update-run-activity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import {
   canReconcileUpdateRunCandidates,
-  decodeRun,
-  hasStoredUpdateRecovery,
   readUpdateRunRecord,
   readUpdateRuns,
 } from "./update-run-read.kernel.js";
+import { inspectUpdateRunReconciliation } from "./update-run-reconciliation.read.js";
 import type {
-  UpdateRunReconciliationCandidate,
-  UpdateRunReconciliationInput,
   UpdateRunReconciliationOperations,
   UpdateRunReconciliationResult,
 } from "./update-run-reconciliation.types.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
-import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 import { persistRun, updateRunLedgerSchema as schema, upsertStep } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
-
-export function inspectUpdateRunReconciliation(
-  db: DatabaseSync,
-  record: UpdateRunRecord,
-  input: UpdateRunReconciliationInput,
-): UpdateRunReconciliationCandidate {
-  return {
-    record,
-    rule: hasStoredUpdateRecovery(db, record.runId)
-      ? undefined
-      : inspectUpdateRunAbandonment(record, input),
-  };
-}
-
-export function readUpdateRunReconciliationCandidates(
-  db: DatabaseSync,
-  input: UpdateRunReconciliationInput,
-): UpdateRunReconciliationCandidate[] {
-  if (!tableExists(db, "update_runs")) {
-    return [];
-  }
-  let query = getNodeSqliteKysely<LedgerDatabase>(db)
-    .selectFrom("update_runs")
-    .selectAll()
-    .where("status", "=", "running");
-  if (!input.explicit) {
-    query = query.where("updated_at_ms", "<", Date.now() - ABANDONED_UPDATE_RUN_MS);
-  }
-  if (input.runIds) {
-    query = query.where("run_id", "in", [...input.runIds]);
-  }
-  return executeSqliteQuerySync(db, query.orderBy("run_id")).rows.map((row) =>
-    inspectUpdateRunReconciliation(db, decodeRun(row), input),
-  );
-}
 
 export function reconcileUpdateRunCandidatesInWorker(
   command: UpdateRunReconciliationOperations["updateRuns.reconcile"]["input"],

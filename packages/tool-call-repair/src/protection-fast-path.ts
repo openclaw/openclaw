@@ -24,10 +24,6 @@ export function createProtectionScanState(): ProtectionScanState {
   };
 }
 
-export function cloneProtectionScanState(state: ProtectionScanState): ProtectionScanState {
-  return { ...state };
-}
-
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
 /** Blank means spaces and tabs only; Unicode spaces do not end a Markdown block. */
 const BLANK_LINE = /^[ \t]*$/;
@@ -122,7 +118,7 @@ export function resolveProtectionFastPath(
   if (BARE_CARRIAGE_RETURN.test(incoming)) {
     return undefined;
   }
-  const state = cloneProtectionScanState(carried);
+  const state = { ...carried };
   const lineStarts: Array<[start: number, isProtected: boolean]> = [];
   let index = 0;
   for (;;) {
@@ -146,7 +142,7 @@ export function resolveProtectionFastPath(
       // An unfinished line can still acquire code ownership.
       return undefined;
     } else {
-      const probe = cloneProtectionScanState(state);
+      const probe = { ...state };
       applyLine(probe, line);
       if (probe.paragraphAmbiguous || probe.structuralUnknown) {
         return undefined;

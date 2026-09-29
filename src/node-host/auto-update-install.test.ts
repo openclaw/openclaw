@@ -6,6 +6,7 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { UpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
+import * as tmpOpenClawDir from "../infra/tmp-openclaw-dir.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -131,6 +132,7 @@ describe("Bun private node runtime installation", () => {
     }
     Object.defineProperty(process, "platform", { value: platform });
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -222,8 +224,12 @@ describe("Bun private node runtime installation", () => {
   });
 
   it("keeps npm metadata and packing on Windows under Bun", async () => {
-    Object.defineProperty(process, "platform", { value: "win32" });
     const stateDir = tempDirs.make("openclaw-node-bun-windows-");
+    // Simulating Windows must not change the host filesystem's temp-path semantics.
+    vi.spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      tempDirs.make("openclaw-node-bun-windows-tmp-"),
+    );
+    Object.defineProperty(process, "platform", { value: "win32" });
     mocks.pack.mockResolvedValue({ ok: false, error: "synthetic npm pack failure" });
     await expect(prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir })).rejects.toThrow(
       "synthetic npm pack failure",

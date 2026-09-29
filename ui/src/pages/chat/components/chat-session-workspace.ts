@@ -7,7 +7,6 @@ import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifa
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
-import { patchSettings, type ChatWorkspaceDock } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
@@ -379,18 +378,6 @@ function toggleSessionWorkspace(state: SessionWorkspaceHost) {
   state.requestUpdate?.();
 }
 
-function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspaceDock) {
-  const workspace = getSessionWorkspace(state);
-  if (workspace.dock !== dock) {
-    workspace.dock = dock;
-    if (state.settings) {
-      state.settings = { ...state.settings, chatWorkspaceDock: dock };
-    }
-    patchSettings({ chatWorkspaceDock: dock });
-  }
-  state.requestUpdate?.();
-}
-
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
   const workspace = getSessionWorkspace(state);
   clearWorkspaceTimer(workspace);
@@ -474,7 +461,6 @@ function openArtifact(
 export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
   options?: {
-    narrowLayout?: boolean;
     draftScope?: string;
     draftContext?: SessionWorkspaceHost["sessionWorkspaceDraftContext"];
     expanded?: boolean;
@@ -511,8 +497,6 @@ export function createSessionWorkspaceProps(
     loading: workspace.loading,
     error: workspace.error,
     activeId: workspace.activeId,
-    dock: workspace.dock,
-    narrowLayout: options?.narrowLayout === true,
     filter: workspace.filter,
     browserPath: workspace.browserPath,
     browserSearch: workspace.browserSearch,
@@ -521,7 +505,6 @@ export function createSessionWorkspaceProps(
       state.requestUpdate?.();
     },
     onToggleCollapsed: () => toggleSessionWorkspace(state),
-    onSetDock: (dock) => setSessionWorkspaceDock(state, dock),
     onRefresh: () => loadSessionWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceTimer(workspace);
@@ -571,6 +554,8 @@ export function resolveSessionDiffSidebarContent(
     isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
   const content: SidebarContent = {
     kind: "session-diff",
+    // Checkout retirement replaces this identity; ordinary refreshes retain it.
+    owner: workspace,
     load: async (scope) => {
       if (!client) {
         throw new Error(t("chat.sessionDiff.disconnected"));

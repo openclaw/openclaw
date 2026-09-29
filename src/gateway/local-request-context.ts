@@ -30,6 +30,7 @@ import {
   readPreparedGatewayModelCatalogBatch,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "./server-model-catalog.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -108,6 +109,8 @@ function createLocalGatewayRequestContext(
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    resolveSessionRequestTargets: (request) =>
+      resolveSessionRequestTargets({ ...request, context }),
     // Embedded calls have no running Gateway application owner.
     isConfigReloadSettled: () => false,
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
