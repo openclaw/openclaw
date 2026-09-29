@@ -29,7 +29,6 @@ import {
   type DraftCloudProfile,
   type DraftEnvironment,
 } from "./discovery.ts";
-import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { renderPickerLabel } from "./picker-label.ts";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 
@@ -169,34 +168,38 @@ function renderEnvironmentHeading(
   </div>`;
 }
 
-export function renderWhereChip(
-  params: ReturnType<DraftPlaceBrowser["popoverCallbacks"]> & {
-    idPrefix?: string;
-    autoPlacementMode?: "least-busy" | "eligible-order";
-    state: WhereChipState;
-    gatewayName: string;
-    environmentQuery: string;
-    onEnvironmentQueryInput: (query: string) => void;
-    cloudProfileId: string;
-    machineClass?: string;
-    os?: string;
-    deviceId: string;
-    autoDevice?: boolean;
-    cloudDisabledReason?: string;
-    cloudProfileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
-    submitting: boolean;
-    pendingPlacement: boolean;
-    isAdmin: boolean;
-    catalogLoading?: boolean;
-    onSelectDevice: (deviceId: string) => void;
-    onSelectAutoDevice: () => void;
-    onSelectCloudProfile: (profileId: string, useDefaults?: boolean) => void;
-    onSelectCloudOs?: (osId: string) => void;
-    onSelectCloudMachine?: (machineId: string) => void;
-    onConnectMachine: () => void;
-    onManageCloudWorkers: () => void;
-  },
-) {
+export function renderWhereChip(params: {
+  idPrefix?: string;
+  autoPlacementMode?: "least-busy" | "eligible-order";
+  state: WhereChipState;
+  gatewayName: string;
+  environmentQuery: string;
+  onEnvironmentQueryInput: (query: string) => void;
+  cloudProfileId: string;
+  machineClass?: string;
+  os?: string;
+  deviceId: string;
+  autoDevice?: boolean;
+  cloudDisabledReason?: string;
+  cloudProfileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
+  submitting: boolean;
+  pendingPlacement: boolean;
+  popoverOpen: boolean;
+  popoverHiding: boolean;
+  isAdmin: boolean;
+  catalogLoading?: boolean;
+  onGuardTransition: (event: MouseEvent) => void;
+  onPopoverShow: () => void;
+  onPopoverHide: () => void;
+  onPopoverAfterHide: () => void;
+  onSelectDevice: (deviceId: string) => void;
+  onSelectAutoDevice: () => void;
+  onSelectCloudProfile: (profileId: string, useDefaults?: boolean) => void;
+  onSelectCloudOs?: (osId: string) => void;
+  onSelectCloudMachine?: (machineId: string) => void;
+  onConnectMachine: () => void;
+  onManageCloudWorkers: () => void;
+}) {
   const cloudPresentation = resolveCloudProfileIcon(
     params.state.cloudProfiles.find((profile) => profile.id === params.cloudProfileId),
   );

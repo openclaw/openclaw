@@ -7,7 +7,6 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { renderSessionMenuItem } from "./cloud-target.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftBranches } from "./discovery.ts";
-import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { renderPickerLabel } from "./picker-label.ts";
 
 registerNewSessionSetupEnglish();
@@ -310,28 +309,32 @@ function renderWorktreeFields(params: {
   `;
 }
 
-export function renderCheckoutChip(
-  params: ReturnType<DraftPlaceBrowser["popoverCallbacks"]> & {
-    idPrefix?: string;
-    state: CheckoutChipState;
-    remotePlacement: boolean;
-    repository?: boolean;
-    folderLabel: string;
-    worktree: boolean;
-    worktreeAvailable: boolean;
-    repositoryUnavailable?: boolean;
-    branches: DraftBranches | null;
-    branchesLoading: boolean;
-    baseRef: string;
-    worktreeName: string;
-    submitting: boolean;
-    pendingPlacement: boolean;
-    onSelectWorktree: (value: boolean) => void;
-    onBaseRefInput: (baseRef: string) => void;
-    onWorktreeNameInput: (name: string) => void;
-    onConfirm: () => void;
-  },
-) {
+export function renderCheckoutChip(params: {
+  idPrefix?: string;
+  state: CheckoutChipState;
+  remotePlacement: boolean;
+  repository?: boolean;
+  folderLabel: string;
+  worktree: boolean;
+  worktreeAvailable: boolean;
+  repositoryUnavailable?: boolean;
+  branches: DraftBranches | null;
+  branchesLoading: boolean;
+  baseRef: string;
+  worktreeName: string;
+  submitting: boolean;
+  pendingPlacement: boolean;
+  popoverOpen: boolean;
+  popoverHiding: boolean;
+  onGuardTransition: (event: MouseEvent) => void;
+  onPopoverShow: () => void;
+  onPopoverHide: () => void;
+  onPopoverAfterHide: () => void;
+  onSelectWorktree: (value: boolean) => void;
+  onBaseRefInput: (baseRef: string) => void;
+  onWorktreeNameInput: (name: string) => void;
+  onConfirm: () => void;
+}) {
   return html`
     <span class="new-session-page__select">
       <button

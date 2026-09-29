@@ -3,19 +3,23 @@
 // derive from this walk, so a gate cannot block silently.
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
 import * as catalog from "./catalog-target.ts";
-import { isWorktreeNameValid } from "./create-params.ts";
+import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import { resolveDraftSessionPlacement } from "./draft-session-placement.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
-import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
-import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
+import type {
+  PendingSessionPlacementRecoveryState,
+  SubmissionOutcomeReason,
+} from "./session-placement-recovery-state.ts";
 import { readNewSessionTerminalStartAccess } from "./terminal-start.ts";
 
 registerNewSessionSetupEnglish();
@@ -121,10 +125,26 @@ export function requiresNewSessionModelSetup(options: {
   });
 }
 
+// The flow consumes these gates; keep their read contract independent of its class.
+type SubmitGateDraft = {
+  readonly pendingPlacement: PendingSessionPlacementRecoveryState;
+  readonly message: string;
+  readonly submissionOutcomeUnknown: SubmissionOutcomeReason | null;
+  readonly mentions: readonly HumanMention[];
+  readonly visibility: NewSessionVisibility;
+  readonly attachmentDraft: {
+    readonly pendingReads: number;
+    readonly attachments: readonly ChatAttachment[];
+  };
+  readonly capabilities: { readonly toolOverrides: SessionToolOverrides | null };
+  requiresModelSetup(): boolean;
+  submissionAccess(): SessionMethodAccess;
+};
+
 export function resolveNewSessionSubmitBlock(
   gateway: DraftGatewayState,
   place: DraftPlaceState,
-  draft: DraftSubmissionFlow,
+  draft: SubmitGateDraft,
   snapshot: DraftSubmissionSnapshot,
 ): NewSessionSubmitBlock | undefined {
   const kind = catalog.isTarget(snapshot.data) ? "terminal" : "session";
@@ -301,7 +321,7 @@ export function resolveNewSessionSubmitBlock(
 
 // Last so an empty draft never masks a reasoned gate in the tooltip.
 function emptyDraftBlock(
-  draft: DraftSubmissionFlow,
+  draft: SubmitGateDraft,
   kind: "session" | "terminal",
   pendingPlacementActive: boolean,
 ): NewSessionSubmitBlock | undefined {
