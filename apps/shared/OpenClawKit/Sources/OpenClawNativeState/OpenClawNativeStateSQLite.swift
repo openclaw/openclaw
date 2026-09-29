@@ -1,5 +1,8 @@
 import Foundation
 import SQLite3
+#if canImport(Darwin)
+import Darwin
+#endif
 
 public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
     public let message: String
@@ -37,7 +40,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 /// One recursive connection lock serializes transactions and statement access.
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 15
+    private static let maximumSupportedSchemaVersion: Int64 = 19
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {
@@ -200,6 +203,8 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     ]
 
     private let databaseURL: URL
+    private let admission: OpenClawNativeStateAdmission
+    private let databaseIdentity: OpenClawNativeStateAdmission.DatabaseIdentity
     fileprivate let database: OpaquePointer
     fileprivate let connectionLock = NSRecursiveLock()
 
@@ -209,6 +214,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         createIfMissing: Bool = true) throws
     {
         self.databaseURL = databaseURL
+        self.admission = try OpenClawNativeStateAdmission(databaseURL: databaseURL)
         if createIfMissing {
             try Self.secureDirectory(databaseURL.deletingLastPathComponent())
         }
@@ -226,19 +232,34 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             if !initializationSucceeded { sqlite3_close(database) }
         }
         self.database = database
+        try OpenClawNativeStateAdmission.assertDatabaseHasNotMoved(database)
+        self.databaseIdentity = try OpenClawNativeStateAdmission.databaseIdentity(at: databaseURL)
+        try self.admission.assertAvailable()
         let timeout = busyTimeoutMilliseconds > 0
             ? busyTimeoutMilliseconds
             : Self.defaultBusyTimeoutMilliseconds
         guard sqlite3_busy_timeout(database, timeout) == SQLITE_OK else {
             throw self.databaseError(operation: "configure SQLite busy timeout")
         }
+        try self.admission.assertAvailable()
+        try self.assertCurrentDatabase()
         try Self.secureDatabaseFiles(databaseURL)
         initializationSucceeded = true
     }
 
     deinit {
+        let sourceIsCurrent = (try? self.assertCurrentDatabase()) != nil
         sqlite3_close(self.database)
-        try? Self.secureDatabaseFiles(self.databaseURL)
+        if sourceIsCurrent,
+           (try? self.admission.assertAvailable()) != nil,
+           (try? OpenClawNativeStateAdmission.databaseIdentity(at: self.databaseURL)) == self.databaseIdentity
+        {
+            try? Self.secureDatabaseFiles(self.databaseURL)
+        }
+    }
+
+    public static func assertNoOfflineMaintenance(databaseURL: URL) throws {
+        _ = try OpenClawNativeStateAdmission(databaseURL: databaseURL)
     }
 
     public var changes: Int32 {
@@ -250,12 +271,15 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             try self.execute("BEGIN IMMEDIATE")
             var committed = false
             defer {
-                if !committed { try? self.execute("ROLLBACK") }
+                if !committed { sqlite3_exec(self.database, "ROLLBACK", nil, nil, nil) }
             }
             let value = try body()
+            // Protect journal/WAL files while the write transaction still excludes removal.
+            try self.withCurrentDatabase {
+                try Self.secureDatabaseFiles(self.databaseURL)
+            }
             try self.execute("COMMIT")
             committed = true
-            try Self.secureDatabaseFiles(self.databaseURL)
             return value
         }
     }
@@ -303,7 +327,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     }
 
     public func prepare(_ sql: String) throws -> OpenClawNativeStateSQLiteStatement {
-        try self.withConnectionLock {
+        try self.withCurrentDatabase {
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(self.database, sql, -1, &statement, nil) == SQLITE_OK,
                   let statement
@@ -315,7 +339,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     }
 
     public func execute(_ sql: String) throws {
-        try self.withConnectionLock {
+        try self.withCurrentDatabase {
             var errorMessage: UnsafeMutablePointer<CChar>?
             let result = sqlite3_exec(self.database, sql, nil, nil, &errorMessage)
             guard result == SQLITE_OK else {
@@ -380,6 +404,21 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         self.connectionLock.lock()
         defer { self.connectionLock.unlock() }
         return try body()
+    }
+
+    fileprivate func withCurrentDatabase<T>(_ body: () throws -> T) throws -> T {
+        try self.withConnectionLock {
+            try self.admission.assertAvailable()
+            try self.assertCurrentDatabase()
+            return try body()
+        }
+    }
+
+    fileprivate func assertCurrentDatabase() throws {
+        try OpenClawNativeStateAdmission.assertDatabaseHasNotMoved(self.database)
+        guard try OpenClawNativeStateAdmission.databaseIdentity(at: self.databaseURL) == self.databaseIdentity else {
+            throw OpenClawNativeStateError("Native state database was replaced; reopen it before use")
+        }
     }
 
     private static func descriptor(_ table: OpenClawNativeStateCanonicalTable) -> CanonicalTable {
@@ -504,14 +543,14 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         #if os(iOS) || os(watchOS)
         attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
         #endif
-        try fileManager.setAttributes(attributes, ofItemAtPath: url.path)
+        try self.setPrivateAttributes(attributes, atPath: url.path)
     }
 
     static func secureDatabaseFiles(
         _ databaseURL: URL,
         fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
         setAttributes: ([FileAttributeKey: Any], String) throws -> Void = {
-            try FileManager.default.setAttributes($0, ofItemAtPath: $1)
+            try OpenClawNativeStateSQLite.setPrivateAttributes($0, atPath: $1)
         }) throws
     {
         for (url, isTransient) in [
@@ -532,6 +571,71 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
                 continue
             }
         }
+    }
+
+    private static func setPrivateAttributes(_ attributes: [FileAttributeKey: Any], atPath path: String) throws {
+        try FileManager.default.setAttributes(attributes, ofItemAtPath: path)
+        #if canImport(Darwin)
+        guard let security = filesec_init() else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { filesec_free(security) }
+        // Do not open and close another database descriptor: that can release SQLite's POSIX locks.
+        var metadata = stat()
+        guard statx_np(path, &metadata, security) == 0 else {
+            if errno == ENOTSUP || errno == EOPNOTSUPP { return }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard metadata.st_uid == geteuid() else { return }
+        var storedACL: acl_t?
+        guard filesec_get_property(security, FILESEC_ACL, &storedACL) == 0 else {
+            // Unlike a failed stat, a missing ACL property means the existing object has no ACL.
+            if errno == ENOENT || errno == ENOTSUP || errno == EOPNOTSUPP { return }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard let acl = storedACL else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EINVAL))
+        }
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        var flags: acl_flagset_t?
+        guard acl_get_flagset_np(UnsafeMutableRawPointer(acl), &flags) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        let hasFlags = acl_get_flag_np(flags, acl_flag_t(rawValue: .max))
+        guard hasFlags >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        // Empty ACLs can lose their ACL-level inheritance flags when persisted.
+        guard hasFlags == 0 else { return }
+
+        // Mixed ACLs can depend on allow-before-deny ordering, even for the owner.
+        var index: Int32 = 0
+        while true {
+            var entry: acl_entry_t?
+            guard acl_get_entry(acl, index, &entry) == 0 else {
+                guard errno == EINVAL else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+                break
+            }
+            var tag = ACL_UNDEFINED_TAG
+            guard acl_get_tag_type(entry, &tag) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            guard tag == ACL_EXTENDED_ALLOW else { return }
+            index += 1
+        }
+        guard index > 0 else { return }
+        for _ in 0..<index {
+            var entry: acl_entry_t?
+            guard acl_get_entry(acl, 0, &entry) == 0, acl_delete_entry(acl, entry) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        }
+        if acl_set_file(path, ACL_TYPE_EXTENDED, acl) != 0, errno != ENOTSUP, errno != EOPNOTSUPP {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        #endif
     }
 
     private static func isMissingFileError(_ error: Error) -> Bool {
@@ -558,10 +662,14 @@ public final class OpenClawNativeStateSQLiteStatement {
     }
 
     public func step() throws -> OpenClawNativeStateSQLiteStep {
-        try self.connection.withConnectionLock {
+        try self.connection.withCurrentDatabase {
             switch sqlite3_step(self.statement) {
-            case SQLITE_ROW: .row
-            case SQLITE_DONE: .done
+            case SQLITE_ROW:
+                try self.connection.assertCurrentDatabase()
+                return .row
+            // SQLITE_DONE may have committed and released the last file lock.
+            // Later removal must not turn that durable receipt into a failed write.
+            case SQLITE_DONE: return .done
             default: throw self.connection.databaseError(operation: "step SQLite statement")
             }
         }

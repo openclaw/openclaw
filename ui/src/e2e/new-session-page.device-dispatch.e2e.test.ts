@@ -24,7 +24,7 @@ const gitRepository = {
 };
 
 suite.define(() => {
-  it("spaces destination section headings consistently", async () => {
+  it("groups environments and selects Auto before named devices", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -42,6 +42,13 @@ suite.define(() => {
               sessionHost: true,
               workerSlots: { total: 2, available: 1 },
             },
+            {
+              id: "node:offline-runner",
+              type: "node",
+              label: "Offline runner",
+              status: "unavailable",
+              sessionHost: true,
+            },
           ],
           profiles: [{ id: "aws", providerId: "aws" }],
         },
@@ -53,20 +60,47 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
 
-      const headings = page.locator(
-        ".new-session-page__where-popover .new-session-page__menu-title",
-      );
+      const picker = page.locator(".new-session-page__where-popover");
+      const destinations = picker.locator(".new-session-page__environment-list");
       await expect
-        .poll(() => headings.allTextContents())
-        .toEqual(["Environments", "Your devices", "Cloud"]);
-      const spacing = await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue("--space-2").trim(),
-      );
+        .poll(() =>
+          destinations
+            .locator("[data-value]")
+            .evaluateAll((elements) =>
+              elements.map((element) => element.getAttribute("data-value")),
+            ),
+        )
+        .toEqual([
+          "auto-device",
+          "gateway",
+          "device:paired-runner",
+          "device:offline-runner",
+          "cloud:aws",
+        ]);
       expect(
-        await headings.evaluateAll((elements) =>
-          elements.map((element) => getComputedStyle(element).marginTop),
-        ),
-      ).toEqual(["0px", spacing, spacing]);
+        await picker
+          .locator(".new-session-page__environment-heading")
+          .allTextContents()
+          .then((headings) => headings.map((heading) => heading.replace(/\s+/g, " ").trim())),
+      ).toEqual(["Your devices", "Cloud"]);
+      const auto = destinations.locator('[data-value="auto-device"]');
+      expect(await auto.getAttribute("aria-pressed")).toBe("false");
+      expect(await destinations.getByRole("button", { name: /^aws(?: · .+)?$/ }).count()).toBe(1);
+      await auto.click();
+      const trigger = page.locator("#new-session-where-trigger");
+      await expect.poll(() => trigger.getAttribute("data-auto-device")).toBe("true");
+      await trigger.click();
+      await expect.poll(() => auto.getAttribute("aria-pressed")).toBe("true");
+      await destinations.locator('[data-value="device:paired-runner"]').click();
+      await expect.poll(() => trigger.getAttribute("data-device-id")).toBe("paired-runner");
+      expect(await trigger.getAttribute("data-auto-device")).toBeNull();
+      await trigger.click();
+      expect(await auto.getAttribute("aria-pressed")).toBe("false");
+      expect(
+        await destinations
+          .locator('[data-value="device:paired-runner"]')
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
     } finally {
       await context.close();
     }
@@ -97,6 +131,13 @@ suite.define(() => {
               status: "available",
               sessionHost: true,
               workerSlots: { total: 2, available: 1 },
+            },
+            {
+              id: "node:offline-runner",
+              type: "node",
+              label: "Offline runner",
+              status: "unavailable",
+              sessionHost: true,
             },
           ],
           profiles: [],
@@ -131,6 +172,7 @@ suite.define(() => {
         agentId: "main",
         message: "",
         worktree: true,
+        worktreeSource: "empty",
       });
       expect(create.params).not.toHaveProperty("execNode");
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
@@ -182,7 +224,19 @@ suite.define(() => {
         workspace: WORKSPACE,
         workspaceGit: true,
         methodResponses: {
-          "environments.list": { environments: [environment], profiles: [] },
+          "environments.list": {
+            environments: [
+              environment,
+              {
+                ...environment,
+                id: "node:offline-runner",
+                label: "Offline runner",
+                status: "available",
+                workerSlots: { total: 2, available: 0 },
+              },
+            ],
+            profiles: [],
+          },
           "sessions.create": { key: "agent:main:stale-device-capacity" },
           "worktrees.branches": gitRepository,
         },
@@ -232,10 +286,16 @@ suite.define(() => {
           suite,
           page,
           `failed-topology-${value.replace(":", "-")}.png`,
+          {
+            surface: page.locator(
+              '.new-session-page__where-popover > dialog > wa-popup > [part="popup"]',
+            ),
+            content: [selectedDevice, automaticDevice],
+          },
         );
         expect(await start.isDisabled()).toBe(true);
         expect(await selectedDevice.isDisabled()).toBe(true);
-        expect(await automaticDevice.isDisabled()).toBe(true);
+        expect(await automaticDevice.isDisabled()).toBe(value !== "auto-device");
         expect(await localDevice.isEnabled()).toBe(true);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
@@ -243,7 +303,16 @@ suite.define(() => {
         await page.clock.runFor(1);
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRefresh + 1 });
         await gateway.resolveDeferred("environments.list", {
-          environments: [{ ...environment, workerSlots: { total: 2, available: 0 } }],
+          environments: [
+            { ...environment, workerSlots: { total: 2, available: 0 } },
+            {
+              ...environment,
+              id: "node:offline-runner",
+              label: "Offline runner",
+              status: "available",
+              workerSlots: { total: 2, available: 0 },
+            },
+          ],
           profiles: [],
         });
         await expect.poll(() => start.isDisabled()).toBe(true);
@@ -322,6 +391,13 @@ suite.define(() => {
             status: "available",
             sessionHost: true,
             workerSlots: { total: 2, available: 1 },
+          },
+          {
+            id: "node:offline-runner",
+            type: "node",
+            label: "Offline runner",
+            status: "unavailable",
+            sessionHost: true,
           },
         ],
         profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -407,7 +483,7 @@ suite.define(() => {
       reason: "No worker slots are available",
     },
   ])(
-    "keeps a remembered $name blocked until Local is explicitly selected",
+    "keeps a remembered $name blocked until the user explicitly switches to Local",
     async ({ preference, status, availableSlots, attribute, value, reason }) => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -464,7 +540,11 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await where.click();
-        await page.locator('[data-value="gateway"]').click();
+        const local = page.locator('[data-value="gateway"]');
+        expect(await local.isEnabled()).toBe(true);
+        await local.click();
+        await expect.poll(() => where.getAttribute("data-auto-device")).toBeNull();
+        await expect.poll(() => where.getAttribute("data-device-id")).toBeNull();
         await expect.poll(() => start.isEnabled()).toBe(true);
         await start.click();
         await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
@@ -526,6 +606,13 @@ suite.define(() => {
               sessionHost: true,
               workerSlots: { total: 2, available: 1 },
             },
+            {
+              id: "node:offline-runner",
+              type: "node",
+              label: "Offline runner",
+              status: "unavailable",
+              sessionHost: true,
+            },
           ],
           profiles: [],
         },
@@ -573,7 +660,7 @@ suite.define(() => {
   });
 
   it.each(deviceTargets)(
-    "reloads a pending $name device create with the same placement target",
+    "reloads a pending empty-workspace create with the same $name device target",
     async ({ value, target }) => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
@@ -581,7 +668,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["sessions.create"],
         workspace: WORKSPACE,
-        workspaceGit: true,
+        workspaceGit: false,
         methodResponses: {
           "environments.list": {
             environments: [
@@ -593,10 +680,16 @@ suite.define(() => {
                 sessionHost: true,
                 workerSlots: { total: 2, available: 1 },
               },
+              {
+                id: "node:offline-runner",
+                type: "node",
+                label: "Offline runner",
+                status: "unavailable",
+                sessionHost: true,
+              },
             ],
             profiles: [],
           },
-          "worktrees.branches": gitRepository,
           "sessions.dispatch": { placement: { state: "active", generation: 1 } },
           "sessions.send": { runId: "run-device-recovery", status: "started" },
         },
@@ -610,6 +703,7 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill(message);
         await page.getByRole("button", { name: "Start session" }).click();
         const firstCreate = await gateway.waitForRequest("sessions.create");
+        expect(firstCreate.params).toMatchObject({ worktree: true, worktreeSource: "empty" });
         const sessionKey = (firstCreate.params as { key?: string }).key;
         if (!sessionKey) {
           throw new Error("expected a recoverable device create key");
@@ -627,9 +721,18 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".new-session-page__message").inputValue())
           .toBe(message);
+        await expect
+          .poll(() => page.locator("#new-session-project-trigger").textContent())
+          .toContain("New workspace");
+        expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
         await page.getByRole("button", { name: "Start session" }).click();
         const retryCreate = await gateway.waitForRequest("sessions.create");
-        expect(retryCreate.params).toMatchObject({ key: sessionKey, message: "", worktree: true });
+        expect(retryCreate.params).toMatchObject({
+          key: sessionKey,
+          message: "",
+          worktree: true,
+          worktreeSource: "empty",
+        });
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         await gateway.deferNext("sessions.dispatch");
         await gateway.resolveDeferred("sessions.create", { key: sessionKey });

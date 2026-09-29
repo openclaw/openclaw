@@ -29,7 +29,7 @@ import {
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
-import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
+import { linkOpenClawPeerDependencies, resolveOpenClawHostDependency } from "./plugin-peer-link.js";
 
 type ValidatedPackagePlugin = {
   manifest: PackageManifest;
@@ -49,7 +49,6 @@ export async function validatePackagePluginInstallSource(params: {
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
   allowSourceTypeScriptEntries?: boolean;
-  dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   trustedSourceLinkedOfficialInstall?: boolean;
   config?: OpenClawConfig;
@@ -165,7 +164,6 @@ export async function validatePackagePluginInstallSource(params: {
     ),
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         packageDir: params.packageDir,
@@ -186,6 +184,7 @@ export async function validatePackagePluginInstallSource(params: {
     return scanResult;
   }
 
+  const hostDependency = resolveOpenClawHostDependency(manifest);
   return {
     ok: true,
     plugin: {
@@ -198,7 +197,7 @@ export async function validatePackagePluginInstallSource(params: {
         ? { setup: ocManifestResult.manifest.setup }
         : {}),
       hasRuntimeDependencies: hasPackageRuntimeDependencies(manifest),
-      peerDependencies: { ...manifest.dependencies, ...manifest.peerDependencies },
+      peerDependencies: hostDependency ? { openclaw: hostDependency.spec } : {},
     },
   };
 }
@@ -273,17 +272,6 @@ export async function installPluginFromInstalledPackageDir(
     dependencyScanRootDir?: string;
   } & PackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
-  return await installPluginFromInstalledPackageDirInternal(params);
-}
-
-async function installPluginFromInstalledPackageDirInternal(
-  params: {
-    additionalDependencyPackageDirs?: string[];
-    emitSuccessSecurityEvent?: boolean;
-    packageDir: string;
-    dependencyScanRootDir?: string;
-  } & PackageInstallCommonParams,
-): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const { logger } = runtime.resolveTimedInstallModeOptions(params, defaultLogger);
   const validated = await validatePackagePluginInstallSource({
@@ -292,7 +280,6 @@ async function installPluginFromInstalledPackageDirInternal(
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,

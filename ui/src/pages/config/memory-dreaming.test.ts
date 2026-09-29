@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { renderDreamingSettings } from "./memory-dreaming.ts";
 
 function renderInto(
@@ -97,18 +98,20 @@ describe("renderDreamingSettings", () => {
     expect(selectedSegment(renderInto({ storage: { mode: "nonsense" } }))).toBe("separate");
   });
 
-  it("shows inherited values and dynamic timezone provenance", () => {
+  it("shows inherited values in placeholders without repeating default status", () => {
     const container = renderInto(null);
 
-    expect(rowFor(container, "Dreaming frequency").textContent).toContain(
-      "Using default: 0 3 * * *",
+    expect(container.textContent).not.toContain("Using default:");
+    expect(rowFor(container, "Dreaming frequency").querySelector("input")?.placeholder).toBe(
+      "0 3 * * *",
     );
-    expect(rowFor(container, "Timezone").textContent).toContain("Using default: Asia/Singapore");
+    expect(rowFor(container, "Timezone").querySelector("input")?.placeholder).toBe(
+      "Asia/Singapore",
+    );
     expect(numberInput(container, "Lookback days").placeholder).toBe("2");
-    expect(rowFor(container, "Lookback days").textContent).toContain("Using default: 2");
   });
 
-  it("shows the advanced execution model as the inherited model default", () => {
+  it("shows the advanced execution model as the inherited model default", async () => {
     const onPatch = vi.fn();
     const container = renderInto(
       {
@@ -117,10 +120,13 @@ describe("renderDreamingSettings", () => {
       },
       onPatch,
     );
+    await updatePickers(container);
     const row = rowFor(container, "Dreaming model");
 
     expect(row.textContent).toContain("Default: openai/gpt-5.6");
-    expect(row.querySelector('wa-option[value="anthropic/claude-sonnet"]')).not.toBeNull();
+    expect(
+      row.querySelector('[role="option"][data-value="anthropic/claude-sonnet"]'),
+    ).not.toBeNull();
     const custom = row.querySelector<HTMLInputElement>(".model-picker__custom");
     expect(custom?.hidden).toBe(false);
     if (custom) {
@@ -135,9 +141,7 @@ describe("renderDreamingSettings", () => {
     expect(onPatch).toHaveBeenCalledWith(["model"], undefined);
 
     const inherited = renderInto({ execution: { defaults: { model: "openai/gpt-5.6" } } });
-    expect(rowFor(inherited, "Dreaming model").textContent).toContain(
-      "Using default: openai/gpt-5.6",
-    );
+    expect(rowFor(inherited, "Dreaming model").textContent).not.toContain("Using default:");
   });
 
   it("displays runtime defaults for malformed explicit values", () => {

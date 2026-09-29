@@ -1,6 +1,5 @@
-// Msteams plugin module implements graph thread behavior.
-import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { fetchGraphJson, type GraphResponse } from "./graph.js";
+import { htmlToPlainText } from "./inbound.js";
 import type { MSTeamsRequestDeadline } from "./request-timeout.js";
 
 export type GraphThreadMessage = {
@@ -18,14 +17,7 @@ export type GraphThreadMessage = {
  * Teams wraps mentions in <at>Name</at> tags.
  */
 export function stripHtmlFromTeamsMessage(html: string): string {
-  // Preserve mention display names by replacing <at>Name</at> with @Name.
-  let text = html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1");
-  // Strip remaining HTML tags.
-  text = text.replace(/<[^>]*>/g, " ");
-  // Single-pass decoding preserves literally typed entity text such as "&lt;".
-  text = decodeHtmlEntities(text).replaceAll("\u00a0", " ");
-  // Normalize whitespace.
-  return text.replace(/\s+/g, " ").trim();
+  return htmlToPlainText(html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1"));
 }
 
 /**
@@ -113,19 +105,21 @@ export async function fetchThreadReplies(
   return res.value ?? [];
 }
 
-/**
- * Format thread messages into a context string for the agent.
- * Skips the current message (by id) and blank messages.
- */
-export function formatThreadContext(
+type ThreadContextMessage = {
+  message_id?: string;
+  sender: string;
+  body: string;
+};
+
+export function buildThreadContext(
   messages: GraphThreadMessage[],
   currentMessageId?: string,
-): string {
-  const lines: string[] = [];
+): ThreadContextMessage[] {
+  const context: ThreadContextMessage[] = [];
   for (const msg of messages) {
     if (msg.id && msg.id === currentMessageId) {
       continue;
-    } // Skip the triggering message.
+    }
     const sender = msg.from?.user?.displayName ?? msg.from?.application?.displayName ?? "unknown";
     const contentType = msg.body?.contentType ?? "text";
     const rawContent = msg.body?.content ?? "";
@@ -134,7 +128,7 @@ export function formatThreadContext(
     if (!content) {
       continue;
     }
-    lines.push(`${sender}: ${content}`);
+    context.push({ message_id: msg.id, sender, body: content });
   }
-  return lines.join("\n");
+  return context;
 }

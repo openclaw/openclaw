@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { resolveQaRuntimePairLaneScenarioIds } from "./runtime-pair-lane-selection.js";
 import {
-  QA_RUNTIME_PAIR_LANES,
   readQaScenarioById,
   readQaScenarioExecutionConfig,
   readQaScenarioPack,
@@ -11,17 +10,21 @@ import {
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 
 describe("QA runtime-pair scenario catalog", () => {
-  it("uses the canonical lanes with audited declaration counts", () => {
-    expect(QA_RUNTIME_PAIR_LANES).toEqual(["core", "extended", "soak"]);
+  it("pins deterministic sessions_spawn fixture inputs", () => {
+    const config = readQaScenarioExecutionConfig("runtime-tool-sessions-spawn");
 
-    const laneCounts = Object.fromEntries(
-      QA_RUNTIME_PAIR_LANES.map((lane) => [
-        lane,
-        readQaScenarioPack().scenarios.filter((scenario) => scenario.runtimePairLane === lane)
-          .length,
-      ]),
+    expect(config?.happyPrompt).toContain("sessions_spawn directly exactly once");
+    expect(config?.happyPrompt).toContain(
+      'task="Runtime tool fixture subagent: reply exactly RUNTIME-TOOL-FIXTURE."',
     );
-    expect(laneCounts).toEqual({ core: 35, extended: 9, soak: 2 });
+    expect(config?.happyPrompt).toContain('label="runtime-tool-fixture"');
+    expect(config?.happyPrompt).toContain('mode="run"');
+    expect(config?.happyPrompt).toContain("thread=false");
+    expect(config?.happyPrompt).toContain("expectsCompletionMessage=false");
+    expect(config?.failurePrompt).toContain('sessions_spawn directly exactly once with task=""');
+    expect(config?.failurePrompt).toContain(
+      "Do not repair, omit, replace, or retry the empty task",
+    );
   });
 
   it("declares every release agentic scenario in the core lane", () => {

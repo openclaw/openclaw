@@ -1,3 +1,11 @@
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeThinkingProfile,
+} from "openclaw/plugin-sdk/claude-model-runtime";
 /**
  * Thinking-level policy for Claude models on Amazon Bedrock. It maps Bedrock
  * model ids to the provider SDK thinking levels that are actually supported.
@@ -6,13 +14,6 @@ import type {
   ProviderRuntimeModel,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  resolveClaudeFable5ModelIdentity,
-  resolveClaudeModelIdentity,
-  resolveClaudeMythos5ModelIdentity,
-  resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
-} from "openclaw/plugin-sdk/provider-model-shared";
 
 const BASE_CLAUDE_THINKING_LEVELS = [
   { id: "off" },
@@ -122,14 +123,15 @@ export function resolveBedrockClaudeThinkingProfile(
   const trimmed = modelId.trim();
   const canonicalModelId = resolveClaudeModelIdentity({ id: trimmed, params });
   const modelRefs = [trimmed, canonicalModelId];
+  const fableModelId = resolveClaudeFable5ModelIdentity({ id: trimmed, params });
   if (
-    resolveClaudeFable5ModelIdentity({ id: trimmed, params }) ||
+    fableModelId ||
     resolveClaudeMythos5ModelIdentity({ id: trimmed, params }) ||
     resolveClaudeSonnet5ModelIdentity({ id: trimmed, params })
   ) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-      defaultLevel: "high",
+      defaultLevel: fableModelId ? resolveClaudeThinkingProfile(fableModelId).defaultLevel : "high",
       preserveWhenCatalogReasoningFalse: true,
     };
   }

@@ -8,7 +8,6 @@ import {
   type AuthHealthSummary,
 } from "../agents/auth-health.js";
 import {
-  type AuthCredentialReasonCode,
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
   hasAnyAuthProfileStoreSource,
@@ -39,6 +38,8 @@ import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -48,9 +49,51 @@ const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
 const AUTH_PROFILES_CHECK_ID = "core/doctor/auth-profiles";
+const COPILOT_NOTICE_KEY = "doctor.githubCopilotAmbientTokenNotice";
 const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
 };
+
+/** Explain the retired ambient-token activation once per state directory. */
+export function noteCopilotAmbientToken(cfg: OpenClawConfig, env = process.env): void {
+  if (
+    !(env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim()) ||
+    env.COPILOT_GITHUB_TOKEN?.trim() ||
+    cfg.models?.providers?.["github-copilot"] ||
+    Object.values(cfg.auth?.profiles ?? {}).some(
+      (profile) => profile.provider === "github-copilot",
+    ) ||
+    readConfigMachineState<boolean>(COPILOT_NOTICE_KEY, { env })
+  ) {
+    return;
+  }
+  const agentDirs = [undefined, ...listAgentIds(cfg).map((id) => resolveAgentDir(cfg, id, env))];
+  for (const agentDir of agentDirs) {
+    const store = loadAuthProfileStoreForRuntime(
+      agentDir,
+      { readOnly: true, allowKeychainPrompt: false },
+      env,
+    );
+    if (Object.values(store.profiles).some((profile) => profile.provider === "github-copilot")) {
+      return;
+    }
+  }
+  let claimed = false;
+  updateConfigMachineState<boolean>(
+    COPILOT_NOTICE_KEY,
+    (shown) => {
+      claimed = shown !== true;
+      return true;
+    },
+    { env },
+  );
+  if (claimed) {
+    note(
+      "GitHub Copilot is no longer enabled by GH_TOKEN/GITHUB_TOKEN. To use Copilot, run `openclaw models auth login --provider github-copilot` or set COPILOT_GITHUB_TOKEN.",
+      "GitHub Copilot",
+    );
+  }
+}
 
 /** Surface the one-time relocation while the legacy shared owner is still active. */
 export function noteSharedAuthStoreStatus(env: NodeJS.ProcessEnv = process.env): void {
@@ -168,26 +211,12 @@ export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
   note(buildCodexProviderOverrideWarning(providerOverride), CODEX_OAUTH_WARNING_TITLE);
 }
 
-type AuthIssue = {
-  profileId: string;
-  provider: string;
-  status: string;
-  reasonCode?: AuthCredentialReasonCode;
-  remainingMs?: number;
-};
+type AuthIssue = AuthHealthSummary["profiles"][number];
 
 type AuthProfileHealthTarget = {
   label: string;
   agentDir?: string;
 };
-
-function formatAuthNoteTitle(
-  title: string,
-  target: AuthProfileHealthTarget,
-  labelStores: boolean,
-): string {
-  return labelStores ? `${title} (${target.label})` : title;
-}
 
 function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
   const targets = new Map<string, AuthProfileHealthTarget>();
@@ -285,10 +314,6 @@ async function formatAuthIssueLine(
   return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
 
-function resolveAuthProfileStorePath(target: AuthProfileHealthTarget): string {
-  return resolveAuthStorePathForDisplay(target.agentDir);
-}
-
 function authProfileIssueToHealthFinding(params: {
   issue: AuthIssue;
   target: AuthProfileHealthTarget;
@@ -305,7 +330,7 @@ function authProfileIssueToHealthFinding(params: {
     checkId: AUTH_PROFILES_CHECK_ID,
     severity: "warning",
     message: `${owner} ${params.issue.profileId} is ${params.issue.status}${reason}${remaining}.`,
-    path: resolveAuthProfileStorePath(params.target),
+    path: resolveAuthStorePathForDisplay(params.target.agentDir),
     target: params.issue.profileId,
     ...(params.issue.reasonCode ? { requirement: params.issue.reasonCode } : {}),
     fixHint:
@@ -366,7 +391,7 @@ function authProfileCooldownToHealthFinding(
     message: params.labelStores
       ? `${params.target.label} auth profile ${params.profileId} is ${params.kind} (${params.remaining}).`
       : `Auth profile ${params.profileId} is ${params.kind} (${params.remaining}).`,
-    path: resolveAuthProfileStorePath(params.target),
+    path: resolveAuthStorePathForDisplay(params.target.agentDir),
     target: params.profileId,
     fixHint: params.hint,
   };
@@ -401,6 +426,7 @@ function loadAuthProfileHealth(params: {
           ([profileId, local]) =>
             local.type !== "oauth" ||
             !shouldUseMainOwnerForLocalOAuthCredential({
+              profileId,
               local,
               main: findPersistedAuthProfileCredential({ profileId }),
             }),
@@ -438,19 +464,12 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
 
   const issues = summary.profiles.filter(isAuthProfileHealthIssue);
   for (const issue of issues) {
-    const authIssue: AuthIssue = {
-      profileId: issue.profileId,
-      provider: issue.provider,
-      status: issue.status,
-      reasonCode: issue.reasonCode,
-      remainingMs: issue.remainingMs,
-    };
     findings.push(
       authProfileIssueToHealthFinding({
-        issue: authIssue,
+        issue,
         target: params.target,
         labelStores: params.labelStores,
-        hint: await resolveAuthIssueHint(authIssue, params.cfg, store),
+        hint: await resolveAuthIssueHint(issue, params.cfg, store),
       }),
     );
   }
@@ -496,7 +515,7 @@ async function noteAuthProfileHealthForTarget(params: {
 }): Promise<string[]> {
   let { store, summary } = loadAuthProfileHealth(params);
   const noteTitle = (title: string) =>
-    formatAuthNoteTitle(title, params.target, params.labelStores);
+    params.labelStores ? `${title} (${params.target.label})` : title;
   const unusable = collectAuthProfileCooldowns(store).map(
     ({ profileId, kind, remaining, hint }) =>
       `- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`,

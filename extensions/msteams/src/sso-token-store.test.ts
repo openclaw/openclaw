@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
@@ -9,7 +10,8 @@ import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(() => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
   }),
@@ -46,9 +48,7 @@ describe("msteams sso token store (plugin state)", () => {
     expect(await store.get(second)).toEqual(second);
 
     await expect(fs.access(storePath)).rejects.toThrow();
-    await expect(
-      fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
-    ).resolves.toBeUndefined();
+    await fs.access(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
   it("ignores legacy flat-key token files at runtime", async () => {
@@ -81,7 +81,7 @@ describe("msteams sso token store (plugin state)", () => {
         userId: "user-1",
       }),
     ).toBeNull();
-    await expect(fs.access(storePath)).resolves.toBeUndefined();
+    await fs.access(storePath);
   });
 
   it("keeps plugin-state keys bounded for long Teams identifiers", async () => {

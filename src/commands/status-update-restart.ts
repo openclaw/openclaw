@@ -1,93 +1,102 @@
-// Formats update-restart sentinel state for status reports.
-// The sentinel is written by update flows; status only turns it into operator-facing hints.
-
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
+import { getUpdateRun, getUpdateRunAsync } from "../infra/update-run-ledger.js";
+import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
 import {
-  CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
-  CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
-} from "../infra/update-control-plane-sentinel.js";
+  renderUpdateRunReport,
+  updateRunReportInputFromSentinel,
+} from "../infra/update-run-report.js";
+import { readUpdateRunStatus } from "../infra/update-run-status.js";
 
 type Formatter = (value: string) => string;
 
-function readReason(payload: RestartSentinelPayload): string | null {
-  const reason = payload.stats?.reason;
-  return typeof reason === "string" && reason.trim().length > 0 ? reason : null;
+function renderStatusReport(run: Parameters<typeof renderUpdateRunReport>[0]) {
+  const report = renderUpdateRunReport(run);
+  const reconciled = isAcknowledgedAbandonedUpdateRun(run);
+  const message =
+    run.status === "failed" && !reconciled
+      ? run.steps
+          .filter((step) => step.status === "failed")
+          .flatMap((step) => step.failureFacts ?? [])
+          .find((fact) => fact.message)?.message
+      : undefined;
+  return {
+    ...report,
+    reconciled,
+    headline: message ? `${report.headline} ${message}` : report.headline,
+  };
 }
 
-function readAfterVersion(payload: RestartSentinelPayload): string | null {
-  const version = payload.stats?.after?.version;
-  return typeof version === "string" && version.trim().length > 0 ? version : null;
+function readReport(payload: RestartSentinelPayload) {
+  const run = payload.stats?.runId ? getUpdateRun(payload.stats.runId) : undefined;
+  return renderStatusReport(run ?? updateRunReportInputFromSentinel(payload));
 }
 
-/** Returns the one-line update restart status value, or null when no update sentinel applies. */
 export function formatUpdateRestartStatusValue(
   payload: RestartSentinelPayload | null | undefined,
-  opts: {
-    ok?: Formatter;
-    warn?: Formatter;
-    muted?: Formatter;
-    nowMs?: number;
-    formatTimeAgo?: (ageMs: number) => string;
-  } = {},
+  opts: { ok?: Formatter; warn?: Formatter; muted?: Formatter } = {},
 ): string | null {
   if (!payload || payload.kind !== "update") {
     return null;
   }
-
-  const age =
-    opts.formatTimeAgo && Number.isFinite(payload.ts)
-      ? ` · ${opts.formatTimeAgo(Math.max(0, (opts.nowMs ?? Date.now()) - payload.ts))}`
-      : "";
-  const reason = readReason(payload);
-  const warn = opts.warn ?? ((value: string) => value);
-  const ok = opts.ok ?? ((value: string) => value);
-  const muted = opts.muted ?? ((value: string) => value);
-
-  if (payload.status === "error") {
-    return warn(
-      `failed · ${reason ?? "restart failed"} · run openclaw gateway status --deep${age}`,
-    );
-  }
-
-  if (payload.status === "skipped") {
-    if (reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
-      // Handoff already started in the control plane; gateway restart should not be duplicated.
-      return warn(`handoff running · gateway restart pending · run openclaw update status${age}`);
-    }
-    if (reason === CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON) {
-      // Restart completed enough to defer, but health proof still needs a deep gateway check.
-      return warn(`restart pending health verification · run openclaw gateway status --deep${age}`);
-    }
-    return muted(`skipped · ${reason ?? "restart skipped"}${age}`);
-  }
-
-  const version = readAfterVersion(payload);
-  return ok(`verified${version ? ` · gateway ${version}` : ""}${age}`);
+  return formatUpdateRestartReport(payload, readReport(payload), opts);
 }
 
-/** Returns follow-up action lines for update restart failures or pending handoffs. */
+function formatUpdateRestartReport(
+  payload: RestartSentinelPayload,
+  { headline, reconciled }: ReturnType<typeof renderStatusReport>,
+  opts: { ok?: Formatter; warn?: Formatter; muted?: Formatter },
+): string {
+  const format = reconciled
+    ? opts.muted
+    : payload.status === "error"
+      ? opts.warn
+      : payload.status === "ok"
+        ? opts.ok
+        : opts.muted;
+  return format ? format(headline) : headline;
+}
+
+/** Keep recorded progress and history separate from the current installation's update check. */
+export async function buildStatusUpdateRows(
+  payload: RestartSentinelPayload | null | undefined,
+  opts: Parameters<typeof formatUpdateRestartStatusValue>[1] = {},
+) {
+  const history = await readUpdateRunStatus();
+  if ("runStatusError" in history) {
+    return [
+      { Item: "Update run", Value: `Update run status unavailable: ${history.runStatusError}` },
+    ];
+  }
+  const run = history.activeRun ?? history.lastRun;
+  const rows = run ? [{ Item: "Update run", Value: renderStatusReport(run).headline }] : [];
+  if (history.runReconciliationError) {
+    rows.push({
+      Item: "Update reconciliation",
+      Value: `Update run reconciliation failed: ${history.runReconciliationError}`,
+    });
+  }
+  for (const advisory of history.advisories ?? []) {
+    rows.push({ Item: "Update advisory", Value: advisory.message });
+  }
+  // Legacy sentinels lack run IDs; matching prose cannot establish the same occurrence.
+  if (payload?.kind === "update" && (!run || payload.stats?.runId !== run.runId)) {
+    const restartRun = payload.stats?.runId
+      ? await getUpdateRunAsync(payload.stats.runId)
+      : undefined;
+    const restart = formatUpdateRestartReport(
+      payload,
+      renderStatusReport(restartRun ?? updateRunReportInputFromSentinel(payload)),
+      opts,
+    );
+    if (restart) {
+      rows.push({ Item: "Update restart", Value: restart });
+    }
+  }
+  return rows;
+}
+
 export function formatUpdateRestartActionLines(
   payload: RestartSentinelPayload | null | undefined,
 ): string[] {
-  if (!payload || payload.kind !== "update") {
-    return [];
-  }
-  if (payload.status === "error") {
-    return [
-      "Update restart failed; run openclaw gateway status --deep.",
-      "If the service is down, run openclaw gateway restart or openclaw gateway install --force.",
-    ];
-  }
-  const reason = readReason(payload);
-  if (
-    payload.status === "skipped" &&
-    (reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON ||
-      reason === CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON)
-  ) {
-    return [
-      "Update restart is still pending; run openclaw update status --json for handoff state.",
-      "If it stays pending, run openclaw gateway status --deep.",
-    ];
-  }
-  return [];
+  return payload?.kind === "update" ? readReport(payload).lines : [];
 }

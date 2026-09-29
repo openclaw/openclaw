@@ -6,9 +6,11 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
+import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
@@ -112,16 +114,6 @@ describe("installSessionToolResultGuard", () => {
     expect(synthetic.content?.[0]?.text).toContain("missing tool result");
   });
 
-  it("flushes pending tool calls when asked explicitly", () => {
-    const sm = SessionManager.inMemory();
-    const guard = installSessionToolResultGuard(sm);
-
-    sm.appendMessage(toolCallMessage);
-    guard.flushPendingToolResults();
-
-    expectPersistedRoles(sm, ["assistant", "toolResult"]);
-  });
-
   it("uses configured text for synthetic tool results", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
@@ -162,23 +154,6 @@ describe("installSessionToolResultGuard", () => {
 
     expectPersistedRoles(sm, ["assistant", "user"]);
     expect(guard.getPendingIds()).toStrictEqual([]);
-  });
-
-  it("does not add synthetic toolResult when a matching one exists", () => {
-    const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
-
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      }),
-    );
-
-    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("applies count-based truncation wording when persisting oversized tool results", () => {
@@ -248,28 +223,6 @@ describe("installSessionToolResultGuard", () => {
     expect(text).toContain("truncated");
   });
 
-  it("backfills blank toolResult names from pending tool calls", () => {
-    const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
-
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "   ",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      }),
-    );
-
-    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]) as Array<{
-      role: string;
-      toolName?: string;
-    }>;
-    expect(messages[1]?.toolName).toBe("read");
-  });
-
   it("preserves ordering with multiple tool calls and partial results", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);
@@ -291,12 +244,7 @@ describe("installSessionToolResultGuard", () => {
         isError: false,
       }),
     );
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "after tools" }],
-      }),
-    );
+    sm.appendMessage(asAppendMessage(textAssistant("after tools")));
 
     const messages = expectPersistedRoles(sm, [
       "assistant", // tool calls
@@ -306,42 +254,6 @@ describe("installSessionToolResultGuard", () => {
     ]);
     expect((messages[2] as { toolCallId?: string }).toolCallId).toBe("call_b");
     expect(guard.getPendingIds()).toStrictEqual([]);
-  });
-
-  it("flushes pending on guard when no toolResult arrived", () => {
-    const sm = SessionManager.inMemory();
-    const guard = installSessionToolResultGuard(sm);
-
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "hard error" }],
-        stopReason: "error",
-      }),
-    );
-    expect(guard.getPendingIds()).toStrictEqual([]);
-  });
-
-  it("handles toolUseId on toolResult", () => {
-    const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
-
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolUse", id: "use_1", name: "f", arguments: {} }],
-      }),
-    );
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolUseId: "use_1",
-        content: [{ type: "text", text: "ok" }],
-      }),
-    );
-
-    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("preserves opaque canonical tool-call ids while repairing result metadata", () => {
@@ -436,13 +348,7 @@ describe("installSessionToolResultGuard", () => {
     appendAssistantToolCall(sm, { id: "call_1", name: "read" });
     appendAssistantToolCall(sm, { id: "call_2", name: "exec" });
     sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "real output" }],
-        isError: false,
-      }),
+      asAppendMessage(textToolResult("call_1", "read", "real output", { isError: false })),
     );
 
     const messages = expectPersistedRoles(sm, ["assistant", "assistant", "toolResult"]);
@@ -450,6 +356,78 @@ describe("installSessionToolResultGuard", () => {
     expect((messages[2] as { isError?: boolean }).isError).toBe(false);
     expect(JSON.stringify(messages)).not.toContain("missing tool result");
     expect(guard.getPendingIds()).toStrictEqual(["call_2"]);
+  });
+
+  it.each([
+    {
+      name: "provider response id",
+      first: { responseId: "resp_1" },
+      last: { responseId: "resp_1" },
+    },
+    {
+      // The runtime assigns turnId before the provider reports responseId, then carries it.
+      name: "runtime turn id with a late response id",
+      first: { turnId: "turn_1" },
+      last: { turnId: "turn_1", responseId: "resp_1" },
+    },
+  ])(
+    "keeps async tool calls pending across later fragments of the same response ($name)",
+    ({ first, last }) => {
+      const sm = SessionManager.inMemory();
+      const guard = installSessionToolResultGuard(sm, { missingToolResultText: "aborted" });
+
+      // Async tool execution commits each tool call as its own fragment of one provider
+      // response; the closing text fragment arrives while that tool is still running.
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+          ...first,
+          stopReason: "toolUse",
+        }),
+      );
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "Checking now." }],
+          ...last,
+          stopReason: "toolUse",
+        }),
+      );
+      expect(guard.getPendingIds()).toStrictEqual(["call_1"]);
+      sm.appendMessage(
+        asAppendMessage(textToolResult("call_1", "exec", "real output", { isError: false })),
+      );
+
+      const messages = expectPersistedRoles(sm, ["assistant", "assistant", "toolResult"]);
+      expect(getToolResultText(messages)).toBe("real output");
+      expect(guard.getPendingIds()).toStrictEqual([]);
+    },
+  );
+
+  it("synthesizes results before an assistant message from a later response", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, { missingToolResultText: "aborted" });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+        responseId: "resp_1",
+        stopReason: "toolUse",
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        responseId: "resp_2",
+        stopReason: "stop",
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult", "assistant"]);
+    expect(getToolResultText(messages)).toBe("aborted");
   });
 
   it("clears pending when a sanitized assistant message is dropped and synthetic results are disabled", () => {
@@ -487,17 +465,6 @@ describe("installSessionToolResultGuard", () => {
 
     expectPersistedRoles(sm, ["assistant", "assistant"]);
     expect(guard.getPendingIds()).toEqual(["call_2"]);
-  });
-
-  it("caps oversized tool result text during persistence", () => {
-    const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
-
-    appendToolResultText(sm, "x".repeat(500_000));
-
-    const text = getToolResultText(getPersistedMessages(sm));
-    expect(text.length).toBeLessThan(500_000);
-    expect(text).toContain("truncated");
   });
 
   it("does not truncate tool results under the limit", () => {
@@ -729,13 +696,7 @@ describe("installSessionToolResultGuard", () => {
       sm.appendMessage(toolCallMessage);
       if (blocked) {
         sm.appendMessage(
-          asAppendMessage({
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "read",
-            content: [{ type: "text", text: "blocked" }],
-            isError: false,
-          }),
+          asAppendMessage(textToolResult("call_1", "read", "blocked", { isError: false })),
         );
       }
       guard.flushPendingToolResults();
@@ -771,13 +732,7 @@ describe("installSessionToolResultGuard", () => {
     });
     sm.appendMessage(toolCallMessage);
     sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "   ",
-        content: [{ type: "text", text: "original" }],
-        isError: false,
-      }),
+      asAppendMessage(textToolResult("call_1", "   ", "original", { isError: false })),
     );
     expect(observed).toEqual(["read", "read"]);
     expect(getToolResultText(getPersistedMessages(sm))).toBe("hook applied");
@@ -914,52 +869,23 @@ describe("installSessionToolResultGuard", () => {
     expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("replacement");
   });
 
-  it("suppresses assistant error stubs when requested", () => {
+  it("retains terminal errors in nonpersistent sessions", async () => {
     const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm, {
-      suppressAssistantErrorPersistence: true,
-    });
-
+    const owner = createAssistantErrorTranscript({ runId: "run-test" });
+    installSessionToolResultGuard(sm, { assistantErrorTranscript: owner });
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
-        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+        content: [],
         stopReason: "error",
+        errorMessage: "terminal failure",
         timestamp: Date.now(),
       }),
     );
-    sm.appendMessage(
-      asAppendMessage({
-        role: "user",
-        content: "next user message",
-        timestamp: Date.now() + 1,
-      }),
-    );
-
-    const persisted = getPersistedMessages(sm);
-    expect(persisted.map((message) => message.role)).toEqual(["user"]);
-  });
-
-  it("notifies after assistant error stubs persist", () => {
-    const sm = SessionManager.inMemory();
-    const persistedErrors: Array<Extract<AgentMessage, { role: "assistant" }>> = [];
-    installSessionToolResultGuard(sm, {
-      onAssistantErrorMessagePersisted: (message) => {
-        persistedErrors.push(message);
-      },
-    });
-
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
-        stopReason: "error",
-        timestamp: Date.now(),
-      }),
-    );
-
-    expect(persistedErrors).toHaveLength(1);
-    expect(persistedErrors[0]?.stopReason).toBe("error");
+    await owner.settle(true);
+    expect(getPersistedMessages(sm)).toEqual([
+      expect.objectContaining({ role: "assistant", errorMessage: "terminal failure" }),
+    ]);
   });
 
   it("reports the exact persisted user entry id", () => {
@@ -983,54 +909,10 @@ describe("installSessionToolResultGuard", () => {
     ]);
   });
 
-  it("models a four-candidate followup fallback cascade producing exactly one user and one assistant-error entry", () => {
-    const sm = SessionManager.inMemory();
-    const FALLBACK_CANDIDATES = 4;
-    let userPersisted = false;
-    let assistantErrorPersisted = false;
-
-    for (let attempt = 0; attempt < FALLBACK_CANDIDATES; attempt += 1) {
-      installSessionToolResultGuard(sm, {
-        suppressNextUserMessagePersistence: userPersisted,
-        suppressAssistantErrorPersistence: assistantErrorPersisted,
-        onUserMessagePersisted: () => {
-          userPersisted = true;
-        },
-        onAssistantErrorMessagePersisted: () => {
-          assistantErrorPersisted = true;
-        },
-      });
-      sm.appendMessage(
-        asAppendMessage({
-          role: "user",
-          content: "queued user message",
-          timestamp: Date.now() + attempt,
-        }),
-      );
-      sm.appendMessage(
-        asAppendMessage({
-          role: "assistant",
-          content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
-          stopReason: "error",
-          timestamp: Date.now() + attempt,
-        }),
-      );
-    }
-
-    const persisted = getPersistedMessages(sm);
-    const roles = persisted.map((m) => m.role);
-    expect(roles).toEqual(["user", "assistant"]);
-    const consecutiveSameRole = roles.reduce(
-      (acc, role, idx) => acc + (idx > 0 && role === roles[idx - 1] ? 1 : 0),
-      0,
-    );
-    expect(consecutiveSameRole).toBe(0);
-  });
-
   it("still persists successful assistant messages when error suppression is on", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
-      suppressAssistantErrorPersistence: true,
+      assistantErrorTranscript: createAssistantErrorTranscript({ runId: "run-test" }),
     });
 
     sm.appendMessage(

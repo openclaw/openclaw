@@ -13,12 +13,15 @@ func waitUntil(
     // only matters under full-suite parallel load, where 3s flaked on CI.
     timeoutSeconds: Double = 15.0,
     pollMs: UInt64 = 10,
+    now: @Sendable () -> Date = { Date() },
     _ condition: @escaping @Sendable () async -> Bool) async throws
 {
-    let deadline = Date().addingTimeInterval(timeoutSeconds)
-    while Date() < deadline {
+    let deadline = now().addingTimeInterval(timeoutSeconds)
+    while now() < deadline {
         if await condition() { return }
         try await Task.sleep(nanoseconds: pollMs * 1_000_000)
     }
+    // Completion can arrive during the final suspension, before this waiter resumes.
+    if await condition() { return }
     throw AsyncWaitTimeoutError(label: label)
 }

@@ -3,12 +3,12 @@
 // value that drains replies to the wrong room and replays there after a restart). It must refuse;
 // crons carrying an explicit target / their own delivery context are unaffected.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram-targets.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   forumMessagingForTest,
-  parseTelegramTargetForTest,
   telegramMessagingForTest,
 } from "../../infra/outbound/targets.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -26,6 +26,12 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 
 vi.mock("../../config/sessions/delivery-info.js", () => ({
   extractDeliveryInfo: extractDeliveryInfoMock,
+  extractDeliveryInfoBatch: (keys: Array<string | undefined>, options: unknown) =>
+    keys.map((key) =>
+      key
+        ? extractDeliveryInfoMock(key, options)
+        : { deliveryContext: undefined, threadId: undefined },
+    ),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -37,6 +43,16 @@ vi.mock("../../config/sessions/session-accessor.js", () => {
   return {
     loadSessionEntry,
     loadSessionEntryReadOnly: loadSessionEntry,
+    loadExactSessionEntryCandidatesReadOnlyBatch: (
+      scopes: Array<{ agentId: string; storePath: string; sessionKeys: string[] }>,
+    ) =>
+      scopes.map(({ agentId, storePath, sessionKeys }) => ({
+        ok: true,
+        value: sessionKeys.flatMap((sessionKey) => {
+          const entry = loadSessionEntry({ agentId, storePath, sessionKey });
+          return entry ? [{ sessionKey, entry }] : [];
+        }),
+      })),
   };
 });
 

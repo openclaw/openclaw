@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { waitForPidFile } from "../helpers/process-wait.js";
 
@@ -8,13 +9,22 @@ const configs = [
   "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.agents-embedded-agent.config.ts",
 ];
+// Cross Telegram's ten-file process boundary without adding another config.
+export const reportChunkTestFiles: readonly string[] = Array.from(
+  { length: 11 },
+  (_, index) => `extensions/telegram/src/owned-${String(index).padStart(2, "0")}.test.ts`,
+);
 
 export type ReportFixtureMode =
   | "overlap"
   | "serial"
   | "parallel"
+  | "automatic"
   | "grouped"
   | "grouped-conflict"
+  | "nested-shared-leaf"
+  | "nested-shared-leaf-name-drift"
+  | "nested-shared-leaf-root-drift"
   | "batch"
   | "batch-real-home"
   | "batch-parallel"
@@ -36,6 +46,7 @@ export type ReportFixtureMode =
   | "final-write"
   | "publish-write"
   | "identity"
+  | "config-load-once"
   | "pool-identity"
   | "config-error"
   | "suite-error"
@@ -48,10 +59,13 @@ export type ReportFixtureMode =
   | "chunks";
 
 /** Tiny native configs shared by regression tests and retained operator proofs. */
-export function createVitestReportFixture(root: string, evidence = path.join(root, "reports")) {
+export function createVitestReportFixture(
+  root: string,
+  evidence = path.join(root, "reports"),
+  compileCache = path.join(root, "node-compile-cache"),
+) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(evidence, { recursive: true });
-  fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"), "junction");
   const write = (file: string, contents: string) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, contents);
@@ -73,7 +87,7 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
     XDG_RUNTIME_DIR: path.join(root, "xdg/runtime"),
     TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
     TSX_DISABLE_CACHE: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
+    NODE_COMPILE_CACHE: compileCache,
     COREPACK_ENABLE_NETWORK: "0",
     GIT_OPTIONAL_LOCKS: "0",
     CI: "1",
@@ -83,7 +97,6 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
     OPENCLAW_TEST_PROJECTS_TIMINGS: "0",
     OPENCLAW_VITEST_MAX_WORKERS: "1",
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
-    OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
     OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "20000",
   };
   for (const [key, value] of Object.entries(env)) {
@@ -99,14 +112,52 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
       nativeArgs?: string[];
       entry?: "projects" | "batch-cli";
       report?: boolean;
+      configOutput?: boolean;
       crashSignal?: "SIGABRT" | "SIGKILL";
     } = {},
   ) => {
     const deadline = performance.now() + 45000;
+    if (mode === "config-load-once") {
+      // Give the cache regression a private default root, never shared dependencies.
+      const modules = path.join(root, "node_modules");
+      fs.mkdirSync(modules);
+      fs.symlinkSync(
+        path.join(repoRoot, "node_modules/vitest"),
+        path.join(modules, "vitest"),
+        "junction",
+      );
+      write(path.join(root, "package.json"), '{"private":true,"type":"module"}');
+      write(path.join(modules, ".vitest-cache/canary"), "another cache owner");
+      write(
+        path.join(modules, ".vitest-cache/_metadata.json"),
+        '{"lockfileHash":"unrelated-owner"}',
+      );
+    } else {
+      fs.symlinkSync(
+        path.join(repoRoot, "node_modules"),
+        path.join(root, "node_modules"),
+        "junction",
+      );
+    }
     const output = path.join(evidence, "result.json");
     const ready = path.join(root, "ready");
+    if (options.configOutput) {
+      write(path.join(root, "config-coverage/canary"), "retained");
+    }
+    if (mode === "watchdog") {
+      const preload = path.join(root, "watchdog-startup.mjs");
+      // Exercise a first attempt killed before its config can record any state.
+      write(
+        preload,
+        `import fs from 'node:fs';import path from 'node:path';
+const output=process.argv.find(arg=>arg.startsWith('--outputFile.json='))?.slice('--outputFile.json='.length);
+if(output&&path.basename(path.dirname(output))==='1'&&process.argv.some(arg=>arg.endsWith(${JSON.stringify(configs[0])}))){fs.writeFileSync(${JSON.stringify(path.join(root, "cold-started"))},'started');await new Promise(resolve=>setTimeout(resolve,3000));}`,
+      );
+      env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
+    }
     const done = path.join(root, "beta.done");
     const events = path.join(evidence, "executed.jsonl");
+    const configLoads = path.join(evidence, "config-loads.txt");
     const realHomeReplay = mode === "batch-real-home";
     if (realHomeReplay) {
       env.USERPROFILE = env.HOME;
@@ -121,10 +172,22 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
       write(path.join(env.HOME!, "canary"), "synthetic caller home\n");
     }
     const isParallel = ["parallel", "batch-parallel", "failure", "overlap"].includes(mode);
+    const testFiles =
+      mode === "automatic"
+        ? [
+            "src/utils.test.ts",
+            "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
+          ]
+        : ["alpha.test.ts", "beta.test.ts"];
+    const mergeAfterJoins = path.join(evidence, "merge-after-joins");
+    // Report paths identify the first attempt before config startup can record state.
     for (const [index, name] of ["alpha", "beta"].entries()) {
       const prelude = `import fs from 'node:fs';
+${mode === "watchdog" ? "import path from 'node:path';" : ""}
 ${mode === "teardown-timeout" && index === 0 ? "setInterval(()=>{},1000);" : ""}
 const merging = process.argv.includes('--mergeReports');
+${mode === "automatic" ? `if(merging){for(const line of fs.readFileSync(${JSON.stringify(events)},'utf8').trim().split('\\n')){const {pid}=JSON.parse(line);try{process.kill(pid,0);}catch(error){if(error.code==='ESRCH')continue;throw error;}throw new Error('report replay began before test worker joined');}fs.writeFileSync(${JSON.stringify(mergeAfterJoins)},'joined');}` : ""}
+${mode === "config-load-once" ? `if(merging)fs.appendFileSync(${JSON.stringify(configLoads)},${JSON.stringify(name + "\n")});` : ""}
 ${options.crashSignal && index === 0 ? `if(!merging){process.kill(process.pid,${JSON.stringify(options.crashSignal)});await new Promise(()=>setInterval(()=>{},1000));}` : ""}
 const output = process.argv.find(arg => arg.startsWith('--outputFile.json='))?.slice('--outputFile.json='.length);
 ${mode === "coverage-missing" && index === 0 ? `if(!merging)process.once('exit',()=>{const dir=process.argv.find(arg=>arg.startsWith('--coverage.reportsDirectory='))?.split('=').slice(1).join('=');if(dir&&fs.existsSync(dir+'/lcov.info')){fs.copyFileSync(dir+'/lcov.info',dir+'/lcov.info.native-original');fs.unlinkSync(dir+'/lcov.info');}});` : ""}
@@ -132,13 +195,13 @@ ${mode === "merge-failure" ? `if(merging)throw new Error('owned native merge fai
 ${mode === "config-error" && index === 1 ? "throw new Error('owned configuration failure');" : ""}
 ${mode === "final-write" ? `if(merging&&output)fs.mkdirSync(output);` : ""}
 ${mode === "child-write" && index === 0 ? `if(!merging&&output)fs.mkdirSync(output);` : ""}
-${mode === "watchdog" && index === 0 ? `if(!merging&&!fs.existsSync(${JSON.stringify(ready)})){fs.writeFileSync(${JSON.stringify(ready)},'started');await new Promise(()=>setInterval(()=>{},1000));}` : ""}
+${mode === "watchdog" && index === 0 ? "if(!merging&&output&&path.basename(path.dirname(output))==='1'){await new Promise(()=>setInterval(()=>{},1000));}" : ""}
 ${["missing", "corrupt"].includes(mode) && index === 0 ? `if(!merging)process.once('exit',()=>{const file=${mode === "missing" ? "output" : "process.argv.find(arg=>arg.startsWith('--outputFile.blob='))?.slice('--outputFile.blob='.length)"};if(file&&fs.existsSync(file)){fs.copyFileSync(file,file+'.native-original');${mode === "missing" ? "fs.unlinkSync(file)" : "fs.writeFileSync(file,'owned corruption')"};}});` : ""}
 `;
       write(
         path.join(root, configs[index]!),
         prelude +
-          `export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-" + name))},test:{name:${mode === "identity" ? `merging?'changed-${name}':'${name}'` : JSON.stringify(name)},include:[${mode === "empty" ? "'absent.test.ts'" : JSON.stringify(name + ".test.ts")}],${mode === "empty" ? "passWithNoTests:true," : ""}${mode === "ignored-unhandled" ? "dangerouslyIgnoreUnhandledErrors:true," : ""}pool:${mode === "pool-identity" ? "merging?'threads':'forks'" : "'forks'"},maxWorkers:1,fileParallelism:false,cache:false,experimental:{fsModuleCache:false},teardownTimeout:1000,${["metadata", "coverage-missing"].includes(mode) ? "coverage:{provider:'v8',include:['covered.ts'],reporter:['json','lcov']}," : ""}${mode === "tuple" ? `reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "tuple.json"))}}]],` : ""}}};`,
+          `export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-" + name))},${mode === "config-load-once" ? `plugins:[{name:'derive-project-name',config(){return {test:{name:${JSON.stringify(name)}}}}}],` : ""}test:{name:${mode === "config-load-once" ? "undefined" : mode === "identity" ? `merging?'changed-${name}':'${name}'` : JSON.stringify(name)},include:[${mode === "empty" ? "'absent.test.ts'" : JSON.stringify(testFiles[index])}],${mode === "empty" ? "passWithNoTests:true," : ""}${mode === "ignored-unhandled" ? "dangerouslyIgnoreUnhandledErrors:true," : ""}pool:${mode === "pool-identity" ? "merging?'threads':'forks'" : "'forks'"},maxWorkers:1,fileParallelism:false,cache:false,${mode === "config-load-once" ? `fsModuleCache:true,fsModuleCachePath:${JSON.stringify(path.join(root, "fs-cache-" + name))},` : "fsModuleCache:false,"}teardownTimeout:1000,${["metadata", "coverage-missing"].includes(mode) ? "coverage:{provider:'v8',include:['covered.ts'],reporter:['json','lcov']}," : ""}${options.configOutput ? `coverage:{enabled:true,provider:'v8',reportsDirectory:${JSON.stringify(path.join(root, "config-coverage"))}},reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "config-output.json"))}}]],` : ""}${mode === "tuple" ? `reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "tuple.json"))}}]],` : ""}}};`,
       );
       const failure =
         (["failure", "batch-failure"].includes(mode) && index === 1) ||
@@ -149,15 +212,16 @@ ${["metadata", "coverage-missing"].includes(mode) ? "import {classify} from './c
 let attempt=0;
 test('${name}/one',${mode === "retry" && index === 0 ? "{retry:1}," : ""}async()=>{
  fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({name:'${name}/one',pid:process.pid})+'\\n');
+ ${mode === "automatic" ? `expect(fs.existsSync(${JSON.stringify(output)})).toBe(false);` : ""}
  ${realHomeReplay ? `expect(process.env.HOME).toBe(${JSON.stringify(env.HOME)});expect(homedir()).toBe(${JSON.stringify(env.HOME)});` : ""}
- ${["parallel", "batch-parallel"].includes(mode) && index === 0 ? `const {waitForFile}=await import(${JSON.stringify(path.join(repoRoot, "test/helpers/process-wait.ts"))});await waitForFile(${JSON.stringify(done)},15000);` : ""}
+ ${["parallel", "batch-parallel", "automatic"].includes(mode) && index === 0 ? `const {waitForFile}=await import(${JSON.stringify(path.join(repoRoot, "test/helpers/process-wait.ts"))});await waitForFile(${JSON.stringify(done)},15000);` : ""}
  ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));await new Promise(()=>setInterval(()=>{},1000));` : ""}
  ${["unhandled", "ignored-unhandled"].includes(mode) && index === 1 ? "void Promise.reject(new Error('owned unhandled rejection'));await new Promise(resolve=>setImmediate(resolve));" : ""}
  ${["metadata", "coverage-missing"].includes(mode) ? `expect(classify(${index})).toMatchInlineSnapshot(${JSON.stringify(index === 0 ? '"zero"' : '"one"')});` : mode === "overlap" ? "expect(0, 'independent failure pid='+process.pid).toBe(1);" : mode === "retry" && index === 0 ? "expect(++attempt).toBe(2);" : `expect(1).toBe(${failure ? 2 : 1});`}
  ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');` : ""}
 });
 ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/skip',()=>{});test.todo('beta/todo');"}`;
-      write(path.join(root, `${name}.test.ts`), body);
+      write(path.join(root, testFiles[index]!), body);
       if (mode === "suite-error" && index === 1) {
         fs.appendFileSync(
           path.join(root, `${name}.test.ts`),
@@ -169,49 +233,87 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       path.join(root, "covered.ts"),
       "export function classify(n:number){return n===0?'zero':'one'}",
     );
-    let targets = mode === "single" ? [configs[0]!] : [...configs];
+    let targets =
+      mode === "automatic" ? testFiles : mode === "single" ? [configs[0]!] : [...configs];
     if (mode === "grouped" || mode === "grouped-conflict") {
       const leaf = "test/vitest/vitest.alpha.config.ts";
       write(
         path.join(root, leaf),
-        `export default {test:{name:'alpha',include:[${JSON.stringify(path.join(root, "alpha.test.ts"))}],pool:'threads',maxWorkers:1,cache:false,experimental:{fsModuleCache:false}}};`,
+        `export default {test:{name:'alpha',include:[${JSON.stringify(path.join(root, "alpha.test.ts"))}],pool:'threads',maxWorkers:1,cache:false,fsModuleCache:false}};`,
       );
       write(
         path.join(root, configs[1]!),
-        `export default {test:{name:'beta',include:[${JSON.stringify(mode === "grouped-conflict" ? path.join(root, "beta.test.ts") : "beta.test.ts")}],pool:'forks',maxWorkers:1,cache:false,experimental:{fsModuleCache:false}}};`,
+        `export default {test:{name:'beta',include:[${JSON.stringify(mode === "grouped-conflict" ? path.join(root, "beta.test.ts") : "beta.test.ts")}],pool:'forks',maxWorkers:1,cache:false,fsModuleCache:false}};`,
       );
       write(
         path.join(root, configs[0]!),
         `export default {root:${JSON.stringify(root)},test:{projects:${JSON.stringify([leaf, configs[1]])}}};`,
       );
     }
+    if (mode.startsWith("nested-shared-leaf")) {
+      const alpha = path.join(root, "test/vitest/vitest.alpha.config.ts");
+      const beta = path.join(root, "test/vitest/vitest.beta.config.ts");
+      const inner = path.join(root, "test/vitest/vitest.inner.config.ts");
+      const outer = path.join(root, "test/vitest/vitest.outer.config.ts");
+      const other = path.join(root, "test/vitest/vitest.other.config.ts");
+      const changedRoot = path.join(root, "changed-root");
+      fs.mkdirSync(changedRoot);
+      write(
+        alpha,
+        `import fs from 'node:fs';const merging=process.argv.includes('--mergeReports');if(merging)fs.appendFileSync(${JSON.stringify(configLoads)},'alpha\\n');export default {root:${JSON.stringify(root)},plugins:[{name:'derive-alpha-identity',enforce:'post',config(){const root=merging&&${JSON.stringify(mode === "nested-shared-leaf-root-drift")}?${JSON.stringify(changedRoot)}:${JSON.stringify(root)};return {root,test:{root,name:merging&&${JSON.stringify(mode === "nested-shared-leaf-name-drift")}?'changed-alpha':'alpha',pool:'threads'}}}}],test:{include:[${JSON.stringify(path.join(root, "alpha.test.ts"))}],maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
+      );
+      write(
+        beta,
+        `import fs from 'node:fs';const merging=process.argv.includes('--mergeReports');if(merging)fs.appendFileSync(${JSON.stringify(configLoads)},'beta\\n');export default {root:${JSON.stringify(root)},test:{name:'beta',include:[${JSON.stringify(path.join(root, "beta.test.ts"))}],projects:[${JSON.stringify(beta)}],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
+      );
+      write(
+        inner,
+        `export default {root:${JSON.stringify(root)},test:{name:'inner',projects:[${JSON.stringify(alpha)}]}};`,
+      );
+      write(
+        outer,
+        `export default {root:${JSON.stringify(root)},test:{name:'outer',projects:[${JSON.stringify(inner)}]}};`,
+      );
+      write(
+        other,
+        `export default {root:${JSON.stringify(root)},test:{name:'other',projects:[${JSON.stringify(alpha)}]}};`,
+      );
+      write(
+        path.join(root, configs[0]!),
+        `export default {root:${JSON.stringify(root)},test:{projects:[${JSON.stringify(outer)}]}};`,
+      );
+      write(
+        path.join(root, configs[1]!),
+        `export default {root:${JSON.stringify(root)},test:{projects:[${JSON.stringify(other)},${JSON.stringify(beta)}]}};`,
+      );
+    }
     if (mode === "chunks") {
-      const files = [
-        "extensions/telegram/src/owned-one.test.ts",
-        "extensions/telegram/src/owned-two.test.ts",
-      ];
+      const files = reportChunkTestFiles;
       for (const [i, file] of files.entries()) {
         write(
           path.join(root, file),
-          `import {test,expect} from 'vitest';test('chunk/${i}',()=>expect(1).toBe(1));`,
+          `import {test,expect} from 'vitest';test('chunk/${String(i).padStart(2, "0")}',()=>expect(1).toBe(1));`,
         );
       }
       write(
         path.join(root, "test/vitest/vitest.extension-telegram.config.ts"),
-        `import fs from 'node:fs';const file=process.env.OPENCLAW_VITEST_INCLUDE_FILE;export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-chunks"))},test:{name:'chunks',include:file?JSON.parse(fs.readFileSync(file,'utf8')):${JSON.stringify(files)},pool:'forks',maxWorkers:1,cache:false,experimental:{fsModuleCache:false}}};`,
+        `import fs from 'node:fs';const file=process.env.OPENCLAW_VITEST_INCLUDE_FILE;export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-chunks"))},test:{name:'chunks',include:file?JSON.parse(fs.readFileSync(file,'utf8')):${JSON.stringify(files)},pool:'forks',maxWorkers:1,cache:false,fsModuleCache:false}};`,
       );
       env.OPENCLAW_VITEST_INCLUDE_FILE = path.join(root, "includes.json");
       write(env.OPENCLAW_VITEST_INCLUDE_FILE, JSON.stringify(files));
       targets = ["test/vitest/vitest.extension-telegram.config.ts"];
     }
+    // Generated configs need no transforms. The real-home case imports the
+    // repository config and retains its source-aware loader.
+    const configLoader = `--configLoader=${realHomeReplay ? "runner" : "native"}`;
     const args = [
       "--reporter=verbose",
       "--reporter=json",
-      "--configLoader=runner",
+      configLoader,
       mode === "dotted" ? `--outputFile.json=${output}` : `--outputFile=${output}`,
     ];
     if (options.report === false) {
-      args.splice(0, args.length, "--configLoader=runner");
+      args.splice(0, args.length, configLoader);
     }
     args.push(...(options.nativeArgs ?? []));
     if (mode === "dotted") {
@@ -231,13 +333,15 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
         "final-write",
         "identity",
         "pool-identity",
+        "nested-shared-leaf-name-drift",
+        "nested-shared-leaf-root-drift",
         "config-error",
       ].includes(mode)
     ) {
       write(output, "old report");
     }
     let command = [path.join(repoRoot, "scripts/run-vitest.mjs"), "run", ...targets, ...args];
-    if (options.entry === "projects" || mode === "overlap") {
+    if (options.entry === "projects" || mode === "overlap" || mode === "automatic") {
       if (mode === "overlap") {
         targets = [configs[0]!, `./${configs[0]}`];
       }
@@ -284,18 +388,45 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       );
       command = ["--import", path.join(repoRoot, "node_modules/tsx/dist/loader.mjs"), entry];
     }
+    if (mode === "automatic") {
+      // Only the fixture parent gets a qualified-host observation. Native selection,
+      // report ownership and child joins still execute their real implementations.
+      const preload = path.join(root, "automatic-host.mjs");
+      write(
+        preload,
+        "import os from 'node:os';import {syncBuiltinESMExports} from 'node:module';os.availableParallelism=()=>8;os.totalmem=()=>24*1024**3;syncBuiltinESMExports();",
+      );
+      command.unshift("--import", preload);
+    }
     const childEnv = {
       ...env,
-      OPENCLAW_TEST_PROJECTS_PARALLEL: isParallel ? "2" : "1",
-      OPENCLAW_TEST_PROJECTS_SERIAL: isParallel ? "0" : "1",
+      // V8 coverage needs fresh compilation; other phases can share private bytecode.
+      NODE_DISABLE_COMPILE_CACHE: ["metadata", "coverage-missing"].includes(mode) ? "1" : undefined,
+      OPENCLAW_TEST_PROJECTS_PARALLEL: mode === "automatic" ? "" : isParallel ? "2" : "1",
+      OPENCLAW_TEST_PROJECTS_SERIAL: mode === "automatic" ? "" : isParallel ? "0" : "1",
       OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
-      OPENCLAW_VITEST_NO_OUTPUT_RETRY:
-        mode === "watchdog" ? "1" : env.OPENCLAW_VITEST_NO_OUTPUT_RETRY,
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
+        mode === "automatic" ? "" : env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+      OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT:
+        mode === "automatic" ? path.join(root, "automatic-cache") : undefined,
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
         mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
     };
+    let executable = process.execPath;
+    if (process.platform === "linux" && options.crashSignal === "SIGABRT") {
+      // Preserve an inherited zero hard limit; raising it needs OS authority we do not own.
+      const hasZeroHardCoreLimit = /^Max core file size\s+\S+\s+0\s/mu.test(
+        fs.readFileSync("/proc/self/limits", "utf8"),
+      );
+      if (!hasZeroHardCoreLimit) {
+        // Linux reserves one byte to suppress piped core collectors too; zero does not.
+        // Inherit it through wrappers that re-raise the fixture's intentional signal.
+        executable = "prlimit";
+        command = ["--core=1:1", "--", process.execPath, ...command];
+      }
+    }
     const { child, completion } = spawnOwnedVitestProcess({
-      command: process.execPath,
+      command: executable,
       args: command,
       homeMode: realHomeReplay ? "live-aware" : undefined,
       options: { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] },
@@ -324,7 +455,7 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
         path.join(evidence, "run.json"),
         JSON.stringify(
           {
-            command: [process.execPath, ...command],
+            command: [executable, ...command],
             cwd: root,
             env: childEnv,
             ...result,

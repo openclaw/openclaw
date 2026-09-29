@@ -1,9 +1,10 @@
 // Telegram helper module supports draft stream helpers behavior.
 import { vi } from "vitest";
-import type { TelegramDraftPreview, TelegramDraftStream } from "./draft-stream.js";
+import type { TelegramDraftPreview } from "./draft-stream-message.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 
 type TelegramDraftMessageSnapshot = NonNullable<
-  ReturnType<NonNullable<TelegramDraftStream["currentMessageSnapshot"]>>
+  ReturnType<TelegramDraftStream["currentMessageSnapshot"]>
 >;
 
 type TestDraftStream = {
@@ -19,7 +20,7 @@ type TestDraftStream = {
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
   discard: ReturnType<typeof vi.fn<() => Promise<void>>>;
   forceNewMessage: ReturnType<typeof vi.fn<() => void>>;
-  rotateToNewMessageDeferringDelete: ReturnType<typeof vi.fn<() => number | undefined>>;
+  rotateToNewMessageDeferringDelete: ReturnType<typeof vi.fn<() => void>>;
   sendMayHaveLanded: ReturnType<typeof vi.fn<() => boolean>>;
   remainingFinalContent: ReturnType<typeof vi.fn<() => TelegramDraftMessageSnapshot | undefined>>;
   hasConsumedReplyTarget: ReturnType<typeof vi.fn<() => boolean>>;
@@ -92,76 +93,16 @@ export function createTestDraftStream(params?: {
       }
     }),
     rotateToNewMessageDeferringDelete: vi.fn().mockImplementation(() => {
-      // Mirror forceNewMessage's message-id handling (a sequenced harness swaps
-      // ids on the next send; the fixed harness keeps its id unless configured
-      // otherwise) so the rewind semantics match; return the superseded id.
-      const superseded = messageId;
       stopped = false;
       if (params?.clearMessageIdOnForceNew) {
         messageId = undefined;
       }
-      return superseded;
     }),
     sendMayHaveLanded: vi.fn().mockReturnValue(false),
     remainingFinalContent: vi.fn().mockReturnValue(params?.remainingFinalContent),
     hasConsumedReplyTarget: vi.fn().mockReturnValue(params?.hasConsumedReplyTarget ?? false),
     setMessageId: (value: number | undefined) => {
       messageId = value;
-    },
-  };
-}
-
-export function createSequencedTestDraftStream(startMessageId = 1001): TestDraftStream {
-  let activeMessageId: number | undefined;
-  let nextMessageId = startMessageId;
-  let lastDeliveredText = "";
-  const update = vi.fn().mockImplementation((text: string) => {
-    if (activeMessageId == null) {
-      activeMessageId = nextMessageId++;
-    }
-    lastDeliveredText = text.trimEnd();
-  });
-  return {
-    update,
-    updateLazy: vi.fn().mockImplementation((resolveText: () => string | undefined) => {
-      const text = resolveText();
-      if (text !== undefined) {
-        update(text);
-      }
-    }),
-    updatePreview: vi.fn().mockImplementation((preview: TelegramDraftPreview) => {
-      if (activeMessageId == null) {
-        activeMessageId = nextMessageId++;
-      }
-      lastDeliveredText = preview.text.trimEnd();
-    }),
-    flush: vi.fn().mockResolvedValue(undefined),
-    waitForInFlight: vi.fn().mockResolvedValue(undefined),
-    messageId: vi.fn().mockImplementation(() => activeMessageId),
-    lastDeliveredText: vi.fn().mockImplementation(() => lastDeliveredText),
-    currentMessageSnapshot: vi
-      .fn()
-      .mockImplementation(() =>
-        activeMessageId != null && lastDeliveredText
-          ? { text: lastDeliveredText, sourceText: lastDeliveredText }
-          : undefined,
-      ),
-    clear: vi.fn().mockResolvedValue(undefined),
-    stop: vi.fn().mockResolvedValue(undefined),
-    discard: vi.fn().mockResolvedValue(undefined),
-    forceNewMessage: vi.fn().mockImplementation(() => {
-      activeMessageId = undefined;
-    }),
-    rotateToNewMessageDeferringDelete: vi.fn().mockImplementation(() => {
-      const superseded = activeMessageId;
-      activeMessageId = undefined;
-      return superseded;
-    }),
-    sendMayHaveLanded: vi.fn().mockReturnValue(false),
-    remainingFinalContent: vi.fn().mockReturnValue(undefined),
-    hasConsumedReplyTarget: vi.fn().mockReturnValue(false),
-    setMessageId: (value: number | undefined) => {
-      activeMessageId = value;
     },
   };
 }

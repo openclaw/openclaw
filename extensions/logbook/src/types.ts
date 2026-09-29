@@ -1,5 +1,3 @@
-// Shared Logbook domain shapes used by the store, pipeline, and gateway methods.
-
 export type LogbookFrame = {
   id: number;
   capturedAtMs: number;
@@ -62,4 +60,24 @@ export type LogbookDayStats = {
   distractionMs: number;
   categories: Array<{ category: string; ms: number }>;
   apps: Array<{ domain: string; ms: number }>;
+};
+
+export type LogbookStatus = {
+  captureEnabled: boolean;
+  capturePaused: boolean;
+  captureIntervalSeconds: number;
+  analysisIntervalMinutes: number;
+  retentionDays: number;
+  nodeId?: string;
+  nodeName?: string;
+  lastCaptureAtMs?: number;
+  lastCaptureError?: string;
+  pendingFrames: number;
+  analysisRunning: boolean;
+  lastBatch?: Pick<LogbookBatch, "id" | "day" | "status" | "endMs" | "error">;
+  visionModel?: string;
+  visionModelSource: "config" | "media-defaults" | "missing";
+  today: string;
+  todayCards: number;
+  timeZone: string;
 };

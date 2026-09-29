@@ -5,6 +5,7 @@ export TERM=xterm-256color
 export NO_COLOR=1
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/onboard/first-agent-flow.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
@@ -73,13 +74,8 @@ wait_for_log() {
   local start_s
   start_s="$(date +%s)"
   while true; do
-    if [ -f "$ONBOARD_LOG" ]; then
-      if grep -a -F -q "$needle" "$ONBOARD_LOG"; then
-        return 0
-      fi
-      if node scripts/e2e/lib/onboard/log-contains.mjs "$ONBOARD_LOG" "$needle"; then
-        return 0
-      fi
+    if onboarding_log_contains "$needle"; then
+      return 0
     fi
     if [ $(($(date +%s) - start_s)) -ge "$timeout_s" ]; then
       echo "Timeout waiting for log: $needle" >&2
@@ -90,8 +86,35 @@ wait_for_log() {
   done
 }
 
+onboarding_log_contains() {
+  local needle="$1"
+  [ -f "$ONBOARD_LOG" ] &&
+    { grep -a -F -q "$needle" "$ONBOARD_LOG" ||
+      node scripts/e2e/lib/onboard/log-contains.mjs "$ONBOARD_LOG" "$needle"; }
+}
+
+drive_typed_onboarding() {
+  local hook_mode="${OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE:-}"
+  wait_for_log "Continue?" 60
+  send $'y\r' 0.4
+  if [[ "$hook_mode" != "interactive" ]]; then
+    wait_for_log "Help make OpenClaw better?" 60
+    send $'\r' 0.4
+    wait_for_first_agent_prompt onboarding_log_contains 60 0.4
+    send $'\r' 0.4
+    wait_for_log "to search" 60
+    send $'ollama\r' 0.4
+    return
+  fi
+
+  wait_for_log "to search" 60
+  send $'ollama\r' 0.4
+  wait_for_log "Enable hooks?" 60
+  send $' \r' 0.4
+  send $'\r' 0.4
+}
+
 openclaw_e2e_install_package "$INSTALL_LOG"
-echo "Installed the OpenClaw package."
 openclaw_prepublish_plugin_registry_start_mounted "$scenario_tmp/registry" plugin_registry_pid '["@openclaw/codex"]'
 command -v openclaw >/dev/null
 package_root="$(openclaw_e2e_package_root)"
@@ -109,14 +132,7 @@ openclaw_e2e_run_script_with_pty "node \"$entry\" onboard --flow quickstart --mo
 wizard_pid="$!"
 exec 3>"$input_fifo"
 
-wait_for_log "Continue?" 60
-send $'y\r' 0.4
-wait_for_log "Help make OpenClaw better?" 60
-send $'\r' 0.4
-wait_for_log "What should we call your first agent?" 60
-send $'\r' 0.4
-wait_for_log "to search" 60
-send $'ollama\r' 0.4
+drive_typed_onboarding
 
 wait "$wizard_pid"
 wizard_pid=""

@@ -1,5 +1,3 @@
-// sessions_send helper tests cover session-key target parsing and ping-pong
-// turn limits for agent-to-agent announce flows.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -11,7 +9,6 @@ import {
   buildAgentToAgentMessageContext,
   buildAgentToAgentReplyContext,
   resolveAnnounceTargetFromKey,
-  resolvePingPongTurns,
 } from "./sessions-send-helpers.js";
 
 describe("resolveAnnounceTargetFromKey", () => {
@@ -188,12 +185,6 @@ describe("resolveAnnounceTargetFromKey", () => {
       to: "user:u09g2dj0275",
       threadId: undefined,
     });
-  });
-});
-
-describe("resolvePingPongTurns", () => {
-  it("uses the fixed five-turn limit", () => {
-    expect(resolvePingPongTurns()).toBe(5);
   });
 });
 

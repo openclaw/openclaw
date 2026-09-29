@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
@@ -6,21 +7,15 @@ import type {
   RequesterMcpConnect,
   SessionMcpRequesterScope,
 } from "./agent-bundle-mcp-types.js";
-import { requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { readMcpOAuthCredentialsStatus, startMcpOAuthAuthorization } from "./mcp-oauth.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
-type RequesterOAuthServer = Extract<
-  NonNullable<ReturnType<typeof resolveMcpTransportConfig>>,
-  { kind: "http" }
->;
-
 async function connectRequesterOAuthServer(params: {
   serverName: string;
-  server: RequesterOAuthServer;
-  requesterScope: SessionMcpRequesterScope;
   publicOrigin?: string;
+  authorize: (
+    redirectUrl: string,
+  ) => ReturnType<(typeof import("./mcp-oauth.js"))["startMcpOAuthAuthorization"]>;
 }): Promise<AgentToolResult<unknown>> {
   if (!params.publicOrigin) {
     const message =
@@ -31,11 +26,7 @@ async function connectRequesterOAuthServer(params: {
       details: { status: "error", error: message, mcpServer: params.serverName },
     };
   }
-  const result = await startMcpOAuthAuthorization(
-    requesterMcpOAuthIdentity(params.serverName, params.server.url, params.requesterScope),
-    params.server,
-    { redirectUrl: new URL("/oauth/mcp/callback", params.publicOrigin).href },
-  );
+  const result = await params.authorize(new URL("/oauth/mcp/callback", params.publicOrigin).href);
   if (result.status === "authorized") {
     return {
       content: [
@@ -63,15 +54,15 @@ async function connectRequesterOAuthServer(params: {
 }
 
 function buildRequesterConnectCatalog(
-  servers: ReadonlyMap<string, RequesterOAuthServer>,
+  serverNames: Iterable<string>,
   safeServerNamesByServer: ReadonlyMap<string, string>,
 ): McpToolCatalog {
-  const entries = [...servers.entries()];
+  const entries = [...serverNames];
   return {
     version: 1,
     generatedAt: Date.now(),
     servers: Object.fromEntries(
-      entries.map(([serverName]) => [
+      entries.map((serverName) => [
         serverName,
         {
           serverName,
@@ -81,13 +72,14 @@ function buildRequesterConnectCatalog(
         },
       ]),
     ),
-    tools: entries.map(([serverName]) => ({
+    tools: entries.map((serverName) => ({
       serverName,
       safeServerName: safeServerNamesByServer.get(serverName) ?? serverName,
       toolName: "connect",
       description: `Connect your ${serverName} account.`,
       fallbackDescription: `Connect your ${serverName} account.`,
       inputSchema: Type.Object({}),
+      oauthConnectBootstrap: true,
     })),
   };
 }
@@ -101,29 +93,47 @@ export async function createRequesterMcpConnect(params: {
   cfg?: OpenClawConfig;
   configFingerprint: string;
 }): Promise<RequesterMcpConnect | undefined> {
-  const servers = new Map<string, RequesterOAuthServer>();
-  const authorizedServerNames: string[] = [];
-  for (const serverName of [...params.serverNames].toSorted((a, b) => a.localeCompare(b))) {
-    const resolved = resolveMcpTransportConfig(serverName, params.mcpServers[serverName], {
-      logWarnings: false,
+  const configured = [...params.serverNames]
+    .toSorted((a, b) => a.localeCompare(b))
+    .flatMap((serverName) => {
+      const resolved = resolveMcpTransportConfig(serverName, params.mcpServers[serverName], {
+        logWarnings: false,
+      });
+      return resolved?.kind === "http" &&
+        resolved.auth === "oauth" &&
+        resolved.oauth?.identity === "per-requester"
+        ? [{ serverName, resolved }]
+        : [];
     });
-    if (
-      resolved?.kind !== "http" ||
-      resolved.auth !== "oauth" ||
-      resolved.oauth?.identity !== "per-requester"
-    ) {
-      continue;
-    }
-    servers.set(serverName, resolved);
-    const status = await readMcpOAuthCredentialsStatus(
-      requesterMcpOAuthIdentity(serverName, resolved.url, params.requesterScope),
+  if (configured.length === 0) {
+    return undefined;
+  }
+  const { requesterMcpOAuthIdentity } = await import("./mcp-oauth-identity.js");
+  const { readMcpOAuthCredentialsStatuses, startMcpOAuthAuthorization } =
+    await import("./mcp-oauth.js");
+  const identities = configured.map(({ serverName, resolved }) =>
+    requesterMcpOAuthIdentity(serverName, resolved.url, params.requesterScope),
+  );
+  const statuses = await readMcpOAuthCredentialsStatuses(identities);
+  const servers = new Map<string, () => Promise<AgentToolResult<unknown>>>();
+  const authorizedServerNames: string[] = [];
+  for (const [index, { serverName, resolved }] of configured.entries()) {
+    const status = expectDefined(statuses[index], "requester MCP OAuth status");
+    servers.set(serverName, () =>
+      connectRequesterOAuthServer({
+        serverName,
+        publicOrigin: params.cfg?.gateway?.publicOrigin,
+        authorize: (redirectUrl) =>
+          startMcpOAuthAuthorization(
+            requesterMcpOAuthIdentity(serverName, resolved.url, params.requesterScope),
+            resolved,
+            { redirectUrl },
+          ),
+      }),
     );
     if (status.state === "authorized") {
       authorizedServerNames.push(serverName);
     }
-  }
-  if (servers.size === 0) {
-    return undefined;
   }
   const configFingerprint = JSON.stringify({
     config: params.configFingerprint,
@@ -131,21 +141,10 @@ export async function createRequesterMcpConnect(params: {
     publicOrigin: params.cfg?.gateway?.publicOrigin,
   });
   return {
-    catalog: buildRequesterConnectCatalog(servers, params.safeServerNamesByServer),
+    catalog: buildRequesterConnectCatalog(servers.keys(), params.safeServerNamesByServer),
     authorizedServerNames,
     configFingerprint,
-    createExecute(serverName) {
-      const server = servers.get(serverName);
-      return server
-        ? async () =>
-            await connectRequesterOAuthServer({
-              serverName,
-              server,
-              requesterScope: params.requesterScope,
-              publicOrigin: params.cfg?.gateway?.publicOrigin,
-            })
-        : undefined;
-    },
+    createExecute: (serverName) => servers.get(serverName),
   };
 }
 
@@ -154,11 +153,12 @@ export function mergeMcpConnectCatalog(
   liveCatalog: McpToolCatalog,
   requesterConnect?: RequesterMcpConnect,
 ): McpToolCatalog {
-  if (!requesterConnect) {
+  const connectCatalog = requesterConnect?.catalog;
+  if (!connectCatalog) {
     return liveCatalog;
   }
   const missingServerNames = new Set(
-    Object.keys(requesterConnect.catalog.servers).filter(
+    Object.keys(connectCatalog.servers).filter(
       (serverName) => !Object.hasOwn(liveCatalog.servers, serverName),
     ),
   );
@@ -167,18 +167,18 @@ export function mergeMcpConnectCatalog(
   }
   return {
     ...liveCatalog,
-    generatedAt: Math.max(liveCatalog.generatedAt, requesterConnect.catalog.generatedAt),
+    generatedAt: Math.max(liveCatalog.generatedAt, connectCatalog.generatedAt),
     servers: {
       ...liveCatalog.servers,
       ...Object.fromEntries(
-        Object.entries(requesterConnect.catalog.servers).filter(([serverName]) =>
+        Object.entries(connectCatalog.servers).filter(([serverName]) =>
           missingServerNames.has(serverName),
         ),
       ),
     },
     tools: [
       ...liveCatalog.tools,
-      ...requesterConnect.catalog.tools.filter((tool) => missingServerNames.has(tool.serverName)),
+      ...connectCatalog.tools.filter((tool) => missingServerNames.has(tool.serverName)),
     ].toSorted(
       (left, right) =>
         left.safeServerName.localeCompare(right.safeServerName) ||

@@ -18,21 +18,15 @@ export function buildCaptureViewModel(state: UiState) {
   const sessions = state.captureSessions;
   const rows = state.captureQueryRows;
   const events = state.captureEvents;
-  const availableKinds = [
-    ...new Set(
-      events.map((event) => event.kind).filter((value): value is string => Boolean(value)),
-    ),
-  ].toSorted();
-  const availableProviders = [
-    ...new Set(
-      events.map((event) => event.provider).filter((value): value is string => Boolean(value)),
-    ),
-  ].toSorted();
-  const availableHosts = [
-    ...new Set(
-      events.map((event) => event.host).filter((value): value is string => Boolean(value)),
-    ),
-  ].toSorted();
+  const availableValues = (field: "kind" | "provider" | "host") =>
+    [
+      ...new Set(
+        events.map((event) => event[field]).filter((value): value is string => Boolean(value)),
+      ),
+    ].toSorted();
+  const availableKinds = availableValues("kind");
+  const availableProviders = availableValues("provider");
+  const availableHosts = availableValues("host");
   const normalizedSearch = state.captureSearchText.trim().toLowerCase();
   const activeFilters: string[] = [];
   if (state.captureKindFilter.length > 0) {
@@ -200,9 +194,7 @@ export function buildCaptureViewModel(state: UiState) {
   const selectedFlowIndex =
     selectedEvent == null
       ? -1
-      : selectedFlowEvents.findIndex(
-          (event) => captureEventKey(event) === captureEventKey(selectedEvent),
-        );
+      : selectedFlowEvents.findIndex((event) => captureEventKey(event) === selectedEventKey);
   const previousFlowEvent =
     selectedFlowIndex > 0 ? selectedFlowEvents[selectedFlowIndex - 1] : null;
   const nextFlowEvent =
@@ -287,14 +279,13 @@ export function buildCaptureViewModel(state: UiState) {
           }, new Map()),
         ).map(([, group]) => group);
   const clusterEventBursts = (eventsForGroup: CaptureEventView[]) => {
-    const sorted = [...eventsForGroup].toSorted(
+    const sorted = eventsForGroup.toSorted(
       (left, right) =>
         left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)),
     );
     const clusters: Array<{
       key: string;
       representative: CaptureEventView;
-      events: CaptureEventView[];
       count: number;
       startTs: number;
       endTs: number;
@@ -315,14 +306,12 @@ export function buildCaptureViewModel(state: UiState) {
         clusters.push({
           key: captureEventKey(event),
           representative: event,
-          events: [event],
           count: 1,
           startTs: event.ts,
           endTs: event.ts,
         });
         continue;
       }
-      previous.events.push(event);
       previous.count += 1;
       previous.endTs = event.ts;
       previous.representative = event;
@@ -419,19 +408,13 @@ export function buildCaptureViewModel(state: UiState) {
     availableKinds,
     availableProviders,
     availableHosts,
-    normalizedSearch,
     activeFilters,
-    baseFilteredEvents,
     minTs,
-    maxTs,
     totalSpanMs,
     activeWindowStartPct,
     activeWindowEndPct,
     draftWindowStartPct,
     draftWindowEndPct,
-    activeWindowStartTs,
-    activeWindowEndTs,
-    activeWindowLabel,
     filteredEvents,
     analysisEnabled,
     selectedSessions,
@@ -439,11 +422,9 @@ export function buildCaptureViewModel(state: UiState) {
     selectedSessionEventCount,
     selectedEvent,
     selectedEventKey,
-    kindCounts,
     topKinds,
     topProviders,
     topModels,
-    selectedFlowId,
     selectedFlowEvents,
     selectedFlowIndex,
     previousFlowEvent,
@@ -467,7 +448,6 @@ export function buildCaptureViewModel(state: UiState) {
     selectedMetaRows,
     rawPayloadBody,
     availableDetailViews,
-    preferredDetailView,
     effectiveDetailView,
     effectiveFlowLayout,
     effectivePayloadLayout,

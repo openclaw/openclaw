@@ -74,7 +74,33 @@ extension Character {
 public enum DeepLinkRoute: Sendable, Equatable {
     case agent(AgentDeepLink)
     case gateway(GatewayConnectDeepLink)
+    case gatewayAdd(GatewayAddDeepLink)
     case dashboard
+}
+
+/// An address to add, never a grant of access or a replacement for the current gateway.
+public struct GatewayAddDeepLink: Sendable, Equatable {
+    public let url: URL
+    public let name: String?
+
+    public init?(url: URL, name: String? = nil) {
+        guard url.baseURL == nil,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              let host = components.host, !host.isEmpty,
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil,
+              components.port.map({ (1...65535).contains($0) }) ?? true
+        else { return nil }
+        components.scheme = "https"
+        components.host = host.lowercased()
+        guard let normalizedURL = components.url else { return nil }
+        self.url = normalizedURL
+        let label = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.name = label?.isEmpty == false ? label : nil
+    }
 }
 
 public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
@@ -341,12 +367,6 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             return nil
         }
         let tls = payload.tls ?? true
-        if !tls, tlsFingerprintSha256 != nil {
-            return nil
-        }
-        if !tls, !LoopbackHost.isLocalNetworkHost(host) {
-            return nil
-        }
         return GatewayConnectDeepLink.validated(
             host: host,
             port: payload.port ?? defaultGatewayPort(tls: tls),
@@ -379,12 +399,6 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             return nil
         }
         let tls = scheme == "wss" || scheme == "https"
-        if !tls, tlsFingerprintSha256 != nil {
-            return nil
-        }
-        if !tls, !LoopbackHost.isLocalNetworkHost(hostname) {
-            return nil
-        }
         return GatewayConnectDeepLink.validated(
             host: hostname,
             port: parsed.port ?? defaultGatewayPort(tls: tls),
@@ -553,6 +567,17 @@ public enum DeepLinkParser {
                     key: query["key"]))
 
         case "gateway":
+            if comps.percentEncodedPath == "/add" {
+                let items = comps.queryItems ?? []
+                guard comps.user == nil, comps.password == nil, comps.port == nil,
+                      comps.fragment == nil,
+                      items.allSatisfy({ $0.name == "url" || $0.name == "name" }),
+                      Set(items.map(\.name)).count == items.count,
+                      let rawURL = query["url"], let url = URL(string: rawURL),
+                      let link = GatewayAddDeepLink(url: url, name: query["name"])
+                else { return nil }
+                return .gatewayAdd(link)
+            }
             guard let hostParam = query["host"],
                   !hostParam.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
@@ -565,9 +590,6 @@ public enum DeepLinkParser {
                 port = parsedPort
             } else {
                 port = defaultGatewayPort(tls: tls)
-            }
-            if !tls, !LoopbackHost.isLocalNetworkHost(hostParam) {
-                return nil
             }
             guard let link = GatewayConnectDeepLink.validated(
                 host: hostParam,

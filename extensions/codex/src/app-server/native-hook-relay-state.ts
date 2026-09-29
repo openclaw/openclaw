@@ -4,6 +4,7 @@ type PendingUnregister = {
 };
 
 const pending = new Set<PendingUnregister>();
+const closing = new Set<Promise<void>>();
 
 /** Owns delayed hook-relay cleanup across runtime scheduling and test teardown. */
 export const nativeHookRelayUnregisterQueue = {
@@ -13,20 +14,33 @@ export const nativeHookRelayUnregisterQueue = {
   delete(entry: PendingUnregister): boolean {
     return pending.delete(entry);
   },
-  flush(): void {
+  track(operation: Promise<void>): void {
+    closing.add(operation);
+    void operation.then(
+      () => closing.delete(operation),
+      () => closing.delete(operation),
+    );
+  },
+  async flush(): Promise<void> {
     while (pending.size > 0) {
       const entry = pending.values().next().value;
       if (!entry) {
-        return;
+        break;
       }
       clearTimeout(entry.timeout);
       entry.unregister();
     }
+    while (closing.size > 0) {
+      await Promise.allSettled(closing);
+    }
   },
-  clear(): void {
+  async clear(): Promise<void> {
     for (const entry of pending) {
       clearTimeout(entry.timeout);
     }
     pending.clear();
+    while (closing.size > 0) {
+      await Promise.allSettled(closing);
+    }
   },
 };

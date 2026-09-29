@@ -22,13 +22,18 @@ vi.mock("./midturn-precheck.js", () => ({
   isMidTurnPrecheckSignal: hoisted.isMidTurnPrecheckSignal,
 }));
 
+import { SessionManager } from "../../sessions/session-manager.js";
 import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-submit.js";
 
 type PromptErrorInput = Parameters<typeof handleEmbeddedAttemptPromptError>[0];
 
 function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInput {
   return {
-    activeSession: { agent: { state: { messages: [] } }, messages: [] },
+    activeSession: {
+      agent: { state: { messages: [] } },
+      messages: [],
+      sessionManager: SessionManager.inMemory(),
+    },
     attempt: { runId: "run-1", sessionId: "session-1" },
     error: new Error("prompt failed"),
     handleMidTurnPrecheckRequest: hoisted.handleMidTurnPrecheckRequest,

@@ -22,6 +22,8 @@ suite.define(() => {
       const page = await context.newPage();
       const sessionKey = "agent:main:dashboard:reasoning-visibility";
       const reasoningText = "Compare the evidence before answering.";
+      const code = 'const label = "*literal*";\n\nconsole.log(label);\n';
+      const conclusion = "Compare both outputs.";
       const finalText = "The answer is ready.";
       const gateway = await installMockGateway(page, {
         sessionKey,
@@ -31,7 +33,12 @@ suite.define(() => {
           { role: "user", content: "Check the evidence.", timestamp: 1_000 },
           {
             role: "assistant",
-            content: [{ type: "thinking", thinking: reasoningText }],
+            content: [
+              {
+                type: "thinking",
+                thinking: `${reasoningText}\n\n\`\`\`ts\n${code}\`\`\`\n\n${conclusion}`,
+              },
+            ],
             timestamp: 2_000,
           },
           ...(withTools
@@ -75,6 +82,14 @@ suite.define(() => {
         await worked.click();
         await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
         await expect.poll(() => reasoning.isVisible()).toBe(reasoningLevel === "on");
+        if (reasoningLevel === "on") {
+          expect(await reasoning.locator("pre code").allTextContents()).toEqual([code]);
+          expect(await reasoning.locator("p").allTextContents()).toEqual([
+            "Reasoning:",
+            reasoningText,
+            conclusion,
+          ]);
+        }
         expect(await answer.isVisible()).toBe(true);
       }
 

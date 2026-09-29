@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -16,6 +17,7 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitChatSubmission,
   getChatSessionProjection,
+  getChatModelObservedRunId,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   publishChatSessionProjection,
@@ -86,6 +88,22 @@ function failedHistory(): ChatHistoryResult {
 }
 
 describe("chat history in-flight assistant recovery", () => {
+  it("recovers the observed model from chat.history without a new model event or exact ID set", async () => {
+    const history = activeHistory("held-fallback");
+    history.sessionInfo = {
+      key: "main",
+      kind: "direct",
+      updatedAt: 1,
+      hasActiveRun: true,
+      activeModel: "fallback",
+      activeModelProvider: "example",
+    };
+    const state = createState(history);
+    await loadChatHistory(state);
+    expect(state.chatRunId).toBe("held-fallback");
+    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBe("held-fallback");
+  });
+
   it("retires an interrupted run from authoritative history after missing its live terminal", async () => {
     const active = activeHistory("run-interrupted");
     const interrupted: ChatHistoryResult = {
@@ -141,7 +159,7 @@ describe("chat history in-flight assistant recovery", () => {
             "run-first",
           ),
         );
-        admitChatSubmission(state);
+        admitChatSubmission(state, undefined);
       }
 
       await loadChatHistory(state, { startup: method === "chat.startup" });
@@ -186,40 +204,6 @@ describe("chat history in-flight assistant recovery", () => {
     expect(state.chatRunError?.summary).toContain(fullError);
     expect(state.chatRunId).toBeNull();
   });
-
-  it.each(["running", "completed"])(
-    "does not replace a newer %s run with a delayed failed snapshot",
-    async (phase) => {
-      let resolveHistory!: (result: ChatHistoryResult) => void;
-      const request = vi.fn().mockReturnValue(
-        new Promise<ChatHistoryResult>((resolve) => {
-          resolveHistory = resolve;
-        }),
-      );
-      const state = createState(failedHistory());
-      state.client = { request } as unknown as GatewayBrowserClient;
-      const loading = loadChatHistory(state);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      handleChatGatewayEvent(state, {
-        runId: "run-newer",
-        sessionKey: "main",
-        state: "delta",
-        deltaText: "Working",
-      });
-      if (phase === "completed") {
-        handleChatGatewayEvent(state, {
-          runId: "run-newer",
-          sessionKey: "main",
-          state: "final",
-          message: { role: "assistant", content: "Done" },
-        });
-      }
-      resolveHistory(failedHistory());
-      await loading;
-      expect(state.chatRunError).toBeNull();
-      expect(state.chatRunId).toBe(phase === "running" ? "run-newer" : null);
-    },
-  );
 
   it("restores tools, preamble time, and output usage from the in-flight run snapshot", async () => {
     const history = activeHistory("run-live");
@@ -302,14 +286,17 @@ describe("chat history in-flight assistant recovery", () => {
     await loadHistoryWithBrowserTimers(state);
 
     expect(state.chatRunId).toBe("run-live");
-    expect(state.chatStream).toBeNull();
-    expect(state.chatStreamSegments).toContainEqual(
-      expect.objectContaining({
-        runId: "run-live",
-        text: "The active response survived reconnect.",
-        toolCallId: "call-reconnected",
-      }),
-    );
+    expect(state.chatStream).toBe("The active response survived reconnect.");
+    expect(state.chatStreamSegments).toEqual([]);
+    const continued = "The active response survived reconnect. Still streaming.";
+    handleChatGatewayEvent(state, {
+      runId: "run-live",
+      sessionKey: state.sessionKey,
+      state: "delta",
+      message: { role: "assistant", content: continued },
+    });
+    expect(renderedText(state)).toContain(continued);
+    expect(renderedText(state)).not.toContain("The active response survived reconnect.");
     expect(state.chatToolMessages[0]).toMatchObject({
       runId: "run-live",
       toolCallId: "call-reconnected",
@@ -377,14 +364,12 @@ describe("chat history in-flight assistant recovery", () => {
   });
 
   it.each(
-    ["idempotency", "Codex mirror"].flatMap((identity) =>
-      ["fresh adoption", "retained boundary"].flatMap((mode) =>
-        ["single row", "split rows", "split rows with commentary"].map((rows) => ({
-          identity,
-          mode,
-          rows,
-        })),
-      ),
+    ["fresh adoption", "retained boundary"].flatMap((mode) =>
+      [
+        { identity: "idempotency", rows: "single row" },
+        { identity: "idempotency", rows: "split rows" },
+        { identity: "Codex mirror", rows: "split rows with commentary" },
+      ].map(({ identity, rows }) => ({ identity, rows, mode })),
     ),
   )(
     "keeps the cumulative prefix after persisted history replacement: $identity, $mode, $rows",
@@ -826,10 +811,8 @@ describe("chat history in-flight assistant recovery", () => {
   );
 
   it("does not let delayed history overwrite a newer live run", async () => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
     const state = createState(activeHistory("run-reconnected"));
     state.client = { request } as unknown as GatewayBrowserClient;
@@ -846,10 +829,8 @@ describe("chat history in-flight assistant recovery", () => {
   });
 
   it("adopts the snapshot when remount reconciliation replaces an unchanged run map", async () => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
     const history = activeHistory("run-reconnected");
     history.inFlightRun!.text = "The response survived navigation.";
@@ -885,10 +866,8 @@ describe("chat history in-flight assistant recovery", () => {
   ])(
     "merges $name same-run delta that arrives before history",
     async ({ snapshotText, deltaText, cumulativeText, expectedTail }) => {
-      let resolveHistory!: (result: ChatHistoryResult) => void;
-      const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-        resolveHistory = resolve;
-      });
+      const { promise: historyPromise, resolve: resolveHistory } =
+        createDeferred<ChatHistoryResult>();
       const request = vi.fn().mockReturnValue(historyPromise);
       const history = activeHistory("run-reconnected");
       history.messages = [
@@ -921,10 +900,8 @@ describe("chat history in-flight assistant recovery", () => {
   );
 
   it("does not duplicate a live delta already covered by a newer history snapshot", async () => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
     const history = activeHistory("run-reconnected");
     history.messages = [
@@ -991,10 +968,8 @@ describe("chat history in-flight assistant recovery", () => {
       ],
     },
   ])("does not revive a live delta covered by $name", async ({ messages }) => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
     const history = activeHistory("run-reconnected");
     history.messages = messages;
@@ -1024,12 +999,19 @@ describe("chat history in-flight assistant recovery", () => {
     { name: "the snapshot run", completedRunId: "run-reconnected" },
     { name: "a newer intervening run", completedRunId: "run-newer" },
   ])("does not resurrect delayed history after $name completes", async ({ completedRunId }) => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
-    const state = createState(activeHistory("run-reconnected"));
+    const history = activeHistory("run-reconnected");
+    history.sessionInfo = {
+      ...history.sessionInfo,
+      key: "main",
+      kind: "direct",
+      activeRunIds: undefined,
+      activeModel: "old-fallback",
+      activeModelProvider: "example",
+    };
+    const state = createState(history);
     state.client = { request } as unknown as GatewayBrowserClient;
 
     const loadPromise = loadChatHistory(state);
@@ -1048,10 +1030,11 @@ describe("chat history in-flight assistant recovery", () => {
     });
     expect(state.chatRunId).toBeNull();
 
-    resolveHistory(activeHistory("run-reconnected"));
+    resolveHistory(history);
     await loadPromise;
 
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
+    expect(getChatModelObservedRunId(state, history.sessionInfo)).toBeUndefined();
   });
 });

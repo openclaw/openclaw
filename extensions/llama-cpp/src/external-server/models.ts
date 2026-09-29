@@ -98,7 +98,7 @@ function buildCompat(
   return {
     supportsStore: false,
     supportsDeveloperRole: false,
-    supportsReasoningEffort: false,
+    supportsReasoningEffort: asBoolean(caps?.supports_reasoning_effort) === true,
     supportsTemperature: true,
     supportsUsageInStreaming: true,
     supportsTools,
@@ -119,51 +119,40 @@ export function mapLlamaServerModel(
     return null;
   }
   const contextWindow = resolveContextWindow(props);
+  const compat = buildCompat(props);
   return {
     config: {
       id,
       name: id,
-      reasoning: false,
+      reasoning: compat.supportsReasoningEffort === true,
       input: resolveInput(row, props),
       cost: { ...SELF_HOSTED_DEFAULT_COST },
       contextWindow,
       contextTokens: contextWindow,
       maxTokens: resolveMaxTokens(props, contextWindow),
-      compat: buildCompat(props),
+      compat,
     },
     status: normalizeStatus(row.status?.value),
     failed: row.status?.failed === true,
   };
 }
 
-/** Keeps explicit rows first and appends models discovered from the server. */
-function mergeLlamaServerModels(params: {
-  explicitModels?: ModelDefinitionConfig[];
+export function buildLlamaServerProviderConfig(params: {
+  configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
-}): ModelDefinitionConfig[] {
-  const explicit = Array.isArray(params.explicitModels) ? params.explicitModels : [];
-  const merged = [...explicit];
-  const seen = new Set(explicit.map((model) => model.id));
+}): ModelProviderConfig {
+  const models = Array.isArray(params.configured?.models) ? [...params.configured.models] : [];
+  const seen = new Set(models.map((model) => model.id));
   for (const discovered of params.discoveredModels) {
     if (seen.has(discovered.config.id)) {
       continue;
     }
     seen.add(discovered.config.id);
-    merged.push(discovered.config);
+    models.push(discovered.config);
   }
-  return merged;
-}
-
-export function buildLlamaServerProviderConfig(params: {
-  configured?: ModelProviderConfig;
-  discoveredModels: readonly LlamaServerDiscoveredModel[];
-}): ModelProviderConfig {
   return normalizeLlamaServerProviderConfig({
     ...params.configured,
     baseUrl: params.configured?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
-    models: mergeLlamaServerModels({
-      explicitModels: params.configured?.models,
-      discoveredModels: params.discoveredModels,
-    }),
+    models,
   });
 }

@@ -38,6 +38,8 @@ const QuestionInputFields = {
   questionId: QuestionIdSchema,
   header: QuestionHeaderSchema,
   question: NonEmptyString,
+  // Opening an external page is separate from submitting the question's answer.
+  url: Type.Optional(withSince("2026.8", Type.String({ minLength: 1, maxLength: 2048 }))),
   options: Type.Array(QuestionOptionSchema, { maxItems: 4 }),
   multiSelect: Type.Optional(Type.Boolean()),
   isOther: Type.Optional(Type.Boolean()),

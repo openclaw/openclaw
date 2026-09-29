@@ -45,6 +45,9 @@ daemon. For install and product docs, see [lmstudio.ai](https://lmstudio.ai/).
 
     Choose `LM Studio`, then pick a model at the `Default model` prompt.
 
+    The server URL prompt also accepts host shorthand such as `localhost:1234`.
+    Invalid URLs stay in the prompt so you can correct them before model discovery.
+
     On a fresh guided setup, OpenClaw first queries `/api/v1/models` on the
     default or configured LM Studio host. An existing LLM is offered automatically
     only when LM Studio reports tool training and at least 16K of effective
@@ -97,6 +100,10 @@ servers; omit it for unauthenticated servers and OpenClaw stores a local non-sec
 This writes `models.providers.lmstudio` and sets the default model to `lmstudio/<custom-model-id>`.
 Providing an API key also writes the `lmstudio:default` auth profile.
 
+Add `--json` for a machine-readable result. Connection, HTTP, and model-selection
+failures return a JSON error with the same recovery guidance as human output and
+exit nonzero without applying the proposed provider configuration.
+
 Interactive setup can additionally prompt for a preferred load context length and applies it across
 the discovered models it saves to config.
 
@@ -145,6 +152,18 @@ still has `off`/`on` reasoning maps.
   },
 }
 ```
+
+### Model instances and context
+
+With preload enabled, OpenClaw routes chat requests to a loaded instance with
+enough context for the selected model budget. A newly loaded instance is addressed by the
+identifier returned by LM Studio. Your configured model reference and conversation model identity
+keep the canonical model key.
+
+With preload enabled, embedding requests also check that their model is loaded and route to the
+instance prepared for the configured context length. This avoids truncating input through a smaller
+loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT
+loading is disabled. Embedding model and cache identity keep the canonical model key.
 
 ### Disabling preload
 
@@ -196,6 +215,14 @@ require `models.providers.<id>.request.allowPrivateNetwork: true`; set it to `fa
 the default trust.
 
 ## Troubleshooting
+
+### Model discovery failures
+
+When a configured server cannot list models, OpenClaw reports an unavailable catalog or a
+catalog authentication rejection. A refresh can keep the last successful inventory when the
+connection and credentials still match. A successful empty response clears discovered models;
+explicitly configured models remain available without discovery. Restore the server connection
+or correct its credentials, then refresh the model list.
 
 ### LM Studio not detected
 

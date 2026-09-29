@@ -1,4 +1,5 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../app/browser-http.ts";
 
 type AvatarRouteEntry = {
   blobUrl: string | null;
@@ -97,7 +98,7 @@ async function fetchAvatarRoute(
     // password is valid, so a rejected credential falls through to the next one
     // instead of silently leaving the caller on its fallback forever.
     for (const authToken of authTokens.length > 0 ? authTokens : [""]) {
-      const response = await fetch(url, {
+      const response = await fetchControlUiResource(url, {
         ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
         signal: entry.controller.signal,
       });
@@ -165,6 +166,7 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
   private readonly owner = Symbol("authenticated-avatar-route-owner");
   private keys = new Set<string>();
   private connected = false;
+  private stopAuthRecovery?: () => void;
   private readonly onUpdate = () => {
     if (this.connected) {
       this.host.requestUpdate();
@@ -180,11 +182,14 @@ export class AuthenticatedAvatarRouteLoader implements ReactiveController {
 
   hostConnected() {
     this.connected = true;
+    this.stopAuthRecovery ??= subscribeBrowserAuthRestored(this.onUpdate);
     this.host.requestUpdate();
   }
 
   hostDisconnected() {
     this.connected = false;
+    this.stopAuthRecovery?.();
+    this.stopAuthRecovery = undefined;
     this.reset();
   }
 

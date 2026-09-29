@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 349565,
-  "reason": "Integrated Control UI and dependency changes since the 348668 B baseline, including chat face/visibility, locale, first-render, Meetings, and Appearance work, now measure 349565 B (+897 B, 0.26%); an independent exact-head build measured 349533 B (32 B lower, within the 64 B build-variance allowance); fixed 358400 B cap and existing allowances retained",
-  "updatedAt": "2026-09-03"
+  "startupJsGzipBytes": 371771,
+  "reason": "Approved by @steipete for PR #158567 on 2026-09-27: measured startup bundle 371,771 B after main reconciliation and canonical boot-module regeneration, +1,015 B (0.27%) over the previous baseline. Paired baseline and cap retain the 512 B growth and 64 B build-variance allowances, yielding a 372,347 B enforcement limit.",
+  "updatedAt": "2026-09-27"
 }

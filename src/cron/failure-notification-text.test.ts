@@ -13,12 +13,20 @@ const SCRIPT_FAILURE_COPY = {
   snapshot_limit_exceeded: "exceeded its state limit",
   internal_error: "failed internally",
   tool_budget_exceeded: "exceeded its tool budget",
-} satisfies Record<CronTriggerFailureCode, string>;
+} satisfies Record<Exclude<CronTriggerFailureCode, "plugin_reload_failed">, string>;
 
 describe("cronFailureDetailLines", () => {
   it.each(["timeout", "rate_limit"] as const)("keeps classified %s failures compact", (reason) => {
     expect(cronFailureDetailLines(reason, { kind: "command-exit", exitCode: 7 })).toEqual([
       `Cause: ${reason}`,
+    ]);
+  });
+
+  it("explains how to repair an unsupported model selection", () => {
+    expect(cronFailureDetailLines("model_not_found")).toEqual([
+      "Cause: model_not_found",
+      "Run `openclaw doctor --fix` to repair provider-declared retired model references.",
+      "Choose a supported model for this automation or remove its model override to use the agent default. If the agent default is unavailable, update it too.",
     ]);
   });
 

@@ -7,7 +7,7 @@
  */
 
 import type { OcPath } from "../oc-path.js";
-import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from "../oc-path.js";
+import { splitOcPathSlots } from "../oc-path.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./ast.js";
 import { resolveJsoncValueOcPath } from "./resolve-value.js";
 
@@ -25,18 +25,7 @@ export function resolveJsoncOcPath(ast: JsoncAst, path: OcPath): JsoncOcPathMatc
     return null;
   }
 
-  const segments: string[] = [];
-  const collect = (slot: string | undefined): void => {
-    if (slot === undefined) {
-      return;
-    }
-    for (const s of splitRespectingBrackets(slot, ".")) {
-      segments.push(isQuotedSeg(s) ? unquoteSeg(s) : s);
-    }
-  };
-  collect(path.section);
-  collect(path.item);
-  collect(path.field);
+  const segments = splitOcPathSlots(path.section, path.item, path.field);
 
   if (segments.length === 0) {
     return { kind: "root", node: ast };

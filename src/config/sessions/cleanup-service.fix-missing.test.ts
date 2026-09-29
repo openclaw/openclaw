@@ -282,8 +282,8 @@ describe("sessions cleanup --fix-missing", () => {
     }
     const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath });
     database.db.exec(`
-      CREATE TRIGGER fail_session_window_delete
-      BEFORE DELETE ON session_windows
+      CREATE TEMP TRIGGER fail_session_window_delete
+      BEFORE DELETE ON main.session_windows
       WHEN OLD.session_id = '${sessionId}'
       BEGIN
         SELECT RAISE(ABORT, 'injected lifecycle delete failure');

@@ -1,5 +1,6 @@
 {
   "id": "venice",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -44,6 +45,9 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "venice": "venice"
+    },
     "providers": {
       "venice": {
         "baseUrl": "https://api.venice.ai/api/v1",

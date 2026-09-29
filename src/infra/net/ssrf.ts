@@ -16,6 +16,7 @@ import {
   isLegacyIpv4Literal,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
+  isUnspecifiedIpAddress,
 } from "@openclaw/net-policy/ip";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -132,23 +133,7 @@ export function mergeSsrFPolicies(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeSsrFPolicyOrigin(value: string): string | undefined {
+function parseHttpBaseUrl(value: string): URL | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
@@ -158,11 +143,24 @@ function normalizeSsrFPolicyOrigin(value: string): string | undefined {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed.origin.toLowerCase();
+    return parsed;
   } catch {
     return undefined;
   }
+}
+
+export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined {
+  const parsed = parseHttpBaseUrl(baseUrl);
+  return parsed ? { allowedHostnames: [parsed.hostname] } : undefined;
+}
+
+function normalizeSsrFPolicyOrigin(value: string): string | undefined {
+  const parsed = parseHttpBaseUrl(value);
+  if (!parsed) {
+    return undefined;
+  }
+  parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+  return parsed.origin.toLowerCase();
 }
 
 function normalizeSsrFPolicyOrigins(values?: string[]): string[] {
@@ -186,23 +184,14 @@ export function ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl: string): SsrFPol
 export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
   baseUrl: string,
 ): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return {
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: [parsed.hostname],
-    };
-  } catch {
-    return undefined;
-  }
+  const parsed = parseHttpBaseUrl(baseUrl);
+  return parsed
+    ? {
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+        hostnameAllowlist: [parsed.hostname],
+      }
+    : undefined;
 }
 
 const BLOCKED_HOSTNAMES = new Set([
@@ -426,23 +415,6 @@ function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
   return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "loopback";
 }
 
-function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
-  const parsed = parseCanonicalIpAddress(address);
-  if (!parsed) {
-    return false;
-  }
-  if (isIpv4Address(parsed)) {
-    return parsed.range() === "unspecified";
-  }
-  if (parsed.range() === "unspecified") {
-    return true;
-  }
-  if (parsed.range() === "loopback") {
-    return false;
-  }
-  return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "unspecified";
-}
-
 function isBlockedTrustedResolvedIpv6Address(address: string): boolean {
   const parsed = parseCanonicalIpAddress(address);
   if (!parsed || isIpv4Address(parsed)) {
@@ -474,7 +446,7 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
 
   for (const entry of results) {
     if (
-      isUnspecifiedIpAddressIncludingEmbeddedIpv4(entry.address) ||
+      isUnspecifiedIpAddress(entry.address) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
       isBlockedTrustedResolvedIpv6Address(entry.address) ||
       isLinkLocalIpAddress(entry.address) ||
@@ -737,9 +709,6 @@ export function createPinnedDispatcher(
 
   const proxyUrl = policy.proxyUrl.trim();
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
-  if (!requestTls) {
-    return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
-  }
   return createHttp1ProxyAgent(
     {
       uri: proxyUrl,

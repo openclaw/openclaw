@@ -60,10 +60,6 @@ function renderRichResults(query: string, results: DocResult[], runtime: Runtime
   }
 }
 
-async function renderMarkdown(markdown: string, runtime: RuntimeEnv) {
-  runtime.log(markdown.trimEnd());
-}
-
 async function fetchDocsSearch(query: string): Promise<DocResult[]> {
   const url = new URL(SEARCH_API);
   url.searchParams.set("q", query);
@@ -75,7 +71,9 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
       signal: controller.signal,
     });
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      // A retained capture clone can keep cancellation pending until peer EOF.
+      // Request cancellation, then let this request owner abort transport in finally.
+      void response.body?.cancel().catch(() => undefined);
       throw new Error(`HTTP ${response.status}`);
     }
     const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
@@ -92,12 +90,13 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     return parseDocsSearchResults(payload.results);
   } finally {
     clearTimeout(timeout);
+    controller.abort();
   }
 }
 
 function parseDocsSearchResults(raw: unknown): DocResult[] {
   if (!Array.isArray(raw)) {
-    return [];
+    throw new Error("Docs search response is malformed: expected results array");
   }
   const results: DocResult[] = [];
   for (const item of raw) {
@@ -122,7 +121,7 @@ function parseDocsSearchResults(raw: unknown): DocResult[] {
 export async function docsSearchCommand(
   queryParts: string[],
   runtime: RuntimeEnv,
-  options: { json?: boolean } = {},
+  options: { json?: boolean; limit?: number } = {},
 ) {
   const query = queryParts.join(" ").trim();
   if (!query) {
@@ -152,6 +151,9 @@ export async function docsSearchCommand(
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Docs search failed: ${message}`, { cause: error });
   }
+  if (options.limit !== undefined) {
+    results = results.slice(0, options.limit);
+  }
 
   if (options.json) {
     writeRuntimeJson(runtime, { query, results });
@@ -162,6 +164,5 @@ export async function docsSearchCommand(
     renderRichResults(query, results, runtime);
     return;
   }
-  const markdown = buildMarkdown(query, results);
-  await renderMarkdown(markdown, runtime);
+  runtime.log(buildMarkdown(query, results).trimEnd());
 }

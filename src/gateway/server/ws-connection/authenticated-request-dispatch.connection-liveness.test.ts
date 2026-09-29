@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayConnectionState } from "../../server-connection-state.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import {
@@ -52,7 +53,11 @@ describe("authenticated request connection liveness", { concurrent: false }, () 
       started.resolve();
       return held.promise;
     });
-    const state = createGatewayConnectionState({ bootId: "late-subscription", cfg: {} });
+    const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "late-subscription",
+      cfg: {},
+    });
     onTestFinished(() => state.mentionInbox.dispose());
     const client = createOperatorWsClient({
       connId: "late-subscription-connection",
@@ -69,17 +74,20 @@ describe("authenticated request connection liveness", { concurrent: false }, () 
       }),
     });
 
-    await harness.dispatcher.dispatch(
+    const dispatch = harness.dispatcher.dispatch(
       { type: "req", id: testCase.method, method: testCase.method, params: testCase.params },
       client,
     );
-    await started.promise;
-    expect(runtime.beforeHandler).toHaveBeenCalledOnce();
-
-    state.clients.delete(client);
-    state.sessionEventSubscribers.unsubscribe(client.connId);
-    state.sessionMessageSubscribers.unsubscribeAll(client.connId);
-    held.resolve();
+    try {
+      await started.promise;
+      expect(runtime.beforeHandler).toHaveBeenCalledOnce();
+      state.clients.delete(client);
+      state.sessionEventSubscribers.unsubscribe(client.connId);
+      state.sessionMessageSubscribers.unsubscribeAll(client.connId);
+    } finally {
+      held.resolve();
+      await dispatch;
+    }
 
     expect(await harness.awaitResponseFrame(testCase.method)).toMatchObject({ ok: true });
     testCase.assertEmpty(state);

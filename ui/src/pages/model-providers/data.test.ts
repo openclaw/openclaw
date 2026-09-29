@@ -8,10 +8,11 @@ import type {
 } from "../../api/types.ts";
 import {
   buildModelProviderCards,
-  buildSelectableDefaultModels,
   buildUnconfiguredProviderOptions,
+  type DefaultModelSelection,
   modelCatalogRef,
   readModelProviderConfig,
+  resolveDefaultModelPresentation,
 } from "./data.ts";
 
 function catalogEntry(overrides: Partial<ModelCatalogEntry> & { provider: string }) {
@@ -36,6 +37,20 @@ function firstCard(cards: ReturnType<typeof buildModelProviderCards>) {
 
 function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
+}
+
+function defaultModelChoices(models: ModelCatalogEntry[] | null, selection: DefaultModelSelection) {
+  return resolveDefaultModelPresentation(
+    { models: models ?? [], hasSnapshot: models !== null, retired: false },
+    {
+      ...selection,
+      thinkingLevel: undefined,
+      thinkingOverridden: false,
+      fastMode: undefined,
+      fastModeOverridden: false,
+    },
+    null,
+  ).configuredModels;
 }
 
 const EMPTY_INPUT = {
@@ -294,6 +309,33 @@ describe("buildModelProviderCards", () => {
     });
   });
 
+  it("keeps automatic shared-owner orders incomplete on each separate card", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "provider-a",
+          authProvider: "shared-auth",
+          displayName: "Provider A",
+          status: "ok",
+          profiles: [{ profileId: "shared:first", type: "oauth", status: "ok" }],
+        },
+        {
+          provider: "provider-b",
+          authProvider: "shared-auth",
+          displayName: "Provider B",
+          status: "ok",
+          profiles: [{ profileId: "shared:second", type: "oauth", status: "ok" }],
+        },
+      ]),
+    });
+
+    expect(cards).toHaveLength(2);
+    expect(cards.map((provider) => provider.profileOrderExplicitProviders)).toEqual([[], []]);
+    expect(cards[0]?.profileOrders["shared-auth"]).toEqual(["shared:first", "shared:second"]);
+    expect(cards[1]?.profileOrders["shared-auth"]).toEqual(["shared:first", "shared:second"]);
+  });
+
   it("merges CLI alias auth rows even when usage enrichment is unavailable", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
@@ -349,6 +391,61 @@ describe("buildModelProviderCards", () => {
       { provider: "claude-cli", profileIds: ["p2"] },
     ]);
   });
+
+  it("groups alias profile priority under the shared auth owner", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "anthropic",
+          authProvider: "anthropic",
+          displayName: "Claude",
+          status: "ok",
+          profiles: [{ profileId: "p1", type: "oauth", status: "ok" }],
+          profileOrder: ["p2", "p1"],
+          profileOrderStored: true,
+        },
+        {
+          provider: "claude-cli",
+          authProvider: "anthropic",
+          displayName: "Claude",
+          status: "ok",
+          profiles: [{ profileId: "p2", type: "oauth", status: "ok" }],
+          profileOrder: ["p2", "p1"],
+          profileOrderStored: true,
+        },
+      ]),
+    });
+
+    expect(firstCard(cards)).toMatchObject({
+      profileProviderIds: { p1: "anthropic", p2: "anthropic" },
+      profileOrders: { anthropic: ["p2", "p1"] },
+      profileOrderExplicitProviders: ["anthropic"],
+      profileOrderStoredProviders: ["anthropic"],
+    });
+  });
+
+  it.each(["provider-config", "auth-config"] as const)(
+    "projects %s priority locks onto the owning card",
+    (profileOrderLocked) => {
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus([
+          {
+            provider: "openai",
+            authProvider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [{ profileId: "p1", type: "oauth", status: "ok", source: "config" }],
+            profileOrder: ["p1"],
+            profileOrderLocked,
+          },
+        ]),
+      });
+
+      expect(firstCard(cards).profileOrderLocks).toEqual({ openai: profileOrderLocked });
+    },
+  );
 
   it("keeps a credential-less missing route visible beside CLI OAuth", () => {
     const cards = buildModelProviderCards({
@@ -474,7 +571,7 @@ describe("buildModelProviderCards", () => {
     expect(firstCard(cards).localCost).toEqual({
       totalCost: 0.42,
       totalTokens: 150,
-      sessionCount: 3,
+      messageCount: 3,
     });
   });
 
@@ -523,7 +620,7 @@ describe("model provider configuration data", () => {
       catalogEntry({ provider: "openai", id: "gpt-ready", available: true }),
       catalogEntry({ provider: "openai", id: "gpt-disabled", available: false }),
     ];
-    const selectable = buildSelectableDefaultModels(models, {
+    const selectable = defaultModelChoices(models, {
       primary: "openai/gpt-saved",
       fallbacks: ["openai/gpt-disabled"],
       utilityModel: null,
@@ -540,13 +637,13 @@ describe("model provider configuration data", () => {
     (primary) => {
       const selection = { primary, fallbacks: [], utilityModel: null };
 
-      expect(buildSelectableDefaultModels(null, selection)[0]).not.toHaveProperty("available");
-      expect(buildSelectableDefaultModels([], selection)[0]).toMatchObject({ available: false });
+      expect(defaultModelChoices(null, selection)[0]).not.toHaveProperty("available");
+      expect(defaultModelChoices([], selection)[0]).toMatchObject({ available: false });
     },
   );
 
   it("preserves alias-valued and bare model defaults as picker options", () => {
-    const selectable = buildSelectableDefaultModels(
+    const selectable = defaultModelChoices(
       [catalogEntry({ provider: "anthropic", id: "claude-opus", alias: "Opus", available: true })],
       { primary: "opus", fallbacks: ["unknown-model"], utilityModel: null },
     );

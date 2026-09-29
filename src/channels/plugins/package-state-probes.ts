@@ -1,8 +1,3 @@
-/**
- * Bundled channel package-state probes.
- *
- * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
- */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -18,6 +13,7 @@ import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import { isPluginSourceModulePath } from "../../plugins/native-module-require.js";
 import { pluginCacheExistsSync } from "../../plugins/plugin-cache-files.js";
 import { isSafeChannelEnvVarTriggerName } from "../../secrets/channel-env-var-names.js";
+import { isOpenClawStateDatabaseDefinitelyAbsent } from "../../state/openclaw-state-db-readonly.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
@@ -116,21 +112,14 @@ function listBuiltBundledPackageStateModules(params: {
   return locations;
 }
 
-function resolveChannelPackageStateModuleLocation(params: {
-  entry: PluginChannelCatalogEntry;
-  specifier: string;
-}): ChannelPackageStateModuleLocation {
-  return {
-    modulePath: resolveExistingPluginModulePath(params.entry.rootDir, params.specifier),
-    rootDir: params.entry.rootDir,
-  };
-}
-
 function listChannelPackageStateModuleLocations(params: {
   entry: PluginChannelCatalogEntry;
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
-  const source = resolveChannelPackageStateModuleLocation(params);
+  const source = {
+    modulePath: resolveExistingPluginModulePath(params.entry.rootDir, params.specifier),
+    rootDir: params.entry.rootDir,
+  };
   // Prefer built bundled artifacts when present so probes match shipped runtime
   // behavior, then fall back to source for local development.
   const built = listBuiltBundledPackageStateModules({
@@ -299,6 +288,13 @@ export function hasChannelPackageState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): boolean {
+  if (
+    params.metadataKey === "persistedAuthState" &&
+    params.entry.channel.persistedAuthState?.backingStore === "plugin-state" &&
+    isOpenClawStateDatabaseDefinitelyAbsent(params.env)
+  ) {
+    return false;
+  }
   const checker = resolveChannelPackageStateChecker({
     entry: params.entry,
     metadataKey: params.metadataKey,

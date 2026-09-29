@@ -1,12 +1,27 @@
 // Exercises legacy values through the actual snapshot, Doctor, atomic write, and reread.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { getFreePort } from "../test-utils/ports.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import {
+  createBuiltRuntime,
+  runBuiltRuntime,
+} from "./doctor-config-preflight.process.test-support.js";
+import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+
+const CLI_CHILD_TIMEOUT_MS = 60_000;
+const runtimeDirs = useAutoCleanupTempDirTracker(afterAll);
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
+let runtimeRoot: string | undefined;
 
 async function repairConfig(configPath: string) {
   const ctx = await prepareDoctorContext(configPath);
@@ -16,6 +31,105 @@ async function repairConfig(configPath: string) {
 
 describe("Doctor legacy config composition", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
+
+  it("preserves the July TTS preference locator before retiring its config keys", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const prefsPath = path.join(home, "speech-preferences.json");
+      const preferences = '{"tts":{"auto":"off","maxLength":1200}}\n';
+      await fs.writeFile(prefsPath, preferences);
+      const configPath = await writeOpenClawConfig(home, {
+        agents: { list: [{ id: "main" }] },
+        messages: { tts: { prefsPath, personas: { narrator: { prompt: { style: "calm" } } } } },
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      });
+      await repairConfig(configPath);
+      expect((await readConfigFileSnapshot()).valid).toBe(true);
+      expect(readConfigMachineState("tts.prefsPath")).toBe(prefsPath);
+      expect(await fs.readFile(prefsPath, "utf8")).toBe(preferences);
+      const first = await fs.readFile(configPath, "utf8");
+      expect(JSON.parse(first)).not.toHaveProperty("messages.tts");
+      expect(JSON.parse(first)).not.toHaveProperty("tts.prefsPath");
+      expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
+      expect(await fs.readFile(configPath, "utf8")).toBe(first);
+    });
+  });
+
+  it.each([false, true])(
+    "converges the July upgrade fixture with explicit local model=%s",
+    async (explicitModel) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        const raw = JSON.parse(
+          await fs.readFile(
+            new URL("../../test/fixtures/doctor-2026.7.1.json", import.meta.url),
+            "utf8",
+          ),
+        );
+        if (explicitModel) {
+          raw.agents.defaults.memorySearch.local = { modelPath: "/synthetic/embedding.gguf" };
+        }
+        raw.gateway.port = await getFreePort();
+        const configPath = await writeOpenClawConfig(home, raw);
+        if (!runtimeRoot) {
+          runtimeRoot = createBuiltRuntime(runtimeDirs.make("openclaw-doctor-legacy-runtime-"));
+          // The source marker disables installed-package compile caching in every CLI child.
+          await fs.unlink(path.join(runtimeRoot, "src"));
+        }
+        const cliRuntime = runtimeRoot;
+        const env: NodeJS.ProcessEnv = {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          WINDIR: process.env.WINDIR,
+          ComSpec: process.env.ComSpec,
+          HOME: home,
+          USERPROFILE: home,
+          TMPDIR: home,
+          OPENCLAW_STATE_DIR: path.dirname(configPath),
+          OPENCLAW_CONFIG_PATH: configPath,
+          NODE_COMPILE_CACHE: path.join(cliRuntime, "node-compile-cache"),
+          NO_COLOR: "1",
+        };
+        const run = async (args: string[], expected = 0) => {
+          const result = await runBuiltRuntime(cliRuntime, env, args, CLI_CHILD_TIMEOUT_MS);
+          const output = `${result.stdout}\n${result.stderr}`;
+          expect(result.code, output).toBe(expected);
+        };
+        const doctorArgs = ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"];
+        await run(["config", "validate"], 1);
+        await run(doctorArgs);
+        const first = await fs.readFile(configPath, "utf8");
+        const saved = JSON.parse(first);
+        await run(["config", "validate"]);
+        expect(saved.agents).not.toHaveProperty("list");
+        expect(saved.agents.ownership).toBe("explicit");
+        expect(Object.keys(saved.agents.entries)).toEqual(["main", "research"]);
+        expect(saved.agents.defaults.systemAgent.agentId).toBe("main");
+        expect(saved.meta.migrations.modelPolicyAllowlist).toBe(true);
+        expect(saved.agents.defaults.modelPolicy.allow).toEqual([
+          "anthropic/claude-sonnet-4-6",
+          "anthropic/claude-opus-4-7",
+        ]);
+        expect(saved.memory.search).toEqual({ ...raw.agents.defaults.memorySearch });
+        expect(saved.tools.media.models).toEqual([
+          { ...raw.tools.media.audio.models[0], capabilities: ["audio"] },
+        ]);
+        expect(saved.gateway.nodes.commands.deny).toEqual(["system.run"]);
+        expect(saved.channels.telegram.groupAllowFrom).toEqual(["123456789"]);
+        expect(saved.channels.telegram.accounts.secondary.groupAllowFrom).toEqual(["987654321"]);
+        expect(saved.plugins.entries.browser.enabled).toBe(true);
+        expect(saved.meta).not.toHaveProperty("lastTouchedAt");
+        expect(saved.gateway.tailscale).not.toHaveProperty("resetOnExit");
+        await run(doctorArgs);
+        expect(await fs.readFile(configPath, "utf8")).toBe(first);
+      });
+    },
+    getCliProcessTestTimeout(
+      CLI_CHILD_TIMEOUT_MS,
+      CLI_CHILD_TIMEOUT_MS,
+      CLI_CHILD_TIMEOUT_MS,
+      CLI_CHILD_TIMEOUT_MS,
+    ),
+  );
 
   it.each([
     "list",
@@ -27,8 +141,8 @@ describe("Doctor legacy config composition", () => {
     "list with config env",
     "list with included identity",
   ])("preserves memory search settings from %s", async (shape) => {
-    await withTempHome(async (home) => {
-      await withEnvOverride(
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync(
         {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           DOCTOR_AGENT_ID: "research",
@@ -192,9 +306,9 @@ describe("Doctor legacy config composition", () => {
   it.each(["unnamed", "duplicate", "malformed"])(
     "repairs %s local agents beside an unrelated include",
     async (shape) => {
-      await withTempHome(async (home) => {
+      await withDoctorConfigPreflightHome(async (home) => {
         const workspace = path.join(home, "shared-agent-workspace");
-        await withEnvOverride(
+        await withEnvAsync(
           {
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             DOCTOR_TRUSTED_PROXY: "127.0.0.2",
@@ -276,8 +390,8 @@ describe("Doctor legacy config composition", () => {
   it.each(["duplicate ids", "whole-entry include"])(
     "refuses ambiguous legacy roster persistence for %s",
     async (shape) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const identity = { name: "Second agent" };
           const includeRaw = `${JSON.stringify(
             shape === "duplicate ids" ? identity : { identity, memorySearch: { enabled: false } },
@@ -325,8 +439,8 @@ describe("Doctor legacy config composition", () => {
   );
 
   it.each(["root", "list", "entries"])("preserves message policy from %s", async (scope) => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const message = { allowCrossContextSend: true, broadcast: { enabled: false } };
         const agent = scope === "root" ? {} : { tools: { message } };
         const configPath = await writeOpenClawConfig(home, {
@@ -350,8 +464,8 @@ describe("Doctor legacy config composition", () => {
     });
   });
   it("preserves inherited message policy when an agent opts out of the legacy bypass", async () => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
           tools: { message: { allowCrossContextSend: true } },
           agents: {
@@ -377,20 +491,44 @@ describe("Doctor legacy config composition", () => {
       });
     });
   });
-  it.each(["${DOCTOR_MEMORY_KEY}", "$${DOCTOR_MEMORY_KEY}"])(
-    "preserves migrated default memory references %s and explicit canonical values",
-    async (apiKey) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride(
-          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", DOCTOR_MEMORY_KEY: "memory-secret-canary" },
+  it.each([
+    { apiKey: "${DOCTOR_MEMORY_KEY}", provider: "auto", canonicalApiKey: undefined },
+    { apiKey: "$${DOCTOR_MEMORY_KEY}", provider: "auto", canonicalApiKey: undefined },
+    {
+      apiKey: "${DOCTOR_MEMORY_KEY}",
+      provider: "${DOCTOR_MEMORY_PROVIDER}",
+      canonicalApiKey: undefined,
+    },
+    {
+      apiKey: "${DOCTOR_MEMORY_KEY}",
+      provider: "auto",
+      canonicalApiKey: "${DOCTOR_CANONICAL_MEMORY_KEY}",
+    },
+  ])(
+    "preserves migrated $apiKey and canonical $canonicalApiKey references while canonicalizing $provider",
+    async ({ apiKey, provider, canonicalApiKey }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
+          {
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            DOCTOR_MEMORY_KEY: "memory-secret-canary",
+            DOCTOR_MEMORY_PROVIDER: "auto",
+            DOCTOR_CANONICAL_MEMORY_KEY: "canonical-secret-canary",
+          },
           async () => {
             const configPath = await writeOpenClawConfig(home, {
-              memory: { search: { enabled: false, query: { maxResults: 9 } } },
+              memory: {
+                search: {
+                  enabled: false,
+                  query: { maxResults: 9 },
+                  ...(canonicalApiKey ? { remote: { apiKey: canonicalApiKey } } : {}),
+                },
+              },
               agents: {
                 defaults: {
                   memorySearch: {
                     enabled: true,
-                    provider: "auto",
+                    provider,
                     query: { maxResults: 7 },
                     remote: { apiKey },
                   },
@@ -405,16 +543,40 @@ describe("Doctor legacy config composition", () => {
               gateway: { mode: "local" },
               plugins: { enabled: false },
             });
-            const repaired = await repairConfig(configPath);
+            const ctx = await prepareDoctorContext(configPath);
+            await withEnvAsync(
+              {
+                DOCTOR_MEMORY_KEY: "rotated-memory-secret-canary",
+                DOCTOR_CANONICAL_MEMORY_KEY: "rotated-canonical-secret-canary",
+              },
+              async () => {
+                await runInitialConfigWriteHealth(ctx);
+                const snapshot = await readConfigFileSnapshot();
+                expect(snapshot.valid).toBe(true);
+                expect(snapshot.sourceConfig.memory?.search?.remote?.apiKey).toBe(
+                  canonicalApiKey
+                    ? "rotated-canonical-secret-canary"
+                    : apiKey.startsWith("$$")
+                      ? "${DOCTOR_MEMORY_KEY}"
+                      : "rotated-memory-secret-canary",
+                );
+              },
+            );
+            const repaired = ctx.configResult;
+            expect(ctx.configWriteRefusal).toBeUndefined();
             expect(repaired.cfg.memory?.search?.remote?.apiKey).toBe(
-              apiKey.startsWith("$$") ? "${DOCTOR_MEMORY_KEY}" : "memory-secret-canary",
+              canonicalApiKey
+                ? "canonical-secret-canary"
+                : apiKey.startsWith("$$")
+                  ? "${DOCTOR_MEMORY_KEY}"
+                  : "memory-secret-canary",
             );
             const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
             expect(saved.memory.search).toEqual({
               enabled: false,
               provider: "openai",
               query: { maxResults: 9 },
-              remote: { apiKey },
+              remote: { apiKey: canonicalApiKey ?? apiKey },
             });
             expect(saved.agents.defaults).not.toHaveProperty("memorySearch");
             expect(saved.agents.entries.ops.memory.search).toEqual({
@@ -434,8 +596,8 @@ describe("Doctor legacy config composition", () => {
   it.each([true, false])(
     "preserves the shipped message bypass precedence for root %s",
     async (globalBypass) => {
-      await withTempHome(async (home) => {
-        await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const denied = { allowWithinProvider: false, allowAcrossProviders: false };
           const configPath = await writeOpenClawConfig(home, {
             tools: { message: { allowCrossContextSend: globalBypass, crossContext: denied } },

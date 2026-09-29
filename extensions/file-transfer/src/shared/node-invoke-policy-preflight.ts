@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
+import { DIR_FETCH_MAX_ENTRIES } from "./dir-fetch-limits.js";
 import { type GrantedAuthorization, promptVerb } from "./node-invoke-policy-approval.js";
 import { readPathBinding, type PathBinding } from "./path-binding.js";
 import {
@@ -11,12 +12,6 @@ import {
   evaluateFilePolicyConstraints,
   type FilePolicyKind,
 } from "./policy.js";
-
-export const DIR_FETCH_MAX_ENTRIES = 5000;
-
-function readResultPayload(result: { payload?: unknown }): Record<string, unknown> | null {
-  return asNullableRecord(result.payload);
-}
 
 function joinRemotePolicyPath(root: string, relPath: string): string {
   const rel = relPath.replace(/\\/gu, "/").replace(/^\.\//u, "");
@@ -46,6 +41,32 @@ function validateDirFetchPreflightEntry(
     return { ok: false, reason: "entry contains '..' traversal" };
   }
   return { ok: true };
+}
+
+type PolicyPathTree = Map<string, PolicyPathTree>;
+
+function* dirFetchPolicyPaths(entries: readonly string[]): Generator<string, void> {
+  const tree: PolicyPathTree = new Map();
+  yield ".";
+  // TARs can omit parent headers. Visit each implied path once, retaining only
+  // component edges; the caller closes this walk at the existing descendant cap.
+  for (const entry of entries) {
+    let branch = tree;
+    let relative = "";
+    for (const [component] of entry.replace(/\\/gu, "/").matchAll(/[^/]+/gu)) {
+      if (!component || component === ".") {
+        continue;
+      }
+      relative = relative ? `${relative}/${component}` : component;
+      let children = branch.get(component);
+      if (!children) {
+        children = new Map();
+        branch.set(component, children);
+        yield relative;
+      }
+      branch = children;
+    }
+  }
 }
 
 export async function validateDirFetchEntries(input: {
@@ -84,8 +105,8 @@ export async function validateDirFetchEntries(input: {
       details: { path: input.canonicalPath },
     });
   }
-  if (input.entries.length > DIR_FETCH_MAX_ENTRIES) {
-    const reason = `dir.fetch ${input.phase} contains ${input.entries.length} entries; limit ${DIR_FETCH_MAX_ENTRIES}`;
+  const rejectEntryLimit = async (count: number, label: "entries" | "descendant paths") => {
+    const reason = `dir.fetch ${input.phase} contains ${count} ${label}; limit ${DIR_FETCH_MAX_ENTRIES}`;
     await appendFileTransferAudit({
       op: input.op,
       nodeId: input.ctx.nodeId,
@@ -103,6 +124,9 @@ export async function validateDirFetchEntries(input: {
       message: `${reason}; refusing archive transfer`,
       details: { path: input.canonicalPath, reason },
     });
+  };
+  if (input.entries.length > DIR_FETCH_MAX_ENTRIES) {
+    return await rejectEntryLimit(input.entries.length, "entries");
   }
 
   const entries: string[] = [];
@@ -150,11 +174,15 @@ export async function validateDirFetchEntries(input: {
     entries.push(entry);
   }
 
-  const candidates = [
-    input.canonicalPath,
-    ...entries.map((entry) => joinRemotePolicyPath(input.canonicalPath, entry)),
-  ];
-  for (const candidate of candidates) {
+  let descendantCount = 0;
+  for (const relative of dirFetchPolicyPaths(entries)) {
+    if (relative !== ".") {
+      descendantCount += 1;
+      if (descendantCount > DIR_FETCH_MAX_ENTRIES) {
+        return await rejectEntryLimit(descendantCount, "descendant paths");
+      }
+    }
+    const candidate = joinRemotePolicyPath(input.canonicalPath, relative);
     const policyInput = {
       nodeId: input.ctx.nodeId,
       nodeDisplayName,
@@ -265,7 +293,7 @@ async function invokePreflight(input: {
       },
     };
   }
-  const payload = readResultPayload(preflight);
+  const payload = asNullableRecord(preflight.payload);
   if (payload?.ok === false) {
     const code = typeof payload.code === "string" ? payload.code : "PREFLIGHT_FAILED";
     const canonicalPath =
@@ -291,6 +319,21 @@ async function invokePreflight(input: {
     }
     return { ok: false, result: preflight };
   }
+  // Old nodes ignore unknown request fields; confirm this restriction before the mutating call.
+  if (
+    input.op === "file.write" &&
+    input.params.rejectHardlinks === true &&
+    payload?.rejectHardlinks !== true
+  ) {
+    return {
+      ok: false,
+      result: policyDeniedResult({
+        op: input.op,
+        code: "HARDLINK_REJECTION_UNSUPPORTED",
+        message: "node does not support hardlink-safe workspace writes; update the node and retry",
+      }),
+    };
+  }
   const canonicalPath = payload && typeof payload.path === "string" ? payload.path : "";
   if (!canonicalPath) {
     return {
@@ -303,7 +346,8 @@ async function invokePreflight(input: {
     };
   }
   const binding = readPathBinding(payload?.binding);
-  const expectedBindingKind = input.op === "file.write" ? "write" : "existing";
+  const expectedBindingKind =
+    input.op === "file.write" || input.op === "file.create" ? "write" : "existing";
   if (!binding || binding.kind !== expectedBindingKind) {
     return {
       ok: false,
@@ -481,49 +525,23 @@ export async function runPathPreflight(input: {
     canonicalPath: preflight.canonicalPath,
     startedAt: input.startedAt,
   });
-  return denied
-    ? { ok: false, result: denied }
-    : { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
-}
-
-export async function runDirFetchPreflight(input: {
-  ctx: OpenClawPluginNodeInvokePolicyContext;
-  op: FileTransferAuditOp;
-  authorization: GrantedAuthorization;
-  params: Record<string, unknown>;
-  requestedPath: string;
-  startedAt: number;
-}): Promise<
-  | { ok: true; canonicalPath: string; binding: PathBinding }
-  | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
-> {
-  const preflight = await invokeAuthorizedPreflight({ ...input, kind: "read" });
-  if (!preflight.ok) {
-    return { ok: false, result: preflight.result };
-  }
-  const denied = await validateCanonicalAuthorization({
-    ctx: input.ctx,
-    op: input.op,
-    kind: "read",
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
-    canonicalPath: preflight.canonicalPath,
-    startedAt: input.startedAt,
-  });
   if (denied) {
     return { ok: false, result: denied };
   }
-  const entryDeny = await validateDirFetchEntries({
-    ctx: input.ctx,
-    op: input.op,
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
-    canonicalPath: preflight.canonicalPath,
-    entries: preflight.payload?.entries,
-    startedAt: input.startedAt,
-    phase: "preflight",
-  });
-  return entryDeny
-    ? { ok: false, result: entryDeny }
-    : { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
+  if (input.op === "dir.fetch") {
+    const entryDeny = await validateDirFetchEntries({
+      ctx: input.ctx,
+      op: input.op,
+      authorization: input.authorization,
+      requestedPath: input.requestedPath,
+      canonicalPath: preflight.canonicalPath,
+      entries: preflight.payload?.entries,
+      startedAt: input.startedAt,
+      phase: "preflight",
+    });
+    if (entryDeny) {
+      return { ok: false, result: entryDeny };
+    }
+  }
+  return { ok: true, canonicalPath: preflight.canonicalPath, binding: preflight.binding };
 }

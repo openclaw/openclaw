@@ -1,7 +1,7 @@
 // Control UI helper presents Promise-based confirmation without relying on a native dialog bridge.
-import { html, nothing, render } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import "./modal-dialog.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
 
 /**
  * Opt-out for confirms whose action is repeatable and recoverable. Callers own
@@ -24,34 +24,18 @@ export type ConfirmDialogOptions = {
   danger?: boolean;
   signal?: AbortSignal;
   skipPreference?: ConfirmDialogSkipPreference;
+  requiredAcknowledgement?: string;
 };
 
 let confirmationActive = false;
 
 function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
-  if (options.signal?.aborted) {
-    return Promise.resolve(false);
-  }
-  const host = document.createElement("div");
-  document.body.append(host);
-  return new Promise((resolve) => {
-    let settled = false;
+  return withPromiseModalHost({ signal: options.signal, value: false }, ({ render, finish }) => {
     let skipRequested = false;
-    const finish = (confirmed: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      options.signal?.removeEventListener("abort", handleAbort);
-      render(nothing, host);
-      host.remove();
-      resolve(confirmed);
-    };
-    const handleAbort = () => finish(false);
-    options.signal?.addEventListener("abort", handleAbort, { once: true });
+    let acknowledged = !options.requiredAcknowledgement;
     const title = options.title ?? t("common.confirm");
-    render(
-      html`
+    const content = () => {
+      return html`
         <openclaw-modal-dialog
           label=${title}
           description=${options.message}
@@ -72,7 +56,25 @@ function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
                 : nothing
             }
             ${
-              options.skipPreference
+              options.requiredAcknowledgement
+                ? html`<label class="field checkbox">
+                    <input
+                      type="checkbox"
+                      .checked=${acknowledged}
+                      @change=${(event: Event) => {
+                        const input = event.currentTarget;
+                        if (input instanceof HTMLInputElement) {
+                          acknowledged = input.checked;
+                          render(content);
+                        }
+                      }}
+                    />
+                    <span>${options.requiredAcknowledgement}</span>
+                  </label>`
+                : nothing
+            }
+            ${
+              options.skipPreference && !options.requiredAcknowledgement
                 ? html`<label class="field checkbox exec-approval-skip">
                     <input
                       type="checkbox"
@@ -88,7 +90,11 @@ function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
               <button
                 type="button"
                 class="btn ${options.danger ? "danger" : "primary"}"
+                ?disabled=${!acknowledged}
                 @click=${() => {
+                  if (!acknowledged) {
+                    return;
+                  }
                   if (skipRequested) {
                     options.skipPreference?.remember();
                   }
@@ -103,9 +109,9 @@ function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
             </div>
           </div>
         </openclaw-modal-dialog>
-      `,
-      host,
-    );
+      `;
+    };
+    render(content);
   });
 }
 
@@ -113,7 +119,7 @@ function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
 export function showConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
   // An operator who opted out gets the action itself, not a modal they already
   // answered. Only callers that opted into a skip preference can reach this.
-  if (options.skipPreference?.skipped) {
+  if (options.skipPreference?.skipped && !options.requiredAcknowledgement) {
     return Promise.resolve(true);
   }
   if (confirmationActive) {

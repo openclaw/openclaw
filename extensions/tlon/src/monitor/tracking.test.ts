@@ -34,6 +34,12 @@ describe("createActiveSnapshotTracker", () => {
     expect(tracker.has("removed")).toBe(false);
   });
 
+  it("does not mark a key when its operation was rejected", () => {
+    const tracker = createActiveSnapshotTracker();
+    tracker.addIfAccepted("rejected", false);
+    expect(tracker.has("rejected")).toBe(false);
+  });
+
   it("does not impose a count cap on the authoritative active snapshot", () => {
     const tracker = createActiveSnapshotTracker();
     const keys = Array.from({ length: 2_001 }, (_, index) => `invite-${index}`);

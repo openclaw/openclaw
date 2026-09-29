@@ -15,9 +15,7 @@ struct RuntimeVersion: Comparable, CustomStringConvertible {
     }
 
     static func < (lhs: RuntimeVersion, rhs: RuntimeVersion) -> Bool {
-        if lhs.major != rhs.major { return lhs.major < rhs.major }
-        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
-        return lhs.patch < rhs.patch
+        (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
     }
 
     static func from(string: String) -> RuntimeVersion? {
@@ -55,22 +53,15 @@ enum RuntimeLocator {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "runtime")
     // Keep these floors aligned with package.json engines so the app never launches
     // the gateway on an unsupported odd release or an older even-major runtime.
-    private static let minNode22 = RuntimeVersion(major: 22, minor: 22, patch: 3)
-    private static let minNode24 = RuntimeVersion(major: 24, minor: 15, patch: 0)
-    private static let minNode25 = RuntimeVersion(major: 25, minor: 9, patch: 0)
-    private static let supportedNodeRange = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0"
+    private static let minNode24 = RuntimeVersion(major: 24, minor: 16, patch: 0)
+    private static let minNode26 = RuntimeVersion(major: 26, minor: 1, patch: 0)
+    private static let supportedNodeRange = ">=24.16.0 <25, or >=26.1.0"
 
     static func isSupportedNodeVersion(_ version: RuntimeVersion) -> Bool {
-        if version.major == self.minNode22.major {
-            return version >= self.minNode22
-        }
         if version.major == self.minNode24.major {
             return version >= self.minNode24
         }
-        if version.major == self.minNode25.major {
-            return version >= self.minNode25
-        }
-        return version.major > self.minNode25.major
+        return version >= self.minNode26
     }
 
     static func resolve(
@@ -80,7 +71,7 @@ enum RuntimeLocator {
         let pathEnv = searchPaths.joined(separator: ":")
         let runtime: RuntimeKind = .node
 
-        guard let binary = findExecutable(named: runtime.binaryName, searchPaths: searchPaths) else {
+        guard let binary = CommandResolver.findExecutable(named: runtime.rawValue, searchPaths: searchPaths) else {
             return .failure(.notFound(searchPaths: searchPaths))
         }
         guard let rawVersion = await readVersion(of: binary, pathEnv: pathEnv) else {
@@ -129,17 +120,6 @@ enum RuntimeLocator {
 
     // MARK: - Internals
 
-    private static func findExecutable(named name: String, searchPaths: [String]) -> String? {
-        let fm = FileManager()
-        for dir in searchPaths {
-            let candidate = (dir as NSString).appendingPathComponent(name)
-            if fm.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-        return nil
-    }
-
     private static func readVersion(of binary: String, pathEnv: String) async -> String? {
         let start = Date()
         do {
@@ -175,11 +155,5 @@ enum RuntimeLocator {
                 """)
             return nil
         }
-    }
-}
-
-extension RuntimeKind {
-    fileprivate var binaryName: String {
-        "node"
     }
 }

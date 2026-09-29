@@ -1,9 +1,5 @@
 // Matrix tests cover channel.message adapter plugin behavior.
-import {
-  verifyChannelMessageAdapterCapabilityProofs,
-  verifyChannelMessageLiveCapabilityAdapterProofs,
-  verifyChannelMessageLiveFinalizerProofs,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
@@ -154,11 +150,11 @@ describe("matrix channel message adapter", () => {
     }
     const payload = { text: "durable tool send" };
 
-    expect(prepareSendPayload({ ctx: { action: "send", cfg } as never, payload } as never)).toBe(
-      payload,
-    );
     expect(
-      prepareSendPayload({ ctx: { action: "edit", cfg } as never, payload } as never),
+      await prepareSendPayload({ ctx: { action: "send", cfg } as never, payload } as never),
+    ).toBe(payload);
+    expect(
+      await prepareSendPayload({ ctx: { action: "edit", cfg } as never, payload } as never),
     ).toBeNull();
   });
 
@@ -356,6 +352,9 @@ describe("matrix channel message adapter", () => {
       ctx: {} as never,
     });
 
+    expect(rendered?.text).toContain("fallback");
+    expect(rendered?.text).toContain("Select thinking level");
+
     const matrixChannelData = rendered?.channelData?.matrix as
       | { extraContent?: Record<string, unknown> }
       | undefined;
@@ -374,6 +373,7 @@ describe("matrix channel message adapter", () => {
       payload: rendered!,
       accountId: "default",
       threadId: "$thread",
+      replyToId: "$reply",
     });
 
     expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
@@ -383,53 +383,12 @@ describe("matrix channel message adapter", () => {
     expect(options.cfg).toBe(cfg);
     expect(options.accountId).toBe("default");
     expect(options.threadId).toBe("$thread");
+    expect(options.replyToId).toBe("$reply");
     expect(options.extraContent).toEqual({
       "com.openclaw.presentation": {
         ...presentation,
         version: 1,
         type: "message.presentation",
-      },
-    });
-  });
-
-  it("backs declared live preview finalizer capabilities with adapter proofs", async () => {
-    const adapter = matrixPlugin.message;
-
-    await verifyChannelMessageLiveCapabilityAdapterProofs({
-      adapterName: "matrixMessageAdapter",
-      adapter: adapter!,
-      proofs: {
-        draftPreview: () => {
-          expect(adapter!.live?.finalizer?.capabilities?.discardPending).toBe(true);
-        },
-        previewFinalization: () => {
-          expect(adapter!.live?.finalizer?.capabilities?.finalEdit).toBe(true);
-        },
-        progressUpdates: () => {
-          expect(adapter!.live?.capabilities?.draftPreview).toBe(true);
-        },
-        quietFinalization: () => {
-          expect(adapter!.live?.finalizer?.capabilities?.previewReceipt).toBe(true);
-        },
-      },
-    });
-
-    await verifyChannelMessageLiveFinalizerProofs({
-      adapterName: "matrixMessageAdapter",
-      adapter: adapter!,
-      proofs: {
-        finalEdit: () => {
-          expect(adapter!.live?.capabilities?.previewFinalization).toBe(true);
-        },
-        normalFallback: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
-        },
-        discardPending: () => {
-          expect(adapter!.live?.capabilities?.draftPreview).toBe(true);
-        },
-        previewReceipt: () => {
-          expect(adapter!.live?.capabilities?.quietFinalization).toBe(true);
-        },
       },
     });
   });

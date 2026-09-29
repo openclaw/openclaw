@@ -30,18 +30,64 @@ describe("OpenAI dynamic model capabilities", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it.each([
-    { promptTokens: 272_000, inputRate: 10, output: 0.05, cacheRead: 0.0005, cacheWrite: 0.00625 },
-    { promptTokens: 272_001, inputRate: 20, output: 0.075, cacheRead: 0.001, cacheWrite: 0.0125 },
+    {
+      id: "gpt-6-astra",
+      promptTokens: 272_000,
+      inputRate: 10,
+      output: 0.05,
+      cacheRead: 0.0005,
+      cacheWrite: 0.00625,
+    },
+    {
+      id: "gpt-6-astra",
+      promptTokens: 272_001,
+      inputRate: 20,
+      output: 0.075,
+      cacheRead: 0.001,
+      cacheWrite: 0.0125,
+    },
+    {
+      id: "gpt-6-sol",
+      promptTokens: 272_000,
+      inputRate: 2,
+      output: 0.01,
+      cacheRead: 0.0001,
+      cacheWrite: 0.00125,
+    },
+    {
+      id: "gpt-6-sol",
+      promptTokens: 272_001,
+      inputRate: 4,
+      output: 0.015,
+      cacheRead: 0.0002,
+      cacheWrite: 0.0025,
+    },
+    {
+      id: "gpt-6-luna",
+      promptTokens: 272_000,
+      inputRate: 0.1,
+      output: 0.0005,
+      cacheRead: 0.000005,
+      cacheWrite: 0.0000625,
+    },
+    {
+      id: "gpt-6-luna",
+      promptTokens: 272_001,
+      inputRate: 0.2,
+      output: 0.00075,
+      cacheRead: 0.00001,
+      cacheWrite: 0.000125,
+    },
   ])(
-    "prices Astra's full request at $promptTokens input tokens",
-    ({ promptTokens, inputRate, ...expected }) => {
+    "prices $id's full request at $promptTokens input tokens",
+    ({ id, promptTokens, inputRate, ...expected }) => {
       const model = buildOpenAIProvider().resolveDynamicModel?.({
         provider: "openai",
-        modelId: "gpt-6-astra",
+        modelId: id,
         modelRegistry: modelRegistry(),
       });
       if (!model) {
-        throw new Error("Astra must resolve before pricing");
+        throw new Error(`${id} must resolve before pricing`);
       }
       const usage = {
         input: promptTokens - 1_000,
@@ -57,43 +103,64 @@ describe("OpenAI dynamic model capabilities", () => {
     },
   );
 
-  it.each(["openai-responses", "openai-chatgpt-responses"] as const)(
-    "resolves GPT-6 Astra with its own capabilities over %s",
-    (api) => {
-      const model = buildOpenAIProvider().resolveDynamicModel?.({
-        provider: "openai",
-        modelId: "gpt-6-astra",
-        providerConfig: {
-          api,
-          baseUrl:
-            api === "openai-responses"
-              ? "https://api.openai.com/v1"
-              : "https://chatgpt.com/backend-api/codex",
-          models: [],
-        },
-        modelRegistry: modelRegistry(),
-      });
-
-      expect(model).toMatchObject({
-        id: "gpt-6-astra",
-        provider: "openai",
+  it.each(
+    (["openai-responses", "openai-chatgpt-responses"] as const).flatMap((api) => [
+      {
         api,
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1_050_000,
-        contextTokens: 272_000,
-        maxTokens: 128_000,
+        id: "gpt-6-astra",
+        off: null,
+        efforts: ["low", "medium", "high", "xhigh", "max"],
         cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-        thinkingLevelMap: { off: null, minimal: "low", xhigh: "xhigh", max: "max" },
-        compat: {
-          supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-          supportsTemperature: false,
-          codeMode: "preferred",
-        },
-      });
-    },
-  );
+      },
+      {
+        api,
+        id: "gpt-6-sol",
+        off: "none",
+        efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      },
+      {
+        api,
+        id: "gpt-6-luna",
+        off: "none",
+        efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+      },
+    ]),
+  )("resolves $id with its own capabilities over $api", ({ api, id, off, efforts, cost }) => {
+    const model = buildOpenAIProvider().resolveDynamicModel?.({
+      provider: "openai",
+      modelId: id,
+      providerConfig: {
+        api,
+        baseUrl:
+          api === "openai-responses"
+            ? "https://api.openai.com/v1"
+            : "https://chatgpt.com/backend-api/codex",
+        models: [],
+      },
+      modelRegistry: modelRegistry(),
+    });
+
+    expect(model).toMatchObject({
+      id,
+      provider: "openai",
+      api,
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      cost,
+      thinkingLevelMap: { off, minimal: "low", xhigh: "xhigh", max: "max" },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: efforts,
+        supportsTemperature: false,
+        codeMode: "preferred",
+      },
+    });
+  });
 
   it.each(preferredModels)(
     "retains preferred capabilities for $id without discovery",
@@ -140,19 +207,19 @@ describe("OpenAI dynamic model capabilities", () => {
       codeMode: "preferred",
     },
     {
-      id: "gpt-5.6-sol",
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      id: "gpt-6-sol",
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
       codeMode: "capable",
     },
     {
-      id: "gpt-5.6-terra",
-      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-      codeMode: "preferred",
+      id: "gpt-6-luna",
+      cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+      codeMode: undefined,
     },
     {
-      id: "gpt-5.6-luna",
-      cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-      codeMode: undefined,
+      id: "gpt-5.6-sol",
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      codeMode: "capable",
     },
   ] as const)("preserves exact registry metadata for $id", ({ id, cost, codeMode }) => {
     const provider = buildOpenAIProvider();
@@ -181,7 +248,7 @@ describe("OpenAI dynamic model capabilities", () => {
     expect(model).toBe(exactModel);
   });
 
-  it.each(["chat-latest", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"])(
+  it.each(["chat-latest", "gpt-5.4-mini"])(
     "does not promote unpreferred %s without discovery",
     (modelId) => {
       const model = buildOpenAIProvider().resolveDynamicModel?.({
@@ -215,6 +282,45 @@ describe("OpenAI dynamic model capabilities", () => {
     });
     expect(model?.compat?.codeMode).toBe("preferred");
   });
+
+  it.each(["openai-responses", "openai-chatgpt-responses"] as const)(
+    "constructs %s models without adding the template's transport defaults",
+    (api) => {
+      const template: ProviderRuntimeModel = {
+        id: "gpt-5.4",
+        name: "Template",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://template.example/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 128_000,
+        maxTokens: 8_192,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        headers: { "X-Template": "preserved" },
+        compat: { supportsDeveloperRole: true, codeMode: "capable" },
+      };
+      const original = structuredClone(template);
+      const model = buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: template.id,
+        providerConfig: {
+          api,
+          baseUrl:
+            api === "openai-responses"
+              ? "https://api.openai.com/v1"
+              : "https://chatgpt.com/backend-api/codex",
+          models: [],
+        },
+        modelRegistry: modelRegistry([template]),
+      });
+
+      expect(model).not.toBe(template);
+      expect(model).toMatchObject({ id: template.id, api, headers: original.headers });
+      expect(model?.compat).toEqual(original.compat);
+      expect(template).toEqual(original);
+    },
+  );
 
   it("retains the environment-selected endpoint with preferred metadata", () => {
     vi.stubEnv("OPENAI_BASE_URL", "https://proxy.example/v1");

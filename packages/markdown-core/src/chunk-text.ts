@@ -1,25 +1,14 @@
-// Markdown Core module implements chunk text behavior.
+import {
+  findGraphemeChunkEnd,
+  skipWhitespaceGraphemes,
+} from "@openclaw/normalization-core/grapheme";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 
-export { avoidTrailingHighSurrogateBreak };
+export { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 
 function normalizeChunkLimit(limit: number): number {
   // String slicing truncates fractional indexes, so positive limits need an integer progress step.
   return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
-}
-
-function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefined {
-  if (!text) {
-    return [];
-  }
-  if (limit <= 0) {
-    return [text];
-  }
-  if (text.length <= limit) {
-    return [text];
-  }
-  return undefined;
 }
 
 function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhitespace: number } {
@@ -74,9 +63,9 @@ function findPreferredRangeEnd(text: string, start: number, end: number): number
     return paragraphEnd;
   }
 
-  const newlineIndex = text.lastIndexOf("\n", end - 1);
-  if (newlineIndex >= start) {
-    return newlineIndex + 1;
+  const newlineIndex = slice.lastIndexOf("\n");
+  if (newlineIndex >= 0) {
+    return start + newlineIndex + 1;
   }
 
   for (let index = end - 1; index > start; index -= 1) {
@@ -108,8 +97,7 @@ export function chunkTextRanges(text: string, options: ChunkTextRangesOptions): 
       options.mode === "preferred" && maxEnd < text.length
         ? findPreferredRangeEnd(text, start, maxEnd)
         : undefined;
-    const candidateEnd = preferredEnd && preferredEnd > start ? preferredEnd : maxEnd;
-    const end = avoidTrailingHighSurrogateBreak(text, start, candidateEnd);
+    const end = findGraphemeChunkEnd(text, start, maxEnd, preferredEnd);
     ranges.push({ start, end });
     start = end;
   }
@@ -123,9 +111,11 @@ export function chunkTextRanges(text: string, options: ChunkTextRangesOptions): 
  */
 export function chunkText(text: string, limit: number): string[] {
   const normalizedLimit = normalizeChunkLimit(limit);
-  const early = resolveChunkEarlyReturn(text, normalizedLimit);
-  if (early) {
-    return early;
+  if (!text) {
+    return [];
+  }
+  if (normalizedLimit <= 0 || text.length <= normalizedLimit) {
+    return [text];
   }
 
   const chunks: string[] = [];
@@ -141,16 +131,9 @@ export function chunkText(text: string, limit: number): string[] {
     // Prefer block boundaries, then spaces, then a hard size cut when no
     // readable breakpoint exists inside this window.
     const breakOffset = lastNewline > 0 ? lastNewline : lastWhitespace;
-    const end = avoidTrailingHighSurrogateBreak(
-      text,
-      cursor,
-      breakOffset > 0 ? cursor + breakOffset : windowEnd,
-    );
+    const end = findGraphemeChunkEnd(text, cursor, windowEnd, cursor + breakOffset);
     chunks.push(text.slice(cursor, end));
-    cursor = end;
-    while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
-      cursor += 1;
-    }
+    cursor = skipWhitespaceGraphemes(text, end);
   }
   return chunks;
 }

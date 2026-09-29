@@ -111,6 +111,10 @@ enum GatewayEnvironment {
         return self.profilePortReservation.conflict
     }
 
+    static var gatewayPortRequiresRestart: Bool {
+        AppProfile.current.isActive && self.profilePortReservation.port != self.selectedGatewayPort()
+    }
+
     private static func selectedGatewayPort(root: [String: Any] = OpenClawConfigFile.loadDict()) -> Int {
         self.resolvedGatewayPort(
             environment: ProcessInfo.processInfo.environment,
@@ -149,11 +153,6 @@ enum GatewayEnvironment {
         CLIInstallPolicy.requiredGatewayVersionString(
             appVersion: self.appVersionString(),
             isDebug: CLIInstallBuild.isDebug)
-    }
-
-    /// Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
-    static func expectedGatewayVersion(from versionString: String?) -> Semver? {
-        Semver.parse(versionString)
     }
 
     static func check() async -> GatewayEnvironmentStatus {
@@ -223,19 +222,15 @@ enum GatewayEnvironment {
                     requiredGateway: expectedText,
                     message: """
                     Gateway version \(installedRaw) is incompatible with app \(expectedText);
-                    install or update the global package.
+                    open Connection settings to update or set up the Gateway.
                     """)
             }
 
             let gatewayLabel = gatewayBin != nil ? "global" : "local"
             let gatewayVersionText = installedRaw ?? "unknown"
-            // Avoid repeating "(local)" twice; if using the local entrypoint, show the path once.
-            let localPathHint = gatewayBin == nil && projectEntrypoint != nil
-                ? " (local: \(projectEntrypoint ?? "unknown"))"
-                : ""
             let gatewayLabelText = gatewayBin != nil
                 ? "(\(gatewayLabel))"
-                : localPathHint.isEmpty ? "(\(gatewayLabel))" : localPathHint
+                : " (local: \(projectEntrypoint ?? "unknown"))"
             return GatewayEnvironmentStatus(
                 kind: .ok,
                 nodeVersion: runtime.version.description,

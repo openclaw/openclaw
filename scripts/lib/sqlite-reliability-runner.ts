@@ -20,14 +20,17 @@ import {
 } from "../../src/state/openclaw-state-db.js";
 import { runVacuumInterruptionProof } from "./sqlite-reliability-compaction.js";
 import {
+  assertSameReliabilityState,
   COMMITTED_WAL_SENTINEL,
   PROFILES,
   STRESS_TABLE_SQL,
   type CliOptions,
+  type CompactionPayloadProof,
   type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
 import { runIndexRepairInterruptionProof } from "./sqlite-reliability-index-repair.js";
+import type { ReliabilityWorkerExit } from "./sqlite-reliability-process.js";
 import { runPublicationInterruptionProof } from "./sqlite-reliability-publication.js";
 import { runRepositoryInterruptionProof } from "./sqlite-reliability-repository.js";
 import { runRestoreInterruptionProof } from "./sqlite-reliability-restore.js";
@@ -39,20 +42,9 @@ import {
   terminateWriter,
   waitForWriterMessage,
   type WriterHandle,
-  type WriterExit,
 } from "./sqlite-reliability-writer.js";
 
-type TargetDatabase = {
-  identity: SnapshotDatabaseIdentity;
-  label: string;
-  path: string;
-};
-
-type IterationMetric = {
-  restoreMs: number;
-  snapshotBytes: number;
-  snapshotMs: number;
-};
+type TargetDatabase = ReturnType<typeof resolveTargetDatabase>;
 
 type CompactionProof = ReliabilityReport["maintenanceProof"]["compaction"];
 
@@ -99,7 +91,7 @@ function fileSize(pathname: string): number {
   }
 }
 
-function resolveTargetDatabase(options: CliOptions, env: NodeJS.ProcessEnv): TargetDatabase {
+function resolveTargetDatabase(options: CliOptions, env: NodeJS.ProcessEnv) {
   if (options.agentId) {
     const database = openOpenClawAgentDatabase({ agentId: options.agentId, env });
     const target = {
@@ -122,14 +114,24 @@ function resolveTargetDatabase(options: CliOptions, env: NodeJS.ProcessEnv): Tar
 }
 
 function setupStressTable(databasePath: string): void {
-  const database = openNodeSqliteDatabase(databasePath);
-  try {
+  withReliabilityDatabase(databasePath, (database) => {
     database.exec("PRAGMA journal_mode = WAL;");
     database.exec("PRAGMA busy_timeout = 30000;");
     database.exec(STRESS_TABLE_SQL);
     database.exec("DROP TABLE IF EXISTS openclaw_reliability_compaction_bloat;");
     database.prepare("DELETE FROM openclaw_reliability_entries").run();
     database.prepare("DELETE FROM openclaw_reliability_sentinel").run();
+  });
+}
+
+function withReliabilityDatabase<T>(
+  databasePath: string,
+  operation: (database: DatabaseSync) => T,
+  options?: Parameters<typeof openNodeSqliteDatabase>[1],
+): T {
+  const database = openNodeSqliteDatabase(databasePath, options);
+  try {
+    return operation(database);
   } finally {
     database.close();
   }
@@ -206,22 +208,6 @@ function readReliabilityState(database: DatabaseSync, rowsPerBatch: number): Rel
   };
 }
 
-function assertSameReliabilityState(
-  actual: ReliabilityStateProof,
-  expected: ReliabilityStateProof,
-  label: string,
-): void {
-  if (
-    actual.batches !== expected.batches ||
-    actual.rows !== expected.rows ||
-    actual.sha256 !== expected.sha256
-  ) {
-    throw new Error(
-      `${label} changed reliability state: expected batches=${expected.batches} rows=${expected.rows} sha256=${expected.sha256}, got batches=${actual.batches} rows=${actual.rows} sha256=${actual.sha256}`,
-    );
-  }
-}
-
 function verifyRestoredDatabase(params: {
   expectedState?: ReliabilityStateProof;
   identity: SnapshotDatabaseIdentity;
@@ -230,49 +216,48 @@ function verifyRestoredDatabase(params: {
   rowsPerBatch: number;
   uncommittedBatch: number | null;
 }): ReliabilityStateProof {
-  const database = openNodeSqliteDatabase(params.path, {
-    readOnly: params.readOnly ?? true,
-  });
-  try {
-    database.exec("PRAGMA trusted_schema = OFF;");
-    assertPragmaOk(database, "quick_check");
-    assertPragmaOk(database, "integrity_check");
-    const foreignKeys = database.prepare("PRAGMA foreign_key_check;").all();
-    if (foreignKeys.length > 0) {
-      throw new Error(`foreign_key_check failed with ${foreignKeys.length} row(s)`);
-    }
-    if (params.identity.role === "global") {
-      assertOpenClawStateDatabaseForMaintenance(database, { pathname: params.path });
-    } else if (params.identity.role === "agent") {
-      assertOpenClawAgentDatabaseForMaintenance(database, {
-        agentId: params.identity.agentId,
-        pathname: params.path,
-      });
-    }
-    const sentinel = database
-      .prepare("SELECT payload FROM openclaw_reliability_sentinel WHERE id = 1")
-      .get() as { payload?: unknown } | undefined;
-    if (sentinel?.payload !== COMMITTED_WAL_SENTINEL) {
-      throw new Error("committed WAL sentinel is missing after restore");
-    }
-    const state = readReliabilityState(database, params.rowsPerBatch);
-    if (params.uncommittedBatch !== null) {
-      const held = database
-        .prepare("SELECT COUNT(*) AS rows FROM openclaw_reliability_entries WHERE batch = ?")
-        .get(params.uncommittedBatch) as { rows?: unknown };
-      if (Number(held.rows) !== 0) {
-        throw new Error(
-          `uncommitted transaction became visible after restore: batch=${params.uncommittedBatch} rows=${String(held.rows)}`,
-        );
+  return withReliabilityDatabase(
+    params.path,
+    (database) => {
+      database.exec("PRAGMA trusted_schema = OFF;");
+      assertPragmaOk(database, "quick_check");
+      assertPragmaOk(database, "integrity_check");
+      const foreignKeys = database.prepare("PRAGMA foreign_key_check;").all();
+      if (foreignKeys.length > 0) {
+        throw new Error(`foreign_key_check failed with ${foreignKeys.length} row(s)`);
       }
-    }
-    if (params.expectedState) {
-      assertSameReliabilityState(state, params.expectedState, params.path);
-    }
-    return state;
-  } finally {
-    database.close();
-  }
+      if (params.identity.role === "global") {
+        assertOpenClawStateDatabaseForMaintenance(database, { pathname: params.path });
+      } else if (params.identity.role === "agent") {
+        assertOpenClawAgentDatabaseForMaintenance(database, {
+          agentId: params.identity.agentId,
+          pathname: params.path,
+        });
+      }
+      const sentinel = database
+        .prepare("SELECT payload FROM openclaw_reliability_sentinel WHERE id = 1")
+        .get() as { payload?: unknown } | undefined;
+      if (sentinel?.payload !== COMMITTED_WAL_SENTINEL) {
+        throw new Error("committed WAL sentinel is missing after restore");
+      }
+      const state = readReliabilityState(database, params.rowsPerBatch);
+      if (params.uncommittedBatch !== null) {
+        const held = database
+          .prepare("SELECT COUNT(*) AS rows FROM openclaw_reliability_entries WHERE batch = ?")
+          .get(params.uncommittedBatch) as { rows?: unknown };
+        if (Number(held.rows) !== 0) {
+          throw new Error(
+            `uncommitted transaction became visible after restore: batch=${params.uncommittedBatch} rows=${String(held.rows)}`,
+          );
+        }
+      }
+      if (params.expectedState) {
+        assertSameReliabilityState(state, params.expectedState, params.path);
+      }
+      return state;
+    },
+    { readOnly: params.readOnly ?? true },
+  );
 }
 
 function writeCompactionBloatRange(
@@ -281,9 +266,8 @@ function writeCompactionBloatRange(
   lastId: number,
   reset = false,
 ): void {
-  const database = openNodeSqliteDatabase(databasePath);
-  const payload = "b".repeat(COMPACTION_BLOAT_PAYLOAD_BYTES);
-  try {
+  withReliabilityDatabase(databasePath, (database) => {
+    const payload = "b".repeat(COMPACTION_BLOAT_PAYLOAD_BYTES);
     database.exec("PRAGMA journal_mode = WAL;");
     database.exec("PRAGMA wal_autocheckpoint = 0;");
     database.exec("PRAGMA busy_timeout = 30000;");
@@ -310,40 +294,34 @@ function writeCompactionBloatRange(
       throw error;
     }
     database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-  } finally {
-    database.close();
-  }
+  });
 }
 
-function readCompactionPayload(databasePath: string): {
-  bytes: number;
-  idSum: number;
-  rows: number;
-} {
-  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-  try {
-    const row = database
-      .prepare(
-        `SELECT
+function readCompactionPayload(databasePath: string): CompactionPayloadProof {
+  return withReliabilityDatabase(
+    databasePath,
+    (database) => {
+      const row = database
+        .prepare(
+          `SELECT
            COUNT(*) AS rows,
            COALESCE(SUM(id), 0) AS id_sum,
            COALESCE(SUM(length(payload)), 0) AS bytes
          FROM openclaw_reliability_compaction_bloat`,
-      )
-      .get() as { bytes?: unknown; id_sum?: unknown; rows?: unknown };
-    return {
-      bytes: sqliteSafeInteger(row.bytes, "compaction payload bytes"),
-      idSum: sqliteSafeInteger(row.id_sum, "compaction payload id sum"),
-      rows: sqliteSafeInteger(row.rows, "compaction payload rows"),
-    };
-  } finally {
-    database.close();
-  }
+        )
+        .get() as { bytes?: unknown; id_sum?: unknown; rows?: unknown };
+      return {
+        bytes: sqliteSafeInteger(row.bytes, "compaction payload bytes"),
+        idSum: sqliteSafeInteger(row.id_sum, "compaction payload id sum"),
+        rows: sqliteSafeInteger(row.rows, "compaction payload rows"),
+      };
+    },
+    { readOnly: true },
+  );
 }
 
 function deleteCompactionBloat(databasePath: string, retainThroughId?: number): void {
-  const database = openNodeSqliteDatabase(databasePath);
-  try {
+  withReliabilityDatabase(databasePath, (database) => {
     if (retainThroughId === undefined) {
       database.exec("DELETE FROM openclaw_reliability_compaction_bloat;");
     } else {
@@ -352,29 +330,27 @@ function deleteCompactionBloat(databasePath: string, retainThroughId?: number): 
         .run(retainThroughId);
     }
     database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function readAutoVacuum(databasePath: string): number {
-  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-  try {
-    const row = database.prepare("PRAGMA auto_vacuum;").get() as
-      | Record<string, unknown>
-      | undefined;
-    return sqliteSafeInteger(
-      row?.auto_vacuum ?? (row ? Object.values(row)[0] : undefined),
-      "auto_vacuum",
-    );
-  } finally {
-    database.close();
-  }
+  return withReliabilityDatabase(
+    databasePath,
+    (database) => {
+      const row = database.prepare("PRAGMA auto_vacuum;").get() as
+        | Record<string, unknown>
+        | undefined;
+      return sqliteSafeInteger(
+        row?.auto_vacuum ?? (row ? Object.values(row)[0] : undefined),
+        "auto_vacuum",
+      );
+    },
+    { readOnly: true },
+  );
 }
 
 function prepareVacuumRollbackSentinel(databasePath: string): number {
-  const database = openNodeSqliteDatabase(databasePath);
-  try {
+  withReliabilityDatabase(databasePath, (database) => {
     database.exec(`
       PRAGMA busy_timeout = 30000;
       PRAGMA wal_checkpoint(TRUNCATE);
@@ -384,9 +360,7 @@ function prepareVacuumRollbackSentinel(databasePath: string): number {
       PRAGMA journal_mode = WAL;
       PRAGMA wal_checkpoint(TRUNCATE);
     `);
-  } finally {
-    database.close();
-  }
+  });
   const autoVacuum = readAutoVacuum(databasePath);
   if (autoVacuum !== 0) {
     throw new Error(`failed to prepare VACUUM rollback sentinel: auto_vacuum=${autoVacuum}`);
@@ -463,9 +437,6 @@ async function compactTargetDatabase(
       walBytesBefore: report.before.walSizeBytes,
     });
   }
-  if (target.identity.role !== "agent") {
-    throw new Error(`unsupported reliability target role: ${target.identity.role}`);
-  }
   const autoVacuumBefore = readAutoVacuum(target.path);
   const report = await compactDoctorSessionSqliteTarget(
     { agentId: target.identity.agentId, storePath: target.path },
@@ -505,6 +476,15 @@ async function runMaintenanceRoundTrip(params: {
     rowsPerBatch: params.rowsPerBatch,
     uncommittedBatch: null,
   });
+  const verifyState = (databasePath: string, readOnly = true) =>
+    verifyRestoredDatabase({
+      expectedState,
+      identity: params.target.identity,
+      path: databasePath,
+      readOnly,
+      rowsPerBatch: params.rowsPerBatch,
+      uncommittedBatch: null,
+    });
   const expectedPayload = readCompactionPayload(params.target.path);
   if (
     expectedPayload.rows !== COMPACTION_BLOAT_ROWS ||
@@ -531,14 +511,7 @@ async function runMaintenanceRoundTrip(params: {
       sourcePath: params.target.path,
       validationRootPath: params.validationRoot,
       verifyPayload: readCompactionPayload,
-      verifyState: (databasePath) =>
-        verifyRestoredDatabase({
-          expectedState,
-          identity: params.target.identity,
-          path: databasePath,
-          rowsPerBatch: params.rowsPerBatch,
-          uncommittedBatch: null,
-        }),
+      verifyState,
     }),
     runRestoreInterruptionProof({
       expectedPayload,
@@ -549,14 +522,7 @@ async function runMaintenanceRoundTrip(params: {
       snapshotPath: interruptedCopiedPath,
       validationRootPath: params.validationRoot,
       verifyPayload: readCompactionPayload,
-      verifyState: (databasePath) =>
-        verifyRestoredDatabase({
-          expectedState,
-          identity: params.target.identity,
-          path: databasePath,
-          rowsPerBatch: params.rowsPerBatch,
-          uncommittedBatch: null,
-        }),
+      verifyState,
     }),
   );
   let vacuumInterruption: ReliabilityReport["maintenanceProof"]["vacuumInterruption"];
@@ -578,15 +544,7 @@ async function runMaintenanceRoundTrip(params: {
       expectedState,
       readAutoVacuum: () => readAutoVacuum(params.target.path),
       readPayload: () => readCompactionPayload(params.target.path),
-      recoverAndVerifyDatabase: () =>
-        verifyRestoredDatabase({
-          expectedState,
-          identity: params.target.identity,
-          path: params.target.path,
-          readOnly: false,
-          rowsPerBatch: params.rowsPerBatch,
-          uncommittedBatch: null,
-        }),
+      recoverAndVerifyDatabase: () => verifyState(params.target.path, false),
       target: params.target,
     });
   } catch (error) {
@@ -599,43 +557,24 @@ async function runMaintenanceRoundTrip(params: {
   }
   deleteCompactionBloat(params.target.path);
   const compaction = await compactTargetDatabase(params.target, params.env);
-  verifyRestoredDatabase({
-    expectedState,
-    identity: params.target.identity,
-    path: params.target.path,
-    rowsPerBatch: params.rowsPerBatch,
-    uncommittedBatch: null,
-  });
+  verifyState(params.target.path);
 
-  const snapshotStarted = nowMs();
-  const snapshot = await params.repositoryProvider.create({
-    identity: params.target.identity,
-    path: params.target.path,
-  });
-  const snapshotMs = nowMs() - snapshotStarted;
-  const copiedPath = copySnapshotDirectory(snapshot.ref.path, params.syncedRepository);
-  const copiedRef = { path: copiedPath };
-  await params.syncedProvider.verify(copiedRef);
-  const restorePath = path.join(params.restoreRoot, "post-compact.sqlite");
-  const restoreStarted = nowMs();
-  await params.syncedProvider.restoreFresh(copiedRef, restorePath);
-  const restoreMs = nowMs() - restoreStarted;
-  const state = verifyRestoredDatabase({
+  const restored = await runSnapshotRoundTrip({
+    ...params,
+    cleanupArtifacts: false,
     expectedState,
-    identity: params.target.identity,
-    path: restorePath,
-    rowsPerBatch: params.rowsPerBatch,
+    restorePath: path.join(params.restoreRoot, "post-compact.sqlite"),
     uncommittedBatch: null,
   });
   return {
     bloatBytes: vacuumInterruption.payloadBeforeKill.bytes,
     compaction,
     postCompact: {
-      restoreMs: Number(restoreMs.toFixed(3)),
+      restoreMs: restored.restoreMs,
       restoreVerified: true,
-      snapshotBytes: snapshot.manifest.artifact.sizeBytes,
-      snapshotMs: Number(snapshotMs.toFixed(3)),
-      state,
+      snapshotBytes: restored.snapshotBytes,
+      snapshotMs: restored.snapshotMs,
+      state: restored.state,
     },
     repositoryInterruption,
     restoreInterruption,
@@ -643,17 +582,17 @@ async function runMaintenanceRoundTrip(params: {
   };
 }
 
-async function runSnapshotIteration(params: {
+async function runSnapshotRoundTrip(params: {
   cleanupArtifacts: boolean;
-  iteration: number;
+  expectedState?: ReliabilityStateProof;
   repositoryProvider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
-  restoreRoot: string;
+  restorePath: string;
   rowsPerBatch: number;
   syncedProvider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
   syncedRepository: string;
   target: TargetDatabase;
   uncommittedBatch: number | null;
-}): Promise<IterationMetric> {
+}) {
   const snapshotStarted = nowMs();
   const snapshot = await params.repositoryProvider.create({
     identity: params.target.identity,
@@ -663,25 +602,26 @@ async function runSnapshotIteration(params: {
   const copiedPath = copySnapshotDirectory(snapshot.ref.path, params.syncedRepository);
   const copiedRef = { path: copiedPath };
   await params.syncedProvider.verify(copiedRef);
-  const restorePath = path.join(params.restoreRoot, `restore-${params.iteration}.sqlite`);
   const restoreStarted = nowMs();
-  await params.syncedProvider.restoreFresh(copiedRef, restorePath);
+  await params.syncedProvider.restoreFresh(copiedRef, params.restorePath);
   const restoreMs = nowMs() - restoreStarted;
-  verifyRestoredDatabase({
+  const state = verifyRestoredDatabase({
+    expectedState: params.expectedState,
     identity: params.target.identity,
-    path: restorePath,
+    path: params.restorePath,
     rowsPerBatch: params.rowsPerBatch,
     uncommittedBatch: params.uncommittedBatch,
   });
   if (params.cleanupArtifacts) {
     fs.rmSync(snapshot.ref.path, { force: true, recursive: true });
     fs.rmSync(copiedPath, { force: true, recursive: true });
-    fs.rmSync(restorePath, { force: true });
+    fs.rmSync(params.restorePath, { force: true });
   }
   return {
     restoreMs: Number(restoreMs.toFixed(3)),
     snapshotBytes: snapshot.manifest.artifact.sizeBytes,
     snapshotMs: Number(snapshotMs.toFixed(3)),
+    state,
   };
 }
 
@@ -703,6 +643,18 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
     fs.mkdirSync(validationRoot, { recursive: true, mode: 0o700 });
     const target = resolveTargetDatabase(options, env);
     setupStressTable(target.path);
+    const verifyDatabase = (
+      databasePath: string,
+      expectedState?: ReliabilityStateProof,
+      uncommittedBatch: number | null = null,
+    ) =>
+      verifyRestoredDatabase({
+        expectedState,
+        identity: target.identity,
+        path: databasePath,
+        rowsPerBatch: profile.rowsPerBatch,
+        uncommittedBatch,
+      });
     const repositoryProvider = createLocalSqliteSnapshotProvider({
       repositoryPath: repository,
       validationRootPath: validationRoot,
@@ -718,15 +670,10 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
     const partial = await waitForWriterMessage(writer, "partial", () => {
       writer?.child.send?.({ kind: "hold-partial" });
     });
-    const stateBeforeKill = verifyRestoredDatabase({
-      identity: target.identity,
-      path: target.path,
-      rowsPerBatch: profile.rowsPerBatch,
-      uncommittedBatch: partial.batch,
-    });
-    let crashExit: WriterExit | undefined;
+    const stateBeforeKill = verifyDatabase(target.path, undefined, partial.batch);
+    let crashExit: ReliabilityWorkerExit | undefined;
     let stateAfterRecovery: ReliabilityStateProof | undefined;
-    const metrics: IterationMetric[] = [];
+    const metrics: Awaited<ReturnType<typeof runSnapshotRoundTrip>>[] = [];
     for (let iteration = 0; iteration < profile.iterations; iteration += 1) {
       const iterationProof = await monitorSqliteWalDuring({
         maxWalBytes: profile.maxWalBytes,
@@ -737,12 +684,11 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
             // The operation still fails on the recorded peak if the writer exited first.
           }
         },
-        operation: async () =>
-          await runSnapshotIteration({
+        operation: () =>
+          runSnapshotRoundTrip({
             cleanupArtifacts: cleanupIterationArtifacts,
-            iteration,
             repositoryProvider,
-            restoreRoot,
+            restorePath: path.join(restoreRoot, `restore-${iteration}.sqlite`),
             rowsPerBatch: profile.rowsPerBatch,
             syncedProvider,
             syncedRepository,
@@ -755,13 +701,7 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       peakWalBytes = Math.max(peakWalBytes, iterationProof.peakWalBytes);
       if (iteration === 0) {
         crashExit = await crashWriter(writer);
-        stateAfterRecovery = verifyRestoredDatabase({
-          expectedState: stateBeforeKill,
-          identity: target.identity,
-          path: target.path,
-          rowsPerBatch: profile.rowsPerBatch,
-          uncommittedBatch: partial.batch,
-        });
+        stateAfterRecovery = verifyDatabase(target.path, stateBeforeKill, partial.batch);
         writer = startWriter(target.path, profile);
         await waitForWriterMessage(writer, "ready");
       }
@@ -770,26 +710,14 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       throw new Error("SQLite reliability stress did not execute its crash recovery proof.");
     }
     const writerResult = await stopWriter(writer);
-    const stableState = verifyRestoredDatabase({
-      identity: target.identity,
-      path: target.path,
-      rowsPerBatch: profile.rowsPerBatch,
-      uncommittedBatch: null,
-    });
+    const stableState = verifyDatabase(target.path);
     const [publicationInterruptionProof, indexRepairInterruptionProof] =
       await runProofsConcurrently(
         runPublicationInterruptionProof({
           expectedState: stableState,
           scratchPath: path.join(runScratch, "publication-interruptions"),
           sourcePath: target.path,
-          verifyDatabase: (databasePath) =>
-            verifyRestoredDatabase({
-              expectedState: stableState,
-              identity: target.identity,
-              path: databasePath,
-              rowsPerBatch: profile.rowsPerBatch,
-              uncommittedBatch: null,
-            }),
+          verifyDatabase: (databasePath) => verifyDatabase(databasePath, stableState),
         }),
         runIndexRepairInterruptionProof(path.join(runScratch, "index-repair-interruptions")),
       );
@@ -804,6 +732,8 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       validationRoot,
     });
     const snapshotBytes = metrics.map((metric) => metric.snapshotBytes);
+    const restoreTimes = metrics.map((metric) => metric.restoreMs);
+    const snapshotTimes = metrics.map((metric) => metric.snapshotMs);
     return {
       arch: process.arch,
       concurrentRestoresVerified: metrics.length,
@@ -838,22 +768,10 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       },
       target: target.label,
       timingsMs: {
-        restoreP50: percentile(
-          metrics.map((metric) => metric.restoreMs),
-          50,
-        ),
-        restoreP95: percentile(
-          metrics.map((metric) => metric.restoreMs),
-          95,
-        ),
-        snapshotP50: percentile(
-          metrics.map((metric) => metric.snapshotMs),
-          50,
-        ),
-        snapshotP95: percentile(
-          metrics.map((metric) => metric.snapshotMs),
-          95,
-        ),
+        restoreP50: percentile(restoreTimes, 50),
+        restoreP95: percentile(restoreTimes, 95),
+        snapshotP50: percentile(snapshotTimes, 50),
+        snapshotP95: percentile(snapshotTimes, 95),
         total: Number((nowMs() - started).toFixed(3)),
       },
       transactionProof: {

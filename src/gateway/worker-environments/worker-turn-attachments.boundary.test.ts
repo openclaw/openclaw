@@ -24,6 +24,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   openSessionManager,
   placements,
   root,
@@ -33,8 +34,9 @@ import {
   turn,
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { applyStagedWorkerWorkspace, readActualWorkspaceManifest } from "./workspace-reconcile.js";
+import { applyStagedWorkerWorkspace } from "./workspace-reconcile.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 describe("current attachments in an active remote placement", () => {
@@ -51,8 +53,8 @@ describe("current attachments in an active remote placement", () => {
       for (const directory of [remote, local]) {
         await writeFile(path.join(directory, "remote-edits.txt"), "preserve me");
       }
-      const base = await readActualWorkspaceManifest({ root: local, baseCommit: null });
-      seedActivePlacement(executionMode, remote);
+      const base = await captureWorkspaceManifest({ root: local, baseCommit: null });
+      await seedActivePlacement(executionMode, remote);
       // These arrive after placement: the initial workspace snapshot cannot include them.
       const pdf = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(220_000, 65)]);
       const image = Buffer.from(
@@ -145,6 +147,7 @@ describe("current attachments in an active remote placement", () => {
           });
         }),
         measureLaunchTurn,
+        readLaunchToolNames,
         stageAttachments: async (request) => {
           const service = createNodeWorkspaceTransferService({
             getOwner: () => ({
@@ -239,6 +242,9 @@ describe("current attachments in an active remote placement", () => {
           resume: async () => {},
         })),
         reconcileWorkspace: vi.fn(async (request) => {
+          if (request.source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
           const capture = await runCommandWithTimeout(
             [process.execPath, "-e", REMOTE_WORKSPACE_MANIFEST_JS, remote],
             { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: remoteHome } },
@@ -257,7 +263,8 @@ describe("current attachments in an active remote placement", () => {
             currentManifestRef: manifestRef,
             base: base.manifest,
             current,
-            journal: request.journal,
+            acceptance: { kind: "reconcile" },
+            journal: request.source.journal,
           });
           workerManifestPaths = JSON.parse(raw).entries.map(
             (entry: { path: string }) => entry.path,
@@ -267,6 +274,8 @@ describe("current attachments in an active remote placement", () => {
             ...result,
             changed: true,
             verifyStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         }),
         syncWorkspace: vi.fn(),
@@ -274,12 +283,12 @@ describe("current attachments in an active remote placement", () => {
       };
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
-        resolveWorkspacePath: async () => local,
+        resolveWorkspace: async () => ({ kind: "local", path: local }),
         environments: {
           ...unusedEnvironments(),
           get: () => attachedEnvironment(),
           acquireTurnCredential: async () => credential(),
-          acknowledgeCredentialDelivery: () => true,
+          acknowledgeCredentialDelivery: async () => true,
           startTunnel: async () => tunnel,
         },
       });

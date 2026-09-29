@@ -1,12 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  resetPluginBlobStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installMatrixTestRuntime } from "../test-runtime.js";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
 import {
   cleanupMatrixDeliveryPlans,
   createMatrixPlannedEvents,
@@ -64,13 +60,13 @@ function identity(queueId = "queue-1", partIndex = 0, partCount = 1) {
   return resolved;
 }
 
-function events(deliveryIdentity = identity()) {
+function events(deliveryIdentity = identity(), body = "durable hello") {
   return createMatrixPlannedEvents({
     identity: deliveryIdentity,
     events: [
       {
         receiptKind: "text",
-        content: { msgtype: "m.text", body: "durable hello" },
+        content: { msgtype: "m.text", body },
       },
     ],
   });
@@ -83,10 +79,11 @@ async function persist(
     partCount?: number;
     accountId?: string;
     scope?: string;
+    body?: string;
   } = {},
 ) {
   const deliveryIdentity = identity(params.queueId, params.partIndex, params.partCount);
-  const plannedEvents = events(deliveryIdentity);
+  const plannedEvents = events(deliveryIdentity, params.body);
   return await persistMatrixDeliveryPlan({
     identity: deliveryIdentity,
     accountId: params.accountId ?? "default",
@@ -125,9 +122,8 @@ describe("Matrix durable delivery plans", () => {
     client.sendMessage.mockClear();
   });
 
-  afterEach(() => {
-    resetPluginBlobStoreForTests({ closeDatabase: false });
-    resetPluginStateStoreForTests();
+  afterEach(async () => {
+    await resetMatrixTestStores();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -213,64 +209,84 @@ describe("Matrix durable delivery plans", () => {
     });
   });
 
-  it("preserves ordered typed receipt parts and the final event identity", async () => {
-    const deliveryIdentity = identity("queue-multi-event");
-    const plannedEvents = createMatrixPlannedEvents({
-      identity: deliveryIdentity,
-      events: [
-        { receiptKind: "media", content: { msgtype: "m.image", body: "caption" } },
-        { receiptKind: "text", content: { msgtype: "m.text", body: "follow-up" } },
-      ],
-    });
-    await persistMatrixDeliveryPlan({
-      identity: deliveryIdentity,
-      accountId: "default",
-      roomId: "!room:example.org",
-      transactionScopeId: "scope-1",
-      wireEventType: "m.room.message",
-      events: plannedEvents,
-      dispatch: {
-        roomId: "!room:example.org",
-        eventType: "m.room.message",
-        transactionId: plannedEvents[0]!.transactionId,
-        requestPath: `/_matrix/client/v3/rooms/!room%3Aexample.org/send/m.room.message/${plannedEvents[0]!.transactionId}`,
-      },
-    });
-    client.sendMessage.mockResolvedValueOnce("$media-event").mockResolvedValueOnce("$text-event");
-
-    await expect(
-      reconcileMatrixUnknownSend({
-        ...reconciliationContext("queue-multi-event"),
-        effectiveReplyToId: "$reply",
-        threadId: "$thread",
-      }),
-    ).resolves.toMatchObject({
-      status: "sent",
-      messageId: "$text-event",
-      receipt: {
-        primaryPlatformMessageId: "$media-event",
-        platformMessageIds: ["$media-event", "$text-event"],
-        replyToId: "$reply",
-        threadId: "$thread",
-        parts: [
+  it.each([false, true])(
+    "preserves ordered typed receipt parts and the final event identity (duplicate ID: %s)",
+    async (duplicateId) => {
+      const deliveryIdentity = identity("queue-multi-event");
+      const relation = {
+        rel_type: "m.thread" as const,
+        event_id: "$thread",
+        "m.in_reply_to": { event_id: "$reply" },
+      };
+      const plannedEvents = createMatrixPlannedEvents({
+        identity: deliveryIdentity,
+        events: [
           {
-            platformMessageId: "$media-event",
-            kind: "media",
-            index: 0,
-            replyToId: "$reply",
-            threadId: "$thread",
+            receiptKind: "media",
+            content: { msgtype: "m.image", body: "caption", "m.relates_to": relation },
           },
           {
-            platformMessageId: "$text-event",
-            kind: "text",
-            index: 1,
-            replyToId: "$reply",
-            threadId: "$thread",
+            receiptKind: "text",
+            content: { msgtype: "m.text", body: "follow-up", "m.relates_to": relation },
           },
         ],
-      },
-    });
-  });
+      });
+      await persistMatrixDeliveryPlan({
+        identity: deliveryIdentity,
+        accountId: "default",
+        roomId: "!room:example.org",
+        transactionScopeId: "scope-1",
+        wireEventType: "m.room.message",
+        events: plannedEvents,
+        dispatch: {
+          roomId: "!room:example.org",
+          eventType: "m.room.message",
+          transactionId: plannedEvents[0]!.transactionId,
+          requestPath: `/_matrix/client/v3/rooms/!room%3Aexample.org/send/m.room.message/${plannedEvents[0]!.transactionId}`,
+        },
+      });
+      client.sendMessage
+        .mockResolvedValueOnce("$media-event")
+        .mockResolvedValueOnce(duplicateId ? "$media-event" : "$text-event");
+
+      await expect(
+        reconcileMatrixUnknownSend({
+          ...reconciliationContext("queue-multi-event"),
+          effectiveReplyToId: "$reply",
+          threadId: "$thread",
+        }),
+      ).resolves.toMatchObject({
+        status: "sent",
+        messageId: duplicateId ? "$media-event" : "$text-event",
+        receipt: {
+          primaryPlatformMessageId: "$media-event",
+          platformMessageIds: duplicateId ? ["$media-event"] : ["$media-event", "$text-event"],
+          replyToId: "$reply",
+          threadId: "$thread",
+          parts: [
+            {
+              platformMessageId: "$media-event",
+              kind: "media",
+              index: 0,
+              replyToId: "$reply",
+              threadId: "$thread",
+            },
+            ...(duplicateId
+              ? []
+              : [
+                  {
+                    platformMessageId: "$text-event",
+                    kind: "text",
+                    index: 1,
+                    replyToId: "$reply",
+                    threadId: "$thread",
+                  },
+                ]),
+          ],
+        },
+      });
+    },
+  );
 
   it("fails closed without provider I/O when any expected part plan is missing", async () => {
     const incompleteIdentity = identity("queue-incomplete", 0, 2);
@@ -290,29 +306,6 @@ describe("Matrix durable delivery plans", () => {
         accountId: "default",
         roomId: "!room:example.org",
         transactionScopeId: "scope-1",
-        wireEventType: "m.room.message",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("fails closed when the active transaction scope differs", async () => {
-    const scopeIdentity = identity("queue-scope");
-    await persist({ queueId: "queue-scope", scope: "old-scope" });
-
-    await expect(
-      reconcileMatrixUnknownSend(reconciliationContext("queue-scope")),
-    ).resolves.toMatchObject({
-      status: "unresolved",
-      retryable: false,
-      error: expect.stringContaining("no longer matches the active delivery target"),
-    });
-    expect(client.sendMessage).not.toHaveBeenCalled();
-    await expect(
-      loadMatrixDeliveryPlan({
-        identity: scopeIdentity,
-        accountId: "default",
-        roomId: "!room:example.org",
-        transactionScopeId: "old-scope",
         wireEventType: "m.room.message",
       }),
     ).resolves.toBeNull();
@@ -341,29 +334,118 @@ describe("Matrix durable delivery plans", () => {
     });
   });
 
-  it("removes all plans for a committed queue without touching another queue", async () => {
-    await persist({ queueId: "queue-clean" });
-    await persist({ queueId: "queue-keep" });
+  it.each(["scope-1", "old-scope"])(
+    "reconciles 129 parts and cleans only their queue after a sent or terminal result (scope: %s)",
+    async (scope) => {
+      const partCount = 129;
+      const plans: Array<Awaited<ReturnType<typeof persist>>> = [];
+      // Storage order deliberately differs from the required numeric delivery order.
+      for (let partIndex = partCount - 1; partIndex >= 0; partIndex -= 1) {
+        plans.unshift(
+          await persist({
+            queueId: "queue-many",
+            partIndex,
+            partCount,
+            scope,
+            body: `part ${partIndex}`,
+          }),
+        );
+      }
+      await persist({ queueId: "queue-keep" });
 
-    await cleanupMatrixDeliveryPlans({ queueId: "queue-clean" });
+      const result = await reconcileMatrixUnknownSend(reconciliationContext("queue-many"));
+      if (scope === "scope-1") {
+        const messageIds = plans.map((plan) => `$${plan.events[0]!.transactionId}`);
+        expect(result).toMatchObject({
+          status: "sent",
+          messageId: messageIds.at(-1),
+          receipt: {
+            primaryPlatformMessageId: messageIds[0],
+            platformMessageIds: messageIds,
+            parts: messageIds.map((platformMessageId, index) => ({
+              platformMessageId,
+              kind: "text",
+              index,
+            })),
+          },
+        });
+        expect(
+          client.sendMessage.mock.calls.map(([roomId, content, transactionId]) => ({
+            roomId,
+            content,
+            transactionId,
+          })),
+        ).toEqual(
+          plans.map((plan) => ({
+            roomId: plan.roomId,
+            content: plan.events[0]!.content,
+            transactionId: plan.events[0]!.transactionId,
+          })),
+        );
+        await cleanupMatrixDeliveryPlans({ queueId: "queue-many" });
+      } else {
+        expect(result).toMatchObject({
+          status: "unresolved",
+          retryable: false,
+          error: expect.stringContaining("no longer matches the active delivery target"),
+        });
+        expect(client.sendMessage).not.toHaveBeenCalled();
+      }
 
-    await expect(
-      loadMatrixDeliveryPlan({
-        identity: identity("queue-clean"),
-        accountId: "default",
-        roomId: "!room:example.org",
-        transactionScopeId: "scope-1",
-        wireEventType: "m.room.message",
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      loadMatrixDeliveryPlan({
-        identity: identity("queue-keep"),
-        accountId: "default",
-        roomId: "!room:example.org",
-        transactionScopeId: "scope-1",
-        wireEventType: "m.room.message",
-      }),
-    ).resolves.not.toBeNull();
-  });
+      for (const plan of plans) {
+        await expect(
+          loadMatrixDeliveryPlan({
+            identity: plan,
+            accountId: plan.accountId,
+            roomId: plan.roomId,
+            transactionScopeId: plan.transactionScopeId,
+            wireEventType: plan.wireEventType,
+          }),
+        ).resolves.toBeNull();
+      }
+      await expect(
+        loadMatrixDeliveryPlan({
+          identity: identity("queue-keep"),
+          accountId: "default",
+          roomId: "!room:example.org",
+          transactionScopeId: "scope-1",
+          wireEventType: "m.room.message",
+        }),
+      ).resolves.not.toBeNull();
+    },
+  );
+
+  it.each([false, true])(
+    "preserves blank queue handling with a populated store: %s",
+    async (populated) => {
+      if (populated) {
+        await persist({ queueId: "queue-keep" });
+        await expect(cleanupMatrixDeliveryPlans({ queueId: " " })).rejects.toThrow(
+          "requires a queue id",
+        );
+      } else {
+        await expect(cleanupMatrixDeliveryPlans({ queueId: " " })).resolves.toBeUndefined();
+      }
+
+      await expect(reconcileMatrixUnknownSend(reconciliationContext(" "))).resolves.toMatchObject({
+        status: "unresolved",
+        retryable: populated,
+        error: expect.stringContaining(
+          populated ? "requires a queue id" : "no persisted event plan",
+        ),
+      });
+      expect(client.sendMessage).not.toHaveBeenCalled();
+      if (populated) {
+        await expect(
+          loadMatrixDeliveryPlan({
+            identity: identity("queue-keep"),
+            accountId: "default",
+            roomId: "!room:example.org",
+            transactionScopeId: "scope-1",
+            wireEventType: "m.room.message",
+          }),
+        ).resolves.not.toBeNull();
+      }
+    },
+  );
 });

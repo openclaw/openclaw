@@ -3,12 +3,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   type MockOpenAiRequestSnapshot,
   createQaGatewayChild,
@@ -129,16 +128,6 @@ async function startDiscordRestLoopback() {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       }),
-  };
-}
-
-function configureDiscordActivities(cfg: OpenClawConfig): OpenClawConfig {
-  return {
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      alsoAllow: [...(cfg.tools?.alsoAllow ?? []), "show_widget"],
-    },
   };
 }
 
@@ -274,7 +263,7 @@ async function connectInlineClient(gateway: QaGatewayChild): Promise<GatewayClie
 describe("Discord show_widget contextual presenter process proof", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
-  afterEach(async () => {
+  afterAll(async () => {
     const errors: unknown[] = [];
     for (const cleanup of cleanups.splice(0).toReversed()) {
       try {
@@ -288,7 +277,72 @@ describe("Discord show_widget contextual presenter process proof", () => {
     }
   });
 
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+  let discord: Awaited<ReturnType<typeof startDiscordRestLoopback>>;
+  let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>>;
+  let gateway: QaGatewayChild;
+
+  beforeEach(() => {
+    discord.requests.length = 0;
+  });
+
+  beforeAll(async () => {
+    const startedAt = performance.now();
+    const scratch = tempDirs.make("openclaw-discord-attachment-e2e-");
+    discord = await startDiscordRestLoopback();
+    cleanups.push(() => discord.stop());
+    const preloadPath = await writeDiscordFetchPreload(scratch);
+    mock = await startQaMockOpenAiServer();
+    cleanups.push(() => mock.stop());
+    const gatewayOwner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+    gateway = await gatewayOwner.start({
+      repoRoot: REPO_ROOT,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(REPO_ROOT, "dist", "entry.js")],
+        cwd: REPO_ROOT,
+        // This proof uses the checkout's compiled plugins, not release-candidate repair.
+        usePackagedPlugins: false,
+      },
+      providerBaseUrl: `${mock.baseUrl}/v1`,
+      providerMode: "mock-openai",
+      primaryModel: MODEL_REF,
+      alternateModel: MODEL_REF,
+      transport: discordTransport,
+      transportBaseUrl: "http://127.0.0.1:9",
+      controlUiEnabled: false,
+      mutateConfig: (cfg) => ({
+        ...cfg,
+        models: {
+          ...cfg.models,
+          catalogRefresh: { ...cfg.models?.catalogRefresh, enabled: false },
+        },
+        // Public message actions do not need QA Lab's private runtime tools.
+        plugins: {
+          ...cfg.plugins,
+          allow: cfg.plugins?.allow?.filter((id) => id !== "qa-lab"),
+          entries: Object.fromEntries(
+            Object.entries(cfg.plugins?.entries ?? {}).filter(([id]) => id !== "qa-lab"),
+          ),
+        },
+        tools: {
+          ...cfg.tools,
+          alsoAllow: [...(cfg.tools?.alsoAllow ?? []), "message", "show_widget"],
+        },
+      }),
+      runtimeEnvPatch: {
+        DISCORD_BOT_TOKEN: "qa-activities-token",
+        OPENCLAW_QA_DISCORD_REST_BASE: discord.baseUrl,
+        OPENCLAW_SKIP_CANVAS_HOST: undefined,
+        OPENCLAW_SKIP_CHANNELS: "1",
+      },
+      runtimePreloads: [pathToFileURL(preloadPath).href],
+    });
+    process.stdout.write(
+      `${JSON.stringify({ proof: "discord-gateway-shared-fixture", durationMs: performance.now() - startedAt })}\n`,
+    );
+  }, 180_000);
 
   it(
     "preserves component attachment filenames through the public Gateway message action",
@@ -313,65 +367,8 @@ describe("Discord show_widget contextual presenter process proof", () => {
       process.stdout.write(
         `${JSON.stringify({ proof: "discord-gateway-built-revision", head })}\n`,
       );
-      const scratch = tempDirs.make("openclaw-discord-attachment-e2e-");
-      const discord = await startDiscordRestLoopback();
-      cleanups.push(() => discord.stop());
-      const preloadPath = await writeDiscordFetchPreload(scratch);
-      const mock = await startQaMockOpenAiServer();
-      cleanups.push(() => mock.stop());
-      const gatewayOwner = createQaGatewayChild();
-      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-      const gateway = await gatewayOwner.start({
-        repoRoot: REPO_ROOT,
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [path.join(REPO_ROOT, "dist", "entry.js")],
-          cwd: REPO_ROOT,
-          usePackagedPlugins: true,
-        },
-        providerBaseUrl: `${mock.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL_REF,
-        alternateModel: MODEL_REF,
-        transport: discordTransport,
-        transportBaseUrl: "http://127.0.0.1:9",
-        controlUiEnabled: false,
-        mutateConfig: (cfg) => ({
-          ...cfg,
-          // Public message actions do not need QA Lab's private runtime tools.
-          plugins: {
-            ...cfg.plugins,
-            allow: cfg.plugins?.allow?.filter((id) => id !== "qa-lab"),
-            entries: Object.fromEntries(
-              Object.entries(cfg.plugins?.entries ?? {}).filter(([id]) => id !== "qa-lab"),
-            ),
-          },
-          tools: { ...cfg.tools, alsoAllow: [...(cfg.tools?.alsoAllow ?? []), "message"] },
-        }),
-        runtimeEnvPatch: {
-          DISCORD_BOT_TOKEN: "qa-activities-token",
-          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
-          OPENCLAW_QA_DISCORD_REST_BASE: discord.baseUrl,
-          OPENCLAW_SKIP_CHANNELS: "1",
-        },
-      });
-      const media = path.join(gateway.workspaceDir, "source.pdf");
-      const bytes = Buffer.from("%PDF-1.4\nDiscord attachment filename proof\n%%EOF\n");
-      await writeFile(media, bytes);
-      const cases = [
-        { label: "declared", declared: true, expected: "report.pdf" },
-        { label: "blank override", declared: true, filename: "  ", expected: "report.pdf" },
-        {
-          label: "explicit override",
-          declared: true,
-          filename: " operator.pdf ",
-          expected: "operator.pdf",
-        },
-        { label: "media-derived", declared: false, expected: "source.pdf" },
-        { label: "components V2", declared: true, v2: true, expected: "report.pdf" },
-      ];
-      for (const testCase of cases) {
-        const before = discord.requests.filter((request) => request.method === "POST").length;
+      const invokeAction = async (label: string, args: JsonRecord) => {
+        const before = discord.requests.length;
         const response = await fetch(`${gateway.baseUrl}/tools/invoke`, {
           method: "POST",
           signal: AbortSignal.timeout(20_000),
@@ -389,20 +386,35 @@ describe("Discord show_widget contextual presenter process proof", () => {
               action: "send",
               channel: "discord",
               target: `channel:${DISCORD_CHANNEL_ID}`,
-              message: `Attachment proof: ${testCase.label}`,
-              media,
-              filename: testCase.filename,
-              components: {
-                blocks: testCase.declared
-                  ? [{ type: "file", file: "attachment://report.pdf" }]
-                  : [],
-                ...(testCase.v2 ? { container: { accentColor: 0x123456 } } : {}),
-              },
+              ...args,
             },
           }),
         });
         const result = (await response.json()) as JsonRecord;
         expect(response.status, JSON.stringify(result)).toBe(200);
+        expect(result).toMatchObject({ ok: true });
+        expect(result).not.toHaveProperty("result.isError", true);
+        const writes = discord.requests
+          .slice(before)
+          .filter((request) => request.method === "POST" || request.method === "PATCH");
+        expect(
+          writes.map(({ method, pathname }) => ({ method, pathname })),
+          label,
+        ).toEqual([
+          { method: "POST", pathname: `/api/v10/channels/${DISCORD_CHANNEL_ID}/messages` },
+        ]);
+        process.stdout.write(
+          `${JSON.stringify({
+            proof: "gateway-discord-message-action",
+            action: args.action ?? "send",
+            case: label,
+            writes,
+          })}\n`,
+        );
+        return { result, writes };
+      };
+      const invokeMessage = async (label: string, args: JsonRecord) => {
+        const { result, writes } = await invokeAction(label, args);
         expect(result).toMatchObject({
           ok: true,
           result: {
@@ -418,10 +430,33 @@ describe("Discord show_widget contextual presenter process proof", () => {
             },
           },
         });
-        const posts = discord.requests.filter((request) => request.method === "POST");
-        expect(posts, testCase.label).toHaveLength(before + 1);
-        const post = posts.at(-1);
-        expect(post?.pathname).toBe(`/api/v10/channels/${DISCORD_CHANNEL_ID}/messages`);
+        return writes[0];
+      };
+      const media = path.join(gateway.workspaceDir, "source.pdf");
+      const bytes = Buffer.from("%PDF-1.4\nDiscord attachment filename proof\n%%EOF\n");
+      await writeFile(media, bytes);
+      const cases = [
+        { label: "declared", declared: true, expected: "report.pdf" },
+        { label: "blank override", declared: true, filename: "  ", expected: "report.pdf" },
+        {
+          label: "explicit override",
+          declared: true,
+          filename: " operator.pdf ",
+          expected: "operator.pdf",
+        },
+        { label: "media-derived", declared: false, expected: "source.pdf" },
+        { label: "components V2", declared: true, v2: true, expected: "report.pdf" },
+      ];
+      for (const testCase of cases) {
+        const post = await invokeMessage(testCase.label, {
+          message: `Attachment proof: ${testCase.label}`,
+          media,
+          filename: testCase.filename,
+          components: {
+            blocks: testCase.declared ? [{ type: "file", file: "attachment://report.pdf" }] : [],
+            ...(testCase.v2 ? { container: { accentColor: 0x123456 } } : {}),
+          },
+        });
         expect(post?.files).toEqual([
           {
             field: "files[0]",
@@ -444,6 +479,150 @@ describe("Discord show_widget contextual presenter process proof", () => {
           })}\n`,
         );
       }
+
+      for (const testCase of [
+        {
+          label: "canonical body",
+          args: { message: "    canonical body" },
+          expected: "    canonical body",
+        },
+        {
+          label: "raw reasoning tag alias",
+          args: { text: "<think>private</think>    tag body" },
+          expected: "    tag body",
+        },
+        {
+          label: "mixed reasoning preamble alias",
+          args: { text: "<think>private</think>\nThinking\n_summary_\n    mixed body" },
+          expected: "    mixed body",
+        },
+        {
+          label: "fenced literal tag control",
+          args: { message: "```\n    <think>literal</think>\n```" },
+          expected: "```\n    <think>literal</think>\n```",
+        },
+      ]) {
+        const post = await invokeMessage(testCase.label, testCase.args);
+        expect(post?.files, testCase.label).toBeUndefined();
+        process.stdout.write(
+          `${JSON.stringify({
+            proof: "gateway-message-action-to-discord-text",
+            case: testCase.label,
+            content: post?.body?.content,
+          })}\n`,
+        );
+        expect.soft(post?.body?.content, testCase.label).toBe(testCase.expected);
+      }
+
+      const caption = await invokeMessage("caption fallback", {
+        message: " \n ",
+        caption: "    caption body  ",
+        media,
+      });
+      expect(caption?.files).toEqual([
+        {
+          field: "files[0]",
+          name: "source.pdf",
+          type: "application/pdf",
+          base64: bytes.toString("base64"),
+        },
+      ]);
+      // Core reply normalization trims the suffix before Discord delivery.
+      expect.soft(caption?.body?.content).toBe("    caption body");
+
+      const classic = await invokeMessage("classic component file body", {
+        message: "    classic component body  ",
+        media,
+        components: { blocks: [{ type: "file", file: "attachment://report.pdf" }] },
+      });
+      expect(classic?.files).toEqual([
+        {
+          field: "files[0]",
+          name: "report.pdf",
+          type: "application/pdf",
+          base64: bytes.toString("base64"),
+        },
+      ]);
+      expect.soft(classic?.body?.content).toBe("    classic component body");
+
+      const componentText = await invokeMessage("explicit Components V2 body fields", {
+        message: "fallback",
+        components: {
+          text: "    top-level body  ",
+          container: { accentColor: 0x123456 },
+          blocks: [
+            { type: "text", text: "    text-block body  " },
+            {
+              type: "section",
+              text: "    section body  ",
+              accessory: {
+                type: "button",
+                button: { label: " Read ", style: "link", url: "https://example.com/section" },
+              },
+            },
+            {
+              type: "section",
+              texts: ["    first body  ", "    second body  "],
+              accessory: {
+                type: "button",
+                button: { label: " Read ", style: "link", url: "https://example.com/texts" },
+              },
+            },
+          ],
+        },
+      });
+      expect(componentText?.body?.flags).toBe(DISCORD_COMPONENTS_V2_FLAG);
+      expect.soft(componentText?.body?.components).toMatchObject([
+        {
+          type: 17,
+          components: [
+            { type: 10, content: "    top-level body  " },
+            { type: 10, content: "    text-block body  " },
+            {
+              type: 9,
+              components: [{ type: 10, content: "    section body  " }],
+              accessory: { label: "Read" },
+            },
+            {
+              type: 9,
+              components: [
+                { type: 10, content: "    first body  " },
+                { type: 10, content: "    second body  " },
+              ],
+              accessory: { label: "Read" },
+            },
+          ],
+        },
+      ]);
+
+      const poll = await invokeAction("poll", {
+        action: "poll",
+        message: "    poll body  ",
+        pollQuestion: " Lunch? ",
+        pollOption: [" Pizza ", " Sushi "],
+        pollDurationHours: 2,
+        silent: true,
+      });
+      expect(poll.result).toMatchObject({
+        result: {
+          details: {
+            channel: "discord",
+            via: "direct",
+            result: { messageId: DISCORD_MESSAGE_ID },
+          },
+        },
+      });
+      expect(poll.writes[0]?.body).toMatchObject({
+        flags: (1 << 12) | (1 << 2),
+        poll: {
+          question: { text: "Lunch?" },
+          answers: [{ poll_media: { text: "Pizza" } }, { poll_media: { text: "Sushi" } }],
+          duration: 2,
+          allow_multiselect: false,
+          layout_type: 1,
+        },
+      });
+      expect.soft(poll.writes[0]?.body?.content).toBe("    poll body  ");
     },
   );
 
@@ -451,40 +630,6 @@ describe("Discord show_widget contextual presenter process proof", () => {
     "routes one core tool through Discord and keeps mismatched and inline paths honest",
     { timeout: 180_000 },
     async () => {
-      process.stdout.write("[discord-widget-e2e] starting isolated Gateway proof\n");
-      const progress = setInterval(() => {
-        process.stdout.write("[discord-widget-e2e] Gateway proof still running\n");
-      }, 10_000);
-      progress.unref();
-      cleanups.push(async () => clearInterval(progress));
-      const scratch = tempDirs.make("openclaw-discord-widget-e2e-");
-      const discord = await startDiscordRestLoopback();
-      cleanups.push(() => discord.stop());
-      const preloadPath = await writeDiscordFetchPreload(scratch);
-      const mock = await startQaMockOpenAiServer();
-      cleanups.push(() => mock.stop());
-      const gatewayOwner = createQaGatewayChild();
-      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-      const gateway = await gatewayOwner.start({
-        repoRoot: REPO_ROOT,
-        useRepoCli: true,
-        providerBaseUrl: `${mock.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL_REF,
-        alternateModel: MODEL_REF,
-        transport: discordTransport,
-        transportBaseUrl: "http://127.0.0.1:9",
-        controlUiEnabled: false,
-        mutateConfig: configureDiscordActivities,
-        runtimeEnvPatch: {
-          DISCORD_BOT_TOKEN: "qa-activities-token",
-          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
-          OPENCLAW_QA_DISCORD_REST_BASE: discord.baseUrl,
-          OPENCLAW_SKIP_CANVAS_HOST: undefined,
-          OPENCLAW_SKIP_CHANNELS: "1",
-        },
-      });
-
       const started = (await gateway.call("chat.send", {
         sessionKey: DISCORD_SESSION_KEY,
         message: `${INVENTORY_MARKER}: reply exactly INVENTORY_OK without calling tools.`,

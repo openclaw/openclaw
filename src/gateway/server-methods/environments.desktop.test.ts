@@ -1,25 +1,53 @@
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { HostDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { createHostDesktopService } from "../desktop/host-source.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "../desktop/node-source-context.js";
+import * as observeBridge from "../desktop/observe-bridge.js";
+import {
+  resolveDesktopObserveRequester,
+  type DesktopObserveRequester,
+} from "../desktop/observe-requester.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
+import type { GatewayClient } from "./client-types.js";
 import { environmentsHandlers } from "./environments.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  vi.restoreAllMocks();
 });
 
+function createRequesterClient(signal: AbortSignal): GatewayClient {
+  return {
+    connId: "desktop-requester",
+    connectionSignal: signal,
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: GATEWAY_CLIENT_IDS.CLI, version: "test", platform: "test", mode: "cli" },
+    },
+  };
+}
+
 async function invoke(
-  method: "desktop.observe" | "worker.desktop.observe",
+  method: "desktop.observe" | "worker.desktop.observe" | "desktop.release",
   params: unknown,
   context: object,
+  client: GatewayClient | null = null,
+  hasCurrentClientAuthority?: () => boolean,
 ) {
   const respond = vi.fn();
-  await environmentsHandlers[method]?.({ params, respond, context } as never);
+  await environmentsHandlers[method]?.({
+    params,
+    respond,
+    context,
+    client,
+    hasCurrentClientAuthority,
+  } as never);
   const call = respond.mock.calls.at(0);
   if (!call) {
     throw new Error("expected desktop handler response");
@@ -28,6 +56,93 @@ async function invoke(
 }
 
 describe("desktop gateway methods", () => {
+  it("releases only the requesting connection's unclaimed observation once", async () => {
+    const controller = new AbortController();
+    const client = createRequesterClient(controller.signal);
+    let authorityCurrent = true;
+    const requester = resolveDesktopObserveRequester({
+      client,
+      hasCurrentClientAuthority: () => authorityCurrent,
+    });
+    const onAbandon = vi.fn(async () => {});
+    const { token } = observeBridge.mintDesktopObserverToken({
+      sourceKey: "desktop-release",
+      ownerEpoch: 1,
+      control: true,
+      attachment: { kind: "tcp", host: "127.0.0.1", port: 5900 },
+      requester,
+      onAbandon,
+    });
+    const params = { wsPath: `/desktop/observe?token=${token}` };
+    try {
+      const other = { ...client, connId: "another-desktop-requester" };
+      expect((await invoke("desktop.release", params, {}, other))[1]).toEqual({ released: false });
+      authorityCurrent = false;
+      expect((await invoke("desktop.release", params, {}, client))[1]).toEqual({ released: false });
+      expect(onAbandon).not.toHaveBeenCalled();
+      authorityCurrent = true;
+      expect((await invoke("desktop.release", params, {}, client))[1]).toEqual({ released: true });
+      expect((await invoke("desktop.release", params, {}, client))[1]).toEqual({ released: false });
+      expect(onAbandon).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort();
+    }
+  });
+
+  it.each([
+    { source: "host", method: "desktop.observe", params: { source: { kind: "host" } } },
+    {
+      source: "node",
+      method: "desktop.observe",
+      params: { source: { kind: "node", nodeId: "node-1" } },
+    },
+    {
+      source: "environment",
+      method: "desktop.observe",
+      params: { source: { kind: "environment", environmentId: "worker:one" } },
+    },
+    {
+      source: "worker alias",
+      method: "worker.desktop.observe",
+      params: { environmentId: "worker:one" },
+    },
+  ] as const)("binds $source observers to live requester authority", async ({ method, params }) => {
+    const controller = new AbortController();
+    const client = createRequesterClient(controller.signal);
+    let authorityCurrent = true;
+    const observe = vi.fn(async (_request: { requester?: DesktopObserveRequester }) => ({
+      transport: "rfb",
+      wsPath: "/desktop/observe?token=fixed",
+      expiresAtMs: 42,
+    }));
+    const [ok] = await invoke(
+      method,
+      params,
+      {
+        getRuntimeConfig: () => ({ desktop: { host: { enabled: true } } }),
+        hostDesktopService: { observe },
+        [NODE_DESKTOP_SERVICE_CONTEXT]: { observe },
+        workerEnvironmentService: { observeDesktop: observe },
+      },
+      client,
+      () => authorityCurrent,
+    );
+    expect(ok).toBe(true);
+    const requester = observe.mock.calls[0]?.[0].requester;
+    expect(requester).toMatchObject({ connId: client.connId, signal: controller.signal });
+    expect(requester?.isCurrent()).toBe(true);
+    client.invalidated = true;
+    expect(controller.signal.aborted).toBe(false);
+    expect(requester?.isCurrent()).toBe(false);
+    client.invalidated = false;
+    authorityCurrent = false;
+    expect(requester?.isCurrent()).toBe(false);
+    authorityCurrent = true;
+    expect(requester?.isCurrent()).toBe(true);
+    controller.abort();
+    expect(requester?.isCurrent()).toBe(false);
+  });
+
   it("names the Labs config and restart when host desktop is disabled", async () => {
     const [ok, , error] = await invoke(
       "desktop.observe",
@@ -38,11 +153,14 @@ describe("desktop gateway methods", () => {
     expect(error).toEqual({
       code: ErrorCodes.INVALID_REQUEST,
       message:
-        "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true), then restart the gateway",
+        "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true)",
     });
   });
 
   it("returns a host observer token and auth from a real loopback RFB server", async () => {
+    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+    const controller = new AbortController();
+    const client = createRequesterClient(controller.signal);
     const sockets = new Set<net.Socket>();
     const server = net.createServer((socket) => {
       sockets.add(socket);
@@ -75,8 +193,9 @@ describe("desktop gateway methods", () => {
       { source: { kind: "host" }, control: true },
       {
         getRuntimeConfig: () => ({ desktop: { host: config } }),
-        hostDesktopService: createHostDesktopService({ config, registry }),
+        hostDesktopService: createHostDesktopService({ getConfig: () => config, registry }),
       },
+      client,
     );
     expect(ok).toBe(true);
     expect(result).toMatchObject({
@@ -85,6 +204,12 @@ describe("desktop gateway methods", () => {
       auth: "vnc-password",
     });
     expect(result.wsPath).toMatch(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u);
+    const requester = mint.mock.calls[0]?.[0].requester;
+    expect(requester?.signal?.aborted).toBe(false);
+    expect(requester?.isCurrent()).toBe(true);
+    client.invalidated = true;
+    expect(requester?.isCurrent()).toBe(false);
+    expect(controller.signal.aborted).toBe(false);
   });
 
   it("keeps the worker alias identical to the generic environment arm", async () => {

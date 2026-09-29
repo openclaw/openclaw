@@ -126,7 +126,16 @@ export function resolveAuthHintKind(params: {
     if (!AUTH_FAILURE_CODES.has(params.lastErrorCode)) {
       return null;
     }
-    return AUTH_REQUIRED_CODES.has(params.lastErrorCode) ? "required" : "failed";
+    // A remembered device token the Gateway no longer knows is not an operator-supplied
+    // secret; without a typed token or password the Gateway is asking for its token,
+    // not rejecting one (the client already dropped the stale device token).
+    const staleDeviceTokenOnly =
+      params.lastErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH &&
+      !params.hasToken &&
+      !params.hasPassword;
+    return staleDeviceTokenOnly || AUTH_REQUIRED_CODES.has(params.lastErrorCode)
+      ? "required"
+      : "failed";
   }
 
   const lower = normalizeLowercaseStringOrEmpty(params.lastError);

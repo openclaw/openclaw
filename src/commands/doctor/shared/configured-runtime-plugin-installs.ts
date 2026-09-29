@@ -74,8 +74,8 @@ function acpxRuntimeIsConfigured(cfg: OpenClawConfig): boolean {
   );
 }
 
-/** Collect runtime plugin ids implied by configured harness runtimes and ACPX settings. */
-export function collectConfiguredRuntimePluginIds(
+/** Collect runtime ids without loading plugin metadata during startup planning. */
+export function collectConfiguredRuntimeIds(
   cfg: OpenClawConfig,
   options?: ConfiguredAgentHarnessRuntimeOptions,
 ): string[] {

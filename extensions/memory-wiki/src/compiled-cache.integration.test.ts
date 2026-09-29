@@ -1,5 +1,5 @@
 // Memory Wiki compiled cache tests cover compile, prepare, query, restart, and owner cleanup.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -9,12 +9,12 @@ import {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
-  createMemoryWikiCompiledCachePublicationId,
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
   loadMemoryWikiCompiledCache,
@@ -39,8 +39,9 @@ import {
 import { renderWikiMarkdown } from "./markdown.js";
 import { createWikiPromptSectionPreparer } from "./prompt-section.js";
 import { getMemoryWikiPage } from "./query.js";
+import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { initializeMemoryWikiVault } from "./vault.js";
+import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview } from "./wiki-overview.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
@@ -136,8 +137,8 @@ async function publishSnapshot(
   value: MemoryWikiCompiledCacheSnapshot,
 ): Promise<string> {
   const generation = resolveMemoryWikiCompiledCacheGeneration(value);
-  const publicationId = createMemoryWikiCompiledCachePublicationId();
-  const reservationId = createMemoryWikiCompiledCachePublicationId();
+  const publicationId = randomUUID();
+  const reservationId = randomUUID();
   const parentPublicationId = (await loadMemoryWikiVaultIdentity(config.vault.path))
     .compiledCachePublicationId;
   await appendMemoryWikiLog(config.vault.path, {
@@ -179,6 +180,7 @@ async function preparePrompt(config: ReturnType<typeof resolveMemoryWikiConfig>)
 
 describe("Memory Wiki compiled cache lifecycle", () => {
   beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginBlobStoreForTests();
     configureMemoryWikiCompiledCacheStore(undefined);
     blobStateDir = await createTempDir("memory-wiki-compiled-cache-state-");
@@ -188,10 +190,78 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
   afterEach(async () => {
     configureMemoryWikiCompiledCacheStore(undefined);
+    await closeOpenClawStateDatabaseAsync();
     resetPluginBlobStoreForTests();
     blobStateDir = "";
     blobStoreEnv = {};
   });
+
+  it("reuses an existing publication when local source sync starts with an inactive owner", async () => {
+    const { rootDir, config } = await createPersistentVault({
+      initialize: true,
+      config: { vaultMode: "isolated", ingest: { autoCompile: true } },
+    });
+    await fs.writeFile(path.join(rootDir, "sources", "alpha.md"), "# Alpha\n\nLocal source.\n");
+    await compileMemoryWikiVault(config);
+    const before = await loadMemoryWikiVaultIdentity(rootDir);
+    deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+
+    const result = await syncMemoryWikiImportedSources({ config });
+
+    expect(result).toMatchObject({
+      importedCount: 0,
+      updatedCount: 0,
+      removedCount: 0,
+      indexesRefreshed: false,
+      indexRefreshReason: "no-import-changes",
+    });
+    expect((await loadMemoryWikiVaultIdentity(rootDir)).compiledCachePublicationId).toBe(
+      before.compiledCachePublicationId,
+    );
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
+  });
+
+  it("reuses an active compiled owner during repeated initialization and exact page reads", async () => {
+    const { rootDir, config } = await createPersistentVault({ initialize: true });
+    await fs.writeFile(path.join(rootDir, "sources", "alpha.md"), "# Alpha\n\nRequested source.\n");
+    await fs.writeFile(path.join(rootDir, "sources", "unrelated.md"), "# Unrelated\n");
+    await compileMemoryWikiVault(config);
+    const readdir = vi.spyOn(fs, "readdir");
+    try {
+      await initializeMemoryWikiVault(config);
+      await expect(
+        getMemoryWikiPage({ config, lookup: "sources/alpha.md" }),
+      ).resolves.toMatchObject({
+        path: "sources/alpha.md",
+        content: expect.stringContaining("Requested source."),
+      });
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it.each(["source-edit", "log-rollback"] as const)(
+    "explicit activation rejects the compiled snapshot after %s",
+    async (change) => {
+      const { rootDir, config } = await createPersistentVault({ initialize: true });
+      const sourcePath = path.join(rootDir, "sources", "alpha.md");
+      const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
+      await fs.writeFile(sourcePath, "# Alpha\n\nOriginal source.\n");
+      const originalLog = await fs.readFile(logPath, "utf8");
+      await compileMemoryWikiVault(config);
+      await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
+      if (change === "source-edit") {
+        await fs.writeFile(sourcePath, "# Alpha\n\nChanged source.\n");
+      } else {
+        await fs.writeFile(logPath, originalLog);
+      }
+
+      await activateExistingMemoryWikiVault(config);
+
+      await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    },
+  );
 
   it("round-trips compile through async preparation and claim query after restart", async () => {
     const { rootDir, config } = await createPersistentVault({
@@ -364,8 +434,8 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
     const nextSnapshot = snapshot("after");
     const nextGeneration = resolveMemoryWikiCompiledCacheGeneration(nextSnapshot);
-    const nextPublicationId = createMemoryWikiCompiledCachePublicationId();
-    const nextReservationId = createMemoryWikiCompiledCachePublicationId();
+    const nextPublicationId = randomUUID();
+    const nextReservationId = randomUUID();
     const parentPublicationId = (await loadMemoryWikiVaultIdentity(config.vault.path))
       .compiledCachePublicationId;
     await appendMemoryWikiLog(config.vault.path, {
@@ -396,8 +466,8 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await publishSnapshot(config, snapshot("before"));
     const nextSnapshot = snapshot("during reconciliation");
     const nextGeneration = resolveMemoryWikiCompiledCacheGeneration(nextSnapshot);
-    const nextPublicationId = createMemoryWikiCompiledCachePublicationId();
-    const nextReservationId = createMemoryWikiCompiledCachePublicationId();
+    const nextPublicationId = randomUUID();
+    const nextReservationId = randomUUID();
     const parentPublicationId = (await loadMemoryWikiVaultIdentity(config.vault.path))
       .compiledCachePublicationId;
     await appendMemoryWikiLog(config.vault.path, {
@@ -492,12 +562,12 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       config,
       delayedSnapshot,
       resolveMemoryWikiCompiledCacheGeneration(delayedSnapshot),
-      createMemoryWikiCompiledCachePublicationId(),
+      randomUUID(),
     );
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
 
-    const republishedId = createMemoryWikiCompiledCachePublicationId();
-    const staleReservationId = createMemoryWikiCompiledCachePublicationId();
+    const republishedId = randomUUID();
+    const staleReservationId = randomUUID();
     const newerGeneration = resolveMemoryWikiCompiledCacheGeneration(newerSnapshot);
     const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(config.vault.path);
     await appendMemoryWikiLog(config.vault.path, {
@@ -535,8 +605,8 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     const backupLog = await fs.readFile(logPath, "utf8");
     const parentPublicationId = (await loadMemoryWikiVaultIdentity(rootDir))
       .compiledCachePublicationId;
-    const reservedPublicationId = createMemoryWikiCompiledCachePublicationId();
-    const reservationId = createMemoryWikiCompiledCachePublicationId();
+    const reservedPublicationId = randomUUID();
+    const reservationId = randomUUID();
     await appendMemoryWikiLog(rootDir, {
       type: "compile",
       timestamp: "2026-07-17T00:03:00.000Z",
@@ -580,8 +650,8 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   it("keeps a committed publication when an older writer is rejected", async () => {
     const { config } = await createPersistentVault({ initialize: true });
     const parentPublicationId = await publishSnapshot(config, snapshot("parent"));
-    const stalePublicationId = createMemoryWikiCompiledCachePublicationId();
-    const staleReservationId = createMemoryWikiCompiledCachePublicationId();
+    const stalePublicationId = randomUUID();
+    const staleReservationId = randomUUID();
     await appendMemoryWikiLog(config.vault.path, {
       type: "compile",
       timestamp: "2026-07-17T00:03:30.000Z",

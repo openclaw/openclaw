@@ -104,6 +104,9 @@ export async function resolveAgentTurnAttachments(params: {
       cfg: params.cfg,
       ctx: params.ctx,
     }),
+    // The scoped root set is authoritative: merging sessionless defaults back in would restore
+    // the shared workspace/sandbox parents for sandboxed sessions.
+    includeDefaultLocalPathRoots: false,
   });
   const results: AgentTurnAttachment[] = [];
   const resultIndexes: number[] = [];

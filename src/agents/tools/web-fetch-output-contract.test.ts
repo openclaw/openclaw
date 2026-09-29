@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -312,6 +312,40 @@ describe("web_fetch output contract", () => {
     expect(fetchWithWebToolsNetworkGuardMock).toHaveBeenCalledTimes(1);
   });
 
+  it("spills truncated fetched text to a private temp file", async () => {
+    const fullText = "web fetch content ".repeat(400);
+    mockHttpResponse(fullText);
+
+    const tool = createContractTool({ maxChars: 500 });
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/spill" });
+    const details = result?.details as {
+      text?: string;
+      truncated?: boolean;
+      rawLength?: number;
+      length?: number;
+      spill?: { path: string; chars: number; truncated?: true };
+    };
+    if (!details.spill) {
+      throw new Error("expected spill");
+    }
+
+    spillPaths.add(details.spill.path);
+    expect(details.truncated).toBe(true);
+    expect(details.text).toContain("web fetch content");
+    expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(details.text).toMatch(/<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(details.text).toContain(`Full output: ${details.spill.path}`);
+    expect(details.text?.length).toBeLessThanOrEqual(500);
+    expect(details.rawLength).toBe(fullText.length);
+    expect(details.length).toBe(details.text?.length);
+    expect(details.spill.chars).toBe(fullText.length);
+    expect(details.spill.truncated).toBeUndefined();
+    const spilledText = await readFile(details.spill.path, "utf8");
+    expect(spilledText).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(spilledText).toContain(fullText);
+  });
+
   it("validates nested spill metadata", async () => {
     mockHttpResponse("spill body ".repeat(1_000));
     const result = await createContractTool({ maxChars: 300 })?.execute("spill", {
@@ -353,7 +387,7 @@ describe("web_fetch output contract", () => {
       message = (error as Error).message;
     }
     const prefix = "Web fetch failed (500): ";
-    expect(message).toContain(`${prefix}SECURITY NOTICE`);
+    expect(message.startsWith(prefix)).toBe(true);
     expect(message).toContain("Useful error.");
     expect(message.length).toBeLessThanOrEqual(prefix.length + 4_000);
     expect(message.match(/<<<EXTERNAL_UNTRUSTED_CONTENT/g)).toHaveLength(1);

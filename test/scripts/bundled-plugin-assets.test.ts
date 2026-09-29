@@ -131,7 +131,7 @@ describe("bundled plugin assets", () => {
 
       const classifier = createRunNodePathClassifier({ rootDir });
       classifier.refreshGeneratedPluginAssetPaths();
-      const generatedPath = "extensions/canvas/assets/generated-runtime.js";
+      const generatedPath = path.join("extensions", "canvas", "assets", "generated-runtime.js");
       expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(true);
 
       packageJson.openclaw.assetScripts.buildOutputs = ["assets/generated-runtime.js"];
@@ -140,6 +140,20 @@ describe("bundled plugin assets", () => {
 
       expect(classifier.isBuildRelevantRunNodePath(generatedPath)).toBe(false);
       expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(false);
+
+      if (process.platform !== "win32") {
+        // Literal backslashes in native basenames do not identify the generated paths.
+        for (const sourcePath of [
+          path.join("extensions", "canvas", "assets\\generated-runtime.js"),
+          path.join("extensions", "canvas", "src", "host", "qa\\widget.bundle.js"),
+        ]) {
+          const absolutePath = path.join(rootDir, sourcePath);
+          fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+          fs.writeFileSync(absolutePath, "export {};\n");
+          expect(classifier.isBuildRelevantRunNodePath(sourcePath), sourcePath).toBe(true);
+          expect(classifier.isRestartRelevantRunNodePath(sourcePath), sourcePath).toBe(true);
+        }
+      }
     });
   });
 

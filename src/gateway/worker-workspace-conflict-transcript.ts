@@ -1,6 +1,10 @@
-import { SessionManager } from "../agents/sessions/session-manager.js";
-import { getRuntimeConfig } from "../config/config.js";
-import { withTranscriptWriteTransaction } from "../config/sessions/session-accessor.js";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import {
+  appendSessionTranscriptReport,
+  readLatestSessionTranscriptReport,
+  type SessionTranscriptWriteScope,
+} from "../config/sessions/session-accessor.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { boundedWorkerError } from "./worker-environments/worker-error.js";
 import {
   formatWorkspaceConflictSummary,
@@ -8,180 +12,146 @@ import {
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
   WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
-  type WorkerWorkspaceRecoveryFailureReport,
+  type WorkerWorkspaceConflictReport,
+  type WorkspaceResultConflictLookup,
 } from "./worker-environments/workspace-conflicts.js";
 
 export function createWorkerWorkspaceConflictTranscriptHandlers(
-  loadSessionRuntime: () => Promise<{
-    resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
-    resolveGatewaySessionStoreTargetWithStore: typeof import("./session-utils.js").resolveGatewaySessionStoreTargetWithStore;
-  }>,
+  target: SessionTranscriptWriteScope,
+  assertCurrent: () => void,
 ) {
   async function withWorkerTranscript<T>(
-    identity: Pick<WorkerWorkspaceRecoveryFailureReport, "sessionId" | "sessionKey" | "agentId">,
-    run: (manager: SessionManager) => T,
+    run: () => Promise<Result<T, unknown>>,
     missingMessage?: string,
-    strictIdentity = false,
-  ): Promise<T | undefined> {
-    const runtime = await loadSessionRuntime();
-    const target = runtime.resolveGatewaySessionStoreTargetWithStore({
-      cfg: getRuntimeConfig(),
-      key: identity.sessionKey,
-      agentId: identity.agentId,
-      clone: false,
-    });
-    return await withTranscriptWriteTransaction(
-      {
-        agentId: target.agentId,
-        sessionId: identity.sessionId,
-        sessionKey: target.canonicalKey,
-        storePath: target.storePath,
-      },
-      (transcriptTarget) => {
-        const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(
-          target.store,
-          target.storeKeys,
-        );
-        if (
-          entry?.sessionId !== identity.sessionId ||
-          (strictIdentity &&
-            (target.canonicalKey !== identity.sessionKey || target.agentId !== identity.agentId))
-        ) {
-          if (missingMessage) {
-            throw new Error(`${missingMessage} lost session ${identity.sessionId}`);
-          }
-          return undefined;
-        }
-        return run(SessionManager.open(transcriptTarget));
-      },
-    );
-  }
-
-  function latestWorkspaceReport(manager: SessionManager, ...customTypes: string[]) {
-    for (const entry of manager.getBranch().toReversed()) {
-      if (entry.type === "custom_message" && customTypes.includes(entry.customType)) {
-        return entry;
+  ): Promise<Result<T, "session-unavailable">> {
+    assertCurrent();
+    const lostSession = (): Result<T, "session-unavailable"> => {
+      if (missingMessage) {
+        throw new Error(`${missingMessage} lost session ${target.sessionId}`);
       }
-    }
-    return undefined;
+      return err("session-unavailable");
+    };
+    const result = await withSessionTranscriptWriteAssertion(target, assertCurrent, run);
+    assertCurrent();
+    return result.ok ? ok(result.value) : lostSession();
   }
 
   return {
-    resolveWorkspaceResultConflict: async (identity: {
-      sessionId: string;
-      sessionKey: string;
-      agentId: string;
-    }) =>
-      await withWorkerTranscript(identity, (manager) => {
-        const transcriptEntry = latestWorkspaceReport(
-          manager,
+    resolveConflict: async (): Promise<WorkspaceResultConflictLookup> => {
+      const result = await withWorkerTranscript(() =>
+        readLatestSessionTranscriptReport(target, [
           WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
           WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-        );
-        if (transcriptEntry?.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
-          return undefined;
-        }
-        const details = transcriptEntry.details as
-          | { paths?: unknown; stagedResultRef?: unknown; totalCount?: unknown }
-          | undefined;
-        if (
-          Array.isArray(details?.paths) &&
-          details.paths.length > 0 &&
-          details.paths.every(
-            (entryPath): entryPath is string =>
-              typeof entryPath === "string" && entryPath.length > 0,
-          ) &&
-          typeof details.stagedResultRef === "string" &&
-          (details.totalCount === undefined ||
-            (Number.isSafeInteger(details.totalCount) &&
-              (details.totalCount as number) >= details.paths.length)) &&
-          /^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef)
-        ) {
-          return projectWorkspaceResultConflict(
+        ]),
+      );
+      if (!result.ok) {
+        return { kind: "unknown", reason: result.error };
+      }
+      const transcriptEntry = result.value;
+      if (transcriptEntry?.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
+        return { kind: "absent" };
+      }
+      const details = transcriptEntry.details as
+        | { paths?: unknown; stagedResultRef?: unknown; totalCount?: unknown }
+        | undefined;
+      if (
+        Array.isArray(details?.paths) &&
+        details.paths.length > 0 &&
+        details.paths.every(
+          (entryPath): entryPath is string => typeof entryPath === "string" && entryPath.length > 0,
+        ) &&
+        typeof details.stagedResultRef === "string" &&
+        (details.totalCount === undefined ||
+          (Number.isSafeInteger(details.totalCount) &&
+            (details.totalCount as number) >= details.paths.length)) &&
+        /^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef)
+      ) {
+        return {
+          kind: "conflict",
+          conflict: projectWorkspaceResultConflict(
             details.paths,
             details.stagedResultRef,
             details.totalCount as number | undefined,
-          );
-        }
-        return undefined;
-      }),
-    reportWorkspaceResultConflict: async (
-      conflict: { sessionId: string; sessionKey: string; agentId: string } & (
-        | { paths: string[]; stagedResultRef: string; totalCount: number }
-        | { cleared: true }
-      ),
-    ) => {
+          ),
+        };
+      }
+      return { kind: "unknown", reason: "malformed-report" };
+    },
+    reportConflict: async (conflict: WorkerWorkspaceConflictReport) => {
       await withWorkerTranscript(
-        conflict,
-        (manager) => {
-          const latestConflictEntry = latestWorkspaceReport(
-            manager,
-            WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-            WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-          );
-          if ("cleared" in conflict) {
-            if (latestConflictEntry?.customType !== WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE) {
-              manager.appendCustomMessageEntry(
-                WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-                "A later cloud workspace result superseded the previous conflict.",
-                false,
-              );
-            }
-            return;
-          }
-          const projectedConflict = projectWorkspaceResultConflict(
-            conflict.paths,
-            conflict.stagedResultRef,
-            conflict.totalCount,
-          );
-          const details = latestConflictEntry?.details as
-            | { paths?: unknown; stagedResultRef?: unknown; totalCount?: unknown }
-            | undefined;
-          const alreadyReported =
-            latestConflictEntry?.customType === WORKSPACE_CONFLICT_TRANSCRIPT_TYPE &&
-            details?.stagedResultRef === projectedConflict.stagedResultRef &&
-            details.totalCount === projectedConflict.totalCount &&
-            Array.isArray(details.paths) &&
-            JSON.stringify(details.paths) === JSON.stringify(projectedConflict.paths);
-          if (!alreadyReported) {
-            manager.appendCustomMessageEntry(
+        () =>
+          appendSessionTranscriptReport(target, {
+            kind: "custom",
+            customTypes: [
               WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-              formatWorkspaceConflictSummary(
-                projectedConflict.paths,
-                projectedConflict.stagedResultRef,
-                projectedConflict.totalCount,
-              ),
-              true,
-              projectedConflict,
-            );
-          }
-        },
+              WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+            ],
+            selectReport: (latestConflictEntry) => {
+              if ("cleared" in conflict) {
+                if (
+                  latestConflictEntry?.customType !== WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE
+                ) {
+                  return {
+                    customType: WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+                    content: "A later cloud workspace result superseded the previous conflict.",
+                    display: false,
+                  };
+                }
+                return undefined;
+              }
+              const projectedConflict = projectWorkspaceResultConflict(
+                conflict.paths,
+                conflict.stagedResultRef,
+                conflict.totalCount,
+              );
+              const details = latestConflictEntry?.details as
+                | { paths?: unknown; stagedResultRef?: unknown; totalCount?: unknown }
+                | undefined;
+              const alreadyReported =
+                latestConflictEntry?.customType === WORKSPACE_CONFLICT_TRANSCRIPT_TYPE &&
+                details?.stagedResultRef === projectedConflict.stagedResultRef &&
+                details.totalCount === projectedConflict.totalCount &&
+                Array.isArray(details.paths) &&
+                JSON.stringify(details.paths) === JSON.stringify(projectedConflict.paths);
+              if (!alreadyReported) {
+                return {
+                  customType: WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+                  content: formatWorkspaceConflictSummary(
+                    projectedConflict.paths,
+                    projectedConflict.stagedResultRef,
+                    projectedConflict.totalCount,
+                  ),
+                  display: true,
+                  details: projectedConflict,
+                };
+              }
+              return undefined;
+            },
+          }),
         "Recovered cloud workspace conflict",
       );
     },
-    reportWorkspaceResultRecoveryFailure: async (
-      recovery: WorkerWorkspaceRecoveryFailureReport,
-    ) => {
+    reportFailure: async (failure: string) => {
       await withWorkerTranscript(
-        recovery,
-        (manager) => {
-          const latestRecovery = latestWorkspaceReport(
-            manager,
-            WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
-          );
-          const error = boundedWorkerError(recovery.error, 768);
-          const content = `Cloud workspace recovery attempt failed: ${error}. OpenClaw preserved the result and will retry.`;
-          if (latestRecovery?.content !== content) {
-            manager.appendCustomMessageEntry(
-              WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
-              content,
-              true,
-              { error },
-            );
-          }
-        },
+        () =>
+          appendSessionTranscriptReport(target, {
+            kind: "custom",
+            customTypes: [WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE],
+            selectReport: (latestRecovery) => {
+              const error = boundedWorkerError(failure, 768);
+              const content = `Cloud workspace recovery attempt failed: ${error}. OpenClaw preserved the result and will retry.`;
+              if (latestRecovery?.content !== content) {
+                return {
+                  customType: WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
+                  content,
+                  display: true,
+                  details: { error },
+                };
+              }
+              return undefined;
+            },
+          }),
         "Cloud workspace recovery",
-        true,
       );
     },
   };

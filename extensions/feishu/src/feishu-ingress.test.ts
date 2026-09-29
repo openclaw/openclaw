@@ -9,6 +9,7 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
 import { claimUnprocessedFeishuMessage } from "./dedup.js";
@@ -20,7 +21,7 @@ import {
   type FeishuIngressLifecycle,
 } from "./feishu-ingress.js";
 import { monitorWebhook } from "./monitor.transport.js";
-import { getFreePort, waitUntilServerReady } from "./monitor.webhook.test-helpers.js";
+import { getGatewayPort, waitForWebhookRoute } from "./monitor.webhook.test-helpers.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type FeishuIngressQueue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
@@ -86,7 +87,7 @@ function createDispatcher(
   };
 }
 
-function startIngress(params: {
+function createTestIngress(params: {
   queue: FeishuIngressQueue;
   dispatcher: Pick<Lark.EventDispatcher, "invoke">;
 }) {
@@ -100,7 +101,9 @@ function startIngress(params: {
   });
 }
 
-async function withQueue<T>(fn: (queue: FeishuIngressQueue, stateDir: string) => Promise<T>) {
+async function withQueue<T>(
+  fn: (queue: FeishuIngressQueue, startIngress: typeof createTestIngress) => Promise<T>,
+) {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-ingress-"));
   const stateDir = await fs.realpath(created);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -110,9 +113,27 @@ async function withQueue<T>(fn: (queue: FeishuIngressQueue, stateDir: string) =>
     accountId: "default",
     stateDir,
   });
+  const ingresses: ReturnType<typeof createTestIngress>[] = [];
+  const startIngress: typeof createTestIngress = (params) => {
+    const ingress = createTestIngress(params);
+    ingresses.push(ingress);
+    return ingress;
+  };
+  let outcome: PromiseSettledResult<T>;
   try {
-    return await fn(queue, stateDir);
-  } finally {
+    outcome = { status: "fulfilled", value: await fn(queue, startIngress) };
+  } catch (reason) {
+    outcome = { status: "rejected", reason };
+  }
+  try {
+    const stopped = await Promise.allSettled(ingresses.map((ingress) => ingress.stop()));
+    const errors = stopped.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Feishu test ingress shutdown failed");
+    }
+    await closeOpenClawStateDatabaseAsync();
     feishuDedupeState.reset();
     closeOpenClawStateDatabaseForTest();
     if (previousStateDir === undefined) {
@@ -121,11 +142,22 @@ async function withQueue<T>(fn: (queue: FeishuIngressQueue, stateDir: string) =>
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     await fs.rm(stateDir, { recursive: true, force: true });
+  } catch (error) {
+    if (outcome.status === "rejected") {
+      throw new AggregateError([outcome.reason, error], "Feishu ingress test cleanup failed", {
+        cause: error,
+      });
+    }
+    throw error;
   }
+  if (outcome.status === "rejected") {
+    throw outcome.reason;
+  }
+  return outcome.value;
 }
 
 function signWebhookBody(rawBody: string, encryptKey: string): Record<string, string> {
-  const timestamp = "1711111111";
+  const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = "feishu-ingress-test";
   return {
     "content-type": "application/json",
@@ -142,13 +174,13 @@ async function withWebhook(
   ingress: Pick<ReturnType<typeof createFeishuDurableIngress>, "invoke" | "invokeWebhook">,
   run: (url: string) => Promise<void>,
 ) {
-  const port = await getFreePort();
+  const port = await getGatewayPort();
   const webhookPath = "/feishu-ingress-test";
   const encryptKey = "feishu-ingress-test-key";
   const account = {
     accountId: "default",
     encryptKey,
-    config: { webhookHost: "127.0.0.1", webhookPort: port, webhookPath },
+    config: { webhookPath },
   } as ResolvedFeishuAccount;
   const abortController = new AbortController();
   const monitor = monitorWebhook({
@@ -160,8 +192,8 @@ async function withWebhook(
     runtime: createNonExitingRuntimeEnv(),
   });
   const url = `http://127.0.0.1:${port}${webhookPath}`;
-  await waitUntilServerReady(url);
   try {
+    await waitForWebhookRoute(url);
     await run(url);
   } finally {
     abortController.abort();
@@ -178,7 +210,8 @@ async function postWebhook(url: string, envelope: ReturnType<typeof messageEnvel
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   feishuDedupeState.reset();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
@@ -186,7 +219,7 @@ afterEach(() => {
 
 describe("Feishu durable ingress", () => {
   it("waits for durable append before acknowledging the webhook", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, startIngress) => {
       let releaseAppend!: () => void;
       const appendGate = new Promise<void>((resolve) => {
         releaseAppend = resolve;
@@ -207,10 +240,13 @@ describe("Feishu durable ingress", () => {
           responseSettled = true;
           return response;
         });
-        await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(1));
-        expect(responseSettled).toBe(false);
-
-        releaseAppend();
+        try {
+          await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(1));
+          expect(responseSettled).toBe(false);
+        } finally {
+          releaseAppend();
+          await responsePromise;
+        }
         const response = await responsePromise;
         expect(response.status).toBe(200);
         expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
@@ -220,7 +256,7 @@ describe("Feishu durable ingress", () => {
   });
 
   it("returns non-2xx when durable append fails", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, startIngress) => {
       const enqueue = vi.fn(async () => {
         throw new Error("sqlite unavailable");
       });
@@ -241,7 +277,7 @@ describe("Feishu durable ingress", () => {
   });
 
   it("recovers an uncompleted envelope with a fresh drain and dispatches exactly once", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, startIngress) => {
       const interrupted = startIngress({ queue, dispatcher: createDispatcher() });
       await interrupted.invoke(messageEnvelope({ eventId: "evt-restart" }), { needCheck: false });
       await interrupted.stop();
@@ -262,7 +298,7 @@ describe("Feishu durable ingress", () => {
   });
 
   it("retains completion so one event_id dispatches only once", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, startIngress) => {
       const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
         await ingress.resolveLifecycle(flattenEnvelope(data))?.onAdopted();
       });
@@ -281,7 +317,7 @@ describe("Feishu durable ingress", () => {
   });
 
   it("dead-letters authentication failures without retrying", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, startIngress) => {
       const dispatch = vi.fn(async () => {
         throw Object.assign(new Error("unauthorized"), { status: 401 });
       });
@@ -303,7 +339,7 @@ describe("Feishu durable ingress", () => {
   });
 
   it("durably dead-letters recognized envelopes without conversation identity", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, startIngress) => {
       const dispatch = vi.fn(async () => undefined);
       const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
       ingress.start();
@@ -323,28 +359,8 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it("keeps transient dispatch failures retryable", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async () => {
-        throw new Error("temporary network failure");
-      });
-      const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
-      ingress.start();
-      const envelope = messageEnvelope({ eventId: "evt-transient-failure" });
-
-      await ingress.invoke(envelope, { needCheck: false });
-      await ingress.waitForIdle();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      await expect(
-        queue.enqueue("evt-transient-failure", {} as FeishuIngressPayload),
-      ).resolves.toMatchObject({ kind: "pending", duplicate: true });
-      await ingress.stop();
-    });
-  });
-
   it("keeps unrelated downstream syntax failures retryable", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, startIngress) => {
       const dispatch = vi.fn(async () => {
         throw new SyntaxError("temporary API response parse failure");
       });

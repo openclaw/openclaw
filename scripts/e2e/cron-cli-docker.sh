@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Starts a packaged Gateway in Docker and verifies public cron CLI CRUD/run flows.
 set -euo pipefail
 
@@ -11,11 +15,7 @@ TOKEN="cron-cli-e2e-$(date +%s)-$$"
 CONTAINER_NAME="openclaw-cron-cli-e2e-$$"
 CLIENT_LOG="$(mktemp -t openclaw-cron-cli-log.XXXXXX)"
 
-cleanup() {
-  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$CLIENT_LOG"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_container_run "$CONTAINER_NAME" "$CLIENT_LOG"' EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" cron-cli
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 cron-cli empty)"
@@ -138,12 +138,8 @@ if (phase === "create") {
       label: "agent-default",
       input: {
         name: "operator agent default",
-        enabled: false,
-        schedule,
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "agent default" },
-        delivery: { mode: "none" },
       },
       expected: { toolsAllow: ["*"] },
     },
@@ -151,12 +147,8 @@ if (phase === "create") {
       label: "agent-wildcard",
       input: {
         name: "operator agent wildcard",
-        enabled: false,
-        schedule,
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "agent wildcard", toolsAllow: ["*"] },
-        delivery: { mode: "none" },
       },
       expected: { toolsAllow: ["*"] },
     },
@@ -164,12 +156,8 @@ if (phase === "create") {
       label: "agent-empty",
       input: {
         name: "operator agent empty",
-        enabled: false,
-        schedule,
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "agent empty", toolsAllow: [] },
-        delivery: { mode: "none" },
       },
       expected: { toolsAllow: [] },
     },
@@ -177,12 +165,8 @@ if (phase === "create") {
       label: "script-default",
       input: {
         name: "operator script default",
-        enabled: false,
-        schedule,
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "script", script: "return {}" },
-        delivery: { mode: "none" },
       },
       expected: { toolsAllow: ["*"] },
     },
@@ -190,13 +174,9 @@ if (phase === "create") {
       label: "trigger-system-default",
       input: {
         name: "operator trigger system default",
-        enabled: false,
-        schedule,
         sessionTarget: "main",
-        wakeMode: "now",
         trigger: { script: "return { fire: false }" },
         payload: { kind: "systemEvent", text: "trigger system default" },
-        delivery: { mode: "none" },
       },
       expected: { toolsAllow: ["*"] },
     },
@@ -204,13 +184,9 @@ if (phase === "create") {
       label: "trigger-command-default",
       input: {
         name: "operator trigger command default",
-        enabled: false,
-        schedule,
         sessionTarget: "isolated",
-        wakeMode: "now",
         trigger: { script: "return { fire: false }" },
         payload: { kind: "command", argv: ["printf", "trigger-command"] },
-        delivery: { mode: "none" },
       },
       expected: { toolsAllow: ["*"] },
     },
@@ -218,12 +194,8 @@ if (phase === "create") {
       label: "transport-system-capless",
       input: {
         name: "operator transport system capless",
-        enabled: false,
-        schedule,
         sessionTarget: "main",
-        wakeMode: "now",
         payload: { kind: "systemEvent", text: "transport system capless" },
-        delivery: { mode: "none" },
       },
       expected: {},
     },
@@ -231,12 +203,8 @@ if (phase === "create") {
       label: "transport-command-capless",
       input: {
         name: "operator transport command capless",
-        enabled: false,
-        schedule,
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "command", argv: ["printf", "transport-command"] },
-        delivery: { mode: "none" },
       },
       expected: {},
     },
@@ -244,12 +212,8 @@ if (phase === "create") {
       label: "transport-system-narrow-trigger",
       input: {
         name: "operator transport system narrow",
-        enabled: false,
-        schedule,
         sessionTarget: "main",
-        wakeMode: "now",
         payload: { kind: "systemEvent", text: "transport system narrow", toolsAllow: ["read"] },
-        delivery: { mode: "none" },
       },
       expected: { toolsAllow: ["read"] },
       patch: { trigger: { script: "return { fire: false }" } },
@@ -259,12 +223,8 @@ if (phase === "create") {
       label: "transport-system-capless-trigger",
       input: {
         name: "operator transport system adopts wildcard",
-        enabled: false,
-        schedule,
         sessionTarget: "main",
-        wakeMode: "now",
         payload: { kind: "systemEvent", text: "transport system adopts wildcard" },
-        delivery: { mode: "none" },
       },
       expected: {},
       patch: { trigger: { script: "return { fire: false }" } },
@@ -274,7 +234,13 @@ if (phase === "create") {
 
   const snapshots = [];
   for (const testCase of cases) {
-    let job = callGateway("cron.add", testCase.input);
+    let job = callGateway("cron.add", {
+      enabled: false,
+      schedule,
+      wakeMode: "now",
+      delivery: { mode: "none" },
+      ...testCase.input,
+    });
     assertAuthority(`${testCase.label} create`, job, testCase.expected);
     if (testCase.patch) {
       callGateway("cron.update", { id: job.id, patch: testCase.patch });

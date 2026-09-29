@@ -1,15 +1,26 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { startHoverMarqueeFromEvent, stopHoverMarqueeFromEvent } from "../lib/hover-marquee.ts";
 import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
+import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
 
 export function renderSidebarSessionSectionHeader(params: {
   sectionId: string;
   content: TemplateResult;
+  status?: {
+    content: TemplateResult;
+    label: string;
+    expanded: boolean;
+    title?: string;
+    onToggle: () => void;
+  };
   draggable?: boolean;
   disabledReason?: string;
   onStartDrag: (sectionId: string) => void;
   onFinishDrag: () => void;
   onContextMenu?: (event: MouseEvent) => void;
+  reorder?: {
+    label: string;
+    onMove: (target: string, position: "before" | "after") => void | Promise<void>;
+  };
 }) {
   const draggable = params.draggable !== false && !params.disabledReason;
   return html`
@@ -52,12 +63,26 @@ export function renderSidebarSessionSectionHeader(params: {
         (event.currentTarget as HTMLElement).removeAttribute("data-section-drag-blocked");
         params.onFinishDrag();
       }}
-      @mouseenter=${startHoverMarqueeFromEvent}
-      @mouseleave=${stopHoverMarqueeFromEvent}
       @contextmenu=${params.onContextMenu ?? nothing}
     >
       <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>
       ${params.content}
+      ${draggable && params.reorder ? renderSidebarReorderMenu({ ...params.reorder, kind: "section" }) : nothing}
+      ${
+        params.status
+          ? html`<button
+              type="button"
+              class="sidebar-session-group-status"
+              tabindex="-1"
+              aria-label=${params.status.label}
+              aria-expanded=${String(params.status.expanded)}
+              title=${params.status.title ?? nothing}
+              @click=${params.status.onToggle}
+            >
+              ${params.status.content}
+            </button>`
+          : nothing
+      }
     </div>
   `;
 }

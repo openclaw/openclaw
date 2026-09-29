@@ -1,27 +1,39 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** A transient discovery failure must survive successful runtime cancellation. */
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
+import * as generations from "../../../config/sessions/session-delivery-generation.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
+  runExclusiveSessionLifecycleMutation,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun, startQueuedSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+const nativeState = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
+beforeEach(() => {
+  vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
+    nativeState.persistSubagentRunsToDiskAsyncOrThrow,
+  );
+});
 
-it("retains a captured child prefix when the next child's parent identity read fails", async () => {
+it("retains a captured child prefix when the next child's session preparation fails", async () => {
   const owner = "agent:main:main";
   const rootKey = "agent:main:subagent:prefix-root";
   const firstKey = "agent:main:subagent:prefix-first";
@@ -40,7 +52,7 @@ it("retains a captured child prefix when the next child's parent identity read f
       sessionKey,
       defaultSessionId: `${runId}-session`,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
       requesterSessionKey,
@@ -78,20 +90,20 @@ it("retains a captured child prefix when the next child's parent identity read f
     start: unrelatedStart,
     onStartFailure: () => true,
   });
-  const exactRead = sessions.loadExactSessionEntryReadOnly;
+  const prepare = generations.prepareSessionGenerationFacts;
   let capturedFirst = false;
   let failedReads = 0;
-  const failure = "next child parent identity unavailable";
-  vi.spyOn(sessions, "loadExactSessionEntryReadOnly").mockImplementation((scope) => {
-    if (capturedFirst && scope.sessionKey === rootKey && failedReads === 0) {
+  const failure = "next child session preparation unavailable";
+  vi.spyOn(generations, "prepareSessionGenerationFacts").mockImplementation(async (input) => {
+    if (capturedFirst && input.sessionKey === secondKey && failedReads === 0) {
       failedReads += 1;
       throw new Error(failure);
     }
-    const result = exactRead(scope);
-    if (scope.sessionKey === firstKey) {
+    const generation = await prepare(input);
+    if (input.sessionKey === firstKey) {
       capturedFirst = true;
     }
-    return result;
+    return generation;
   });
   const result = await killAllControlledSubagentRuns({
     cfg: getRuntimeConfig(),
@@ -121,19 +133,19 @@ it("retains a captured child prefix when the next child's parent identity read f
     firstStart,
     "an already captured reservation cannot escape on scope disposal",
   ).not.toHaveBeenCalled();
-  expect(findTaskByRunId("prefix-first")?.status).toBe("cancelled");
-  expect(findTaskByRunId("prefix-second")?.status).not.toBe("cancelled");
-  expect(findTaskByRunId("prefix-healthy")?.status).toBe("cancelled");
+  expect(resolveSubagentSessionStatus(subagentRuns.get("prefix-first"))).toBe("killed");
+  expect(resolveSubagentSessionStatus(subagentRuns.get("prefix-second"))).not.toBe("killed");
+  expect(resolveSubagentSessionStatus(subagentRuns.get("prefix-healthy"))).toBe("killed");
   expect(unrelatedStart).toHaveBeenCalledOnce();
 });
 
-// Sweep a bounded set of real reads after admission interruption, not a private
-// refresh API or a fixed expected read count. Every injected error must be visible.
+// Sweep retained identity checks after admission interruption. Every injected
+// failure must remain visible while independent siblings still settle.
 it.each([
   ...[undefined, 1, 2, 3, 4].map((faultAt) => ({ phase: "ancestor drain", faultAt })),
   ...[undefined, 1].map((faultAt) => ({ phase: "later sibling drain", faultAt })),
 ])(
-  "reports identity read $faultAt failure after $phase without losing descendant accounting",
+  "reports retained identity check $faultAt failure after $phase without losing descendant accounting",
   async ({ phase, faultAt }) => {
     const owner = "agent:main:main";
     const aKey = "agent:main:subagent:ancestor";
@@ -155,7 +167,7 @@ it.each([
         lifecycleRevision: `${runId}-revision`,
       });
       if (runId !== "g") {
-        registerSubagentRun({
+        await registerSubagentRun({
           runId,
           childSessionKey: sessionKey,
           requesterSessionKey,
@@ -210,29 +222,38 @@ it.each([
       expect(startQueuedSubagentRun("g")).toBe(true);
     });
     const startFailure = vi.fn(() => true);
-    const exactRead = sessions.loadExactSessionEntryReadOnly;
+    const prepare = generations.prepareSessionGenerationFacts;
     let armed = false;
     let reads = 0;
     let failedReads = 0;
-    let recoveredReads = 0;
-    const failure = "transient ancestor identity read failure";
+    const failure = "transient ancestor identity facts unavailable";
     const reader = vi
-      .spyOn(sessions, "loadExactSessionEntryReadOnly")
-      .mockImplementation((scope) => {
-        if (armed && scope.sessionKey === aKey) {
-          reads += 1;
-          if (reads === faultAt) {
-            failedReads += 1;
-            throw new Error(failure);
-          }
-          const result = exactRead(scope);
-          if (failedReads > 0 && result?.entry.sessionId === "a-session") {
-            recoveredReads += 1;
-          }
-          return result;
-        }
-        return exactRead(scope);
+      .spyOn(generations, "prepareSessionGenerationFacts")
+      .mockImplementation(async (input) => {
+        const generation = await prepare(input);
+        return {
+          ...generation,
+          assertCurrent() {
+            generation.assertCurrent();
+            if (armed && input.sessionKey === aKey) {
+              reads += 1;
+              if (reads === faultAt) {
+                failedReads += 1;
+                throw new Error(failure);
+              }
+            }
+          },
+        };
       });
+    const grandchildCancelled = createDeferred();
+    const stopObserving = subscribeSubagentRunChanges((runIds) => {
+      if (
+        runIds?.includes("g") &&
+        resolveSubagentSessionStatus(subagentRuns.get("g")) === "killed"
+      ) {
+        grandchildCancelled.resolve();
+      }
+    });
     const pending = killAllControlledSubagentRuns({
       cfg: getRuntimeConfig(),
       controller: {
@@ -244,8 +265,15 @@ it.each([
       },
       runs: [a, healthy],
     });
+    const awaitProgress = (signal: Promise<void>, label: string) =>
+      Promise.race([
+        signal,
+        pending.then((result) => {
+          throw new Error(`${label} was not reached: ${JSON.stringify(result)}`);
+        }),
+      ]);
     try {
-      await entered.promise;
+      await awaitProgress(entered.promise, "ancestor interruption");
       expect(failedReads, "initial binding and iteration entered without a fault").toBe(0);
       expect(abortA).not.toHaveBeenCalled();
       expect(interruptD, "D remains admitted while A drains").not.toHaveBeenCalled();
@@ -253,7 +281,7 @@ it.each([
       expect(subagentRuns.has("g")).toBe(false);
       // D, not the interrupted ancestor A, owns this accepted late registration.
       await admissionD.run(async () => {
-        registerSubagentRun({
+        await registerSubagentRun({
           runId: "g",
           childSessionKey: gKey,
           requesterSessionKey: dKey,
@@ -279,10 +307,18 @@ it.each([
       armed = phase === "ancestor drain";
       admissionA.release();
       if (phase === "later sibling drain") {
-        await healthyEntered.promise;
+        await awaitProgress(healthyEntered.promise, "healthy sibling interruption");
+        await awaitProgress(grandchildCancelled.promise, "grandchild cancellation publication");
+        // Publication precedes G's abort-marker write. Join its mutation from
+        // outside the observer's reentrant context before arming the next fault.
+        await runExclusiveSessionLifecycleMutation({
+          scope: storePath,
+          identities: [gKey, "g-session"],
+          run: async () => {},
+        });
         expect(a.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
         expect(d.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-        expect(findTaskByRunId("g")?.status).toBe("cancelled");
+        expect(resolveSubagentSessionStatus(subagentRuns.get("g"))).toBe("killed");
         expect(startG).not.toHaveBeenCalled();
         armed = true;
         admissionHealthy.release();
@@ -294,23 +330,21 @@ it.each([
       expect(startFailure).not.toHaveBeenCalled();
       if (faultAt === undefined) {
         expect(result).toMatchObject({ status: "ok", killed: 4 });
-        expect(findTaskByRunId("g")?.status).toBe("cancelled");
+        expect(resolveSubagentSessionStatus(subagentRuns.get("g"))).toBe("killed");
         expect(startG).not.toHaveBeenCalled();
       } else {
-        expect(failedReads, "exactly one transient I/O fault").toBe(1);
+        expect(failedReads, "exactly one transient identity-facts fault").toBe(1);
         expect(
           sessions.loadExactSessionEntryReadOnly({ storePath, sessionKey: aKey })?.entry.sessionId,
         ).toBe("a-session");
-        expect(recoveredReads, "real accessor succeeds again after the fault").toBeGreaterThan(0);
         const observation = JSON.stringify({
           phase,
           faultAt,
           failedReads,
-          recoveredReads,
           aKilled: a.endedReason,
           dKilled: d.endedReason,
           healthyKilled: healthy.endedReason,
-          gTask: findTaskByRunId("g")?.status,
+          gTask: resolveSubagentSessionStatus(subagentRuns.get("g")),
           gExecution: subagentRuns.get("g")?.execution.status,
           gDispatches: startG.mock.calls.length,
           result,
@@ -323,6 +357,7 @@ it.each([
       }
     } finally {
       armed = false;
+      stopObserving();
       admissionA.release();
       admissionD.release();
       admissionHealthy.release();

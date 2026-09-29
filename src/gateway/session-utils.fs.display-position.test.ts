@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
-import { ArchivedTranscriptReader } from "./session-utils.fs.js";
+import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 
 function activity(id: string, afterEntryId: string | null, startOrder: number) {
   return createNestedToolActivity({
@@ -37,7 +37,6 @@ function positions(messages: unknown[]) {
 describe("archive transcript display positions", () => {
   let dir: string;
   let storePath: string;
-  const archiveOptions = { allowResetArchiveFallback: true, resetArchiveOnly: true };
 
   beforeAll(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-archive-position-"));
@@ -80,18 +79,52 @@ describe("archive transcript display positions", () => {
         ...activity("missing", "dispatch-anchor", 5),
         details: { ...activity("missing", "dispatch-anchor", 5).details, afterEntryId: undefined },
       }),
-      entry("final", "missing", { role: "assistant", content: "done" }),
+      {
+        type: "custom_message",
+        id: "notice",
+        parentId: "missing",
+        customType: "run-failed-before-reply",
+        content: "This turn ended before a reply.",
+        display: true,
+        timestamp: "2026-08-28T00:00:00.000Z",
+      },
+      {
+        type: "custom_message",
+        id: "hidden",
+        parentId: "notice",
+        customType: "private-report",
+        content: "PRIVATE_REPORT",
+        display: false,
+        timestamp: "2026-08-28T00:00:00.000Z",
+      },
+      {
+        type: "custom_message",
+        id: "missing-display",
+        parentId: "hidden",
+        customType: "private-report",
+        content: "PRIVATE_REPORT",
+        timestamp: "2026-08-28T00:00:00.000Z",
+      },
+      {
+        type: "custom_message",
+        id: "runtime-context",
+        parentId: "missing-display",
+        customType: "openclaw.runtime-context",
+        content: "PRIVATE_CONTEXT",
+        display: true,
+        timestamp: "2026-08-28T00:00:00.000Z",
+      },
+      entry("final", "runtime-context", { role: "assistant", content: "done" }),
     ]);
     const reader = new ArchivedTranscriptReader({ sessionId, storePath });
     const full = await reader.read({
       mode: "full",
       reason: "archive placement",
-      ...archiveOptions,
     });
-    const recentOptions = { maxMessages: 8, maxLines: 8, ...archiveOptions };
+    const recentOptions = { maxMessages: 8, maxLines: 12 };
     const recent = await reader.readRecentWithStats(recentOptions);
     const bounded = await reader.read({ mode: "recent", ...recentOptions });
-    const page = await reader.readPage({ offset: 0, maxMessages: 8, ...archiveOptions });
+    const page = await reader.readPage({ offset: 0, maxMessages: 8 });
     const source = recent.displaySource;
 
     expect(source).toEqual(expect.any(String));
@@ -106,6 +139,7 @@ describe("archive transcript display positions", () => {
       "unknown",
       "invalid",
       "missing",
+      "notice",
       "final",
     ]);
     const expected = [
@@ -119,20 +153,40 @@ describe("archive transcript display positions", () => {
       { source, rawSeq: 11 },
       { source, rawSeq: 12 },
       { source, rawSeq: 13 },
+      { source, rawSeq: 17 },
     ];
     expect(positions(full.messages)).toEqual(expected);
     for (const result of [recent, bounded, page]) {
-      expect(positions(result.messages)).toEqual(expected.slice(2));
+      expect(positions(result.messages)).toEqual(expected.slice(-8));
     }
-    expect(recent.totalMessages).toBe(10);
-    expect(page).toMatchObject({ totalMessages: 10, displaySource: source });
+    expect(recent.totalMessages).toBe(11);
+    expect(page).toMatchObject({ totalMessages: 11, displaySource: source });
+    expect(
+      await reader.readPage({
+        offset: 0,
+        maxMessages: 0,
+        recentAtHead: { maxMessages: 0, maxLines: 0, maxBytes: 1024 },
+      }),
+    ).toMatchObject({ messages: [], totalMessages: 11, displaySource: source });
+    expect(full.messages.at(-2)).toMatchObject({
+      role: "custom",
+      customType: "run-failed-before-reply",
+      content: "This turn ended before a reply.",
+      timestamp: Date.parse("2026-08-28T00:00:00.000Z"),
+    });
+    for (const id of ["hidden", "missing-display", "runtime-context"]) {
+      expect(await reader.readById(id)).toMatchObject({ found: false });
+      expect(await reader.readAroundId({ messageId: id, maxMessages: 2 })).toMatchObject({
+        found: false,
+        messages: [],
+      });
+    }
     for (const message of full.messages) {
       const id = metadata(message).id as string;
-      const byId = await reader.readById(id, archiveOptions);
+      const byId = await reader.readById(id);
       const around = await reader.readAroundId({
         messageId: id,
         maxMessages: 2,
-        ...archiveOptions,
       });
       expect(byId).toMatchObject({ found: true, oversized: false });
       expect(metadata(byId.message).transcriptPosition).toEqual(
@@ -140,6 +194,28 @@ describe("archive transcript display positions", () => {
       );
       expect(around).toMatchObject({ found: true, displaySource: source });
       expect(around.messages.find((row) => metadata(row).id === id)).toEqual(message);
+    }
+    for (const [messageId, direction, maxMessages, messages, offset] of [
+      ["root", "older", 4, full.messages.slice(0, 1), 10],
+      ["final", "newer", 4, full.messages.slice(-1), 0],
+      ["progress", "newer", 2, full.messages.slice(1, 3), 8],
+      ["fast", "older", 2, full.messages.slice(1, 3), 8],
+      ["notice", "older", 1, full.messages.slice(9, 10), 1],
+      ["notice", "newer", 1, full.messages.slice(9, 10), 1],
+    ] as const) {
+      const directionalPage = await reader.readAroundId({
+        messageId,
+        direction,
+        maxMessages,
+      });
+      expect(directionalPage).toMatchObject({
+        found: true,
+        displaySource: source,
+        totalMessages: 11,
+        hasOverreadContext: false,
+        offset,
+      });
+      expect(directionalPage.messages).toEqual(messages);
     }
   });
 
@@ -152,7 +228,7 @@ describe("archive transcript display positions", () => {
       entry("beginning", "kept", activity("beginning", null, 1)),
     ]);
     const reader = new ArchivedTranscriptReader({ sessionId, storePath });
-    const page = await reader.readPage({ offset: 0, maxMessages: 10, ...archiveOptions });
+    const page = await reader.readPage({ offset: 0, maxMessages: 10 });
     const source = page.displaySource;
     expect(page.messages.map((message) => metadata(message).id)).toEqual([
       "reset",
@@ -184,7 +260,7 @@ describe("archive transcript display positions", () => {
       const file = writeArchive(sessionId, [root, control, nested]);
       fs.utimesSync(file, 1_700_000_000, 1_700_000_000);
       const reader = new ArchivedTranscriptReader({ sessionId, storePath });
-      const readPage = () => reader.readPage({ offset: 0, maxMessages: 10, ...archiveOptions });
+      const readPage = () => reader.readPage({ offset: 0, maxMessages: 10 });
       if (phase !== "index scan") {
         await readPage();
       }
@@ -246,9 +322,7 @@ describe("archive transcript display positions", () => {
       });
       try {
         const result =
-          phase === "index scan"
-            ? readPage()
-            : reader.readRecentWithStats({ maxMessages: 10, ...archiveOptions });
+          phase === "index scan" ? readPage() : reader.readRecentWithStats({ maxMessages: 10 });
         const failure = await result.then(
           () => undefined,
           (error: unknown) => error,
@@ -275,13 +349,13 @@ describe("archive transcript display positions", () => {
     const records = [entry("root", null, { role: "user", content: "prompt" })];
     const file = writeArchive(sessionId, records);
     const reader = new ArchivedTranscriptReader({ sessionId, storePath });
-    const initial = await reader.readPage({ offset: 0, maxMessages: 1, ...archiveOptions });
+    const initial = await reader.readPage({ offset: 0, maxMessages: 1 });
     const source = initial.displaySource;
     expect(source).toEqual(expect.any(String));
     for (const result of [
-      await reader.readPage({ offset: 1, maxMessages: 1, ...archiveOptions }),
-      await reader.readRecentWithStats({ maxMessages: 0, ...archiveOptions }),
-      await reader.readAroundId({ messageId: "absent", maxMessages: 1, ...archiveOptions }),
+      await reader.readPage({ offset: 1, maxMessages: 1 }),
+      await reader.readRecentWithStats({ maxMessages: 0 }),
+      await reader.readAroundId({ messageId: "absent", maxMessages: 1 }),
     ]) {
       expect(result).toMatchObject({ messages: [], displaySource: source });
     }
@@ -290,7 +364,7 @@ describe("archive transcript display positions", () => {
       file,
       `\n${JSON.stringify(entry("new", "root", { role: "assistant", content: "new" }))}`,
     );
-    const replaced = await reader.readPage({ offset: 0, maxMessages: 1, ...archiveOptions });
+    const replaced = await reader.readPage({ offset: 0, maxMessages: 1 });
     expect(replaced).toMatchObject({ displaySource: expect.any(String) });
     expect(replaced.displaySource).not.toBe(source);
 
@@ -301,11 +375,11 @@ describe("archive transcript display positions", () => {
     for (const archive of [file, copy]) {
       fs.utimesSync(archive, 1_700_000_000, 1_700_000_000);
     }
-    const current = await reader.readPage({ offset: 0, maxMessages: 1, ...archiveOptions });
+    const current = await reader.readPage({ offset: 0, maxMessages: 1 });
     const other = await new ArchivedTranscriptReader({
       sessionId,
       storePath: path.join(otherDir, "sessions.json"),
-    }).readPage({ offset: 0, maxMessages: 1, ...archiveOptions });
+    }).readPage({ offset: 0, maxMessages: 1 });
     expect(other.displaySource).toEqual(expect.any(String));
     expect(other.displaySource).not.toBe(current.displaySource);
   });

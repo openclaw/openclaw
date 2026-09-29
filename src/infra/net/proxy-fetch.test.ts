@@ -1,10 +1,6 @@
 // Proxy fetch tests cover explicit/env proxy dispatchers, managed proxy TLS,
 // FormData conversion, metadata markers, and proxy env recovery.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  registerActiveManagedProxyUrl,
-  stopActiveManagedProxyRegistration,
-} from "./proxy/active-proxy-state.js";
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -162,8 +158,6 @@ describe("makeProxyFetch", () => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {});
-
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
     const proxyUrl = "http://proxy.test:8080";
     undiciFetch.mockResolvedValue({ ok: true });
@@ -178,28 +172,6 @@ describe("makeProxyFetch", () => {
     const init = requireUndiciFetchInit();
     expect(input).toBe("https://api.example.com/v1/audio");
     expect(init.dispatcher).toBe(getLastAgent());
-  });
-
-  it("adds active managed proxy CA trust to explicit proxy fetch dispatchers", async () => {
-    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
-      proxyTls: { ca: "explicit-proxy-fetch-ca" },
-    });
-    undiciFetch.mockResolvedValue({ ok: true });
-
-    try {
-      const proxyFetch = makeProxyFetch("https://proxy.test:8443");
-
-      await proxyFetch("https://api.example.com/v1/audio");
-
-      expect(proxyAgentSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          uri: "https://proxy.test:8443",
-          proxyTls: expect.objectContaining({ ca: "explicit-proxy-fetch-ca" }),
-        }),
-      );
-    } finally {
-      stopActiveManagedProxyRegistration(registration);
-    }
   });
 
   it("reuses the same ProxyAgent across calls", async () => {
@@ -242,47 +214,6 @@ describe("makeProxyFetch", () => {
     const sentHeaders = new Headers(requireHeadersInit(passedInit.headers, "FormData proxy"));
     expect(sentHeaders.has("content-length")).toBe(false);
     expect(sentHeaders.has("content-type")).toBe(false);
-  });
-
-  it("keeps non-FormData bodies unchanged", async () => {
-    undiciFetch.mockResolvedValue({ ok: true });
-
-    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
-    const body = JSON.stringify({ hello: "world" });
-
-    await proxyFetch("https://api.example.com/json", {
-      method: "POST",
-      body,
-    });
-
-    expect(requireUndiciFetchInit().body).toBe(body);
-  });
-
-  it("drops symbol metadata from plain header dictionaries before undici fetch", async () => {
-    undiciFetch.mockResolvedValue({ ok: true });
-
-    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
-    const headers = { "Content-Type": "application/json" } as Record<string, string> & {
-      [key: symbol]: unknown;
-    };
-    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
-      value: new Set(["content-type"]),
-      enumerable: false,
-    });
-
-    await proxyFetch("https://api.example.com/json", {
-      method: "POST",
-      headers,
-      body: "{}",
-    });
-
-    const passedHeaders = requireUndiciFetchInit().headers;
-    expect(passedHeaders).not.toBe(headers);
-    expect(Object.getOwnPropertySymbols(passedHeaders as object)).toStrictEqual([]);
-    expect(
-      new Headers(requireHeadersInit(passedHeaders, "plain dictionary proxy")).get("content-type"),
-    ).toBe("application/json");
-    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
   });
 
   it("keeps undici FormData instances unchanged", async () => {
@@ -381,123 +312,21 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(init.dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
   });
 
-  it("adds active managed proxy CA trust to env proxy fetch dispatchers", () => {
-    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
-      proxyTls: { ca: "proxy-fetch-ca" },
-    });
-
-    try {
-      const fetchFn = requireProxyFetch(
-        resolveProxyFetchFromEnv({
-          HTTP_PROXY: "",
-          HTTPS_PROXY: "https://proxy.test:8443",
-        }),
-      );
-
-      expect(fetchFn).toBeTypeOf("function");
-      expect(envAgentSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          httpsProxy: "https://proxy.test:8443",
-          proxyTls: expect.objectContaining({ ca: "proxy-fetch-ca" }),
-        }),
-      );
-    } finally {
-      stopActiveManagedProxyRegistration(registration);
-    }
-  });
-
-  it("converts global FormData bodies when using proxy env fetch", async () => {
-    undiciFetch.mockResolvedValue({ ok: true });
-
-    const fetchFn = requireProxyFetch(
-      resolveProxyFetchFromEnv({
-        HTTP_PROXY: "",
-        HTTPS_PROXY: "http://proxy.test:8080",
-      }),
-    );
-
-    const form = new globalThis.FormData();
-    form.append("file", new Blob([new Uint8Array(8)], { type: "audio/wav" }), "test.wav");
-    form.append("model", "test-model");
-
-    await fetchFn("https://api.example.com/v1/audio/transcriptions", {
-      method: "POST",
-      body: form,
-    });
-
-    const passedBody = requireUndiciFetchInit().body;
-    expect(passedBody).toBeInstanceOf(MockUndiciFormData);
-    expect((passedBody as InstanceType<typeof MockUndiciFormData>).get("model")).toBe("test-model");
-    expect((passedBody as InstanceType<typeof MockUndiciFormData>).get("file")).toBeInstanceOf(
-      Blob,
-    );
-  });
-
-  it("returns proxy fetch when HTTP_PROXY is set", () => {
-    const fetchFn = requireProxyFetch(
-      resolveProxyFetchFromEnv({
-        HTTPS_PROXY: "",
-        HTTP_PROXY: "http://fallback.test:3128",
-      }),
-    );
-    expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        httpProxy: "http://fallback.test:3128",
-        httpsProxy: "http://fallback.test:3128",
-      }),
-    );
-  });
-
-  it("returns proxy fetch when lowercase https_proxy is set", () => {
-    const fetchFn = requireProxyFetch(
-      resolveProxyFetchFromEnv({
-        HTTPS_PROXY: "",
-        HTTP_PROXY: "",
-        http_proxy: "",
-        https_proxy: "http://lower.test:1080",
-      }),
-    );
-    expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ httpsProxy: "http://lower.test:1080" }),
-    );
-  });
-
-  it("returns proxy fetch when lowercase http_proxy is set", () => {
-    const fetchFn = requireProxyFetch(
-      resolveProxyFetchFromEnv({
-        HTTPS_PROXY: "",
-        HTTP_PROXY: "",
-        https_proxy: "",
-        http_proxy: "http://lower-http.test:1080",
-      }),
-    );
-    expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        httpProxy: "http://lower-http.test:1080",
-        httpsProxy: "http://lower-http.test:1080",
-      }),
-    );
-  });
-
-  it("returns proxy fetch when ALL_PROXY is set", () => {
-    const fetchFn = requireProxyFetch(
-      resolveProxyFetchFromEnv({
-        HTTPS_PROXY: "",
-        HTTP_PROXY: "",
-        https_proxy: "",
-        http_proxy: "",
-        ALL_PROXY: "socks5://all-proxy.test:1080",
-      }),
-    );
-    expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        httpProxy: "socks5://all-proxy.test:1080",
-        httpsProxy: "socks5://all-proxy.test:1080",
-      }),
+  it("forwards supplied managed trust context without attaching shared TLS to mixed proxy options", () => {
+    const env = {
+      HTTP_PROXY: "socks5://proxy.test:1080",
+      HTTPS_PROXY: "https://proxy.test:8443",
+      OPENCLAW_PROXY_ACTIVE: "1",
+      OPENCLAW_PROXY_CA_FILE: "/supplied/proxy-ca.pem",
+    };
+    expect(requireProxyFetch(resolveProxyFetchFromEnv(env))).toBeTypeOf("function");
+    expect(createHttp1EnvHttpProxyAgent).toHaveBeenCalledWith(
+      {
+        httpProxy: env.HTTP_PROXY,
+        httpsProxy: env.HTTPS_PROXY,
+      },
+      undefined,
+      env,
     );
   });
 

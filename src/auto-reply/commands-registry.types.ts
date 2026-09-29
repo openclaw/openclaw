@@ -84,6 +84,8 @@ export type ChatCommandDefinition = {
   tier?: CommandTier;
   /** Handler is safe to resolve while another run owns the session execution slot. */
   activeRunSafe?: true;
+  /** Browser command forms that do not need the selected chat model; authorization still applies. */
+  modelIndependent?: "always" | "no-args" | "directive" | ((args: string) => boolean);
 };
 
 /** Provider-facing native command registration shape. */
@@ -99,6 +101,8 @@ export type NativeCommandSpec = {
 /** Extra context used when normalizing slash command text. */
 export type CommandNormalizeOptions = {
   botUsername?: string;
+  /** Keeps complete directive/task arguments, including whitespace and later lines. */
+  preserveArguments?: boolean;
   /** Strip an explicit command target only while channel bot identity is unavailable. */
   targetedCommandMode?: "pre-identity";
 };

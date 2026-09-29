@@ -1,4 +1,3 @@
-// Network Policy module implements ip behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -109,13 +108,9 @@ export function isIpv6Address(address: ParsedIpAddress): address is ipaddr.IPv6 
 }
 
 function normalizeIpv4MappedAddress(address: ParsedIpAddress): ParsedIpAddress {
-  if (!isIpv6Address(address)) {
-    return address;
-  }
-  if (!address.isIPv4MappedAddress()) {
-    return address;
-  }
-  return address.toIPv4Address();
+  return isIpv6Address(address) && address.isIPv4MappedAddress()
+    ? address.toIPv4Address()
+    : address;
 }
 
 function normalizeIpParseInput(raw: string | undefined): string | undefined {
@@ -164,11 +159,7 @@ export function isCanonicalDottedDecimalIPv4(raw: string | undefined): boolean {
 
 /** Detects legacy numeric IPv4 forms that canonical parsing deliberately rejects. */
 export function isLegacyIpv4Literal(raw: string | undefined): boolean {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return false;
-  }
-  const normalized = stripIpv6Brackets(trimmed);
+  const normalized = normalizeIpParseInput(raw);
   if (!normalized || normalized.includes(":")) {
     return false;
   }
@@ -176,16 +167,7 @@ export function isLegacyIpv4Literal(raw: string | undefined): boolean {
     return false;
   }
   const parts = normalized.split(".");
-  if (parts.length === 0 || parts.length > 4) {
-    return false;
-  }
-  if (parts.some((part) => part.length === 0)) {
-    return false;
-  }
-  if (!parts.every((part) => isNumericIpv4LiteralPart(part))) {
-    return false;
-  }
-  return true;
+  return parts.length <= 4 && parts.every(isNumericIpv4LiteralPart);
 }
 
 /** True when a canonical IP literal is loopback, including IPv4-mapped IPv6. */
@@ -213,6 +195,18 @@ export function isLinkLocalIpAddress(raw: string | undefined): boolean {
     return true;
   }
   return normalized.range() === "linkLocal";
+}
+
+/** True for unspecified IPs, including IPv4 embedded in IPv6 transition forms. */
+export function isUnspecifiedIpAddress(raw: string | undefined): boolean {
+  const parsed = parseCanonicalIpAddress(raw);
+  if (!parsed || parsed.range() === "loopback") {
+    return false;
+  }
+  const normalized = isIpv6Address(parsed)
+    ? (extractEmbeddedIpv4FromIpv6(parsed) ?? parsed)
+    : parsed;
+  return normalized.range() === "unspecified";
 }
 
 /** True for cloud metadata IP literals, including mapped and embedded forms. */
@@ -266,6 +260,11 @@ export function isBlockedSpecialUseIpv6Address(
     // RFC8215 local-use NAT64 can carry deployment-specific more-specific
     // prefixes, so the literal alone cannot prove which IPv4 bits a router
     // will use. Block the allocation instead of guessing a public decoy.
+    return true;
+  }
+  if (isCloudMetadataIpAddress(address.toString())) {
+    // Metadata endpoints stay blocked even when operators opt into the wider
+    // ULA range for fake-ip proxy compatibility.
     return true;
   }
   if (range === "uniqueLocal" && options.allowUniqueLocalRange === true) {
@@ -396,7 +395,12 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
     );
   }
   if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
-    return comparableIp.match([comparableBase, prefixLength]);
+    // A base normalized from IPv6 is mapped: its prefix includes 96 mapped bits.
+    // Shorter prefixes contain the whole mapped block, equivalent to IPv4 /0.
+    const ipv4PrefixLength = isIpv6Address(baseAddress)
+      ? Math.max(0, prefixLength - 96)
+      : prefixLength;
+    return comparableIp.match([comparableBase, ipv4PrefixLength]);
   }
   if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
     return comparableIp.match([comparableBase, prefixLength]);

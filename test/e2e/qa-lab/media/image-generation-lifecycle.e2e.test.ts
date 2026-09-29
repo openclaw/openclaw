@@ -8,12 +8,13 @@ import {
   createQaChannelTransport,
   startQaBusServer,
   createQaGatewayChild,
-  type QaGatewayChild,
   startQaMockOpenAiServer,
   TINY_PNG_BASE64,
   type MockOpenAiRequestSnapshot,
 } from "../../../../extensions/qa-lab/api.js";
+import { resolveRuntimePolicySessionKey } from "../../../../src/auto-reply/reply/runtime-policy-session-key.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
@@ -21,15 +22,16 @@ const IMAGE_MODEL_REF = "openai/gpt-image-1";
 const REQUEST_TEXT =
   "Image generation check IMAGE_TASK_LIFECYCLE: generate the QA lighthouse image.";
 const CONVERSATION = { id: "image-generation-lifecycle", kind: "direct" as const };
-
-type GatewayTask = {
-  id: string;
-  kind?: string;
-  sourceId?: string;
-  status: string;
-  progressSummary?: string;
-  endedAt?: string | number;
-};
+// QA direct chats share a transcript, but each peer owns its media tasks.
+const REQUESTER_SESSION_KEY = resolveRuntimePolicySessionKey({
+  sessionKey: "agent:qa:main",
+  ctx: {
+    Provider: "qa-channel",
+    AccountId: "default",
+    ChatType: "direct",
+    SenderId: CONVERSATION.id,
+  },
+});
 
 async function readRequestBody(request: IncomingMessage) {
   const chunks: Buffer[] = [];
@@ -165,13 +167,15 @@ async function waitForToolOutput(baseUrl: string, needle: string) {
   return matched as MockOpenAiRequestSnapshot;
 }
 
-async function readImageTasks(gateway: QaGatewayChild): Promise<GatewayTask[]> {
-  const payload = (await gateway.call("tasks.list", { limit: 100 })) as {
-    tasks?: GatewayTask[];
-  };
-  return (payload.tasks ?? []).filter(
-    (task) => task.kind === "image_generation" && task.sourceId === "image_generate:openai",
-  );
+async function readImageTaskStatus(gateway: {
+  call: (method: string, params: unknown) => Promise<unknown>;
+}) {
+  const result = (await gateway.call("tools.invoke", {
+    name: "image_generate",
+    args: { action: "status" },
+    sessionKey: REQUESTER_SESSION_KEY,
+  })) as { ok?: boolean; output?: unknown; result?: unknown };
+  return JSON.stringify(result);
 }
 
 describe("image generation task lifecycle through QA-channel", () => {
@@ -210,7 +214,7 @@ describe("image generation task lifecycle through QA-channel", () => {
     cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
     const gateway = await gatewayOwner.start({
       repoRoot: REPO_ROOT,
-      useRepoCli: true,
+      command: createQaPreparedRepoCliCommand(REPO_ROOT),
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: MODEL_REF,
@@ -236,30 +240,14 @@ describe("image generation task lifecycle through QA-channel", () => {
       timeout: 30_000,
     });
 
-    let runningTasks: GatewayTask[] = [];
-    await vi.waitFor(
-      async () => {
-        runningTasks = await readImageTasks(gateway);
-        expect(runningTasks).toHaveLength(1);
-        expect(runningTasks[0]).toMatchObject({
-          id: expect.any(String),
-          status: "running",
-          progressSummary: "Generating image",
-        });
-      },
-      { interval: 50, timeout: 30_000 },
-    );
-    const taskId = runningTasks[0]?.id;
-    expect(taskId).toEqual(expect.any(String));
-
     await sendExactRequest();
     const runningDuplicate = await waitForToolOutput(mock.baseUrl, "is already running");
-    expect(runningDuplicate.toolOutput).toContain(taskId);
+    const runningReceipt = runningDuplicate.toolOutput.match(
+      /Image generation task (\S+) is already running/u,
+    )?.[1];
+    expect(runningReceipt).toEqual(expect.any(String));
     expect(imageProvider.requests).toHaveLength(1);
-    expect(await readImageTasks(gateway)).toEqual([
-      expect.objectContaining({ id: taskId, status: "running" }),
-    ]);
-
+    expect(await readImageTaskStatus(gateway)).toContain(runningReceipt);
     imageProvider.release();
     await vi.waitFor(
       () => {
@@ -282,28 +270,12 @@ describe("image generation task lifecycle through QA-channel", () => {
       { interval: 50, timeout: 90_000 },
     );
 
-    let completedTasks: GatewayTask[] = [];
-    await vi.waitFor(
-      async () => {
-        completedTasks = await readImageTasks(gateway);
-        expect(completedTasks).toEqual([
-          expect.objectContaining({
-            id: taskId,
-            status: "completed",
-            progressSummary: "Generated 1 image",
-            endedAt: expect.anything(),
-          }),
-        ]);
-      },
-      { interval: 50, timeout: 30_000 },
-    );
-
     const completionReentry = await vi.waitFor(
       async () => {
         const request = (await readMockRequests(mock.baseUrl)).find(
-          (request) =>
-            request.allInputText.includes("[Inter-session message]") &&
-            request.allInputText.includes("sourceTool=image_generate"),
+          (snapshot) =>
+            snapshot.allInputText.includes("[Inter-session message]") &&
+            snapshot.allInputText.includes("sourceTool=image_generate"),
         );
         if (!request) {
           throw new Error("image completion did not re-enter the agent session");
@@ -314,9 +286,18 @@ describe("image generation task lifecycle through QA-channel", () => {
     );
     expect(completionReentry.allInputText).toContain("sourceChannel=internal");
 
+    // Completion delivery precedes the terminal task state; wait for it before the next duplicate.
+    await vi.waitFor(
+      async () =>
+        expect(await readImageTaskStatus(gateway)).toContain(
+          "No active image generation task is currently running",
+        ),
+      { interval: 50, timeout: 30_000 },
+    );
+
     await sendExactRequest();
     const completedDuplicate = await waitForToolOutput(mock.baseUrl, "recently succeeded");
-    expect(completedDuplicate.toolOutput).toContain(taskId);
+    expect(completedDuplicate.toolOutput).toContain(runningReceipt);
 
     const plannedCalls = (await readMockRequests(mock.baseUrl)).filter(
       (request) =>
@@ -330,13 +311,6 @@ describe("image generation task lifecycle through QA-channel", () => {
       plannedCalls[0]?.plannedToolArgs,
     ]);
     expect(imageProvider.requests).toHaveLength(1);
-    expect(await readImageTasks(gateway)).toEqual([
-      expect.objectContaining({ id: taskId, status: "completed" }),
-    ]);
-
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 500);
-    });
     const completionOutcomes = state
       .getSnapshot()
       .messages.filter(

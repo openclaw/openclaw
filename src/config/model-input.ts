@@ -4,12 +4,13 @@ import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalize";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { modelKey } from "../shared/model-key.js";
+import type { AgentModelEntryConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
@@ -37,11 +38,8 @@ export function resolveAgentModelTimeoutMsValue(model?: AgentToolModelConfig): n
   if (!model || typeof model !== "object") {
     return undefined;
   }
-  return typeof model.timeoutMs === "number" &&
-    Number.isFinite(model.timeoutMs) &&
-    model.timeoutMs > 0
-    ? Math.floor(model.timeoutMs)
-    : undefined;
+  const timeout = asPositiveFiniteNumber(model.timeoutMs);
+  return timeout === undefined ? undefined : Math.floor(timeout);
 }
 
 /** Converts legacy string model config into the object shape used by model patch helpers. */
@@ -58,6 +56,14 @@ export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLi
 
 const GOOGLE_PROVIDER_IDS = new Set(["google", "google-gemini-cli", "google-vertex"]);
 
+/** Applies existing Google/Together model fixes while preserving literal catalog namespaces. */
+export function normalizeProviderCatalogModelIdForConfig(provider: string, model: string): string {
+  if (GOOGLE_PROVIDER_IDS.has(provider) || model.startsWith("google/")) {
+    return normalizeGooglePreviewModelId(model);
+  }
+  return provider === "together" ? normalizeTogetherModelId(model) : model;
+}
+
 /** Canonicalizes provider/model refs before they are persisted to config. */
 export function normalizeAgentModelRefForConfig(model: string): string {
   const trimmed = model.trim();
@@ -67,13 +73,8 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   }
 
   const { provider, modelId: modelSuffix } = parsed;
-  const normalizedModel =
-    GOOGLE_PROVIDER_IDS.has(provider) || modelSuffix.startsWith("google/")
-      ? normalizeGooglePreviewModelId(modelSuffix)
-      : provider === "together"
-        ? normalizeTogetherModelId(modelSuffix)
-        : modelSuffix;
-  return modelKey(provider, normalizedModel);
+  const normalizedModel = normalizeProviderCatalogModelIdForConfig(provider, modelSuffix);
+  return `${provider}/${normalizedModel}`;
 }
 
 /** Normalizes primary/fallback refs without replacing unchanged config values. */
@@ -106,7 +107,12 @@ export function normalizeAgentModelSelectionForConfig(value: unknown): unknown {
   return next;
 }
 
-function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {
+export function mergeAgentModelEntryForConfig(
+  existing: AgentModelEntryConfig | undefined,
+  incoming: AgentModelEntryConfig,
+): AgentModelEntryConfig;
+export function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown;
+export function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {
   if (!isPlainRecord(existing) || !isPlainRecord(incoming)) {
     return incoming;
   }

@@ -15,7 +15,6 @@ describe("memory index", () => {
   it("does not activate fallback during search when index identity is already mismatched", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
 
@@ -52,6 +51,54 @@ describe("memory index", () => {
         }
       ).provider?.id,
     ).toBe("local");
+  });
+
+  it("reports the adopted fallback provider when the published index belongs to it", async () => {
+    // A previous run fell back, so the published index carries the fallback provider's
+    // identity. Search adopts it; a deep status probe on a fresh manager must describe the
+    // same provider instead of the configured primary.
+    const publishCfg = createCfg({
+      provider: "fallback-provider",
+      model: "fallback-provider-embed",
+    });
+    const publisher = await getFreshManager(publishCfg);
+    await publisher.sync({ reason: "test", force: true });
+    await publisher.close?.();
+
+    const cfg = createCfg({ model: "mock-embed", fallback: "fallback-provider" });
+
+    const searchManager = await getFreshManager(cfg);
+    const results = await searchManager.search("alpha");
+    expect(results.length).toBeGreaterThan(0);
+    expect(searchManager.status().provider).toBe("fallback-provider");
+    await searchManager.close?.();
+
+    const statusManager = await getFreshManager(cfg);
+    const probe = await statusManager.probeEmbeddingAvailability();
+    const status = statusManager.status();
+
+    expect(probe.ok).toBe(true);
+    expect(status.provider).toBe("fallback-provider");
+    expect(status.model).toBe("fallback-provider-embed");
+    expect(status.custom?.providerState).toMatchObject({ mode: "fallback-active" });
+    // The index is readable by the provider search uses, so it must not be reported as a
+    // configuration mismatch that an operator would answer with a forced rebuild.
+    expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+  });
+
+  it("keeps probing the configured provider when the published index matches it", async () => {
+    const cfg = createCfg({ fallback: "fallback-provider" });
+    const publisher = await getFreshManager(cfg);
+    await publisher.sync({ reason: "test", force: true });
+    await publisher.close?.();
+
+    const statusManager = await getFreshManager(cfg);
+    const probe = await statusManager.probeEmbeddingAvailability();
+    const status = statusManager.status();
+
+    expect(probe.ok).toBe(true);
+    expect(status.provider).toBe("mock");
+    expect(status.custom?.providerState).toMatchObject({ mode: "active" });
   });
 
   it("rebuilds with fallback provider during explicit identity repair", async () => {
@@ -162,7 +209,6 @@ describe("memory index", () => {
   it("reinitializes the configured provider after probe-time local degradation", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
 
@@ -326,7 +372,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       minScore: 0.35,
-      hybrid: { enabled: true },
     });
     const manager = await getFreshManager(cfg);
     try {
@@ -349,7 +394,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       minScore: 0.35,
-      hybrid: { enabled: true },
     });
     const manager = await getFreshManager(cfg);
     try {

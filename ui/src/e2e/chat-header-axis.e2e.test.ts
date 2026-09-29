@@ -54,11 +54,19 @@ suite.define(() => {
 
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-          const header = page.locator(".chat-pane__header").first();
+          const header = page.locator(
+            "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__header",
+          );
           await header.waitFor();
           await header.locator(".workspace-icon").waitFor();
 
           const geometry = await header.evaluate((root) => {
+            const main = root
+              .closest("openclaw-chat-pane")
+              ?.querySelector('[data-region="main"]:not([hidden])');
+            if (!main) {
+              throw new Error("Task header requires visible main content");
+            }
             const centerY = (selector: string) => {
               const node = root.querySelector(selector);
               if (!node) {
@@ -87,9 +95,7 @@ suite.define(() => {
                 ...root.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep"),
               ].map((node) => getComputedStyle(node).display),
               headerBottom: root.getBoundingClientRect().bottom,
-              contentTop: root.parentElement
-                ?.querySelector(".sidebar-region")
-                ?.getBoundingClientRect().top,
+              contentTop: main.getBoundingClientRect().top,
             };
           });
 
@@ -166,7 +172,7 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".agent-chat__composer-combobox > textarea").focus();
-        await page.keyboard.press("Control+f");
+        await page.keyboard.press("ControlOrMeta+f");
         const search = page.locator(".agent-chat__search-bar input");
         await search.waitFor();
         const [headerBox, searchBox] = await Promise.all([
@@ -197,14 +203,30 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}new`);
-        await page.addStyleTag({ content: ":root { --safe-area-bottom: 34px !important; }" });
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 34 } });
         const composer = page.locator(".new-session-page__composer");
         await composer.waitFor();
-        const margins = await composer.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { bottom: style.marginBottom, left: style.marginLeft, right: style.marginRight };
+        await composer.scrollIntoViewIfNeeded();
+        const bounds = await composer.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            left: rect.left,
+            right: rect.right,
+            bottom: rect.bottom,
+            draftBottom: element.closest(".new-session-page__draft")!.getBoundingClientRect()
+              .bottom,
+            shellBottom: element.closest(".shell")!.getBoundingClientRect().bottom,
+          };
         });
-        expect(margins).toEqual({ bottom: "48px", left: "4px", right: "4px" });
+        // New Session remains in its scrollable draft flow, not docked like
+        // Chat. Its local 6px gap must not reserve the app's physical inset again.
+        expect(bounds.shellBottom).toBeCloseTo(viewport.height - 34, 0);
+        expect(bounds.draftBottom - bounds.bottom).toBeCloseTo(6, 0);
+        expect(bounds.bottom).toBeLessThanOrEqual(bounds.shellBottom);
+        expect(bounds.left).toBeGreaterThanOrEqual(20);
+        expect(bounds.right).toBeLessThanOrEqual(viewport.width - 20);
+        expect(bounds.left).toBeCloseTo(viewport.width - bounds.right, 0);
       } finally {
         await suite.closeBrowserContext(context);
       }

@@ -3,6 +3,7 @@ import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type {
   ChatFastModeSelectState,
   ChatFastModeSelectValue,
@@ -12,6 +13,8 @@ import {
   type ChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+
+registerModelControlsEnglish();
 
 type ChatEffortPickerParams = {
   disabled: boolean;
@@ -49,6 +52,15 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   const selectedThinkingValue = hasThinkingOverride ? selection.value : "";
   const sliderIndex = selection.kind === "anchored" ? selection.index : 0;
   const sliderUnanchored = selection.kind === "unanchored";
+  // Binary providers can use a ranked wire value with the display label "On".
+  const maximumIndex = sliderStops.findLastIndex(
+    (stop) =>
+      stop.label !== "On" &&
+      ["minimal", "low", "medium", "high", "xhigh", "max"].includes(stop.value),
+  );
+  const sliderBoost = (index: number) =>
+    sliderStops[index]?.value === "ultra" ? "ultra" : index === maximumIndex ? "max" : "";
+  const committedBoost = sliderUnanchored ? "" : sliderBoost(sliderIndex);
   const sliderFillPercent = (index: number) =>
     sliderStops.length > 1 ? (index / (sliderStops.length - 1)) * 100 : 0;
   const defaultLevelLabel = formatEffortLabel(params.thinking.inherited.displayLabel);
@@ -74,40 +86,37 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };
+  const syncSliderPreview = (input: HTMLInputElement, previewIndex?: number) => {
+    const preview = previewIndex === undefined ? undefined : sliderStops[previewIndex];
+    const index = previewIndex ?? sliderIndex;
+    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(index)}%`);
+    input.dataset.effortBoost = preview ? sliderBoost(index) : committedBoost;
+    input.setAttribute(
+      "aria-valuetext",
+      preview ? formatEffortLabel(preview.label) : reasoningValueLabel,
+    );
+    const panel = input.closest(".chat-controls__reasoning-panel");
+    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
+      label.hidden = !preview || label.dataset.chatThinkingPreviewIndex !== input.value;
+    });
+    const committedLabel = panel?.querySelector<HTMLElement>(
+      "[data-chat-thinking-preview-committed]",
+    );
+    if (committedLabel) {
+      committedLabel.hidden = Boolean(preview);
+    }
+  };
   const resetSliderPreview = (input: HTMLInputElement, restoreValue = false) => {
     if (restoreValue) {
       input.value = String(sliderIndex);
     }
-    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(sliderIndex)}%`);
-    input.setAttribute("aria-valuetext", reasoningValueLabel);
-    const panel = input.closest(".chat-controls__reasoning-panel");
-    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
-      label.hidden = true;
-    });
-    const committedLabel = panel?.querySelector<HTMLElement>(
-      "[data-chat-thinking-preview-committed]",
-    );
-    if (committedLabel) {
-      committedLabel.hidden = false;
-    }
+    syncSliderPreview(input);
   };
   const onSliderDrag = (event: Event) => {
     const input = event.currentTarget as HTMLInputElement;
-    const stop = sliderStops[Number(input.value)];
-    if (!stop) {
-      return;
-    }
-    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
-    input.setAttribute("aria-valuetext", formatEffortLabel(stop.label));
-    const panel = input.closest(".chat-controls__reasoning-panel");
-    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
-      label.hidden = label.dataset.chatThinkingPreviewIndex !== input.value;
-    });
-    const committedLabel = panel?.querySelector<HTMLElement>(
-      "[data-chat-thinking-preview-committed]",
-    );
-    if (committedLabel) {
-      committedLabel.hidden = true;
+    const index = Number(input.value);
+    if (sliderStops[index]) {
+      syncSliderPreview(input, index);
     }
   };
   const onSliderCommit = (event: Event) => {
@@ -256,6 +265,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                                 .value=${String(sliderIndex)}
                                 style=${`--reasoning-fill: ${sliderFillPercent(sliderIndex)}%`}
                                 data-chat-thinking-slider="true"
+                                data-effort-boost=${committedBoost}
                                 data-chat-thinking-values=${sliderStops
                                   .map((stop) => stop.value)
                                   .join(",")}

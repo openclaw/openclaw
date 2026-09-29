@@ -1,4 +1,5 @@
 import { spawn, type SpawnOptions } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 
 const KNIP_VERSION = "6.32.2";
@@ -146,6 +147,8 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
     let bufferExceeded = false;
     let outputBytes = 0;
     const output: string[] = [];
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let exitStatus: number | null = null;
     let exitSignal: string | null = null;
@@ -212,6 +215,10 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
       clearInterval(heartbeatTimer);
       clearTimeout(killTimer);
       cleanupParentSignalHandlers();
+      // A clipped final code point is not malformed child output; leave it out at the byte cap.
+      if (!bufferExceeded) {
+        output.push(stdoutDecoder.end(), stderrDecoder.end());
+      }
       resolve({ ...result, output: output.join("") });
     };
     const finishAfterProcessTreeCleanup = async (result: Omit<KnipRunResult, "output">) => {
@@ -225,27 +232,27 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
       finish(result);
     };
 
-    const appendOutput = (chunk: string | Uint8Array) => {
+    const appendOutput = (decoder: StringDecoder, chunk: string | Uint8Array) => {
       if (settled || bufferExceeded) {
         return;
       }
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       const remainingBytes = maxBufferBytes - outputBytes;
       if (buffer.length <= remainingBytes) {
-        output.push(buffer.toString("utf8"));
+        output.push(decoder.write(buffer));
         outputBytes += buffer.length;
         return;
       }
       if (remainingBytes > 0) {
-        output.push(buffer.subarray(0, remainingBytes).toString("utf8"));
+        output.push(decoder.write(buffer.subarray(0, remainingBytes)));
         outputBytes = maxBufferBytes;
       }
       bufferExceeded = true;
       writeStatus(
         `[deadcode] Knip ${scanName} exceeded ${maxBufferBytes} output bytes; terminating.`,
       );
-      child.stdout?.off?.("data", appendOutput);
-      child.stderr?.off?.("data", appendOutput);
+      child.stdout?.off?.("data", appendStdout);
+      child.stderr?.off?.("data", appendStderr);
       child.stdout?.destroy?.();
       child.stderr?.destroy?.();
       clearInterval(heartbeatTimer);
@@ -253,8 +260,10 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
       killTimer = setTimeout(() => signalProcessTree(child, "SIGKILL"), killGraceMs);
     };
 
-    child.stdout?.on("data", appendOutput);
-    child.stderr?.on("data", appendOutput);
+    const appendStdout = (chunk: string | Uint8Array) => appendOutput(stdoutDecoder, chunk);
+    const appendStderr = (chunk: string | Uint8Array) => appendOutput(stderrDecoder, chunk);
+    child.stdout?.on("data", appendStdout);
+    child.stderr?.on("data", appendStderr);
     child.on("error", (error) =>
       finish({
         errorCode: spawnErrorCode(error),
@@ -297,4 +306,20 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
       });
     });
   });
+}
+
+export async function runKnipScans<T extends { name: string; args: readonly string[] }>(
+  scans: readonly T[],
+  commonArgs: readonly string[],
+  report: (scan: T, result: KnipRunResult) => boolean,
+): Promise<void> {
+  const results = await Promise.all(
+    scans.map(async (scan) => {
+      const result = await runKnip([...scan.args, ...commonArgs], { scanName: scan.name });
+      return report(scan, result);
+    }),
+  );
+  if (results.includes(false)) {
+    process.exitCode = 1;
+  }
 }

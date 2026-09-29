@@ -1,4 +1,3 @@
-// Resolves transcript source configuration from OpenClaw config.
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 
 /**
@@ -20,15 +19,8 @@ type TranscriptsAutoStartConfig = {
 };
 
 /** Normalized auto-start source entry consumed by transcript runtime code. */
-export type ResolvedTranscriptsAutoStartConfig = {
-  providerId: string;
+export type ResolvedTranscriptsAutoStartConfig = TranscriptsAutoStartConfig & {
   whenOccupied: boolean;
-  sessionId?: string;
-  title?: string;
-  accountId?: string;
-  guildId?: string;
-  channelId?: string;
-  meetingUrl?: string;
 };
 
 /** Raw transcripts config block. */

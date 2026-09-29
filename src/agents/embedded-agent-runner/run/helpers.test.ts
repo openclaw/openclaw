@@ -1,8 +1,9 @@
 // Embedded run helper tests cover final assistant text extraction and error
 // metadata assembly shared by normal exits and failure paths.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
-import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import { describe, expect, it } from "vitest";
+import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import {
@@ -12,9 +13,15 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveLatestCallUsage,
-  MAX_TRANSIENT_RETRIES,
-  resolveTransientRetryDelayMs,
 } from "./helpers.js";
+
+describe("classifyRateLimitWindow - OpenRouter per-day cap", () => {
+  it("classifies a hyphenated free-models-per-day 429 as a long window", () => {
+    expect(
+      classifyRateLimitWindow("429 Rate limit exceeded: free-models-per-day-high-balance."),
+    ).toEqual({ kind: "long" });
+  });
+});
 
 describe("resolveEmbeddedAttemptBasePrompt", () => {
   const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -52,14 +59,7 @@ function makeAssistantMessage(
     api: "responses",
     provider: "openai",
     model: "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     role: "assistant",
     content,
     timestamp: Date.now(),
@@ -117,60 +117,6 @@ describe("resolveFinalAssistantVisibleText", () => {
     expect(resolveFinalAssistantRawText(lastAssistant)).toBe("<final>keep this</final>");
   });
 });
-
-describe("resolveTransientRetryDelayMs", () => {
-  it("bounds three jittered exponential retries", () => {
-    const random = vi.spyOn(Math, "random").mockReturnValue(0);
-    try {
-      const delays = [1, 2, 3].map((retryNumber, index) =>
-        resolveTransientRetryDelayMs({ retryNumber, elapsedMs: delaysBefore(index) }),
-      );
-      expect(delays).toEqual([500, 1_000, 2_000]);
-      expect(MAX_TRANSIENT_RETRIES).toBe(3);
-      expect(delays.every((delay) => delay !== undefined && delay > 0)).toBe(true);
-    } finally {
-      random.mockRestore();
-    }
-  });
-
-  it("honors Retry-After and rejects a delay beyond the total ceiling", () => {
-    expect(
-      resolveTransientRetryDelayMs({ retryNumber: 1, retryAfterMs: 30_000, elapsedMs: 0 }),
-    ).toBeGreaterThanOrEqual(30_000);
-    expect(
-      resolveTransientRetryDelayMs({
-        retryNumber: 3,
-        retryAfterMs: 2_000,
-        // 1s of the 90s transient retry budget left; retryAfterMs exceeds it.
-        elapsedMs: 89_000,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("keeps jitter below the per-retry cap", () => {
-    const random = vi.spyOn(Math, "random").mockReturnValue(0.999);
-    try {
-      expect(resolveTransientRetryDelayMs({ retryNumber: 3, elapsedMs: 0 })).toBeLessThanOrEqual(
-        30_000,
-      );
-    } finally {
-      random.mockRestore();
-    }
-  });
-
-  it("parses Retry-After HTTP dates for the shared retry owner", () => {
-    expect(
-      resolveRetryAfterMs(
-        "HTTP 503: temporary failure; Retry-After: Thu, 01 Jan 2026 00:01:30 GMT",
-        Date.parse("2026-01-01T00:00:00.000Z"),
-      ),
-    ).toBe(90_000);
-  });
-});
-
-function delaysBefore(index: number): number {
-  return index === 0 ? 0 : index === 1 ? 500 : 1_500;
-}
 
 describe("resolveLatestCallUsage", () => {
   it("preserves the previous exact call across a zero-usage retry", () => {

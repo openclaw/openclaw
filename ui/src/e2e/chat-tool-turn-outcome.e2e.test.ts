@@ -1,7 +1,12 @@
 // Control UI E2E tests cover autonomous tool-turn outcome rendering.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 
 let artifactDir: string | undefined;
 beforeEach(() => {
@@ -11,6 +16,7 @@ beforeEach(() => {
     : undefined;
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { registerItemOnlyOutcomeTest } from "./chat-tool-item-outcomes.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -22,7 +28,7 @@ function failedTool(timestamp: number) {
   return {
     role: "toolResult",
     toolName: "shell",
-    content: JSON.stringify({ status: "failed", exitCode: 1 }),
+    content: JSON.stringify({ status: "failed", exitCode: 1, error: "Command could not finish" }),
     isError: true,
     timestamp,
   };
@@ -32,7 +38,12 @@ async function captureToolActivityProof(page: import("playwright").Page, name: s
   if (!artifactDir) {
     return;
   }
-  await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
+  await writeFile(
+    path.join(artifactDir, `${name}.png`),
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+      page.locator(".chat-main"),
+    ]),
+  );
 }
 
 async function captureFactrowProof(
@@ -64,6 +75,8 @@ async function expandCompletedWorkGroups(page: import("playwright").Page) {
 }
 
 suite.define(() => {
+  registerItemOnlyOutcomeTest(suite, captureToolActivityProof);
+
   it.each([
     { name: "dark-desktop", colorScheme: "dark" as const, height: 900, width: 1200 },
     { name: "light-desktop", colorScheme: "light" as const, height: 900, width: 1200 },
@@ -214,9 +227,12 @@ suite.define(() => {
       expect(await rawPanel.isHidden()).toBe(true);
 
       if (artifactDir) {
-        await page.locator(".chat-main").screenshot({
-          path: path.join(artifactDir, `tool-detail-layout-${name}.png`),
-        });
+        await writeFile(
+          path.join(artifactDir, `tool-detail-layout-${name}.png`),
+          await takeControlUiElementScreenshot(page, page.locator(".chat-main"), [
+            toolRows.first(),
+          ]),
+        );
         const video = page.video();
         await context.close();
         await video?.saveAs(path.join(artifactDir, `tool-detail-layout-${name}.webm`));
@@ -252,21 +268,35 @@ suite.define(() => {
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     await page.getByText("Recovered on the next autonomous turn.", { exact: true }).waitFor();
+    const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
+    await workSummaries.first().waitFor();
+    expect(await workSummaries.first().getByText("1 failed", { exact: true }).isVisible()).toBe(
+      true,
+    );
+    expect(await page.getByText("Command could not finish", { exact: false }).count()).toBe(0);
     await expandCompletedWorkGroups(page);
 
     expect(await page.locator(".chat-tool-msg-summary__label").allTextContents()).toEqual([
       "Tool output",
       "Tool output",
     ]);
-    // Collapsed rows stay neutral even when the call failed; the failure is
-    // recorded as the expanded body's outcome, with the reported exit code.
+    // Collapsed rows retain only the status; diagnostics need explicit expansion.
     const summaryClasses = await page
       .locator(".chat-tool-msg-summary")
       .evaluateAll((nodes) => nodes.map((node) => node.className));
     expect(summaryClasses).toHaveLength(2);
     expect(summaryClasses[0]).not.toContain("chat-tool-msg-summary--error");
     expect(summaryClasses[1]).not.toContain("chat-tool-msg-summary--error");
+    expect(await page.getByText("Command could not finish", { exact: false }).count()).toBe(0);
     await page.locator(".chat-tool-msg-summary").first().click();
+    const expandedResult = page.locator(".chat-tool-msg-body").first();
+    await expandedResult.locator(".chat-text pre code").waitFor({ state: "visible" });
+    expect(await expandedResult.locator(".chat-text pre code").textContent()).toBe(
+      failedTool(1).content,
+    );
+    expect(await expandedResult.locator("details, .code-block-json-mode").count()).toBe(0);
+    expect(await expandedResult.locator(".code-block-copy").isVisible()).toBe(true);
+    await page.getByText("Command could not finish", { exact: false }).waitFor();
     await expect
       .poll(() => page.locator(".chat-tool-card__outcome").first().textContent())
       .toBe("Exit code 1");
@@ -311,6 +341,24 @@ suite.define(() => {
               },
             },
           ],
+          activity: [
+            {
+              itemId: "tool:call-read",
+              toolCallId: "call-read",
+              kind: "tool",
+              phase: "end",
+              status: "completed",
+              title: "Read source",
+            },
+            {
+              itemId: "tool:call-patch",
+              toolCallId: "call-patch",
+              kind: "tool",
+              phase: "end",
+              status: "completed",
+              title: "Apply patch",
+            },
+          ],
           timestamp: 1,
         },
         {
@@ -333,7 +381,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
-    expect(await activity.textContent()).toContain("Read a file, edited a file, created a file");
+    expect(await activity.textContent()).toContain("2 other operations");
     const activityGeometry = await activity.evaluate((node) => {
       const container = node.closest<HTMLElement>(".chat-activity-group");
       const label = node.querySelector<HTMLElement>(".chat-activity-group__label");
@@ -461,6 +509,16 @@ suite.define(() => {
           role: "toolResult",
           toolCallId: "call-release-patch",
           toolName: "apply_patch",
+          activity: [
+            {
+              itemId: "tool:call-release-patch",
+              toolCallId: "call-release-patch",
+              kind: "tool",
+              phase: "end",
+              status: "completed",
+              title: "Apply Patch",
+            },
+          ],
           content: [{ type: "text", text: "Applied patch" }],
           timestamp: timestamp + 3_000,
         },
@@ -468,6 +526,16 @@ suite.define(() => {
           role: "toolResult",
           toolCallId: "call-release-test",
           toolName: "exec",
+          activity: [
+            {
+              itemId: "tool:call-release-test",
+              toolCallId: "call-release-test",
+              kind: "tool",
+              phase: "end",
+              status: "completed",
+              title: "Exec",
+            },
+          ],
           content: [{ type: "text", text: "PASS src/release/release-plan.test.ts (8 tests)" }],
           timestamp: timestamp + 4_000,
         },
@@ -505,9 +573,7 @@ suite.define(() => {
       .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
       .toBe("dark");
     await captureFactrowProof(page, activity, "dark");
-    expect(await summary.textContent()).toContain(
-      "Ran a command, edited a file, created a file, deleted a file",
-    );
+    expect(await summary.textContent()).toContain("2 other operations");
     expect(await patchRow.locator(".chat-tool-row__verb").textContent()).toBe("Changed");
     await context.close();
   });
@@ -555,7 +621,7 @@ suite.define(() => {
     await context.close();
   });
 
-  it("keeps a message-only turn visible with its first message line", async () => {
+  it("keeps a message-only turn visible with its caption behind disclosure", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const message = "Hello Molty, first claw-to-claw hello.";
@@ -590,23 +656,20 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    const row = page.locator(".chat-tool-msg-summary", { hasText: message });
+    const row = page.locator(".chat-tool-msg-summary");
     await row.waitFor();
 
-    expect(await page.locator(".chat-work-group").count()).toBe(0);
-    expect(await row.locator(".chat-tool-msg-summary__label").textContent()).toBe("Message");
-    expect(await row.locator(".chat-tool-msg-summary__names").textContent()).toBe(message);
+    expect(await row.count()).toBe(1);
+    expect(await page.getByText(message, { exact: false }).isVisible()).toBe(false);
     await captureToolActivityProof(page, "message-only-turn-visible");
     await row.click();
-    await page.getByText("action:", { exact: true }).waitFor();
-    expect(await page.getByText("send", { exact: true }).count()).toBe(1);
-    expect(await page.getByText("Hidden second line.", { exact: false }).count()).toBeGreaterThan(
-      0,
-    );
+    const diagnostics = page.locator(".chat-tool-msg-body");
+    await diagnostics.getByText("Hidden second line.", { exact: false }).waitFor();
+    expect(await diagnostics.textContent()).toContain(message);
     await context.close();
   });
 
-  it("sweeps a text wave over the active tool row and stops it on the result", async () => {
+  it("stops the active tool wave on failure and keeps diagnostics behind disclosure", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -641,6 +704,22 @@ suite.define(() => {
     });
     // Start-phase sync is throttled and repaints on the next event, so follow
     // with a delta (as real runs do) to surface the live card.
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      seq: 2,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        itemId: "tool:call-wave",
+        toolCallId: "call-wave",
+        kind: "tool",
+        name: "exec",
+        title: "Run checks",
+        phase: "start",
+        status: "running",
+      },
+    });
     await page.waitForTimeout(200);
     await gateway.emitGatewayEvent("chat", {
       deltaText: "Working on it.",
@@ -674,7 +753,7 @@ suite.define(() => {
 
     await gateway.emitGatewayEvent("agent", {
       runId,
-      seq: 2,
+      seq: 3,
       stream: "tool",
       ts: Date.now(),
       sessionKey: "main",
@@ -682,11 +761,28 @@ suite.define(() => {
         toolCallId: "call-wave",
         name: "exec",
         phase: "result",
-        result: { text: "done" },
+        isError: true,
+        result: { text: "Command could not finish in /workspace/example" },
       },
     });
     // The wave is a live-run marker only: the result event must end it and
     // restore plain text color even though the run has not finished yet.
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      seq: 4,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        itemId: "tool:call-wave",
+        toolCallId: "call-wave",
+        kind: "tool",
+        name: "exec",
+        title: "Run checks",
+        phase: "end",
+        status: "failed",
+      },
+    });
     await expect.poll(() => page.locator(".chat-tool-row--running").count()).toBe(0);
     const settled = await page
       .locator(".chat-tool-row__cmd")
@@ -697,6 +793,13 @@ suite.define(() => {
       });
     expect(settled.animationName).toBe("none");
     expect(settled.color).not.toBe("rgba(0, 0, 0, 0)");
+    const failedRow = page.locator(".chat-tool-msg-summary").first();
+    expect(await failedRow.getByText("failed", { exact: true }).isVisible()).toBe(true);
+    expect(await page.getByText("Command could not finish", { exact: false }).count()).toBe(0);
+    await failedRow.click();
+    await page
+      .getByText("Command could not finish in /workspace/example", { exact: true })
+      .waitFor();
     await context.close();
   });
 

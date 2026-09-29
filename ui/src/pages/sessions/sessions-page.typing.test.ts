@@ -5,9 +5,9 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
   createSessionCapabilityHarness,
+  createTestSessionCapability,
   sessionChangedEvent,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
@@ -25,12 +25,15 @@ function result(key: string): SessionsListResult {
 async function mountTypingPage(initialResult = result("agent:main:initial")) {
   const pending: Array<ReturnType<typeof createDeferred<SessionsListResult>>> = [];
   const requests: unknown[] = [];
-  const request = vi.fn(async (method: string, params?: unknown) => {
+  const request = vi.fn(async (method: string, params?: { includeUnknown?: boolean }) => {
     if (method === "sessions.subscribe") {
-      return { subscribed: true, list: result("agent:main:sidebar") };
+      return { subscribed: true };
     }
     if (method !== "sessions.list") {
       throw new Error(`Unexpected request: ${method}`);
+    }
+    if (params?.includeUnknown !== false) {
+      return result("agent:main:sidebar");
     }
     requests.push(params);
     if (requests.length === 1) {
@@ -42,7 +45,7 @@ async function mountTypingPage(initialResult = result("agent:main:initial")) {
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const connection = createGateway(client);
-  const sessions = createSessionCapability(connection.gateway);
+  const sessions = createTestSessionCapability(connection.gateway);
   const context = createContext(connection.gateway, sessions);
   let notifyScope: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0] = () =>
     undefined;
@@ -120,12 +123,13 @@ describe("Sessions page typing ownership", () => {
       );
       const query = { search: "retired", includeDerivedTitles: false };
       let unsubscribe = sessions.subscribeList(query, vi.fn());
+      const updatedObserved = createDeferred();
       const loading = sessions.refreshList(query);
       try {
         if (timing !== "unsubscribed") {
           emitEvent(sessionChangedEvent("agent:main:changed"));
           if (timing === "queued") {
-            await vi.advanceTimersByTimeAsync(200);
+            await vi.advanceTimersByTimeAsync(5_000);
           }
         }
         unsubscribe();
@@ -143,19 +147,36 @@ describe("Sessions page typing ownership", () => {
           document.dispatchEvent(new Event("visibilitychange"));
         }
         if (resubscribe) {
-          unsubscribe = sessions.subscribeList(query, vi.fn());
+          unsubscribe = sessions.subscribeList(query, (next) => {
+            if (next.result?.sessions[0]?.key === "agent:main:updated") {
+              updatedObserved.resolve();
+            }
+          });
           expect(filteredCalls).toBe(1);
         }
         active.resolve(result("agent:main:retired"));
         await loading;
         if (hidden) {
+          await vi.advanceTimersByTimeAsync(1_000);
           expect(filteredCalls).toBe(1);
           visibility.mockReturnValue("visible");
           document.dispatchEvent(new Event("visibilitychange"));
           await vi.advanceTimersByTimeAsync(0);
+        } else if (!resubscribe || timing === "queued") {
+          await vi.advanceTimersByTimeAsync(4_999);
+          expect(filteredCalls).toBe(1);
+          if (resubscribe) {
+            expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe(
+              "agent:main:retired",
+            );
+          }
+          await vi.advanceTimersByTimeAsync(1);
+        } else {
+          await vi.advanceTimersByTimeAsync(0);
         }
         expect(filteredCalls).toBe(resubscribe ? 2 : 1);
         if (resubscribe) {
+          await updatedObserved.promise;
           expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:updated");
         }
       } finally {
@@ -232,9 +253,6 @@ describe("Sessions page typing ownership", () => {
         if (method === "sessions.patch") {
           return patch.promise;
         }
-        if (method === "sessions.compaction.list") {
-          return { checkpoints: [] };
-        }
         expect(method).toBe("sessions.list");
         if (params?.includeUnknown !== false) {
           mutationRefreshes += 1;
@@ -244,7 +262,7 @@ describe("Sessions page typing ownership", () => {
         return pageRequests === 1 ? before : pageRequests === 2 ? older.promise : after;
       });
       const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
       const page = await createRenderedPage(createContext(gateway, sessions), before);
       try {
         page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
@@ -309,7 +327,7 @@ describe("Sessions page typing ownership", () => {
       vi.useFakeTimers();
       const harness = await mountTypingPage();
       const { page, input, edit, requests, pending, connection, client } = harness;
-      let replacementSessions: ReturnType<typeof createSessionCapability> | undefined;
+      let replacementSessions: ReturnType<typeof createTestSessionCapability> | undefined;
       try {
         await edit("older");
         await vi.advanceTimersByTimeAsync(200);
@@ -326,7 +344,7 @@ describe("Sessions page typing ownership", () => {
           document.body.append(page);
         } else if (retirement === "context") {
           const replacement = createGateway(client);
-          replacementSessions = createSessionCapability(replacement.gateway);
+          replacementSessions = createTestSessionCapability(replacement.gateway);
           page.context = createContext(replacement.gateway, replacementSessions);
           page.requestUpdate();
         } else {
@@ -464,11 +482,11 @@ describe("Sessions page typing ownership", () => {
     vi.useFakeTimers();
     const { page, requests, pending, input, type, cleanup } = await mountTypingPage();
     try {
-      page.selectedKeys = new Set(["agent:main:initial"]);
+      page.selectedSessions = new Map([["agent:main:initial", { key: "agent:main:initial" }]]);
       await type("older");
       expect.soft(requests).toHaveLength(1);
       expect(page.result).toBeNull();
-      expect(page.selectedKeys.size).toBe(0);
+      expect(page.selectedSessions.size).toBe(0);
       expect(page.loading).toBe(true);
       expect(input().value).toBe("older");
       expect(page.textContent).not.toContain("No sessions match your filters.");

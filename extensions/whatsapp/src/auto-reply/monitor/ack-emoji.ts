@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements ack emoji behavior.
 import { resolveAgentIdentity } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
@@ -16,12 +15,7 @@ export function resolveWhatsAppAckEmoji(params: {
     typeof params.ackConfig === "string" ? params.ackConfig : params.ackConfig.emoji;
   return (
     configured?.trim() ||
-    resolveAgentIdentityEmoji(params.cfg, params.agentId) ||
+    resolveAgentIdentity(params.cfg, params.agentId)?.emoji?.trim() ||
     DEFAULT_WHATSAPP_ACK_REACTION
   );
-}
-
-function resolveAgentIdentityEmoji(cfg: OpenClawConfig, agentId: string): string | undefined {
-  const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
-  return emoji || undefined;
 }

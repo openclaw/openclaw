@@ -6,10 +6,13 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
+import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 
-export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
 const SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT = 256;
 
 export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
@@ -78,6 +81,53 @@ export function resolveSharedAuthStoreOwnership(
   return ownership;
 }
 
+/** Fill the same process-stable owner cache without reading SQLite on the caller. */
+export async function resolveSharedAuthStoreOwnershipAsync(
+  context: OpenClawStateWorkerContext,
+): Promise<SharedAuthStoreOwnership> {
+  const databasePath = context.admission.databasePath;
+  const cached = sharedAuthStoreOwnershipByDatabasePath.get(databasePath);
+  if (cached) {
+    return cached;
+  }
+  const value = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "authProfiles.sharedOwnership",
+        input: { artifactPreserving: isArtifactPreservingStateRead() },
+      }),
+    { existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  // An explicit commit/reload while this read waited remains the authoritative owner.
+  const current = sharedAuthStoreOwnershipByDatabasePath.get(databasePath);
+  if (current) {
+    return current;
+  }
+  if (sharedAuthStoreOwnershipByDatabasePath.size >= SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT) {
+    throw new Error(
+      "Shared auth store ownership cache exceeded its process root limit; restart OpenClaw.",
+    );
+  }
+  const ownership = parseSharedAuthStoreOwnership(value);
+  sharedAuthStoreOwnershipByDatabasePath.set(databasePath, ownership);
+  return ownership;
+}
+
+/** Inspect copied state without pinning a runtime owner or changing SQLite artifacts. */
+export function inspectSharedAuthStoreOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+): SharedAuthStoreOwnership {
+  return parseSharedAuthStoreOwnership(
+    readConfigMachineState<unknown>(
+      SHARED_AUTH_STORE_STATE_KEY,
+      { env },
+      { artifactPreservingReadOnly: true },
+    ),
+  );
+}
+
 /** Update the process-stable cache after this process commits the ownership row. */
 export function noteCommittedSharedAuthStoreOwnership(
   ownership: SharedAuthStoreOwnership,
@@ -124,10 +174,14 @@ export function resolveSharedAuthStorePath(env: NodeJS.ProcessEnv = process.env)
  * happen to share a `profileId` across providers (operator-renamed profile,
  * test fixture, etc.) do not needlessly serialize against each other.
  */
-export function resolveOAuthRefreshLockPath(provider: string, profileId: string): string {
+export function resolveOAuthRefreshLockPath(
+  provider: string,
+  profileId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const lockKey = JSON.stringify([provider, profileId]);
   const safeId = `lock-${oauthLockPathDigest(lockKey)}`;
-  return path.join(resolveStateDir(), "locks", "oauth-refresh", safeId);
+  return path.join(resolveStateDir(env), "locks", "oauth-refresh", safeId);
 }
 
 function oauthLockPathDigest(value: string): string {

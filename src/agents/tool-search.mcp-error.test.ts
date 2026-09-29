@@ -8,16 +8,16 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { runAgentLoop, type AgentEvent, type AgentMessage } from "../plugin-sdk/agent-core.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
-import { runAgentLoop, type AgentEvent, type AgentMessage } from "./runtime/index.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { isToolResultError } from "./tool-result-error.js";
 import {
   applyToolSearchCatalog,
   createToolSearchCatalogRef,
   createToolSearchTools,
   TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
@@ -34,14 +34,7 @@ const model: Model = {
   maxTokens: 1000,
 };
 
-const testUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const testUsage = createZeroUsageFixture();
 
 function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
   const tool = {
@@ -79,19 +72,15 @@ function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
   };
 }
 
-function createToolSearchControl(target: AnyAgentTool, name: string, mode: "code" | "tools") {
-  const config = { tools: { toolSearch: { enabled: true, mode } } };
+function createDeferredCall(target: AnyAgentTool) {
+  const config = { tools: { toolSearch: { enabled: true, mode: "tools" as const } } };
   const catalogRef = createToolSearchCatalogRef();
   const controls = createToolSearchTools({ config, catalogRef });
   applyToolSearchCatalog({ tools: [...controls, target], config, catalogRef });
   return expectDefined(
-    controls.find((tool) => tool.name === name),
-    `${name} control`,
+    controls.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME),
+    `${TOOL_CALL_RAW_TOOL_NAME} control`,
   );
-}
-
-function createDeferredCall(target: AnyAgentTool) {
-  return createToolSearchControl(target, TOOL_CALL_RAW_TOOL_NAME, "tools");
 }
 
 async function createDeferredMcpCall(result: CallToolResult) {
@@ -142,15 +131,16 @@ describe("Tool Search MCP failures", () => {
       status: "failed",
     });
     const wrappedDetails = wrappedResult.details as {
-      tool: unknown;
+      tool: { id: string; name: string; source: string };
       result: unknown;
       status: unknown;
     };
+    const { id, name, source } = wrappedDetails.tool;
     expect(wrappedResult.content).toEqual([
       {
         type: "text",
         text: expect.stringContaining(
-          JSON.stringify({ tool: wrappedDetails.tool, result: wrappedDetails.result }, null, 2),
+          JSON.stringify({ tool: { id, name, source }, result: wrappedDetails.result }, null, 2),
         ),
       },
     ]);
@@ -282,23 +272,6 @@ describe("Tool Search MCP failures", () => {
     });
 
     expect(isToolResultError(wrappedNativeResult)).toBe(false);
-  });
-
-  it("lets tool_search_code recover from a nested MCP failure", async () => {
-    const { target } = await createDeferredMcpCall({
-      content: [{ type: "text", text: "Backend request failed" }],
-      isError: true,
-    });
-    const codeTool = createToolSearchControl(target, TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code");
-    const result = await codeTool.execute("code-mode-mcp-call", {
-      code: `
-        const call = await openclaw.tools.call(${JSON.stringify(target.name)}, {});
-        return { recovered: call.result.details.status === "error" };
-      `,
-    });
-
-    expect(result.details).toMatchObject({ ok: true, value: { recovered: true } });
-    expect(isToolResultError(result)).toBe(false);
   });
 
   it("continues to throw target execution exceptions", async () => {

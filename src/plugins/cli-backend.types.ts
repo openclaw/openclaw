@@ -2,6 +2,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
+type CliBackendNoOutputWatchdog = {
+  /** Fraction of overall timeout used when fixed timeout is not set. */
+  noOutputTimeoutRatio?: number;
+  /** Lower bound for computed watchdog timeout. */
+  minMs?: number;
+  /** Upper bound for computed watchdog timeout. */
+  maxMs?: number;
+};
+
 /** Static command adapter owned by a CLI backend plugin registration. */
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
@@ -74,23 +83,9 @@ export type CliBackendConfig = {
     /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
       /** Fresh/new sessions (non-resume). */
-      fresh?: {
-        /** Fraction of overall timeout used when fixed timeout is not set. */
-        noOutputTimeoutRatio?: number;
-        /** Lower bound for computed watchdog timeout. */
-        minMs?: number;
-        /** Upper bound for computed watchdog timeout. */
-        maxMs?: number;
-      };
+      fresh?: CliBackendNoOutputWatchdog;
       /** Resume sessions. */
-      resume?: {
-        /** Fraction of overall timeout used when fixed timeout is not set. */
-        noOutputTimeoutRatio?: number;
-        /** Lower bound for computed watchdog timeout. */
-        minMs?: number;
-        /** Upper bound for computed watchdog timeout. */
-        maxMs?: number;
-      };
+      resume?: CliBackendNoOutputWatchdog;
     };
   };
 };
@@ -168,6 +163,8 @@ export type CliBackendToolAvailability = {
 
 /** Native action a plugin-owned runtime asks the admitted host run to authorize. */
 export type CliBackendToolPermissionRequest = {
+  /** Actual working directory reported by the native permission hook. */
+  cwd?: string;
   toolName: string;
   toolInput: Record<string, unknown>;
   toolCallId?: string;
@@ -226,6 +223,8 @@ export type CliBackendLiveSessionHandle = {
 export type CliBackendLiveSessionCapability = {
   fingerprint: string;
   current(): CliBackendLiveSessionHandle | undefined;
+  /** Retires the current process and awaits host-owned cleanup before replacement. */
+  restart(): Promise<void>;
   register(handle: CliBackendLiveSessionHandle): void;
   /** Rebinds this exact admitted turn to the registered process's stable capture. */
   activate(handle: CliBackendLiveSessionHandle): void;
@@ -241,6 +240,8 @@ export type CliBackendPromptContext = {
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
+  /** Preserve a verified invocation name when command resolves through a PATH shim. */
+  argv0?: string;
   args: readonly string[];
   cwd: string;
   env: Record<string, string>;
@@ -278,6 +279,8 @@ export type CliBackendResolveExecutionArgsContext = {
   modelId: string;
   authProfileId?: string;
   thinkingLevel?: CliBackendThinkingLevel;
+  /** Effective fast mode at spawn, after queue admission and backend preparation. */
+  fastMode?: boolean;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;
   useResume: boolean;
@@ -527,6 +530,12 @@ type CliBackendPluginBase = {
   resolveModelId?: (ctx: CliBackendResolveModelIdContext) => string;
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
+  /**
+   * Exact-tool execution suppresses ambient instruction files, skills, hooks,
+   * and plugins so the host-prepared instruction snapshot remains authoritative.
+   * Required for rooted runs; omission keeps those runs unavailable.
+   */
+  isolatesInstructionsWithExactTools?: true;
   /**
    * Maps the observed native list, intersected with the host selection, to equivalent
    * cron capabilities: read/write/edit/apply_patch/exec/process/web_search/web_fetch.

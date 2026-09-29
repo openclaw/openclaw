@@ -1,6 +1,7 @@
 /** Canonical owner identity and nonpublishing auth snapshot composition. */
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isSecretRef } from "../../config/types.secrets.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
@@ -22,7 +23,10 @@ import {
   loadPersistedAuthProfileStoreAtDatabasePath,
   mergeAuthProfileStores,
 } from "./persisted.js";
-import { setRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
+import {
+  getRuntimeExternalCliProfileIds,
+  setRuntimeExternalCliProfileIds,
+} from "./runtime-external-profile-references.js";
 import { resolveAuthProfileDatabasePath, type AuthProfileStoreOwner } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
@@ -41,7 +45,7 @@ export function stripRuntimeExternalProfileMetadata(store: AuthProfileStore): Au
 export function markRuntimePersistedProfiles(
   store: AuthProfileStore,
   persistedStore: AuthProfileStore = store,
-): AuthProfileStore {
+): RuntimeAuthProfileStore {
   const profileIds = Object.entries(persistedStore.profiles)
     .flatMap(([profileId, credential]) =>
       isDeepStrictEqual(store.profiles[profileId], credential) ? [profileId] : [],
@@ -50,6 +54,7 @@ export function markRuntimePersistedProfiles(
   return {
     ...store,
     runtimePersistedProfileIds: profileIds.length > 0 ? profileIds : undefined,
+    runtimeLocalOrderProviderIds: Object.keys(persistedStore.order ?? {}).toSorted(),
   };
 }
 
@@ -87,6 +92,7 @@ export function listRuntimeLocalProfileIds(
   return Object.entries(store.profiles).flatMap(([profileId, credential]) =>
     mainStore &&
     shouldUseMainOwnerForLocalOAuthCredential({
+      profileId,
       local: credential,
       main: mainStore.profiles[profileId],
     })
@@ -97,12 +103,14 @@ export function listRuntimeLocalProfileIds(
 
 export function mergeLocalAuthProfileStoreWithInheritedStore(
   localStore: AuthProfileStore,
-  inheritedStore: AuthProfileStore,
+  inheritedStore: AuthProfileStore | undefined,
 ): RuntimeAuthProfileStore {
   // Preserve local ownership so later publication never retains another owner's inherited rows.
-  const merged = mergeAuthProfileStores(inheritedStore, localStore, {
-    preserveBaseRuntimeExternalProfiles: true,
-  });
+  const merged = inheritedStore
+    ? mergeAuthProfileStores(inheritedStore, localStore, {
+        preserveBaseRuntimeExternalProfiles: true,
+      })
+    : localStore;
   return setRuntimeLocalProfileMetadata(
     stripRuntimeExternalProfileMetadata(merged),
     listRuntimeLocalProfileIds(localStore, inheritedStore),
@@ -241,16 +249,22 @@ export function runtimeAuthProfileSnapshotSharesOwner(
   snapshot: RuntimeAuthSharedOwner,
   owner: Pick<AuthProfileStoreOwner, "location" | "sharedDatabasePath">,
 ): boolean {
+  return resolveRuntimeAuthSharedOwnerPath(snapshot, owner.location) === owner.sharedDatabasePath;
+}
+
+/** Resolve a captured owner's path without opening a cold scope or consulting ambient state. */
+export function resolveRuntimeAuthSharedOwnerPath(
+  snapshot: RuntimeAuthSharedOwner,
+  location: AuthProfileStoreOwner["location"],
+): string {
   if (snapshot.kind === "resolved") {
-    return snapshot.sharedDatabasePath === owner.sharedDatabasePath;
+    return snapshot.sharedDatabasePath;
   }
   // Resolve forward from captured cold facts and the known producer's storage
   // location; never open the cold scope or infer ownership from directory ancestry.
-  const candidate =
-    owner.location === "state-db"
-      ? resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: snapshot.scope.stateDir })
-      : path.join(snapshot.scope.sharedMainDir, "openclaw-agent.sqlite");
-  return candidate === owner.sharedDatabasePath;
+  return location === "state-db"
+    ? resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: snapshot.scope.stateDir })
+    : path.join(snapshot.scope.sharedMainDir, "openclaw-agent.sqlite");
 }
 
 export function runtimeAuthSharedOwnerRebound(
@@ -271,24 +285,8 @@ export function runtimeAuthCredentialState(
     .toSorted(([left], [right]) => left.localeCompare(right));
 }
 
-export function runtimeAuthOwnerState(
-  store: RuntimeAuthProfileStore | undefined,
-):
-  | Pick<
-      RuntimeAuthProfileStore,
-      | "order"
-      | "profiles"
-      | "runtimePersistedProfileIds"
-      | "runtimeExternalProfileIds"
-      | "runtimeExternalProfileIdsAuthoritative"
-      | "runtimeExternalCliProfileIds"
-      | "runtimeLocalProfileIds"
-      | "runtimeInheritsMainState"
-    >
-  | undefined {
-  if (!store) {
-    return undefined;
-  }
+/** Model metadata follows credentials and availability, never rotation bookkeeping. */
+export function runtimeAuthMetadataState(store: RuntimeAuthProfileStore) {
   return {
     order: store.order,
     profiles: store.profiles,
@@ -297,6 +295,117 @@ export function runtimeAuthOwnerState(
     runtimeExternalProfileIdsAuthoritative: store.runtimeExternalProfileIdsAuthoritative,
     runtimeExternalCliProfileIds: store.runtimeExternalCliProfileIds,
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
-    runtimeInheritsMainState: store.runtimeInheritsMainState,
+    runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds,
+    availability: Object.fromEntries(
+      Object.entries(store.usageStats ?? {}).flatMap(([profileId, stats]) => {
+        if (!store.profiles[profileId] && !profileId.startsWith("inline-api-key:")) {
+          return [];
+        }
+        const availability = {
+          blockedUntil: stats.blockedUntil,
+          blockedModel: stats.blockedModel,
+          blockedScope: stats.blockedScope,
+          cooldownUntil: stats.cooldownUntil,
+          cooldownReason: stats.cooldownReason,
+          cooldownModel: stats.cooldownModel,
+          disabledUntil: stats.disabledUntil,
+          disabledReason: stats.disabledReason,
+        };
+        return Object.values(availability).some((value) => value !== undefined)
+          ? [[profileId, availability] as const]
+          : [];
+      }),
+    ),
   };
+}
+
+export function pruneAuthProfileStoreReferences(
+  store: RuntimeAuthProfileStore,
+  keptProfileIds: Set<string>,
+  keptOrderProfileIds = keptProfileIds,
+): void {
+  if (store.runtimeCredentialSources) {
+    store.runtimeCredentialSources = Object.fromEntries(
+      Object.entries(store.runtimeCredentialSources).filter(([profileId]) =>
+        keptProfileIds.has(profileId),
+      ),
+    );
+  }
+  store.order = store.order
+    ? Object.fromEntries(
+        Object.entries(store.order)
+          .map(([provider, profileIds]) => [
+            provider,
+            profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
+          ])
+          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
+      )
+    : undefined;
+  store.lastGood = store.lastGood
+    ? Object.fromEntries(
+        Object.entries(store.lastGood).filter(([, profileId]) => keptProfileIds.has(profileId)),
+      )
+    : undefined;
+  store.usageStats = store.usageStats
+    ? Object.fromEntries(
+        Object.entries(store.usageStats).filter(
+          ([profileId]) => keptProfileIds.has(profileId) || profileId.startsWith("inline-api-key:"),
+        ),
+      )
+    : undefined;
+  store.runtimePersistedProfileIds = store.runtimePersistedProfileIds
+    ?.filter((profileId) => keptProfileIds.has(profileId))
+    .toSorted();
+  if (store.runtimePersistedProfileIds?.length === 0) {
+    store.runtimePersistedProfileIds = undefined;
+  }
+  store.runtimeLocalProfileIds = store.runtimeLocalProfileIds
+    ?.filter((profileId) => keptProfileIds.has(profileId))
+    .toSorted();
+  store.runtimeExternalProfileIds = store.runtimeExternalProfileIds
+    ?.filter((profileId) => keptProfileIds.has(profileId))
+    .toSorted();
+  setRuntimeExternalCliProfileIds(
+    store,
+    getRuntimeExternalCliProfileIds(store).filter((profileId) => keptProfileIds.has(profileId)),
+  );
+  if (
+    store.runtimeExternalProfileIds?.length === 0 &&
+    store.runtimeExternalProfileIdsAuthoritative !== true
+  ) {
+    store.runtimeExternalProfileIds = undefined;
+  }
+  if (store.runtimeExternalProfileIdsAuthoritative === true) {
+    store.runtimeExternalProfileIds ??= [];
+  }
+}
+
+export function preserveResolvedSecretBackedCredentials(params: {
+  next: AuthProfileStore;
+  existing: AuthProfileStore;
+}): AuthProfileStore {
+  const next = cloneAuthProfileStore(params.next);
+  for (const [profileId, credential] of Object.entries(next.profiles)) {
+    const existing = params.existing.profiles[profileId];
+    if (
+      credential.type === "api_key" &&
+      existing?.type === "api_key" &&
+      credential.key === undefined &&
+      existing.key !== undefined &&
+      isSecretRef(credential.keyRef) &&
+      isDeepStrictEqual(credential.keyRef, existing.keyRef)
+    ) {
+      next.profiles[profileId] = { ...credential, key: existing.key };
+    } else if (
+      credential.type === "token" &&
+      existing?.type === "token" &&
+      credential.token === undefined &&
+      existing.token !== undefined &&
+      isSecretRef(credential.tokenRef) &&
+      isDeepStrictEqual(credential.tokenRef, existing.tokenRef)
+    ) {
+      next.profiles[profileId] = { ...credential, token: existing.token };
+    }
+  }
+  return next;
 }

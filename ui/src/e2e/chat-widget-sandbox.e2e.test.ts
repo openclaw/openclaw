@@ -3,17 +3,28 @@ import { writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Route } from "playwright";
 import { expect, it } from "vitest";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import {
+  buildControlUiCspHeader,
+  computeInlineScriptHashes,
+} from "../../../src/gateway/control-ui-csp.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installWidgetPromptDiagnostics,
+  retainWidgetPromptFailure,
+} from "./chat-widget-sandbox.diagnostics.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -46,11 +57,24 @@ function widgetDocument(): string {
     <label>Local note<input aria-label="Local note" placeholder="State stays in this widget"></label>
     <button id="refresh">Refresh via chat</button><button id="details">Toggle details</button>
     <button id="data">Try dashboard data</button><button id="record">Record state</button>
+    <button id="popup">Try native popup</button>
+    <output id="popup-result" aria-label="Popup result"></output>
     <output id="result" aria-label="Widget result">Ready</output>
     <div id="extra" class="details" hidden>Additional community details</div>
     <script>
+      (()=>{
+        const nativeOpen=window.open;
+        document.querySelector('#popup').onclick=()=>{
+          document.querySelector('#popup-result').textContent=
+            !navigator.userActivation.isActive?'No user activation':
+              nativeOpen.call(window,'about:blank','_blank')===null?'Popup blocked':'Popup opened';
+        };
+      })();
+    </script>
+    <script>
+      function open(){const extra=document.querySelector('#extra');extra.hidden=!extra.hidden;}
       document.querySelector('#refresh').onclick=()=>window.openclaw.prompt.send('Refresh the synthetic dashboard');
-      document.querySelector('#details').onclick=()=>{const extra=document.querySelector('#extra');extra.hidden=!extra.hidden;};
+      document.querySelector('#details').onclick=open;
       document.querySelector('#data').onclick=async()=>{try{await window.openclaw.data.read('private-dashboard');
         document.querySelector('#result').textContent='Unexpected data access';}
         catch{document.querySelector('#result').textContent='Dashboard data is unavailable in chat';}};
@@ -136,7 +160,16 @@ async function startProtectedSource(html: string) {
           response.setHeader(name, value);
         }
       }
-      response.end(Buffer.from(await upstream.arrayBuffer()));
+      const body = Buffer.from(await upstream.arrayBuffer());
+      if (upstream.headers.get("content-type")?.startsWith("text/html")) {
+        response.setHeader(
+          "Content-Security-Policy",
+          buildControlUiCspHeader({
+            inlineScriptHashes: computeInlineScriptHashes(body.toString("utf8")),
+          }),
+        );
+      }
+      response.end(body);
     })().catch(() => {
       if (!response.headersSent) {
         response.writeHead(502);
@@ -189,6 +222,7 @@ suite.define(() => {
       });
       expect(await authenticated.text()).toBe(html);
 
+      let completed = false;
       await suite.withPage(
         {
           viewport: { width: 1600, height: 1000 },
@@ -196,7 +230,8 @@ suite.define(() => {
           permissions: ["local-network-access"],
           recordVideo: { dir: suite.artifactDir, size: { width: 1600, height: 1000 } },
         },
-        async ({ page }) => {
+        async ({ page, context }) => {
+          await installWidgetPromptDiagnostics(context);
           const storageKey = controlUiBundledSettingsStorageKey(proxy.baseUrl);
           await page.addInitScript(
             ({ key, session }) => {
@@ -232,14 +267,44 @@ suite.define(() => {
               "board.event": { ok: true, appended: true },
             },
           });
-          await page.goto(controlUiSessionUrl(proxy.baseUrl, sessionKey, "dashboard"));
           const outer = page.locator(".chat-tool-card__preview-frame");
-          await outer.waitFor();
+          let releaseConfig!: () => void;
+          const configReady = new Promise<void>((resolve) => {
+            releaseConfig = resolve;
+          });
+          const holdConfig = async (route: Route) => {
+            await configReady;
+            await route.fallback();
+          };
+          const configRoute = `**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+          await page.route(configRoute, holdConfig);
+          try {
+            await page.goto(controlUiSessionUrl(proxy.baseUrl, sessionKey, "dashboard"));
+            await outer.waitFor();
+            // Chat can render before bootstrap resolves; strict mode must still authenticate.
+            const strict = outer.contentFrame();
+            await strict.getByRole("heading", { name: "Community pulse" }).waitFor();
+            await expect
+              .poll(() => strict.locator("body").evaluate(() => document.readyState))
+              .toBe("complete");
+            expect(await outer.getAttribute("sandbox")).toBe("");
+            await strict.getByRole("button", { name: "Toggle details" }).click();
+            expect(await strict.locator("#extra").isVisible()).toBe(false);
+            await strict.getByRole("button", { name: "Refresh via chat" }).click();
+            expect(await gateway.getRequests("chat.send")).toEqual([]);
+            expect(
+              proxy.sourceRequests.filter(({ destination }) => destination !== undefined),
+            ).toEqual([]);
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "01-auth-gated-widget.png"),
+            });
+          } finally {
+            await page.unroute(configRoute, holdConfig);
+            releaseConfig();
+          }
           const boardOuter = page.locator(".board-widget__frame");
           const board = boardOuter.contentFrame().frameLocator("iframe");
           await board.getByRole("heading", { name: "Community pulse" }).waitFor();
-          // This capture also records the old blocked direct iframe during red proof.
-          await page.screenshot({ path: path.join(suite.artifactDir, "01-auth-gated-widget.png") });
           const inline = outer.contentFrame().frameLocator("iframe");
           await inline.getByRole("heading", { name: "Community pulse" }).waitFor();
           expect(
@@ -249,6 +314,23 @@ suite.define(() => {
             docId: documentId,
           });
           expect(proxy.boardRequests).toEqual(["ticket"]);
+          for (const widget of [inline, board]) {
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Toggle details" }),
+            );
+            await widget.getByText("Additional community details").waitFor();
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Toggle details" }),
+            );
+            await widget.getByText("Additional community details").waitFor({ state: "hidden" });
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Try native popup" }),
+            );
+            await widget.getByText("Popup blocked", { exact: true }).waitFor();
+          }
           await page.screenshot({
             path: path.join(suite.artifactDir, "02-inline-and-sidebar.png"),
           });
@@ -296,15 +378,24 @@ suite.define(() => {
             expect(await boardNote.inputValue()).toBe("Dashboard state survives swaps");
           }
           const originalHeight = (await outer.boundingBox())?.height ?? 0;
-          await inline.getByRole("button", { name: "Toggle details" }).click();
+          await clickBoardWidgetControl(
+            page,
+            inline.getByRole("button", { name: "Toggle details" }),
+          );
           await expect
             .poll(async () => (await outer.boundingBox())?.height ?? 0)
             .toBeGreaterThan(originalHeight + 400);
           expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
           expect(await note.inputValue()).toBe("State survives rerenders");
-          await inline.getByRole("button", { name: "Toggle details" }).click();
+          await clickBoardWidgetControl(
+            page,
+            inline.getByRole("button", { name: "Toggle details" }),
+          );
 
-          await inline.getByRole("button", { name: "Refresh via chat" }).click();
+          await clickBoardWidgetControl(
+            page,
+            inline.getByRole("button", { name: "Refresh via chat" }),
+          );
           const sent = asRecord((await gateway.waitForRequest("chat.send")).params);
           expect(sent).toMatchObject({
             sessionKey,
@@ -339,7 +430,7 @@ suite.define(() => {
           expect(await note.inputValue()).toBe("State survives rerenders");
           expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
-          await board.getByRole("button", { name: "Record state" }).click();
+          await clickBoardWidgetControl(page, board.getByRole("button", { name: "Record state" }));
           await board.getByText("State recorded", { exact: true }).waitFor();
           expect((await gateway.getRequests("board.event"))[0]?.params).toEqual({
             ticket: "ticket",
@@ -349,6 +440,15 @@ suite.define(() => {
           await expect
             .poll(() =>
               inline.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
+            )
+            .toBe("dark");
+          // A light proxy between dark documents paints an opaque UA canvas.
+          await expect
+            .poll(() =>
+              outer
+                .contentFrame()
+                .locator("html")
+                .evaluate((root) => getComputedStyle(root).colorScheme),
             )
             .toBe("dark");
           await expect
@@ -381,6 +481,12 @@ suite.define(() => {
               2,
             ),
           );
+          completed = true;
+        },
+        async ({ page }) => {
+          if (!completed) {
+            await retainWidgetPromptFailure(page, suite.artifactDir);
+          }
         },
       );
     } finally {

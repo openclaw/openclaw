@@ -1,29 +1,34 @@
 // Evaluates heartbeat active-hours windows.
 import { resolveUserTimezone } from "../agents/date-time.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HeartbeatConfig } from "./heartbeat-config.js";
 
 // Heartbeat active-hours helpers interpret user/local/IANA timezones and treat
 // invalid config as permissive so bad schedules do not disable heartbeats.
-type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
-
 const ACTIVE_HOURS_TIME_PATTERN = /^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/;
 
-/** Resolve the timezone used to evaluate heartbeat active hours. */
-function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "user") {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  }
-  if (trimmed === "local") {
+/** Resolve the formatter used to evaluate heartbeat active hours. */
+function resolveActiveHoursFormatter(
+  cfg: OpenClawConfig,
+  raw?: string,
+): Intl.DateTimeFormat | null {
+  let timeZone = raw?.trim();
+  const isExplicit = timeZone && timeZone !== "user" && timeZone !== "local";
+  if (!timeZone || timeZone === "user") {
+    timeZone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+  } else if (timeZone === "local") {
     const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return host?.trim() || "UTC";
+    timeZone = host?.trim() || "UTC";
   }
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-    return trimmed;
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
   } catch {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+    return isExplicit ? resolveActiveHoursFormatter(cfg) : null;
   }
 }
 
@@ -34,16 +39,7 @@ function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number 
   const [hourStr, minuteStr] = raw.split(":");
   const hour = Number(hourStr);
   const minute = Number(minuteStr);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return null;
-  }
-  if (hour === 24) {
-    if (!opts.allow24 || minute !== 0) {
-      return null;
-    }
-    return 24 * 60;
-  }
-  return hour * 60 + minute;
+  return hour === 24 && !opts.allow24 ? null : hour * 60 + minute;
 }
 
 function resolveMinutesInTimeZone(nowMs: number, formatter: Intl.DateTimeFormat): number | null {
@@ -86,16 +82,8 @@ export function isWithinActiveHours(
     return false;
   }
 
-  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
-  let formatter: Intl.DateTimeFormat;
-  try {
-    formatter = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    });
-  } catch {
+  const formatter = resolveActiveHoursFormatter(cfg, active.timezone);
+  if (!formatter) {
     return true;
   }
 

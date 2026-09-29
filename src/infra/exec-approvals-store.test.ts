@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import * as stateDatabase from "../state/openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -25,6 +27,7 @@ import {
   ensureExecApprovals,
   loadExecApprovals,
   loadExecApprovalsReadOnly,
+  loadExecApprovalsReadOnlyAsync,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
@@ -104,38 +107,74 @@ afterEach(() => {
   }
 });
 
+const readOnlyLoaders = [
+  { name: "synchronous", load: loadExecApprovalsReadOnly },
+  { name: "asynchronous", load: loadExecApprovalsReadOnlyAsync },
+];
+
 describe("exec approvals SQLite store", () => {
-  it("does not create shared state for a read-only load", () => {
-    const statePath = resolveOpenClawStateSqlitePath();
-    expect(fs.existsSync(statePath)).toBe(false);
+  it.each(readOnlyLoaders)(
+    "does not create shared state for a $name read-only load",
+    async ({ load }) => {
+      const statePath = resolveOpenClawStateSqlitePath();
+      expect(fs.existsSync(statePath)).toBe(false);
 
-    expect(loadExecApprovalsReadOnly()).toMatchObject({
-      version: 1,
-      agents: {},
-    });
-    expect(fs.existsSync(statePath)).toBe(false);
-  });
+      expect(await load()).toMatchObject({
+        version: 1,
+        agents: {},
+      });
+      expect(fs.existsSync(statePath)).toBe(false);
+    },
+  );
 
-  it("does not migrate older shared state for a read-only load", () => {
-    saveExecApprovals({
-      version: 1,
-      defaults: { security: "allowlist" },
-      agents: {},
-    });
-    const statePath = resolveOpenClawStateSqlitePath();
-    closeOpenClawStateDatabaseForTest();
-    const older = new DatabaseSync(statePath);
-    older.exec(`
+  it.each(readOnlyLoaders)(
+    "does not migrate older shared state for a $name read-only load",
+    async ({ load }) => {
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist" },
+        agents: {},
+      });
+      const statePath = resolveOpenClawStateSqlitePath();
+      closeOpenClawStateDatabaseForTest();
+      const older = new DatabaseSync(statePath);
+      older.exec(`
       PRAGMA user_version = 7;
       UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
     `);
-    older.close();
+      older.close();
 
-    expect(loadExecApprovalsReadOnly().defaults?.security).toBe("allowlist");
+      expect((await load()).defaults?.security).toBe("allowlist");
 
-    const after = new DatabaseSync(statePath, { readOnly: true });
-    expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
-    after.close();
+      const after = new DatabaseSync(statePath, { readOnly: true });
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      after.close();
+    },
+  );
+
+  it.each(readOnlyLoaders)(
+    "fails closed for an unavailable $name read-only owner",
+    async ({ load }) => {
+      makeStateDatabaseUnavailable();
+      expect((await load()).defaults).toMatchObject({ security: "deny", ask: "off" });
+      expect(loggerWarn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps the captured legacy gate and repair directory when an async read resumes elsewhere", async () => {
+    const original = process.env.OPENCLAW_STATE_DIR;
+    if (!original) {
+      throw new Error("missing test state dir");
+    }
+    fs.writeFileSync(path.join(original, "exec-approvals.json"), "{}");
+    const loaded = loadExecApprovalsReadOnlyAsync();
+    const foreign = createStateDir();
+    await expect(loaded).rejects.toMatchObject({
+      name: "ExecApprovalsMigrationRequiredError",
+      message: expect.stringContaining(`OPENCLAW_STATE_DIR set to ${original}`),
+    });
+    expect(fs.existsSync(path.join(original, "state", "openclaw.sqlite"))).toBe(false);
+    expect(fs.existsSync(path.join(foreign, "state", "openclaw.sqlite"))).toBe(false);
   });
 
   it("uses a permissive missing-row default without creating the row", () => {
@@ -216,7 +255,10 @@ describe("exec approvals SQLite store", () => {
 
   it("mints one socket token and reuses it on later initialization", () => {
     const first = ensureExecApprovals();
+    const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
     const second = ensureExecApprovals();
+    expect(writes).not.toHaveBeenCalled();
+    writes.mockRestore();
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(first.socket?.token).toBe(second.socket?.token);
     expect(first.socket?.path).toBe(second.socket?.path);
@@ -290,14 +332,8 @@ describe("exec approvals SQLite store", () => {
       },
     });
     seedAgentDeletionJournal("removed");
-    let notifyCommitStarted!: () => void;
-    const commitStarted = new Promise<void>((resolve) => {
-      notifyCommitStarted = resolve;
-    });
-    let finishCommit!: () => void;
-    const commitGate = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
+    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
+    const { promise: commitGate, resolve: finishCommit } = createDeferred();
     const deletion = withAgentExecApprovalsRemoved("removed", async () => {
       notifyCommitStarted();
       await commitGate;
@@ -325,14 +361,8 @@ describe("exec approvals SQLite store", () => {
   it("allows unrelated writers while deleting an agent with no approval policy", async () => {
     saveExecApprovals({ version: 1, agents: { kept: { security: "deny" } } });
     seedAgentDeletionJournal("missing");
-    let notifyCommitStarted!: () => void;
-    const commitStarted = new Promise<void>((resolve) => {
-      notifyCommitStarted = resolve;
-    });
-    let finishCommit!: () => void;
-    const commitGate = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
+    const { promise: commitStarted, resolve: notifyCommitStarted } = createDeferred();
+    const { promise: commitGate, resolve: finishCommit } = createDeferred();
     const deletion = withAgentExecApprovalsRemoved("missing", async () => {
       notifyCommitStarted();
       await commitGate;
@@ -472,24 +502,6 @@ describe("exec approvals SQLite store", () => {
       expect(loadExecApprovals()).toMatchObject({ version: 1, agents: {} });
     },
   );
-
-  it("scopes the doctor command to the blocked state directory", () => {
-    // A bare `openclaw doctor --fix` repairs the default root, leaving a scoped
-    // install blocked by the same file it was told to repair (#115008).
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("missing test state dir");
-    }
-    const error = new ExecApprovalsMigrationRequiredError(
-      path.join(stateDir, "exec-approvals.json"),
-    );
-
-    // Prose, not `VAR=value cmd`: no Windows shell accepts that form, and a path
-    // containing spaces would need shell-specific quoting to survive a paste.
-    expect(error.message).toContain(
-      `Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${stateDir}`,
-    );
-  });
 
   it.each([
     [true, false, false],

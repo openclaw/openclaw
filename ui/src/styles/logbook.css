@@ -132,7 +132,7 @@
 
 .logbook-card__header {
   display: grid;
-  grid-template-columns: 92px 4px minmax(0, 1fr) auto;
+  grid-template-columns: max-content 4px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   width: 100%;
@@ -208,7 +208,7 @@
   text-transform: uppercase;
   padding: 2px 7px;
   border-radius: 999px;
-  color: hsl(var(--logbook-hue, 200) 70% 70%);
+  color: var(--text);
   background: hsl(var(--logbook-hue, 200) 60% 50% / 0.15);
 }
 

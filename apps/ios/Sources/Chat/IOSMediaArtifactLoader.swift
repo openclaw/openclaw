@@ -28,19 +28,15 @@ struct IOSMediaArtifactLoader: Sendable {
     private let connectionProvider: ConnectionProvider
     private let requestFactory: RequestFactory
 
-    init(connectionProvider: @escaping ConnectionProvider) {
-        self.init(connectionProvider: connectionProvider) { tls, maximumBytes in
+    init(
+        connectionProvider: @escaping ConnectionProvider,
+        requestFactory: @escaping RequestFactory = { tls, maximumBytes in
             let session = GatewayTLSPinningSession(params: tls)
             return { request in
                 defer { session.finishTasksAndInvalidate() }
                 return try await session.data(for: request, maximumBytes: maximumBytes)
             }
-        }
-    }
-
-    init(
-        connectionProvider: @escaping ConnectionProvider,
-        requestFactory: @escaping RequestFactory)
+        })
     {
         self.connectionProvider = connectionProvider
         self.requestFactory = requestFactory
@@ -60,7 +56,7 @@ struct IOSMediaArtifactLoader: Sendable {
         {
             guard response.encoding == "base64",
                   let declaredMIME,
-                  declaredMIME.hasPrefix(kind.mimeTypePrefix),
+                  kind.acceptsMIMEType(declaredMIME),
                   let data = Data(base64Encoded: encoded)
             else { throw LoadError.invalidResponse }
             guard data.count <= maximumBytes else { throw LoadError.payloadTooLarge }
@@ -85,7 +81,7 @@ struct IOSMediaArtifactLoader: Sendable {
             url.scheme?.lowercased() == "https" &&
             connection.config.tls == nil &&
             headers.isEmpty &&
-            declaredMIME?.hasPrefix(kind.mimeTypePrefix) == true
+            declaredMIME.map(kind.acceptsMIMEType) == true
         if canStreamDirectly, playback != .transcode, let declaredMIME {
             return .stream(OpenClawChatMediaStream(
                 url: url,
@@ -95,7 +91,7 @@ struct IOSMediaArtifactLoader: Sendable {
 
         var request = URLRequest(url: url)
         request.timeoutInterval = kind == .video ? 60 : 20
-        request.setValue("\(kind.rawValue)/*", forHTTPHeaderField: "Accept")
+        request.setValue(kind.acceptHeader, forHTTPHeaderField: "Accept")
         if canStreamDirectly {
             request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
         }
@@ -122,7 +118,7 @@ struct IOSMediaArtifactLoader: Sendable {
             throw LoadError.requestFailed(statusCode: http.statusCode)
         }
         guard let mimeType = http.mimeType?.lowercased(),
-              mimeType.hasPrefix(kind.mimeTypePrefix)
+              kind.acceptsMIMEType(mimeType)
         else { throw LoadError.unsupportedMediaType }
         if canStreamDirectly {
             return .stream(OpenClawChatMediaStream(
@@ -139,6 +135,7 @@ struct IOSMediaArtifactLoader: Sendable {
         case .image: self.maximumImageBytes
         case .audio: self.maximumAudioBytes
         case .video: self.maximumVideoBytes
+        case .file: 100 * 1024 * 1024 // Gateway document limit (media-core/constants).
         }
     }
 }

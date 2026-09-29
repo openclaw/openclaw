@@ -5,6 +5,7 @@ import {
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { createEmptyTransportUsage } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { groqMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -110,14 +111,7 @@ function wrapGroqOversizedRequestRecovery(
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createEmptyTransportUsage(),
             stopReason: "error",
             errorMessage: error instanceof Error ? error.message : String(error),
             timestamp: Date.now(),
@@ -140,7 +134,7 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Groq",
     docsPath: "/providers/groq",
-    catalog: { liveModelDiscovery: true },
+    catalog: { liveModelDiscovery: true, discoveryMode: "strict" },
     wrapStreamFn: (ctx) =>
       wrapGroqOversizedRequestRecovery(
         ctx.streamFn,

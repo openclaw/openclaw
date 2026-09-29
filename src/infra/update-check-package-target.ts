@@ -2,11 +2,12 @@ import { normalizeNullableString as toOptionalTrimmedString } from "@openclaw/no
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
-  parseOpenClawSchemaVersions,
+  parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { cancelUnreadResponseBody } from "./http-body.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 type NpmPackageTargetStatus = {
   target: string;
@@ -30,7 +31,10 @@ export type NpmMetadataCommandRunner = (
   code: number | null;
 }>;
 
-function parseNpmPackageTargetMetadata(raw: string): {
+function parseNpmPackageTargetMetadata(
+  raw: string,
+  packageName: string,
+): {
   version: string | null;
   nodeEngine: string | null;
   schemaVersions?: OpenClawSchemaVersions;
@@ -51,12 +55,13 @@ function parseNpmPackageTargetMetadata(raw: string): {
   const nodeEngine =
     toOptionalTrimmedString(rec["engines.node"]) ??
     (engines ? toOptionalTrimmedString((engines as Record<string, unknown>).node) : null);
-  const openclaw = rec.openclaw && typeof rec.openclaw === "object" ? rec.openclaw : null;
-  const schemaVersions =
-    parseOpenClawSchemaVersions(rec["openclaw.schemaVersions"]) ??
-    (openclaw
-      ? parseOpenClawSchemaVersions((openclaw as Record<string, unknown>).schemaVersions)
-      : undefined);
+  const schemaVersions = parsePackageOpenClawSchemaVersions({
+    name: packageName,
+    version: rec.version,
+    openclaw: Object.hasOwn(rec, "openclaw.schemaVersions")
+      ? { schemaVersions: rec["openclaw.schemaVersions"] }
+      : rec.openclaw,
+  });
   return {
     version: toOptionalTrimmedString(rec.version),
     nodeEngine,
@@ -77,61 +82,44 @@ function packageTargetSpec(params: { target: string; spec?: string }): string {
 const PUBLIC_NPM_REGISTRY_URL = "https://registry.npmjs.org/";
 const PUBLIC_NPM_PACKAGE_NAME = "openclaw";
 
-function npmRegistryTargetUrl(params: {
-  registryUrl: string;
-  packageName: string;
-  target: string;
-}): string {
-  const baseUrl = params.registryUrl.endsWith("/") ? params.registryUrl : `${params.registryUrl}/`;
-  return new URL(
-    `${encodeURIComponent(params.packageName)}/${encodeURIComponent(params.target)}`,
-    baseUrl,
-  ).toString();
-}
+class NpmRegistryHttpError extends Error {}
 
-async function fetchNpmPackageTargetStatusFromRegistry(params: {
+/** Reads one registry document, retaining the deadline until its body is consumed. */
+export async function fetchRegistryPackageDocument<T = unknown>(params: {
   target: string;
-  timeoutMs: number;
   registryUrl?: string;
   packageName?: string;
-}): Promise<NpmPackageTargetStatus> {
-  const url = npmRegistryTargetUrl({
-    registryUrl: params.registryUrl ?? PUBLIC_NPM_REGISTRY_URL,
-    packageName: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
-    target: params.target,
-  });
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  label?: string;
+  operation?: string;
+  bodyTimeoutMs?: number;
+}): Promise<T> {
+  const registry = params.registryUrl ?? PUBLIC_NPM_REGISTRY_URL;
+  const packageName = params.packageName ?? PUBLIC_NPM_PACKAGE_NAME;
+  const url = new URL(
+    `${encodeURIComponent(packageName)}/${encodeURIComponent(params.target)}`,
+    registry.endsWith("/") ? registry : `${registry}/`,
+  ).toString();
   const { signal, cleanup } = buildTimeoutAbortSignal({
-    timeoutMs: Math.max(250, params.timeoutMs),
-    operation: "npm-registry-update-check",
+    timeoutMs: Math.max(1, params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS),
+    signal: params.signal,
+    operation: params.operation ?? "npm-registry-update-check",
     url,
   });
   let res: Response | undefined;
   try {
     res = await fetch(url, { signal });
     if (!res.ok) {
-      return {
-        target: params.target,
-        version: null,
-        nodeEngine: null,
-        error: `HTTP ${res.status}`,
-      };
+      throw new NpmRegistryHttpError(`HTTP ${res.status}`);
     }
-    // Keep the deadline active through body consumption. Fetch resolves at
-    // headers, so clearing it earlier would leave a stalled registry body unbounded.
-    const json = await readProviderJsonResponse<{
-      version?: unknown;
-      engines?: { node?: unknown };
-      openclaw?: { schemaVersions?: unknown };
-    }>(res, "npm package target status");
-    const schemaVersions = parseOpenClawSchemaVersions(json.openclaw?.schemaVersions);
-    return {
-      target: params.target,
-      version: toOptionalTrimmedString(json.version),
-      nodeEngine: toOptionalTrimmedString(json.engines?.node),
-      ...(schemaVersions ? { schemaVersions } : {}),
-    };
-  } catch (err) {
-    return { target: params.target, version: null, nodeEngine: null, error: String(err) };
+    return await readProviderJsonResponse<T>(
+      res,
+      params.label ?? "npm package target status",
+      params.bodyTimeoutMs === undefined
+        ? undefined
+        : { signal, chunkTimeoutMs: params.bodyTimeoutMs },
+    );
   } finally {
     await cancelUnreadResponseBody(res);
     cleanup();
@@ -148,24 +136,36 @@ export async function fetchNpmPackageTargetStatus(params: {
   runCommand?: NpmMetadataCommandRunner;
   registryUrl?: string;
   packageName?: string;
+  /** Aborts registry reads; command runners own their own cancellation. */
+  signal?: AbortSignal;
 }): Promise<NpmPackageTargetStatus> {
-  const timeoutMs = params.timeoutMs ?? 3500;
+  const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
   const target = params.target;
-  if (!params.command && !params.runCommand) {
-    return await fetchNpmPackageTargetStatusFromRegistry({
-      target,
-      timeoutMs,
-      registryUrl: params.registryUrl,
-      packageName: params.packageName,
-    });
-  }
-  const runCommand = params.runCommand ?? runCommandWithTimeout;
   try {
+    if (!params.command && !params.runCommand) {
+      const json = await fetchRegistryPackageDocument<{
+        version?: unknown;
+        engines?: { node?: unknown };
+        openclaw?: { schemaVersions?: unknown };
+      }>(params);
+      const schemaVersions = parsePackageOpenClawSchemaVersions({
+        ...json,
+        name: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
+      });
+      return {
+        target,
+        version: toOptionalTrimmedString(json.version),
+        nodeEngine: toOptionalTrimmedString(json.engines?.node),
+        ...(schemaVersions ? { schemaVersions } : {}),
+      };
+    }
+    const runCommand = params.runCommand ?? runCommandWithTimeout;
+    const spec = packageTargetSpec(params);
     const res = await runCommand(
       [
         params.command ?? "npm",
         "view",
-        packageTargetSpec({ target, spec: params.spec }),
+        spec,
         "version",
         "engines.node",
         "openclaw.schemaVersions",
@@ -173,7 +173,7 @@ export async function fetchNpmPackageTargetStatus(params: {
         "--global",
       ],
       {
-        timeoutMs: Math.max(250, timeoutMs),
+        timeoutMs: Math.max(1, timeoutMs),
         cwd: params.cwd,
         env: params.env,
         maxOutputBytes: 1024 * 1024,
@@ -187,9 +187,19 @@ export async function fetchNpmPackageTargetStatus(params: {
         error: formatNpmViewError(res),
       };
     }
-    const { version, nodeEngine, schemaVersions } = parseNpmPackageTargetMetadata(res.stdout);
-    return { target, version, nodeEngine, ...(schemaVersions ? { schemaVersions } : {}) };
+    return {
+      target,
+      ...parseNpmPackageTargetMetadata(
+        res.stdout,
+        spec === "openclaw" || /^openclaw@[^:/]+$/.test(spec) ? "openclaw" : "",
+      ),
+    };
   } catch (err) {
-    return { target, version: null, nodeEngine: null, error: String(err) };
+    return {
+      target,
+      version: null,
+      nodeEngine: null,
+      error: err instanceof NpmRegistryHttpError ? err.message : String(err),
+    };
   }
 }

@@ -3,7 +3,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { ApplicationContext } from "../../app/context.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { activationTimeoutForKind } from "./state.ts";
+import { activationTimeoutForKind, type ModelSetupWizardRecovery } from "./state.ts";
 
 const FIRST_RUN_ACTIVATION_RECEIPT_KEY = "openclaw.modelSetup.pendingActivation.v1";
 const DEVICE_IDENTITY_KEY = "openclaw-device-identity-v1";
@@ -37,6 +37,8 @@ export type FirstRunActivationReceipt = {
   gatewayUrl: string;
   agentId: string;
   modelRef: string | null;
+  modelTarget?: "utility";
+  wizard?: ModelSetupWizardRecovery;
   kind: string;
   deadlineMs: number;
   owner: string;
@@ -78,6 +80,10 @@ function activationOwner(
       connection.bootstrapToken,
       connection.bootstrapProfile ?? "",
       deviceToken ?? "",
+      ...(receipt.modelTarget ? [receipt.modelTarget] : []),
+      ...(receipt.wizard
+        ? [receipt.wizard.sessionId, receipt.wizard.authChoice, receipt.wizard.authKind ?? ""]
+        : []),
     ];
     const encoder = new TextEncoder();
     const framed = values.map((value) => `${encoder.encode(value).length}:${value}`).join("|");
@@ -128,6 +134,18 @@ export function readFirstRunActivationReceipt(
       typeof receipt.gatewayUrl !== "string" ||
       typeof receipt.agentId !== "string" ||
       (receipt.modelRef !== null && typeof receipt.modelRef !== "string") ||
+      (receipt.modelTarget !== undefined && receipt.modelTarget !== "utility") ||
+      (receipt.wizard !== undefined &&
+        (receipt.kind !== "provider-auth" ||
+          !receipt.wizard ||
+          typeof receipt.wizard.sessionId !== "string" ||
+          !receipt.wizard.sessionId ||
+          typeof receipt.wizard.authChoice !== "string" ||
+          !receipt.wizard.authChoice ||
+          (receipt.wizard.authKind !== undefined &&
+            receipt.wizard.authKind !== "secret" &&
+            receipt.wizard.authKind !== "oauth" &&
+            receipt.wizard.authKind !== "device-code"))) ||
       typeof receipt.kind !== "string" ||
       typeof receipt.deadlineMs !== "number" ||
       !Number.isFinite(receipt.deadlineMs) ||
@@ -157,7 +175,13 @@ export function firstRunActivationDeadline(kind: string): number {
 
 export function persistFirstRunActivationReceipt(
   context: ActivationContext,
-  candidate: { kind: string; modelRef?: string | null; deadlineMs?: number },
+  candidate: {
+    kind: string;
+    modelRef?: string | null;
+    modelTarget?: "utility";
+    wizard?: ModelSetupWizardRecovery;
+    deadlineMs?: number;
+  },
 ): FirstRunActivationReceipt | null {
   const storage = getSafeLocalStorage();
   if (!storage || context.gateway.snapshot.phase !== "connected") {
@@ -169,6 +193,8 @@ export function persistFirstRunActivationReceipt(
       gatewayUrl: gatewayCredentialScope(context.gateway.connection.gatewayUrl),
       agentId: context.agentSelection.state.selectedId ?? "",
       modelRef: candidate.modelRef ?? null,
+      ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
+      ...(candidate.wizard ? { wizard: candidate.wizard } : {}),
       kind: candidate.kind,
       deadlineMs: candidate.deadlineMs ?? firstRunActivationDeadline(candidate.kind),
     };

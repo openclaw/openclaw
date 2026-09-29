@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   createAuthStoreWithProfiles,
@@ -18,16 +19,8 @@ function configureProfiles(): void {
   authStoreMocks.state.hasSource = true;
   authStoreMocks.state.store = createAuthStoreWithProfiles({
     profiles: {
-      [TEST_PRIMARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-primary",
-      },
-      [TEST_SECONDARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-secondary",
-      },
+      [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+      [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-secondary"),
       [OAUTH_PROFILE_ID]: {
         type: "oauth",
         provider: "openai",
@@ -35,11 +28,7 @@ function configureProfiles(): void {
         refresh: "test-refresh",
         expires: Date.now() + 60_000,
       },
-      [MISMATCHED_PROFILE_ID]: {
-        type: "api_key",
-        provider: "anthropic",
-        key: "sk-mismatched",
-      },
+      [MISMATCHED_PROFILE_ID]: createApiKeyCredential("anthropic", "sk-mismatched"),
     },
     order: { openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID, OAUTH_PROFILE_ID] },
   });
@@ -50,9 +39,12 @@ async function select(params: {
   sessionEntry: SessionEntry;
   configuredProfileId?: string;
   modelId?: string;
+  cfg?: OpenClawConfig;
+  agentId?: string;
 }) {
   return await resolveSessionAuthSelection({
-    cfg: {} as OpenClawConfig,
+    cfg: params.cfg ?? {},
+    agentId: params.agentId ?? "main",
     provider: "openai",
     modelId: params.modelId ?? "gpt-5.6-sol",
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
@@ -65,6 +57,43 @@ async function select(params: {
 }
 
 describe("session auth selection prepared facts", () => {
+  it.each([
+    { source: "auto", selectedModel: "gpt-4.1", expected: TEST_SECONDARY_PROFILE_ID },
+    { source: "user", selectedModel: "gpt-4.1", expected: TEST_PRIMARY_PROFILE_ID },
+    { source: "auto", selectedModel: "gpt-4.1-mini", expected: TEST_PRIMARY_PROFILE_ID },
+  ] as const)(
+    "selects $expected for $source sessions using $selectedModel after activation",
+    async ({ source, selectedModel, expected }) => {
+      await withAuthState(async (state) => {
+        configureProfiles();
+        const sessionEntry: SessionEntry = {
+          sessionId: "existing-session",
+          updatedAt: 1,
+          compactionCount: 0,
+          authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+          authProfileOverrideSource: source,
+          authProfileOverrideCompactionCount: 0,
+        };
+        await expect(
+          select({
+            agentDir: state.agentDir(),
+            agentId: "main",
+            cfg: {
+              agents: {
+                entries: { main: { model: `openai/gpt-4.1@${TEST_SECONDARY_PROFILE_ID}` } },
+              },
+            },
+            modelId: selectedModel,
+            sessionEntry,
+          }),
+        ).resolves.toMatchObject({
+          profileId: expected,
+          source: source === "user" || expected === TEST_SECONDARY_PROFILE_ID ? "user" : "auto",
+        });
+      });
+    },
+  );
+
   it("returns prepared facts for a user pin", async () => {
     await withAuthState(async (state) => {
       configureProfiles();
@@ -83,7 +112,35 @@ describe("session auth selection prepared facts", () => {
     });
   });
 
-  it("returns prepared facts after automatic rotation", async () => {
+  it("retains a removed explicit pin that also names the configured default", async () => {
+    await withAuthState(async (state) => {
+      configureProfiles();
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: 1,
+        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
+        authProfileOverrideSource: "user",
+      };
+      const params = {
+        agentDir: state.agentDir(),
+        sessionEntry,
+        configuredProfileId: TEST_PRIMARY_PROFILE_ID,
+      };
+      await expect(select(params)).resolves.toMatchObject({
+        profileId: TEST_PRIMARY_PROFILE_ID,
+        source: "user",
+      });
+      delete authStoreMocks.state.store.profiles[TEST_PRIMARY_PROFILE_ID];
+
+      await expect(select(params)).resolves.toMatchObject({
+        profileId: TEST_PRIMARY_PROFILE_ID,
+        source: "user",
+      });
+      expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
+    });
+  });
+
+  it("returns prepared facts after compaction without changing the auth profile", async () => {
     await withAuthState(async (state) => {
       configureProfiles();
       const sessionEntry: SessionEntry = {
@@ -97,10 +154,12 @@ describe("session auth selection prepared facts", () => {
       };
 
       await expect(select({ agentDir: state.agentDir(), sessionEntry })).resolves.toEqual({
-        profileId: TEST_SECONDARY_PROFILE_ID,
+        profileId: TEST_PRIMARY_PROFILE_ID,
         source: "auto",
         routeRequirement: "api-key",
       });
+      expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
+      expect(sessionEntry.updatedAt).toBe(1);
     });
   });
 
@@ -133,6 +192,45 @@ describe("session auth selection prepared facts", () => {
         profileId: OAUTH_PROFILE_ID,
         source: "user",
         routeRequirement: "subscription",
+      });
+    });
+  });
+
+  it("retains typed recovery for an explicitly selected profile removed from the store", async () => {
+    await withAuthState(async (state) => {
+      configureProfiles();
+      await expect(
+        select({
+          agentDir: state.agentDir(),
+          sessionEntry: { sessionId: "s1", updatedAt: 1 },
+          configuredProfileId: "openai:removed",
+        }),
+      ).rejects.toMatchObject({
+        code: "selected_auth_profile_unavailable",
+        profileId: "openai:removed",
+      });
+    });
+  });
+
+  it("keeps provider incompatibility for a config-only aws-sdk profile", async () => {
+    await withAuthState(async (state) => {
+      configureProfiles();
+      await expect(
+        select({
+          agentDir: state.agentDir(),
+          sessionEntry: { sessionId: "s1", updatedAt: 1 },
+          configuredProfileId: "amazon-bedrock:default",
+          cfg: {
+            auth: {
+              profiles: {
+                "amazon-bedrock:default": { provider: "amazon-bedrock", mode: "aws-sdk" },
+              },
+            },
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: "Error",
+        message: 'Auth profile "amazon-bedrock:default" is not configured for openai.',
       });
     });
   });

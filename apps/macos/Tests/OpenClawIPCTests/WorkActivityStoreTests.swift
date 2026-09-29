@@ -25,19 +25,6 @@ struct WorkActivityStoreTests {
             store.handleTool(sessionKey: "main", phase: "result", name: "read", meta: "old-tool", args: nil)
 
             // The heartbeat acknowledges that the primary consumer processed the preceding hello.
-            let acknowledgement = WorkActivityAcknowledgement()
-            let observer = NotificationCenter.default.addObserver(
-                forName: .controlHeartbeat,
-                object: nil,
-                queue: .main)
-            { notification in
-                guard let data = notification.object as? Data,
-                      let heartbeat = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data),
-                      heartbeat.status == "work-lifetime-proof"
-                else { return }
-                Task { @MainActor in acknowledgement.received = true }
-            }
-            defer { NotificationCenter.default.removeObserver(observer) }
             await connection.shutdown()
             _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
             let snapshot = try #require(await connection.lastSnapshot)
@@ -48,7 +35,7 @@ struct WorkActivityStoreTests {
                     event: "heartbeat",
                     payload: AnyCodable(["ts": 1, "status": "work-lifetime-proof"]))),
                 socketGeneration: 1)
-            #expect(await self.eventually { acknowledgement.received })
+            #expect(await self.eventually { control.lastHeartbeatEvent?.status == "work-lifetime-proof" })
             #expect(store.current == nil)
             #expect(store.iconState == .idle)
             #expect(store.lastToolUpdatedAt == nil)
@@ -154,20 +141,37 @@ struct WorkActivityStoreTests {
 
     @Test func `resolve icon state honors override selection`() {
         let store = WorkActivityStore()
+        store.handleJob(sessionKey: "discord:group:1", state: "started")
         store.handleJob(sessionKey: "main", state: "started")
         #expect(store.iconState == .workingMain(.job))
 
+        let overrides: [(IconOverrideSelection, IconState)] = [
+            (.idle, .idle),
+            (.mainBash, .overridden(.tool(.bash))),
+            (.mainRead, .overridden(.tool(.read))),
+            (.mainWrite, .overridden(.tool(.write))),
+            (.mainEdit, .overridden(.tool(.edit))),
+            (.mainOther, .overridden(.tool(.other))),
+            (.otherBash, .overridden(.tool(.bash))),
+            (.otherRead, .overridden(.tool(.read))),
+            (.otherWrite, .overridden(.tool(.write))),
+            (.otherEdit, .overridden(.tool(.edit))),
+            (.otherOther, .overridden(.tool(.other))),
+        ]
+        for (selection, expected) in overrides {
+            store.resolveIconState(override: selection)
+            #expect(store.iconState == expected)
+        }
+
+        store.resolveIconState(override: .system)
+        #expect(store.iconState == .workingMain(.job))
+
+        store.handleJob(sessionKey: "main", state: "finished")
         store.resolveIconState(override: .idle)
         #expect(store.iconState == .idle)
-
-        store.resolveIconState(override: .otherEdit)
-        #expect(store.iconState == .overridden(.tool(.edit)))
+        store.resolveIconState(override: .system)
+        #expect(store.iconState == .workingOther(.job))
     }
-}
-
-@MainActor
-private final class WorkActivityAcknowledgement {
-    var received = false
 }
 
 func makeActivityGatewayConnection(mainSessionKey: String) -> GatewayConnection {

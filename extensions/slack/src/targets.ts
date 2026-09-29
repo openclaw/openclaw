@@ -1,4 +1,3 @@
-// Slack plugin module implements targets behavior.
 import { parseSlackTarget, slackTargetsMatch } from "./target-parsing.js";
 
 function matchesResolvedUserTarget(target: string, currentMessagingTarget: string): boolean {

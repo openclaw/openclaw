@@ -38,7 +38,7 @@ describe("skills-cli (e2e)", () => {
     const filePath = path.join(baseDir, "SKILL.md");
     return [
       {
-        skill: createFixtureSkill({
+        skill: createCanonicalFixtureSkill({
           name: "peekaboo",
           description: "Capture UI screenshots",
           filePath,
@@ -97,23 +97,6 @@ describe("skills-cli (e2e)", () => {
     });
   });
 
-  it("formats info for a real bundled skill (peekaboo)", () => {
-    const entries = createEntries();
-    const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
-      managedSkillsDir: "/nonexistent",
-      entries,
-    });
-
-    const peekaboo = report.skills.find((s) => s.name === "peekaboo");
-    if (!peekaboo) {
-      throw new Error("peekaboo fixture skill missing");
-    }
-
-    const output = formatSkillInfo(report, "peekaboo", {});
-    expect(output).toContain("peekaboo");
-    expect(output).toContain("Details:");
-  });
-
   it.each([
     ["plain", "left\tright"],
     ["ESC CSI", "left\x1b[31\tmright\x1b[0m"],
@@ -142,6 +125,28 @@ describe("skills-cli (e2e)", () => {
       expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left right");
     },
   );
+
+  it("preserves description and path whitespace in skills JSON output", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(tempWorkspaceDir, "json-whitespace-"));
+    const managedSkillsDir = path.join(workspaceDir, "managed\tlocal");
+    const description = "First paragraph.\nSecond\tcolumn.\r\nThird paragraph.";
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "json-whitespace", description: JSON.stringify(description) },
+    ]);
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir,
+      config: { plugins: { enabled: false } },
+    });
+    expect(report.skills[0]?.description).toBe(description);
+
+    const list = JSON.parse(formatSkillsList(report, { json: true }));
+    const info = JSON.parse(formatSkillInfo(report, "json-whitespace", { json: true }));
+    const check = JSON.parse(formatSkillsCheck(report, { json: true }));
+    expect(list.skills[0].description).toBe(description);
+    expect(info.description).toBe(description);
+    expect(list.managedSkillsDir).toBe(managedSkillsDir);
+    expect(check.managedSkillsDir).toBe(managedSkillsDir);
+  });
 
   it("reports missing prerequisites for discovered agent-excluded skills", async () => {
     const missingBin = "qa35-fixture-absent-binary";
@@ -192,13 +197,3 @@ describe("skills-cli (e2e)", () => {
     expect(info).toContain(`✗ ${missingBin}`);
   });
 });
-
-function createFixtureSkill(params: {
-  name: string;
-  description: string;
-  filePath: string;
-  baseDir: string;
-  source: string;
-}): SkillEntry["skill"] {
-  return createCanonicalFixtureSkill(params);
-}

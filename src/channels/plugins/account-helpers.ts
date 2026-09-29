@@ -1,8 +1,3 @@
-/**
- * Channel plugin account helper factory.
- *
- * Lists configured accounts and resolves default-account behavior for plugin configs.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveMergedAccountConfig } from "../../config/channel-account-config.js";
@@ -114,6 +109,7 @@ export function createAccountListHelpers<
 
       return resolveMergedAccountConfig<TConfig>({
         channelConfig,
+        channelId: channelKey,
         accounts,
         accountId,
         omitKeys: options?.omitKeys,

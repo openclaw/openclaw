@@ -1,5 +1,4 @@
-// Memory Core plugin module implements manager source state behavior.
-import type { SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildFileEntry,
@@ -7,7 +6,14 @@ import {
   runWithConcurrency,
   type MemoryFileEntry,
   type MemorySource,
+  type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "openclaw/plugin-sdk/sqlite-runtime";
+import { readMemorySourceHash } from "./manager-source-index-kernel.js";
 
 export type MemorySourceFileStateRow = {
   path: string;
@@ -16,15 +22,9 @@ export type MemorySourceFileStateRow = {
   size?: number;
 };
 
-type MemorySourceStateDb = {
-  prepare: (sql: string) => {
-    all: (...args: SQLInputValue[]) => unknown;
-    get: (...args: SQLInputValue[]) => unknown;
-  };
+type MemorySourceDatabase = {
+  memory_index_sources: MemorySourceFileStateRow & { source: MemorySource };
 };
-
-const MEMORY_SOURCE_FILE_STATE_SQL = `SELECT path, hash, mtime, size FROM memory_index_sources WHERE source = ?`;
-const MEMORY_SOURCE_FILE_HASH_SQL = `SELECT hash FROM memory_index_sources WHERE path = ? AND source = ?`;
 
 type MemorySourceInspection = {
   source: MemorySource;
@@ -38,17 +38,24 @@ export async function resolveMemorySourceFileEntries(params: {
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
+  onSkippedSymlinkRoot?: (root: string) => void;
+  files?: MemoryWorkspaceFiles;
 }): Promise<MemoryFileEntry[]> {
-  const files = await listMemoryFiles(
+  const files = await (params.files?.listFiles ?? listMemoryFiles)(
     params.workspaceDir,
     params.settings.extraPaths,
     params.settings.multimodal,
+    params.onSkippedSymlinkRoot,
   );
   return (
     await runWithConcurrency(
       files.map(
         (file) => async () =>
-          await buildFileEntry(file, params.workspaceDir, params.settings.multimodal),
+          await (params.files?.inspectFile ?? buildFileEntry)(
+            file,
+            params.workspaceDir,
+            params.settings.multimodal,
+          ),
       ),
       params.concurrency,
     )
@@ -68,40 +75,50 @@ function hasMemorySourceDrift(params: {
 }
 
 export async function inspectMemorySourceState(params: {
-  db: MemorySourceStateDb;
+  db: DatabaseSync;
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
+  files?: MemoryWorkspaceFiles;
 }): Promise<MemorySourceInspection> {
-  const entries = await resolveMemorySourceFileEntries(params);
-  const indexedRows = loadMemorySourceFileState({ db: params.db, source: "memory" }).rows;
+  const skippedRoots = new Set<string>();
+  const entries = await resolveMemorySourceFileEntries({
+    ...params,
+    onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
+  });
+  const indexedRows = loadMemorySourceFileState({ db: params.db, source: "memory" });
   return {
     source: "memory",
     dirty: hasMemorySourceDrift({ entries, indexedRows }),
     eligible: entries.length,
-    issues: entries.length === 0 ? ["no eligible memory files found"] : [],
+    issues: [
+      ...(entries.length === 0 ? ["no eligible memory files found"] : []),
+      ...Array.from(
+        skippedRoots,
+        (root) =>
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+      ),
+    ],
   };
 }
 
 export function loadMemorySourceFileState(params: {
-  db: MemorySourceStateDb;
+  db: DatabaseSync;
   source: MemorySource;
-}): {
-  rows: MemorySourceFileStateRow[];
-  hashes: Map<string, string>;
-} {
-  const rows = params.db.prepare(MEMORY_SOURCE_FILE_STATE_SQL).all(params.source) as
-    | MemorySourceFileStateRow[]
-    | undefined;
-  const normalizedRows = rows ?? [];
-  return {
-    rows: normalizedRows,
-    hashes: new Map(normalizedRows.map((row) => [row.path, row.hash])),
-  };
+  paths?: readonly string[];
+}): MemorySourceFileStateRow[] {
+  let query = getNodeSqliteKysely<MemorySourceDatabase>(params.db)
+    .selectFrom("memory_index_sources")
+    .select(["path", "hash", "mtime", "size"])
+    .where("source", "=", params.source);
+  if (params.paths) {
+    query = query.where("path", "in", sqliteStringSet(params.paths));
+  }
+  return executeSqliteQuerySync(params.db, query).rows;
 }
 
 export function resolveMemorySourceExistingHash(params: {
-  db: MemorySourceStateDb;
+  db: DatabaseSync;
   source: MemorySource;
   path: string;
   existingHashes?: Map<string, string> | null;
@@ -109,9 +126,5 @@ export function resolveMemorySourceExistingHash(params: {
   if (params.existingHashes) {
     return params.existingHashes.get(params.path);
   }
-  return (
-    params.db.prepare(MEMORY_SOURCE_FILE_HASH_SQL).get(params.path, params.source) as
-      | { hash: string }
-      | undefined
-  )?.hash;
+  return readMemorySourceHash(params.db, params.source, params.path);
 }

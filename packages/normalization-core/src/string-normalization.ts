@@ -1,4 +1,3 @@
-// Normalization Core module implements string normalization behavior.
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
 /** Detects C0 and DEL without rejecting C1 or other Unicode text. */
@@ -115,10 +114,7 @@ export function normalizeCsvOrLooseStringList(value: unknown): string[] {
     return normalizeStringEntries(value);
   }
   if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(value.split(","));
   }
   return [];
 }

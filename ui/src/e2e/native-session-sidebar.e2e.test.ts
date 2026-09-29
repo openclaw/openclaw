@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -20,11 +22,105 @@ beforeEach(() => {
 });
 
 suite.define(() => {
-  it("hides empty native hosts and the empty Coding section", async () => {
-    const page = await suite.browser.newPage({
+  it("hides empty failing catalogs while keeping sessions from available hosts", async () => {
+    const context = await suite.newBrowserContext({
       deviceScaleFactor: 2,
+      locale: "en-US",
+      serviceWorkers: "block",
       viewport: { height: 1100, width: 1440 },
     });
+    const page = await context.newPage();
+    await page.addInitScript(
+      (key) => localStorage.removeItem(key),
+      collapsedSessionSectionsStorageKey,
+    );
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "codex",
+              label: "Codex",
+              capabilities: { continueSession: true, archive: true, startTerminal: true },
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Gateway",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [],
+                  error: {
+                    code: "APP_SERVER_UNAVAILABLE",
+                    message: "Codex app-server is unavailable",
+                  },
+                },
+              ],
+            },
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Gateway",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "native-sidebar-proof",
+                      name: "Review release notes",
+                      cwd: "/workspace/release-notes",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: false,
+                    },
+                  ],
+                },
+                {
+                  hostId: "node:offline",
+                  label: "Remote workstation",
+                  kind: "node",
+                  connected: false,
+                  sessions: [],
+                  error: { code: "NODE_INVOKE_FAILED", message: "Remote catalog is unavailable" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.catalog.list");
+      const sessionGroups = page.locator(".sidebar-recent-sessions");
+      const populated = sessionGroups.locator('[data-session-section="catalog:claude"]');
+      await populated.getByText("Review release notes", { exact: true }).waitFor();
+      if (captureUiProofEnabled) {
+        await sessionGroups.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "empty-failing-catalog.png"),
+        });
+      }
+      expect(await sessionGroups.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
+      expect(await populated.locator('[data-session-catalog-error="claude"]').count()).toBe(1);
+      expect(await populated.locator('[data-session-catalog-host="node:offline"]').count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("hides empty native hosts and the empty Coding section", async () => {
+    const context = await suite.newBrowserContext({
+      deviceScaleFactor: 2,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1100, width: 1440 },
+    });
+    const page = await context.newPage();
     await page.addInitScript(
       (key) => localStorage.removeItem(key),
       collapsedSessionSectionsStorageKey,
@@ -112,7 +208,118 @@ suite.define(() => {
       expect(await section.locator('[data-session-catalog-host="node:remote"]').count()).toBe(1);
       expect(await section.locator('[data-session-catalog-host="node:empty"]').count()).toBe(0);
     } finally {
-      await page.close();
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it.each([false, true])("preserves adopted session menus (touch: %s)", async (hasTouch) => {
+    const adoptedKey = "agent:main:adopted-native-menu";
+    const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const proofDir = proofRoot
+      ? createControlUiE2eArtifactDir("adopted-session-menu", proofRoot)
+      : undefined;
+    const context = await suite.newBrowserContext({
+      deviceScaleFactor: 2,
+      hasTouch,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1100, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      sessionKey: "agent:main:main",
+      terminalEnabled: true,
+      sessions: [
+        { key: "agent:main:main", kind: "direct", label: "Main session", updatedAt: 2 },
+        { key: adoptedKey, kind: "direct", label: "Adopted native session", updatedAt: 1 },
+      ],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list", "terminal.open"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "codex",
+              label: "Codex",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Gateway",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "adopted-thread",
+                      name: "Adopted native session",
+                      status: "stored",
+                      archived: false,
+                      sessionKey: adoptedKey,
+                      canContinue: true,
+                      canOpenTerminal: true,
+                      canArchive: false,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page.locator(`[data-session-key="${adoptedKey}"]`);
+      await row.waitFor({ state: "visible" });
+      const menuTrigger = row.locator(".sidebar-recent-session__link");
+      const catalogMenu = () => page.locator("openclaw-catalog-session-menu");
+      const menuValues = async () =>
+        catalogMenu()
+          .locator("wa-dropdown-item")
+          .evaluateAll((items) =>
+            items
+              .map((item) => item.getAttribute("value"))
+              .filter((value): value is string => Boolean(value)),
+          );
+      const assertCatalogMenu = async (entryPoint: string) => {
+        await expect.poll(() => catalogMenu().count()).toBe(1);
+        await expect.poll(menuValues).toEqual(["viewer", "terminal"]);
+        await expect
+          .poll(() => catalogMenu().locator('[value="terminal"]').getAttribute("disabled"))
+          .toBeNull();
+        console.info(`[catalog-menu-proof] ${entryPoint} values=${(await menuValues()).join(",")}`);
+        if (proofDir) {
+          await writeFile(
+            path.join(proofDir, `${entryPoint}.png`),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              row,
+              catalogMenu(),
+            ]),
+          );
+        }
+      };
+
+      const touchMenu = row.locator("[data-sidebar-session-menu]");
+      if (hasTouch) {
+        await touchMenu.tap();
+        await assertCatalogMenu("touch");
+      } else {
+        expect(await touchMenu.isVisible()).toBe(false);
+        await row.click({ button: "right" });
+        await assertCatalogMenu("context");
+      }
+      await page.keyboard.press("Escape");
+      await expect.poll(() => catalogMenu().count()).toBe(0);
+
+      for (const key of ["ContextMenu", "Shift+F10"]) {
+        await menuTrigger.focus();
+        await page.keyboard.press(key);
+        await assertCatalogMenu(key);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => catalogMenu().count()).toBe(0);
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
     }
   });
 });

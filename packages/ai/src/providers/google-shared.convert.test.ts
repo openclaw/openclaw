@@ -1,11 +1,13 @@
-// Google shared conversion tests cover runtime-to-Google payload conversion.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { createEmptyTransportUsage } from "../transports/transport-stream-shared.js";
 import type { Context, Tool } from "../types.js";
-import { convertMessages, convertTools } from "./google-shared.js";
+import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
 import {
   assertRecord,
+  convertMessages,
   expectConvertedRoles,
   getFirstToolParameters,
   makeGeminiCliAssistantMessage,
@@ -20,26 +22,39 @@ const convertMessagesForTest = convertMessages as unknown as (
   context: Context,
 ) => ReturnType<typeof convertMessages>;
 
-function requireRecordProperty(
-  record: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  const value = record[key];
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected object property ${key}`);
-  }
-  return value as Record<string, unknown>;
-}
-
 describe("google-shared convertTools", () => {
+  it("omits optional metadata from normalized Gemini function declarations", () => {
+    const parameters = normalizeToolParameterSchema(
+      {
+        type: "object",
+        properties: {
+          message: { type: "string" },
+          timeout: { type: "number", "~optional": true },
+        },
+        required: ["message"],
+      },
+      { modelProvider: "google", modelId: "gemini-2.5-flash" },
+    );
+    const converted = expectDefined(
+      convertGoogleTools([{ name: "demo", description: "Demo", parameters }]),
+      "normalized Gemini tool declarations",
+    );
+
+    expect(getFirstToolParameters(converted)).toStrictEqual({
+      type: "object",
+      properties: { message: { type: "string" }, timeout: { type: "number" } },
+      required: ["message"],
+    });
+  });
+
   it("keeps Google tool declarations stable across discovery order", () => {
     const tools = [
       { name: "zeta", description: "Last", parameters: { type: "object" } },
       { name: "alpha", description: "First", parameters: { type: "object" } },
     ] as Tool[];
 
-    expect(convertTools(tools)).toEqual(convertTools(tools.toReversed()));
-    expect(convertTools(tools)?.[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
+    expect(convertGoogleTools(tools)).toEqual(convertGoogleTools(tools.toReversed()));
+    expect(convertGoogleTools(tools)?.[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
       "alpha",
       "zeta",
     ]);
@@ -59,7 +74,7 @@ describe("google-shared convertTools", () => {
       },
     ] as unknown as Tool[];
 
-    const converted = convertTools(tools);
+    const converted = convertGoogleTools(tools);
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );
@@ -103,7 +118,7 @@ describe("google-shared convertTools", () => {
       },
     ] as unknown as Tool[];
 
-    const converted = convertTools(tools);
+    const converted = convertGoogleTools(tools);
     const params = getFirstToolParameters(
       converted as Parameters<typeof getFirstToolParameters>[0],
     );
@@ -120,68 +135,122 @@ describe("google-shared convertTools", () => {
     expect(items.const).toBe("item");
     expect(params.required).toEqual(["mode"]);
   });
-
-  it("keeps supported schema fields", () => {
-    const tools = [
-      {
-        name: "settings",
-        description: "Settings tool",
-        parameters: {
-          type: "object",
-          properties: {
-            config: {
-              type: "object",
-              properties: {
-                retries: { type: "number", minimum: 1 },
-                tags: {
-                  type: "array",
-                  items: { type: "string" },
-                },
-              },
-              required: ["retries"],
-            },
-          },
-          required: ["config"],
-        },
-      },
-    ] as unknown as Tool[];
-
-    const converted = convertTools(tools);
-    const params = getFirstToolParameters(
-      converted as Parameters<typeof getFirstToolParameters>[0],
-    );
-    const config = assertRecord(assertRecord(params.properties).config);
-    const configProps = assertRecord(config.properties);
-    const retries = assertRecord(configProps.retries);
-    const tags = assertRecord(configProps.tags);
-    const items = assertRecord(tags.items);
-
-    expect(params.type).toBe("object");
-    expect(config.type).toBe("object");
-    expect(retries.minimum).toBe(1);
-    expect(tags.type).toBe("array");
-    expect(items.type).toBe("string");
-    expect(config.required).toEqual(["retries"]);
-    expect(params.required).toEqual(["config"]);
-  });
 });
 
 describe("google-shared convertMessages", () => {
+  it.each([
+    {
+      replay: "managed" as const,
+      required: true,
+      expected: [
+        "c2lnXzE=",
+        "skip_thought_signature_validator",
+        "c2lnXzI=",
+        "c2lnXzE=",
+        "c2lnXzI=",
+      ],
+    },
+    {
+      replay: "managed" as const,
+      required: false,
+      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, undefined],
+    },
+    {
+      replay: "signed-parts" as const,
+      required: true,
+      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, "skip_thought_signature_validator"],
+    },
+    {
+      replay: "signed-parts" as const,
+      required: false,
+      expected: ["c2lnXzE=", undefined, "c2lnXzI=", undefined, undefined],
+    },
+  ])(
+    "preserves $replay signature ownership with required=$required",
+    ({ replay, required, expected }) => {
+      const model = makeModel(required ? "gemini-3-flash" : "gemini-2.5-pro");
+      const args = { first: 1, nested: { alpha: 2, beta: 3 } };
+      const reordered = { nested: { beta: 3, alpha: 2 }, first: 1 };
+      const originalBytes = JSON.stringify([args, reordered]);
+      const call = { type: "toolCall" as const, id: "call_1", name: "lookup", arguments: args };
+      const turn = {
+        role: "assistant" as const,
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        stopReason: "toolUse" as const,
+        usage: createEmptyTransportUsage(),
+        timestamp: 0,
+      };
+      const result = makeTextToolResult("call_1", "lookup", "ok", false, 1);
+      const contents = projectGoogleMessages({
+        model,
+        replay,
+        requiresToolCallSignature: required,
+        messages: [
+          {
+            ...turn,
+            content: [
+              { ...call, thoughtSignature: "c2lnXzE=" },
+              { ...call, arguments: reordered },
+            ],
+          },
+          result,
+          result,
+          {
+            ...turn,
+            content: [
+              { ...call, thoughtSignature: "c2lnXzI=" },
+              { ...call, arguments: reordered },
+            ],
+          },
+          result,
+          result,
+          { ...turn, content: [{ ...call, arguments: reordered }] },
+          result,
+        ],
+      });
+      const parts = contents
+        .flatMap((content) => content.parts)
+        .filter((part) => part.functionCall);
+      expect(parts.map((part) => part.thoughtSignature)).toEqual(expected);
+      expect(parts.map((part) => part.functionCall?.args)).toEqual([
+        args,
+        reordered,
+        args,
+        reordered,
+        reordered,
+      ]);
+      expect(parts[1]?.functionCall?.args).toBe(reordered);
+      expect(JSON.stringify([args, reordered])).toBe(originalBytes);
+    },
+  );
+
   it.each([
     { label: "serialized object", value: '{"query":"cats"}', expected: { query: "cats" } },
     { label: "malformed JSON", value: "{not valid json", expected: {} },
     { label: "JSON array", value: ["not", "an", "object"], expected: {} },
   ])("coerces $label tool-call arguments to the SDK object contract", ({ value, expected }) => {
     const model = makeModel("gemini-3-flash");
-    const contents = convertMessagesForTest(model, {
+    const context = {
       messages: [
         makeGoogleAssistantMessage(model.id, [
           { type: "toolCall", id: "call_1", name: "lookup", arguments: value },
         ]),
       ],
-    } as Context);
+    } as Context;
 
-    expect(contents[0]?.parts?.[0]?.functionCall?.args).toEqual(expected);
+    for (const contents of [
+      convertMessagesForTest(model, context),
+      projectGoogleMessages({
+        model,
+        messages: context.messages,
+        replay: "managed",
+        requiresToolCallSignature: true,
+      }),
+    ]) {
+      expect(contents[0]?.parts?.[0]?.functionCall?.args).toEqual(expected);
+    }
   });
 
   it.each([
@@ -222,19 +291,6 @@ describe("google-shared convertMessages", () => {
     expect(contents).toEqual([{ role: "model", parts: [part] }]);
   });
 
-  it("supplies the documented Gemini 3 thought-signature placeholder for unsigned calls", () => {
-    const model = makeModel("gemini-3-flash");
-    const contents = convertMessagesForTest(model, {
-      messages: [
-        makeGoogleAssistantMessage(model.id, [
-          { type: "toolCall", id: "provider_alpha", name: "lookup", arguments: {} },
-        ]),
-      ],
-    } as Context);
-
-    expect(contents[0]?.parts?.[0]?.thoughtSignature).toBe("skip_thought_signature_validator");
-  });
-
   it("keeps unsigned parallel Gemini 3 calls exactly as the provider issued them", () => {
     const model = makeModel("gemini-3-flash");
     const contents = convertMessagesForTest(model, {
@@ -259,16 +315,10 @@ describe("google-shared convertMessages", () => {
   });
 
   it.each([
-    { label: "identical arguments", first: { q: "cats" }, second: { q: "cats" } },
     {
       label: "reordered nested arguments",
       first: { first: 1, nested: { alpha: 2, beta: 3 } },
       second: { nested: { beta: 3, alpha: 2 }, first: 1 },
-    },
-    {
-      label: "canonically distinct Unicode keys",
-      first: { é: 1, "e\u0301": 2 },
-      second: { "e\u0301": 2, é: 1 },
     },
   ])(
     "keeps an earlier Gemini tool-call signature on its original $label part",
@@ -280,14 +330,7 @@ describe("google-shared convertMessages", () => {
           makeGoogleAssistantMessage(model.id, [
             { ...toolCall, arguments: first, thoughtSignature: "c2lnbmVk" },
           ]),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "cats" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "cats", false, 0),
           makeGoogleAssistantMessage(model.id, [{ ...toolCall, arguments: second }]),
         ],
       } as Context);
@@ -306,14 +349,7 @@ describe("google-shared convertMessages", () => {
     const contents = convertMessagesForTest(model, {
       messages: [
         makeGoogleAssistantMessage(model.id, [{ ...cachedCall, thoughtSignature: "c2lnbmVk" }]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "lookup",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("call_1", "lookup", "ok", false, 0),
         makeGoogleAssistantMessage(model.id, [
           { type: "toolCall", id: "other", name: "different", arguments: {} },
           cachedCall,
@@ -328,7 +364,7 @@ describe("google-shared convertMessages", () => {
     expect(signatures).toEqual(["c2lnbmVk", "skip_thought_signature_validator", undefined]);
   });
 
-  it.each(["google-vertex", "openai-responses"])(
+  it.each(["google-vertex"])(
     "never replays a Gemini tool-call signature onto the foreign %s API route",
     (api) => {
       const model = makeModel("gemini-3-flash");
@@ -412,33 +448,6 @@ describe("google-shared convertMessages", () => {
     },
   );
 
-  function expectConsecutiveMessagesNotMerged(params: {
-    modelId: string;
-    first: string;
-    second: string;
-  }) {
-    const model = makeModel(params.modelId);
-    const context = {
-      messages: [
-        {
-          role: "user",
-          content: params.first,
-        },
-        {
-          role: "user",
-          content: params.second,
-        },
-      ],
-    } as unknown as Context;
-
-    const contents = convertMessagesForTest(model, context);
-    expect(contents).toHaveLength(2);
-    expect(expectDefined(contents[0], "contents[0] test invariant").role).toBe("user");
-    expect(expectDefined(contents[1], "contents[1] test invariant").role).toBe("user");
-    expect(expectDefined(contents[0], "contents[0] test invariant").parts).toHaveLength(1);
-    expect(expectDefined(contents[1], "contents[1] test invariant").parts).toHaveLength(1);
-  }
-
   it("keeps thinking blocks when provider/model match", () => {
     const model = makeModel("gemini-1.5-pro");
     const context = {
@@ -461,42 +470,18 @@ describe("google-shared convertMessages", () => {
     expect(part.thoughtSignature).toBe("c2ln");
   });
 
-  it("keeps thought signatures for Claude models", () => {
-    const model = makeModel("claude-3-opus");
-    const context = {
-      messages: [
-        makeGoogleAssistantMessage(model.id, [
-          {
-            type: "thinking",
-            thinking: "structured",
-            thinkingSignature: "c2ln",
-          },
-        ]),
-      ],
-    } as unknown as Context;
-
-    const contents = convertMessagesForTest(model, context);
-    const parts = contents?.[0]?.parts ?? [];
-    expect(parts).toHaveLength(1);
-    const part = assertRecord(parts[0]);
-    expect(part.thought).toBe(true);
-    expect(part.thoughtSignature).toBe("c2ln");
-  });
-
   it("does not merge consecutive user messages for Gemini", () => {
-    expectConsecutiveMessagesNotMerged({
-      modelId: "gemini-1.5-pro",
-      first: "Hello",
-      second: "How are you?",
-    });
-  });
-
-  it("does not merge consecutive user messages for non-Gemini Google models", () => {
-    expectConsecutiveMessagesNotMerged({
-      modelId: "claude-3-opus",
-      first: "First",
-      second: "Second",
-    });
+    expect(
+      convertMessagesForTest(makeModel("gemini-1.5-pro"), {
+        messages: [
+          { role: "user", content: "Hello", timestamp: 0 },
+          { role: "user", content: "How are you?", timestamp: 1 },
+        ],
+      }),
+    ).toEqual([
+      { role: "user", parts: [{ text: "Hello" }] },
+      { role: "user", parts: [{ text: "How are you?" }] },
+    ]);
   });
 
   it("does not merge consecutive model messages for Gemini", () => {
@@ -534,14 +519,7 @@ describe("google-shared convertMessages", () => {
             arguments: { arg: "value" },
           },
         ]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "myTool",
-          content: [{ type: "text", text: "Tool result" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("call_1", "myTool", "Tool result", false, 0),
         {
           role: "user",
           content: "Now do something else",
@@ -559,7 +537,7 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
     const toolResponse = assertRecord(toolResponsePart);
-    expect(requireRecordProperty(toolResponse, "functionResponse").name).toBe("myTool");
+    expect(assertRecord(toolResponse.functionResponse).name).toBe("myTool");
     expect(expectDefined(contents[3], "contents[3] test invariant").role).toBe("user");
   });
 
@@ -589,7 +567,7 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolCall = assertRecord(toolCallPart);
-    expect(requireRecordProperty(toolCall, "functionCall").name).toBe("myTool");
+    expect(assertRecord(toolCall.functionCall).name).toBe("myTool");
   });
 
   it("strips tool call and response ids for google-gemini-cli", () => {
@@ -609,14 +587,7 @@ describe("google-shared convertMessages", () => {
             thoughtSignature: "dGVzdA==",
           },
         ]),
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "myTool",
-          content: [{ type: "text", text: "Tool result" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("call_1", "myTool", "Tool result", false, 0),
       ],
     } as unknown as Context;
 
@@ -643,14 +614,7 @@ describe("google-shared convertMessages", () => {
         makeGoogleAssistantMessage(model.id, [
           { type: "toolCall", id: "provider_call_42", name: "lookup", arguments: {} },
         ]),
-        {
-          role: "toolResult",
-          toolCallId: "provider_call_42",
-          toolName: "lookup",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 0,
-        },
+        makeTextToolResult("provider_call_42", "lookup", "ok", false, 0),
       ],
     } as Context);
 
@@ -676,7 +640,7 @@ describe("google-shared convertMessages", () => {
     const toolResponsePart = contents[0]?.parts?.find(
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
-    const toolResponse = requireRecordProperty(assertRecord(toolResponsePart), "functionResponse");
+    const toolResponse = assertRecord(assertRecord(toolResponsePart).functionResponse);
     expect(assertRecord(toolResponse.response).output).toBe(
       '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
     );

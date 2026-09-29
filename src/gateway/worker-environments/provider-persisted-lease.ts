@@ -1,22 +1,6 @@
 import type { WorkerProvider } from "../../plugins/types.js";
-import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { resolveWorkerLeaseTransportError } from "./service-validation.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
-
-export function requestStaleWorkerDestroy(
-  record: WorkerEnvironmentRecord,
-  store: WorkerEnvironmentStore,
-): WorkerEnvironmentRecord {
-  // Preserve the stale-build cause after teardown so placement recovery remains actionable.
-  return record.state === "attached"
-    ? store.requestDestroy({
-        environmentId: record.environmentId,
-        state: record.state,
-        terminalState: "failed",
-        lastError: STALE_WORKER_BUILD_REASON,
-      })
-    : record;
-}
 
 export async function retireMismatchedWorkerLease(
   record: WorkerEnvironmentRecord,
@@ -35,7 +19,7 @@ export async function retireMismatchedWorkerLease(
     return false;
   }
 
-  const requested = store.requestDestroy({
+  const requested = await store.requestDestroy({
     environmentId: record.environmentId,
     state: record.state,
     terminalState: "failed",

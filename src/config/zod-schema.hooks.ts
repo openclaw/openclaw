@@ -5,26 +5,13 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 function isSafeRelativeModulePath(raw: string): boolean {
   const value = raw.trim();
-  if (!value) {
-    return false;
-  }
   // Hook modules are loaded via file-path resolution + dynamic import().
   // Keep this strictly relative to a configured base dir to avoid path traversal and surprises.
-  if (path.isAbsolute(value)) {
+  // Colons also disallow URL-ish and drive-relative forms (e.g. "file:...", "C:foo").
+  if (!value || path.isAbsolute(value) || value.startsWith("~") || value.includes(":")) {
     return false;
   }
-  if (value.startsWith("~")) {
-    return false;
-  }
-  // Disallow URL-ish and drive-relative forms (e.g. "file:...", "C:foo").
-  if (value.includes(":")) {
-    return false;
-  }
-  const parts = value.split(/[\\/]+/g);
-  if (parts.some((part) => part === "..")) {
-    return false;
-  }
-  return true;
+  return !value.split(/[\\/]+/g).some((part) => part === "..");
 }
 
 const SafeRelativeModulePathSchema = z
@@ -73,6 +60,8 @@ export const HookMappingSchema = z
   .strict()
   .optional();
 
+export type HookMappingConfigInput = NonNullable<z.input<typeof HookMappingSchema>>;
+
 const HookConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -96,6 +85,8 @@ export const InternalHooksSchema = z
   })
   .strict()
   .optional();
+
+export type InternalHooksConfigInput = NonNullable<z.input<typeof InternalHooksSchema>>;
 
 export const HooksGmailSchema = z
   .object({
@@ -138,3 +129,5 @@ export const HooksGmailSchema = z
   })
   .strict()
   .optional();
+
+export type HooksGmailConfigInput = NonNullable<z.input<typeof HooksGmailSchema>>;

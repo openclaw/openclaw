@@ -7,20 +7,20 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as activeTranscriptEvents from "../config/sessions/session-accessor.sqlite-active-events.js";
 import * as redact from "../logging/redact.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  // Worker leases still need these databases until asynchronous cleanup settles.
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
   vi.unstubAllEnvs();
 });
 
@@ -50,6 +50,7 @@ describe("session companion context", () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const run = vi.fn(async () => "Existing answer.");
       const service = createSessionCompanion({
+        scheduler: createTestGatewayScheduler(),
         getConfig: () => ({}),
         contextReader: defaultSessionCompanionContextReader,
         sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },

@@ -68,10 +68,7 @@ function createTimeoutHistoryWithNoReply() {
       ],
     },
     { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
-    {
-      role: "assistant",
-      content: [{ type: "text", text: "NO_REPLY" }],
-    },
+    textAssistant("NO_REPLY"),
   ];
 }
 
@@ -106,18 +103,20 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     targetRequesterSessionKey: string;
     triggerMessage: string;
     requesterIsSubagent?: boolean;
-    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+    completionDirectOrigin?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    };
     requesterSessionOrigin?: { provider?: string; channel?: string };
     bestEffortDeliver?: boolean;
     directIdempotencyKey?: string;
     internalEvents?: unknown;
   }) => {
-    // Retry behavior is modeled here because the outer announce flow only sees
-    // whether direct delivery eventually succeeded or failed.
-    const buildRequest = () => ({
+    const request = {
       method: "agent",
       expectFinal: true,
-      timeoutMs,
       params: {
         sessionKey: params.targetRequesterSessionKey,
         message: params.triggerMessage,
@@ -127,31 +126,16 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         ...(params.requesterIsSubagent
           ? {}
           : {
-              channel: params.requesterOrigin?.channel,
-              to: params.requesterOrigin?.to,
-              accountId: params.requesterOrigin?.accountId,
-              threadId: params.requesterOrigin?.threadId,
+              channel: params.completionDirectOrigin?.channel,
+              to: params.completionDirectOrigin?.to,
+              accountId: params.completionDirectOrigin?.accountId,
+              threadId: params.completionDirectOrigin?.threadId,
             }),
       },
-    });
-    const timeoutMs =
-      clampTimerTimeoutMs(configOverride.agents?.defaults?.subagents?.announceTimeoutMs) ?? 120_000;
-    const retryDelaysMs =
-      process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
-    for (const delayMs of [...retryDelaysMs, undefined]) {
-      const request = buildRequest();
-      gatewayCalls.push(request);
-      try {
-        await callGatewayImpl(request);
-        return { delivered: true, path: "direct" };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!/gateway timeout/i.test(message) || delayMs == null) {
-          return { delivered: false, path: "direct", error: message };
-        }
-      }
-    }
-    throw new Error("unreachable direct delivery retry loop exit");
+    };
+    gatewayCalls.push(request);
+    await callGatewayImpl(request);
+    return { delivered: true, path: "direct" };
   },
   loadRequesterSessionEntry: (sessionKey: string) => ({
     cfg: configOverride,
@@ -170,7 +154,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
-  callGateway: createGatewayCallModuleMock().callGateway,
+  callSubagentLifecycleGateway: createGatewayCallModuleMock().callGateway,
   dispatchGatewayMethodInProcess: async (
     method: string,
     params: Record<string, unknown>,
@@ -209,6 +193,7 @@ vi.mock("../registry/subagent-registry-read.js", () => ({
 vi.mock("../registry/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: () => true,
 }));
+import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<
   typeof import("./subagent-announce.js").runSubagentAnnounceFlow
@@ -230,19 +215,6 @@ const baseAnnounceFlowParams = {
   waitForCompletion: false,
   outcome: { status: "ok" as const },
 } satisfies Omit<AnnounceFlowParams, "childRunId">;
-
-function setConfiguredAnnounceTimeout(timeoutMs: number): void {
-  configOverride = {
-    session: defaultSessionConfig,
-    agents: {
-      defaults: {
-        subagents: {
-          announceTimeoutMs: timeoutMs,
-        },
-      },
-    },
-  };
-}
 
 async function runAnnounceFlowForTest(
   childRunId: string,
@@ -295,69 +267,6 @@ describe("subagent announce timeout config", () => {
     isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
     waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
     fallbackRequesterResolution = null;
-  });
-
-  it("uses 120s timeout by default for direct announce agent call", async () => {
-    await runAnnounceFlowForTest("run-default-timeout");
-
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    expect(directAgentCall?.timeoutMs).toBe(120_000);
-  });
-
-  it("honors configured announce timeout for direct announce agent call", async () => {
-    setConfiguredAnnounceTimeout(120_000);
-    await runAnnounceFlowForTest("run-config-timeout-agent");
-
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    expect(directAgentCall?.timeoutMs).toBe(120_000);
-  });
-
-  it("honors configured announce timeout for completion direct agent call", async () => {
-    setConfiguredAnnounceTimeout(120_000);
-    await runAnnounceFlowForTest("run-config-timeout-send", {
-      requesterOrigin: {
-        channel: "discord",
-        to: "12345",
-      },
-      expectsCompletionMessage: true,
-    });
-
-    const completionDirectAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    expect(completionDirectAgentCall?.timeoutMs).toBe(120_000);
-  });
-
-  it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
-    try {
-      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-      callGatewayImpl = async (request) => {
-        if (request.method === "chat.history") {
-          return { messages: [] };
-        }
-        throw new Error("gateway timeout after 120000ms");
-      };
-
-      const announcePromise = runAnnounceFlowForTest("run-completion-timeout-retry", {
-        requesterOrigin: {
-          channel: "telegram",
-          to: "12345",
-        },
-        expectsCompletionMessage: true,
-      });
-      await expect(announcePromise).resolves.toBe("retryable");
-
-      const directAgentCalls = gatewayCalls.filter(
-        (call) => call.method === "agent" && call.expectFinal === true,
-      );
-      expect(directAgentCalls).toHaveLength(4);
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 
   it("regression, skips parent announce while descendants are still pending", async () => {
@@ -495,23 +404,30 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).not.toContain("private tool output");
   });
 
-  it("keeps authoritative visible timeout output without transcript inference", async () => {
-    chatHistoryMessages = [
-      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
-    ];
+  it.each(["authoritative progress", "(no output)"])(
+    "keeps authoritative visible timeout output %s without transcript inference",
+    async (text) => {
+      chatHistoryMessages = [
+        { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
+      ];
 
-    await runAnnounceFlowForTest("run-timeout-visible-terminal", {
-      outcome: { status: "timeout" },
-      roundOneReply: undefined,
-      terminalReply: { disposition: "visible", text: "authoritative progress" },
-    });
+      await runAnnounceFlowForTest("run-timeout-visible-terminal", {
+        outcome: { status: "timeout" },
+        roundOneReply: undefined,
+        terminalReply: { disposition: "visible", text },
+      });
 
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toBe("authoritative progress");
-    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
-  });
+      const directAgentCall = findFinalDirectAgentCall();
+      const internalEvents =
+        (directAgentCall?.params?.internalEvents as Array<{
+          result?: string;
+          noVisibleResult?: boolean;
+        }>) ?? [];
+      expect(internalEvents[0]?.result).toBe(text);
+      expect(internalEvents[0]?.noVisibleResult).toBeUndefined();
+      expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
+    },
+  );
 
   it("keeps authoritative silence on timeout without transcript inference", async () => {
     chatHistoryMessages = [
@@ -525,6 +441,28 @@ describe("subagent announce timeout config", () => {
     });
 
     expect(findFinalDirectAgentCall()).toBeUndefined();
+    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
+  });
+
+  it("keeps authoritative empty success intentional without transcript inference", async () => {
+    chatHistoryMessages = [
+      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
+    ];
+
+    await runAnnounceFlowForTest("run-ok-empty-terminal", {
+      outcome: { status: "ok" },
+      roundOneReply: undefined,
+      terminalReply: { disposition: "empty" },
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        result?: string;
+        noVisibleResult?: boolean;
+      }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("(no output)");
+    expect(internalEvents[0]?.noVisibleResult).toBe(true);
     expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
   });
 
@@ -563,50 +501,19 @@ describe("subagent announce timeout config", () => {
         result?: string;
         status?: string;
         statusLabel?: string;
+        noVisibleResult?: boolean;
       }>) ?? [];
     expect(internalEvents[0]?.status).toBe("error");
     expect(internalEvents[0]?.statusLabel).toContain("All models failed");
     expect(internalEvents[0]?.result).toBe("(no output)");
+    expect(internalEvents[0]?.noVisibleResult).toBe(true);
     expect(directAgentCall?.params?.message).not.toContain("stale");
     expect(directAgentCall?.params?.message).not.toContain("older fallback");
   });
 
-  it("does not let pre-tool NO_REPLY hide a later timeout", async () => {
-    chatHistoryMessages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Still working through the files." },
-          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-        ],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-2", name: "exec", arguments: {} }],
-      },
-    ];
-
-    await runAnnounceFlowForTest("run-timeout-no-reply", {
-      outcome: { status: "timeout" },
-      roundOneReply: undefined,
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toBe("2 tool call(s) made without visible output.");
-  });
-
   it("prefers visible assistant progress over a later raw tool result", async () => {
     chatHistoryMessages = [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Read 12 files. Narrowing the search now." }],
-      },
+      textAssistant("Read 12 files. Narrowing the search now."),
       {
         role: "toolResult",
         content: [{ type: "text", text: "grep output" }],
@@ -650,10 +557,7 @@ describe("subagent announce timeout config", () => {
   it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {
     chatHistoryMessages = [
       ...createTimeoutHistoryWithNoReply(),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "A longer partial summary that should stay silent." }],
-      },
+      textAssistant("A longer partial summary that should stay silent."),
     ];
 
     await runAnnounceFlowForTest("run-timeout-no-reply-overrides-latest-text", {

@@ -1,26 +1,23 @@
-/**
- * Claude CLI backend descriptor. It configures Claude Code process arguments,
- * MCP bundling, session handling, and credential transport.
- */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
   CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
-import { parseClaudeCliJsonlEvent, parseClaudeCliJsonlLifecycleEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_CLEAR_ENV,
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
+} from "./cli-constants.js";
+import { parseClaudeCliJsonlEvent, parseClaudeCliJsonlLifecycleEvent } from "./cli-output.js";
+import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
   resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
-import anthropicPluginPackage from "./package.json" with { type: "json" };
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -38,12 +35,6 @@ type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
 };
 
 const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
-// SDK import and query() set these in process.env. Seed them before core
-// fingerprints the child env so the first resumed turn keeps its warm query.
-const CLAUDE_AGENT_SDK_ENV = {
-  CLAUDE_AGENT_SDK_VERSION: anthropicPluginPackage.dependencies["@anthropic-ai/claude-agent-sdk"],
-  NoDefaultCurrentDirectoryInExePath: "1",
-};
 const CLAUDE_CLI_DEFAULT_ARGS = [
   "-p",
   "--output-format",
@@ -155,7 +146,6 @@ function resolveClaudeCliAuthInput(
   return undefined;
 }
 
-/** Build the Claude CLI backend plugin descriptor. */
 export function buildAnthropicCliBackend(
   options: {
     ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
@@ -186,6 +176,7 @@ export function buildAnthropicCliBackend(
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
     toolAvailabilityEnforcement: "execution-args",
+    isolatesInstructionsWithExactTools: true,
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
@@ -268,35 +259,36 @@ export function buildAnthropicCliBackend(
         };
         const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
-        const agentSdkExecution =
+        const cliExecution =
           !isolatedCompletion && context.executionMode === "agent"
             ? {
                 async *execute(executionContext: CliBackendExecuteContext) {
-                  const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
+                  const { executeClaudeCli } = await import("./cli.runtime.js");
                   executionContext.assertCurrent?.();
-                  yield* executeClaudeAgentSdk(executionContext, authInput?.secretInput);
+                  yield* executeClaudeCli(executionContext, authInput?.secretInput);
                 },
               }
             : undefined;
         const env = {
-          ...(agentSdkExecution ? CLAUDE_AGENT_SDK_ENV : {}),
+          // Claude rebuilds the startup Git snapshot on process resume, rewriting
+          // the conversation prefix after workspace edits or commits. OpenClaw
+          // supplies workspace instructions; Git state can be read with tools.
+          CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
           ...authInput?.env,
         };
-        return Object.keys(env).length > 0 || isolatedCompletion || agentSdkExecution
-          ? {
-              env,
-              // The paired side-question argv projection disables settings, memory,
-              // hooks, session persistence, and tools before process launch.
-              ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
-              ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
-              ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
-              ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
-              ...agentSdkExecution,
-            }
-          : undefined;
+        return {
+          env,
+          // The paired side-question argv projection disables settings, memory,
+          // hooks, session persistence, and tools before process launch.
+          ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
+          ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
+          ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
+          ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+          ...cliExecution,
+        };
       };
       const supportProbe = options.ensureDynamicSystemPromptSectionsSupport?.();
       return supportProbe ? supportProbe.then(prepare) : prepare();

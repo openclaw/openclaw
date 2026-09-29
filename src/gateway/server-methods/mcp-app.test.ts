@@ -99,6 +99,7 @@ async function invoke(
   params: Record<string, unknown>,
   mcpAppsEnabled = true,
   config: Record<string, unknown> = {},
+  scopes: string[] = ["operator.write"],
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -107,6 +108,7 @@ async function invoke(
   )({
     respond,
     params,
+    client: { connect: { scopes } },
     context: {
       getMcpAppSandboxPort: () => 18790,
       getRuntimeConfig: () => ({
@@ -193,12 +195,25 @@ describe("MCP App gateway bridge", () => {
     expect(mocks.getMcpAppViewLease).toHaveBeenCalledWith("cv_app", expect.any(Object));
     expect(mocks.createMcpAppStandaloneTicket).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
+      toolOperationsAuthorized: true,
       view,
     });
     const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
     expect(activeRuntime.acquireLease).toHaveBeenCalledOnce();
     expect(activeRuntime.acquireLease.mock.results[0]?.value).toHaveBeenCalledOnce();
     expect(mocks.completeDeferredSessionMcpRuntimeRetirement).toHaveBeenCalledWith(activeRuntime);
+  });
+
+  it("mints a view-only standalone ticket for a read-scoped caller", async () => {
+    await invoke("mcp.app.view", { sessionKey: "agent:main:main", viewId: "cv_app" }, true, {}, [
+      "operator.read",
+    ]);
+
+    expect(mocks.createMcpAppStandaloneTicket).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      toolOperationsAuthorized: false,
+      view,
+    });
   });
 
   it("resolves a harness-native view through its originating session", async () => {
@@ -373,20 +388,6 @@ describe("MCP App gateway bridge", () => {
     expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
   });
 
-  it("rechecks a board widget grant before updating model context", async () => {
-    view.authorizeAppInteraction = vi.fn(async () => false);
-    const respond = await invoke("mcp.app.updateModelContext", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-      content: [{ type: "text", text: "blocked" }],
-    });
-
-    expect(respond.mock.calls[0]?.[0]).toBe(false);
-    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
-    const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
-    expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
-  });
-
   it("rechecks current widget authority for every interactive capability", async () => {
     const activeRuntime = runtime();
     mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
@@ -417,6 +418,8 @@ describe("MCP App gateway bridge", () => {
     });
     expect(resource.mock.calls[0]?.[0]).toBe(false);
     expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(7);
+    expect(activeRuntime).not.toHaveProperty("pendingMcpAppModelContext");
+    expect(activeRuntime.callTool).not.toHaveBeenCalled();
     expect(activeRuntime.listResources).not.toHaveBeenCalled();
     expect(activeRuntime.listResourceTemplates).not.toHaveBeenCalled();
     expect(activeRuntime.readResource).not.toHaveBeenCalled();
@@ -500,19 +503,6 @@ describe("MCP App gateway bridge", () => {
 
     const denied = await invoke("mcp.app.callTool", { ...params, toolName: "app-only" });
     expect(denied.mock.calls[0]?.[0]).toBe(false);
-  });
-
-  it("rechecks a board widget grant before every App tool call", async () => {
-    view.authorizeAppInteraction = vi.fn(async () => false);
-    const denied = await invoke("mcp.app.callTool", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-      toolName: "shared",
-    });
-
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
-    expect(mocks.peekSessionMcpRuntime.mock.results[0]?.value.callTool).not.toHaveBeenCalled();
   });
 
   it.each([

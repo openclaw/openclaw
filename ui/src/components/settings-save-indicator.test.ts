@@ -20,6 +20,7 @@ function props(overrides: Partial<SettingsSaveIndicatorProps> = {}): SettingsSav
     applying: false,
     applyDisabled: false,
     onRetry: vi.fn(),
+    onSave: vi.fn(),
     onReload: vi.fn(),
     onApply: vi.fn(),
     ...overrides,
@@ -104,6 +105,35 @@ describe("settings save indicator", () => {
     expect(button("Retry")).toBeUndefined();
     button("Reload")?.click();
     expect(onReload).toHaveBeenCalledOnce();
+  });
+
+  it("explains validation rejection locally with a reason and retry action", async () => {
+    const onRetry = vi.fn();
+    await update(
+      props({ status: "rejected", lastError: "logging.level: Invalid option", onRetry }),
+    );
+
+    expect(indicator.querySelector('[role="status"]')?.textContent).toContain(
+      "Settings not applied",
+    );
+    expect(indicator.textContent).toContain("Current settings are unchanged.");
+    expect(indicator.querySelector("details")?.textContent).toContain(
+      "logging.level: Invalid option",
+    );
+    expect(indicator.querySelector(".settings-save-indicator--danger")).toBeNull();
+    button("Retry")?.click();
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("submits the paused draft through Save instead of retrying a failed patch", async () => {
+    const onSave = vi.fn();
+    const onRetry = vi.fn();
+    await update(props({ status: "paused", onSave, onRetry }));
+
+    button("Save")?.click();
+
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 
   it("applies pending changes and reports the in-flight state", async () => {

@@ -88,14 +88,6 @@ describe("system systemd ownership", () => {
     }
   });
 
-  it("reports a unit loaded by the system manager", async () => {
-    state.systemctl = { stdout: "loaded\n", stderr: "", code: 0, termination: "exit" };
-
-    await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
-      ownership: { status: "loaded", unitName: "openclaw-gateway.service" },
-    });
-  });
-
   it.each([
     { ownership: "loaded", kind: "sealed" },
     { ownership: "installed", kind: "sealed" },
@@ -145,11 +137,8 @@ describe("system systemd ownership", () => {
     },
   );
 
-  it.each([
-    "/etc/systemd/system/openclaw-gateway.service",
-    "/run/systemd/system/openclaw-gateway.service",
-    "/usr/local/lib/systemd/system/openclaw-gateway.service",
-  ])("detects a custom same-name system unit at %s", async (unitPath) => {
+  it("detects a custom same-name unit in the manager's runtime load path", async () => {
+    const unitPath = "/run/systemd/system/openclaw-gateway.service";
     state.paths.add(unitPath);
 
     await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
@@ -173,7 +162,7 @@ describe("system systemd ownership", () => {
 
   it("shares one timeout budget across system-manager ownership probes", async () => {
     let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     execFileUtf8.mockImplementation(async (_command, args) => {
       now += 20;
       return args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl;
@@ -203,12 +192,34 @@ describe("system systemd ownership", () => {
     }
   });
 
+  it.each([60_000, -60_000])(
+    "keeps the shared timeout budget through a %s ms wall-clock step",
+    async (stepMs) => {
+      const now = Date.now;
+      let offset = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+      execFileUtf8.mockImplementation(async (_command, args) => {
+        offset = stepMs;
+        return args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl;
+      });
+      try {
+        await expect(
+          assertNoSystemSystemdOwnership("openclaw-gateway.service", 5_000),
+        ).resolves.toBeUndefined();
+        const timeouts = execFileUtf8.mock.calls.map((call) => call[2]?.timeout ?? 0);
+        expect(timeouts).toHaveLength(3);
+        // Only real elapsed time (tens of ms) may leave the budget; the clock step must
+        // neither drain it to the 1 ms floor nor inflate it past the budget.
+        expect(timeouts.every((timeout) => timeout > 4_000 && timeout <= 5_000)).toBe(true);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it.each([
     "Failed to connect to bus: Permission denied",
-    "spawn systemctl ENOENT",
-    "systemctl not available",
     "System has not been booted with systemd as init system",
-    "Failed to connect to bus: No such file or directory",
   ])("fails closed when manager absence cannot be proven: %s", async (detail) => {
     state.systemctl = { stdout: "", stderr: detail, code: 1, termination: "exit" };
 

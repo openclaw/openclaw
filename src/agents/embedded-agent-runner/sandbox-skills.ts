@@ -5,6 +5,7 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import type {
   SkillEligibilityContext,
@@ -73,30 +74,17 @@ export function mapSandboxSkillEntriesForPrompt(params: {
   if (!params.entries || params.skillsWorkspaceDir === params.skillsPromptWorkspaceDir) {
     return params.entries;
   }
-  return params.entries.map((entry) => {
-    const filePath =
-      mapPathFromWorkspaceToContainer({
-        filePath: entry.skill.filePath,
-        sourceWorkspaceDir: params.skillsWorkspaceDir,
-        targetWorkspaceDir: params.skillsPromptWorkspaceDir,
-      }) ?? entry.skill.filePath;
-    const baseDir =
-      mapPathFromWorkspaceToContainer({
-        filePath: entry.skill.baseDir,
-        sourceWorkspaceDir: params.skillsWorkspaceDir,
-        targetWorkspaceDir: params.skillsPromptWorkspaceDir,
-      }) ?? entry.skill.baseDir;
-    const sourceInfoPath =
-      mapPathFromWorkspaceToContainer({
-        filePath: entry.skill.sourceInfo.path,
-        sourceWorkspaceDir: params.skillsWorkspaceDir,
-        targetWorkspaceDir: params.skillsPromptWorkspaceDir,
-      }) ?? entry.skill.sourceInfo.path;
-    const sourceInfoBaseDir = mapPathFromWorkspaceToContainer({
-      filePath: entry.skill.sourceInfo.baseDir,
+  const mapPath = (filePath: string | undefined) =>
+    mapPathFromWorkspaceToContainer({
+      filePath,
       sourceWorkspaceDir: params.skillsWorkspaceDir,
       targetWorkspaceDir: params.skillsPromptWorkspaceDir,
     });
+  return params.entries.map((entry) => {
+    const filePath = mapPath(entry.skill.filePath) ?? entry.skill.filePath;
+    const baseDir = mapPath(entry.skill.baseDir) ?? entry.skill.baseDir;
+    const sourceInfoPath = mapPath(entry.skill.sourceInfo.path) ?? entry.skill.sourceInfo.path;
+    const sourceInfoBaseDir = mapPath(entry.skill.sourceInfo.baseDir);
     return {
       ...entry,
       skill: {
@@ -113,20 +101,7 @@ export function mapSandboxSkillEntriesForPrompt(params: {
   });
 }
 
-export function createSandboxPromptEntryLoader(params: {
-  loadEntries: () => SkillEntry[];
-  skillsWorkspaceDir: string;
-  skillsPromptWorkspaceDir: string;
-}): () => SkillEntry[] {
-  return () =>
-    mapSandboxSkillEntriesForPrompt({
-      entries: params.loadEntries(),
-      skillsWorkspaceDir: params.skillsWorkspaceDir,
-      skillsPromptWorkspaceDir: params.skillsPromptWorkspaceDir,
-    }) ?? [];
-}
-
-export function mapSandboxSkillUsagePaths(params: {
+function mapSandboxSkillUsagePaths(params: {
   paths?: SkillUsagePath[];
   skillsWorkspaceDir: string;
   skillsPromptWorkspaceDir: string;
@@ -153,6 +128,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
   skillsSnapshot?: SkillSnapshot;
 }): {
   skillsEligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
   skillsPromptWorkspaceDir: string;
   skillsSnapshot?: SkillSnapshot;
   skillsWorkspaceDir: string;
@@ -169,15 +145,20 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
-    let selectedSnapshot: SkillSnapshot | undefined;
+    const skillUsagePaths = mapSandboxSkillUsagePaths({
+      paths: params.sandbox.skillUsagePaths,
+      skillsWorkspaceDir,
+      skillsPromptWorkspaceDir,
+    });
+    // An explicit empty snapshot excludes instructions; it has no host paths to remap.
+    let selectedSnapshot =
+      params.skillsSnapshot && !params.skillsSnapshot.prompt.trim()
+        ? params.skillsSnapshot
+        : undefined;
     if (params.skillsSnapshot?.librarySelections?.length) {
-      const usage = mapSandboxSkillUsagePaths({
-        paths: params.sandbox.skillUsagePaths,
-        skillsWorkspaceDir,
-        skillsPromptWorkspaceDir,
-      });
+      const usageBySkillName = indexFirstByKey(skillUsagePaths ?? [], (usage) => usage.skillName);
       const resolvedSkills = params.skillsSnapshot.resolvedSkills?.map((skill) => {
-        const materialized = usage?.find((item) => item.skillName === skill.name);
+        const materialized = usageBySkillName.get(skill.name);
         if (!materialized) {
           throw new Error(`Selected skill ${skill.name} was not delivered to the sandbox.`);
         }
@@ -200,6 +181,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
       ...(params.sandbox.skillsEligibility
         ? { skillsEligibility: params.sandbox.skillsEligibility }
         : {}),
+      ...(skillUsagePaths ? { skillUsagePaths } : {}),
       skillsPromptWorkspaceDir,
       skillsSnapshot: selectedSnapshot,
       skillsWorkspaceDir,
@@ -207,6 +189,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
     };
   }
   return {
+    ...(params.sandbox?.skillUsagePaths ? { skillUsagePaths: params.sandbox.skillUsagePaths } : {}),
     skillsPromptWorkspaceDir: params.skillsAnchorWorkspace,
     skillsSnapshot: params.skillsSnapshot,
     skillsWorkspaceDir: params.skillsAnchorWorkspace,

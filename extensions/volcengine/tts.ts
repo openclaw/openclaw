@@ -1,8 +1,4 @@
-// Volcengine plugin module implements tts behavior.
 import * as crypto from "node:crypto";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type VolcengineTtsEncoding = "ogg_opus" | "mp3" | "pcm" | "wav";
 
@@ -77,10 +73,6 @@ function toTtsResponse(parsed: Record<string, unknown>): VolcengineTtsResponse {
   };
 }
 
-function parseLegacyTtsResponse(text: string): VolcengineTtsResponse {
-  return toTtsResponse(parseJsonObject(text, "Volcengine"));
-}
-
 function parseSeedTtsFrames(text: string): VolcengineTtsResponse[] {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -105,14 +97,6 @@ function parseSeedTtsFrames(text: string): VolcengineTtsResponse[] {
   return frames;
 }
 
-function hostnameAllowlist(url: string): string[] {
-  return [new URL(url).hostname];
-}
-
-function seedAudioFormat(encoding: VolcengineTtsEncoding): "ogg_opus" | "mp3" | "pcm" {
-  return encoding === "wav" ? "pcm" : encoding;
-}
-
 async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): Promise<Buffer> {
   const {
     text,
@@ -126,7 +110,10 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
     encoding = "ogg_opus",
     timeoutMs = 30_000,
   } = params;
-  const audioFormat = seedAudioFormat(encoding);
+  const audioFormat = encoding === "wav" ? "pcm" : encoding;
+  const { canonicalizeBase64 } = await import("openclaw/plugin-sdk/media-runtime");
+  const { readResponseWithLimit } = await import("openclaw/plugin-sdk/response-limit-runtime");
+  const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
 
   const payload = JSON.stringify({
     user: { uid: "openclaw" },
@@ -156,7 +143,7 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
       body: payload,
     },
     timeoutMs,
-    policy: { hostnameAllowlist: hostnameAllowlist(baseUrl) },
+    policy: { hostnameAllowlist: [new URL(baseUrl).hostname] },
     auditContext: "volcengine.tts",
   });
 
@@ -203,6 +190,9 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
 async function legacyVolcengineTTS(
   params: VolcengineTTSParams & { appId: string; token: string },
 ): Promise<Buffer> {
+  const { canonicalizeBase64 } = await import("openclaw/plugin-sdk/media-runtime");
+  const { readResponseWithLimit } = await import("openclaw/plugin-sdk/response-limit-runtime");
+  const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
   const {
     text,
     appId,
@@ -248,7 +238,7 @@ async function legacyVolcengineTTS(
       body: payload,
     },
     timeoutMs,
-    policy: { hostnameAllowlist: hostnameAllowlist(baseUrl) },
+    policy: { hostnameAllowlist: [new URL(baseUrl).hostname] },
     auditContext: "volcengine.tts",
   });
 
@@ -259,7 +249,7 @@ async function legacyVolcengineTTS(
           new Error(`Volcengine TTS response exceeds ${maxBytes} bytes`),
       }),
     );
-    const body = parseLegacyTtsResponse(responseText);
+    const body = toTtsResponse(parseJsonObject(responseText, "Volcengine"));
     if (!response.ok || body.code !== 3000 || !body.data) {
       throw new Error(
         `Volcengine TTS error ${body.code ?? response.status}: ${body.message ?? "unknown"}`,

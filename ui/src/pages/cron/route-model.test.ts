@@ -3,6 +3,18 @@ import { describe, expect, it } from "vitest";
 import { cronRunEntryMatchesLink, resolveCronRouteData } from "./route-model.ts";
 
 describe("resolveCronRouteData", () => {
+  it("keeps session links owner-qualified and gives exact jobs precedence", () => {
+    expect(resolveCronRouteData("?session=agent%3Aops%3Anight+watch&agent=ops")).toEqual({
+      jobId: null,
+      runId: null,
+      session: { sessionKey: "agent:ops:night watch", sessionAgentId: "ops" },
+    });
+    expect(resolveCronRouteData("?session=global")).toEqual({ jobId: null, runId: null });
+    expect(resolveCronRouteData("?session=global&agent=ops&job=chosen")).toEqual({
+      jobId: "chosen",
+      runId: null,
+    });
+  });
   it.each([
     { scenario: "an empty search", search: "", jobId: null, runId: null },
     { scenario: "a job only", search: "?job=job-1", jobId: "job-1", runId: null },

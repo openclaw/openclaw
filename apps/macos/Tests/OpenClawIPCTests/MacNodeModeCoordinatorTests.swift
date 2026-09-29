@@ -220,19 +220,18 @@ struct MacNodeModeCoordinatorTests {
 
     private func waitUntil(
         _ description: String,
-        timeout: Duration = .seconds(2),
         condition: @escaping @Sendable () async -> Bool) async throws
     {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
+        let deadline = clock.now.advanced(by: .seconds(2))
         while clock.now < deadline {
-            if await condition() {
-                return
-            }
+            if await condition() { return }
             // Some callers run on MainActor; a real suspension lets the
             // notification task make progress instead of polling it out.
             try await Task.sleep(for: .milliseconds(10))
         }
+        // Completion can arrive during the final suspension.
+        if await condition() { return }
         throw CoordinatorWaitTimeout(operation: description)
     }
 
@@ -252,6 +251,24 @@ struct MacNodeModeCoordinatorTests {
         }
         await gateway.disconnect()
         await coordinator.stopAndWait()
+    }
+
+    @Test func `waiter rechecks a completed async snapshot after its deadline`() async throws {
+        let probe = CoordinatorDrainSnapshotProbe()
+
+        try await self.waitUntil("completed async snapshot") {
+            let captured = await probe.hasCaptured()
+            if captured { return captured }
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return captured
+            }
+            await probe.recordCapture()
+            return captured
+        }
+
+        #expect(await probe.hasCaptured())
     }
 
     @Test func `stale endpoint attempt is rejected after a suspended permission query`() {
@@ -839,7 +856,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `native manifest excludes CLI-owned node commands`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: true,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -860,7 +876,7 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `node permission metadata omits unknown authorization state`() {
         let permissions = MacNodeModeCoordinator.advertisedPermissions([
-            .appleScript: .unknown,
+            .camera: .unknown,
             .accessibility: .granted,
             .screenRecording: .notGranted,
         ])
@@ -873,7 +889,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `local native manifest leaves browser proxy to the CLI worker`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: true,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -886,7 +901,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `local mode omits native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -905,7 +919,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `remote mode advertises native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -954,10 +967,6 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: enabled))
         #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: enabled))
 
         let enabledByConfigPath: [String: Any] = [
@@ -984,10 +993,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: numericPluginEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericPluginEnable))
 
         let numericNestedEnable: [String: Any] = [
             "plugins": [
@@ -999,10 +1005,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: numericNestedEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericNestedEnable))
 
         let numericGlobalEnable: [String: Any] = [
             "plugins": [
@@ -1015,10 +1018,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: numericGlobalEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericGlobalEnable))
 
         for transport in ["websocket", "unix"] {
             let unsupported: [String: Any] = [
@@ -1062,10 +1062,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: supervisionDisabled))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: supervisionDisabled))
 
         let pluginDisabled: [String: Any] = [
             "plugins": [
@@ -1093,10 +1090,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: denied))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: denied))
 
         let omittedByAllowlist: [String: Any] = [
             "plugins": [
@@ -1125,10 +1119,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: paddedIds))
+        #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: paddedIds))
 
         let paddedDeny: [String: Any] = [
             "plugins": [
@@ -1141,10 +1132,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: paddedDeny))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: paddedDeny))
 
         let mixedCaseDeny: [String: Any] = [
             "plugins": [
@@ -1157,10 +1145,6 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: mixedCaseDeny))
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: mixedCaseDeny))
 
         let ambiguousEntryAliases: [String: Any] = [
@@ -1178,16 +1162,11 @@ struct MacNodeModeCoordinatorTests {
             ],
         ]
         #expect(OpenClawConfigFile.pluginEntry("codex", root: ambiguousEntryAliases) == nil)
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: ambiguousEntryAliases))
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: ambiguousEntryAliases))
     }
 
     @Test func `computer control cap gates the computer.act command`() {
         let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: true,
             locationMode: .off,
@@ -1197,7 +1176,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(enabledCommands.contains(OpenClawComputerCommand.act.rawValue))
 
         let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -1209,7 +1187,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `camera cap gates capture and PTZ commands`() {
         let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: true,
             computerControlEnabled: false,
             locationMode: .off,
@@ -1220,7 +1197,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(enabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
 
         let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,

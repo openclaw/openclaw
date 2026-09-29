@@ -1,10 +1,7 @@
 // Parses auth profile directives into provider-scoped runtime overrides.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  ensureAuthProfileStore,
-  findPersistedAuthProfileCredential,
-} from "../../agents/auth-profiles/store.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
+import { findPersistedAuthProfileCredential } from "../../agents/auth-profiles/store.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { isUserModelAuthProfileOwner } from "../../state/user-model-accounts.js";
 
@@ -12,7 +9,6 @@ import { isUserModelAuthProfileOwner } from "../../state/user-model-accounts.js"
 export function resolveProfileOverride(params: {
   rawProfile?: string;
   provider: string;
-  cfg: OpenClawConfig;
   agentDir?: string;
   requesterProfileId?: string;
 }): { profileId?: string; error?: string; validateSelection?: () => string | undefined } {

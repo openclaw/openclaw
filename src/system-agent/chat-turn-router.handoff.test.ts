@@ -32,7 +32,6 @@ describe.each([
       expect(reply.action).toBe("none");
       expect(reply.step).toBeUndefined();
       expect(reply.text).toContain("Nothing has changed");
-      expect(reply.text).toContain("never paste credentials");
       expect(reply.handoff).toEqual(surface === "gateway" ? { kind: "model-accounts" } : undefined);
       expect(reply.text).toContain("Settings → Profile → Connected accounts");
       if (surface === "cli") {
@@ -78,7 +77,6 @@ describe.each([
     const engine = new SystemAgentChatEngine({
       surface,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
       deps: {
         applySetup,

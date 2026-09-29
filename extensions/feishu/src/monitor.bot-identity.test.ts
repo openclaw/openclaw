@@ -66,9 +66,6 @@ describe("Feishu bot identity recovery", () => {
       "feishu[person-2]: bot open_id recovered via background retry: ou_provider",
     );
     expect(setFeishuBotIdentityStateMock).toHaveBeenCalledTimes(1);
-    expect(setFeishuBotIdentityStateMock).toHaveBeenLastCalledWith("person-2", {
-      botOpenId: "ou_provider",
-      botName: "OpenClaw QA",
-    });
+    expect(setFeishuBotIdentityStateMock).toHaveBeenLastCalledWith("person-2", "ou_provider");
   });
 });

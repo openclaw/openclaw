@@ -1,10 +1,7 @@
-// Codex plugin module implements command handlers behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
-import {
-  resolveCodexAppServerAuthAccountCacheKey,
-  resolveCodexAppServerFallbackApiKeyCacheKey,
-} from "./app-server/auth-bridge.js";
+import { resolveCodexAppServerAuthAccountCacheKey } from "./app-server/auth-bridge.js";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./app-server/auth-cache-key.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { refreshCodexPluginRuntimeState } from "./app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.js";
@@ -15,7 +12,9 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
+import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import {
+  assertCodexHostOwnerCurrent,
   canMutateCodexHost,
   CODEX_HOST_INSPECTION_AUTH_ERROR,
   CODEX_NATIVE_EXECUTION_AUTH_ERROR,
@@ -70,6 +69,7 @@ import {
   resolveCommandAppServerScope,
 } from "./command-handler-scope.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
+import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
 
 export type { CodexCommandDepsOverride } from "./command-handler-deps.js";
@@ -112,7 +112,33 @@ export async function handleCodexSubcommand(
   if (sandboxBlock) {
     return { text: sandboxBlock };
   }
+  const usageCommand = normalized === "unbind" ? "detach" : normalized;
+  if (
+    rest.length > 0 &&
+    ["status", "models", "detach", "binding", "stop", "mcp", "skills", "account"].includes(
+      usageCommand,
+    )
+  ) {
+    return { text: `Usage: /codex ${usageCommand}` };
+  }
   if (normalized === "plugins") {
+    // Account-wide hosted refresh does not require plugin-management configuration IO.
+    if (rest[0]?.toLowerCase() === "refresh") {
+      if (rest.length !== 1) {
+        return {
+          text: "Usage: /codex plugins refresh — refresh hosted app inventory for the current Codex account/runtime.",
+        };
+      }
+      if (!canMutateCodexHost(ctx)) {
+        return {
+          text: "Only an owner or operator.admin gateway client can refresh hosted app inventory.",
+        };
+      }
+      return await withCodexPluginCommandContext(
+        { deps, ctx, pluginConfig: options.pluginConfig },
+        (context) => refreshCodexHostedApps(context),
+      );
+    }
     if (!deps.codexPluginsManagementIo) {
       return {
         text:
@@ -124,6 +150,8 @@ export async function handleCodexSubcommand(
     const getAppServerScope = () =>
       (appServerScope ??= resolveCommandAppServerScope(deps, ctx, options.pluginConfig));
     return await handleCodexPluginsSubcommand(ctx, rest, deps.codexPluginsManagementIo, {
+      withContext: (run) =>
+        withCodexPluginCommandContext({ deps, ctx, pluginConfig: options.pluginConfig }, run),
       workspaceDir: async () => {
         const data = readCodexConversationBindingData(await ctx.getCurrentConversationBinding());
         const workspaceDir =
@@ -145,7 +173,11 @@ export async function handleCodexSubcommand(
           options.pluginConfig,
           CODEX_CONTROL_METHODS.installPlugin,
           requestParams,
-          { ...scope, config: ctx.config },
+          {
+            ...scope,
+            config: ctx.config,
+            assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx),
+          },
         )) as v2.PluginInstallResponse;
       },
       refresh: async (workspaceDir) => {
@@ -181,7 +213,6 @@ export async function handleCodexSubcommand(
             appServerVersion: client.getServerVersion(),
             runtimeIdentity: client.getRuntimeIdentity(),
           });
-          defaultCodexPluginMetadataCache.invalidate(appCacheKey);
           return await refreshCodexPluginRuntimeState({
             configCwd: workspaceDir,
             appCache: defaultCodexAppInventoryCache,
@@ -204,9 +235,6 @@ export async function handleCodexSubcommand(
     });
   }
   if (normalized === "status") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex status" };
-    }
     const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
       text: formatCodexStatus(
@@ -215,9 +243,6 @@ export async function handleCodexSubcommand(
     };
   }
   if (normalized === "models") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex models" };
-    }
     const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
       text: formatModels(
@@ -243,30 +268,21 @@ export async function handleCodexSubcommand(
     return await bindConversation(deps, ctx, options.pluginConfig, rest);
   }
   if (normalized === "detach" || normalized === "unbind") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex detach" };
-    }
     return { text: await detachConversation(deps, ctx) };
   }
   if (normalized === "binding") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex binding" };
-    }
     return { text: await describeConversationBinding(deps, ctx) };
   }
   if (normalized === "stop") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex stop" };
-    }
-    return { text: await stopConversationTurn(deps, ctx, options.pluginConfig) };
+    return { text: await stopConversationTurn(deps, ctx) };
   }
   if (normalized === "steer") {
     return {
-      text: await steerConversationTurn(deps, ctx, options.pluginConfig, rest.join(" ")),
+      text: await steerConversationTurn(deps, ctx, rest.join(" ")),
     };
   }
   if (normalized === "model") {
-    return { text: await setConversationModel(deps, ctx, options.pluginConfig, rest) };
+    return { text: await setConversationModel(deps, ctx, rest) };
   }
   if (normalized === "fast") {
     if (isMenuVerb(rest)) {
@@ -280,15 +296,8 @@ export async function handleCodexSubcommand(
     }
     return { text: await setConversationPermissions(deps, ctx, rest) };
   }
-  if (normalized === "compact") {
-    return {
-      text: await startThreadAction(deps, ctx, options.pluginConfig, "compact", rest),
-    };
-  }
-  if (normalized === "review") {
-    return {
-      text: await startThreadAction(deps, ctx, options.pluginConfig, "review", rest),
-    };
+  if (normalized === "compact" || normalized === "review") {
+    return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };
   }
   if (normalized === "diagnostics") {
     return await handleCodexDiagnosticsFeedback(
@@ -307,43 +316,21 @@ export async function handleCodexSubcommand(
       text: await handleComputerUseCommand(deps, ctx, options.pluginConfig, rest),
     };
   }
-  if (normalized === "mcp") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex mcp" };
-    }
+  if (normalized === "mcp" || normalized === "skills") {
     const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
+    const response = await deps.codexControlRequest(
+      options.pluginConfig,
+      normalized === "mcp"
+        ? CODEX_CONTROL_METHODS.listMcpServers
+        : CODEX_CONTROL_METHODS.listSkills,
+      normalized === "mcp" ? { limit: 100 } : {},
+      { config: ctx.config, ...scope },
+    );
     return {
-      text: formatList(
-        await deps.codexControlRequest(
-          options.pluginConfig,
-          CODEX_CONTROL_METHODS.listMcpServers,
-          { limit: 100 },
-          { config: ctx.config, ...scope },
-        ),
-        "MCP servers",
-      ),
-    };
-  }
-  if (normalized === "skills") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex skills" };
-    }
-    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
-    return {
-      text: formatSkills(
-        await deps.codexControlRequest(
-          options.pluginConfig,
-          CODEX_CONTROL_METHODS.listSkills,
-          {},
-          { config: ctx.config, ...scope },
-        ),
-      ),
+      text: normalized === "mcp" ? formatList(response, "MCP servers") : formatSkills(response),
     };
   }
   if (normalized === "account") {
-    if (rest.length > 0) {
-      return { text: "Usage: /codex account" };
-    }
     const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
     const requestScope = { config: ctx.config, ...scope };
     const [account, limits] = await Promise.all([
@@ -367,6 +354,7 @@ export async function handleCodexSubcommand(
         await readCodexAccountAuthOverview({
           ctx,
           agentDir: scope.agentDir,
+          authProfileId: scope.authProfileId,
           pluginConfig: options.pluginConfig,
           safeCodexControlRequest: deps.safeCodexControlRequest,
           account,
@@ -381,11 +369,7 @@ export async function handleCodexSubcommand(
 function resolvePluginRuntimeRefreshMethod(method: string) {
   const supported = [
     CODEX_CONTROL_METHODS.listPlugins,
-    CODEX_CONTROL_METHODS.listSkills,
-    CODEX_CONTROL_METHODS.listHooks,
-    CODEX_CONTROL_METHODS.reloadMcpServers,
     CODEX_CONTROL_METHODS.installedApps,
-    CODEX_CONTROL_METHODS.listApps,
     CODEX_CONTROL_METHODS.readApps,
   ] as const;
   const recognized = supported.find((candidate) => candidate === method);

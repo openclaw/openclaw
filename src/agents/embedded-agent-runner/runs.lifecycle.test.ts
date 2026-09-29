@@ -9,12 +9,14 @@ import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.j
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
+  abortEmbeddedAgentRun,
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunHandleActive,
   markEmbeddedRunRecoveringTimeout,
   markActiveEmbeddedRunAbandoned,
+  prepareEmbeddedAgentRunCompletionClaim,
   resolveEmbeddedRunAbandonment,
   resolveActiveEmbeddedRunOwner,
   resolveActiveEmbeddedRunOwnerByRunId,
@@ -25,46 +27,7 @@ import {
   updateActiveEmbeddedRunSnapshot,
   waitForEmbeddedAgentRunEnd,
 } from "./runs.js";
-import { testing } from "./runs.test-support.js";
-
-type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
-
-function createRunHandle(
-  overrides: {
-    abort?: () => void;
-    isAbortable?: boolean;
-    isAborted?: () => boolean;
-    isCompacting?: boolean;
-    isStreaming?: boolean;
-    isStopped?: () => boolean;
-    messageInjection?: RunHandle["messageInjection"];
-    runId?: string;
-    startedAtMs?: number;
-    queueMessage?: RunHandle["queueMessage"];
-    supportsQueueMessageImages?: boolean;
-    supportsTranscriptCommitWait?: boolean;
-  } = {},
-): RunHandle {
-  // Minimal handle fixture with overrideable lifecycle probes for registry
-  // behavior; individual tests supply queue/abort behavior when needed.
-  const abort = overrides.abort ?? (() => {});
-  return {
-    runId: overrides.runId,
-    startedAtMs: overrides.startedAtMs,
-    queueMessage: overrides.queueMessage ?? (async () => {}),
-    ...(overrides.messageInjection ? { messageInjection: overrides.messageInjection } : {}),
-    isStreaming: () => overrides.isStreaming ?? true,
-    ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
-    ...(overrides.isAborted ? { isAborted: overrides.isAborted } : {}),
-    ...(overrides.isAbortable !== undefined
-      ? { isAbortable: () => overrides.isAbortable !== false }
-      : {}),
-    isCompacting: () => overrides.isCompacting ?? false,
-    supportsQueueMessageImages: overrides.supportsQueueMessageImages,
-    supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
-    abort,
-  };
-}
+import { createEmbeddedRunHandle as createRunHandle, testing } from "./runs.test-support.js";
 
 describe("embedded-agent runner run lifecycle", () => {
   afterEach(() => {
@@ -183,30 +146,6 @@ describe("embedded-agent runner run lifecycle", () => {
     await expect(waitPromise).resolves.toBe(true);
   });
 
-  it("shares active run state across distinct module instances", async () => {
-    const runsA = await importFreshModule<typeof import("./runs.js")>(
-      import.meta.url,
-      "./runs.js?scope=shared-a",
-    );
-    const runsB = await importFreshModule<typeof import("./runs.js")>(
-      import.meta.url,
-      "./runs.js?scope=shared-b",
-    );
-    const handle = createRunHandle();
-
-    testing.resetActiveEmbeddedRuns();
-
-    try {
-      runsA.setActiveEmbeddedRun("session-shared", handle);
-      expect(runsB.isEmbeddedAgentRunActive("session-shared")).toBe(true);
-
-      runsB.clearActiveEmbeddedRun("session-shared", handle);
-      expect(runsA.isEmbeddedAgentRunActive("session-shared")).toBe(false);
-    } finally {
-      testing.resetActiveEmbeddedRuns();
-    }
-  });
-
   it("does not let a marker from another module instance restore a replacement recovery", async () => {
     const runsA = await importFreshModule<typeof import("./runs.js")>(
       import.meta.url,
@@ -253,23 +192,6 @@ describe("embedded-agent runner run lifecycle", () => {
     expect(runsA.restoreEmbeddedRunTimeoutAbandonment(staleMarker!)).toBe(false);
     expect(runsB.resolveEmbeddedRunAbandonment({ sessionId })).toBe("recovering_timeout");
     expect(runsB.restoreEmbeddedRunTimeoutAbandonment(currentMarker!)).toBe(true);
-  });
-
-  it("tracks actual embedded handles separately from reply-operation ownership", () => {
-    const handle = createRunHandle();
-
-    expect(isEmbeddedAgentRunHandleActive("session-a")).toBe(false);
-    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
-
-    setActiveEmbeddedRun("session-a", handle, "agent:main:main");
-
-    expect(isEmbeddedAgentRunHandleActive("session-a")).toBe(true);
-    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBe("session-a");
-
-    clearActiveEmbeddedRun("session-a", handle, "agent:main:main");
-
-    expect(isEmbeddedAgentRunHandleActive("session-a")).toBe(false);
-    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
   });
 
   it("clears a relative compatibility file key after normalization", () => {
@@ -424,18 +346,72 @@ describe("embedded-agent runner run lifecycle", () => {
     ).toBe(false);
   });
 
-  it("still logs handle mismatches when another run owns the session", () => {
-    const debugSpy = vi.spyOn(diagnosticLogger, "debug").mockImplementation(() => undefined);
-    const staleHandle = createRunHandle();
-    const activeHandle = createRunHandle();
+  it("revokes a completion claim when a replacement takes the session", () => {
+    const firstHandle = createRunHandle({ runId: "run-first" });
+    const replacementHandle = createRunHandle({ runId: "run-second" });
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-reused",
+      "run-first",
+    );
 
-    setActiveEmbeddedRun("session-handle-replaced", activeHandle);
-    clearActiveEmbeddedRun("session-handle-replaced", staleHandle);
+    setActiveEmbeddedRun("session-reused", firstHandle);
+    setActiveEmbeddedRun("session-reused", replacementHandle);
 
-    expect(isEmbeddedAgentRunHandleActive("session-handle-replaced")).toBe(true);
-    expect(
-      debugSpy.mock.calls.some(([message]) => message.includes("reason=handle_mismatch")),
-    ).toBe(true);
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("consumes a completed claim exactly once after the run clears", () => {
+    const handle = createRunHandle({ runId: "run-completed" });
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-completed",
+      "run-completed",
+    );
+
+    setActiveEmbeddedRun("session-completed", handle);
+    clearActiveEmbeddedRun("session-completed", handle);
+
+    expect(claimCompletion()).toBe(true);
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("does not revive a completed claim after an intervening run", () => {
+    const firstHandle = createRunHandle({ runId: "run-first" });
+    const replacementHandle = createRunHandle({ runId: "run-second" });
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-intervening",
+      "run-first",
+    );
+
+    setActiveEmbeddedRun("session-intervening", firstHandle);
+    clearActiveEmbeddedRun("session-intervening", firstHandle);
+    setActiveEmbeddedRun("session-intervening", replacementHandle);
+    clearActiveEmbeddedRun("session-intervening", replacementHandle);
+
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("revokes prepared claims on abort and registry reset", () => {
+    const abort = vi.fn();
+    const handle = createRunHandle({ abort, runId: "run-aborted" });
+    const { claimCompletion: abortedClaim } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-aborted",
+      "run-aborted",
+    );
+    setActiveEmbeddedRun("session-aborted", handle);
+
+    expect(abortEmbeddedAgentRun("session-aborted")).toBe(true);
+    clearActiveEmbeddedRun("session-aborted", handle);
+    expect(abortedClaim()).toBe(false);
+
+    const resetHandle = createRunHandle({ runId: "run-reset" });
+    const { claimCompletion: resetClaim } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-reset",
+      "run-reset",
+    );
+    setActiveEmbeddedRun("session-reset", resetHandle);
+    clearActiveEmbeddedRun("session-reset", resetHandle);
+    testing.resetActiveEmbeddedRuns();
+    expect(resetClaim()).toBe(false);
   });
 
   it("tracks and clears per-session transcript snapshots for active runs", () => {
@@ -458,10 +434,10 @@ describe("embedded-agent runner run lifecycle", () => {
   });
 
   it("projects one active run identity from either registry key", () => {
-    const handle = createRunHandle({
-      runId: "run-recovery",
+    const handle = {
+      ...createRunHandle({ runId: "run-recovery" }),
       startedAtMs: 1_700_000_000_000,
-    });
+    };
     setActiveEmbeddedRun("session-recovery", handle, "agent:main:main");
 
     const expected = {

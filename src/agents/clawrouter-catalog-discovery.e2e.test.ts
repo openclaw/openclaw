@@ -1,29 +1,46 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { createServer, type Server } from "node:http";
+import { afterEach, describe, expect, it } from "vitest";
+import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
 } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
-import { runPreparedModelCatalogWorkerRequest } from "./prepared-model-catalog.worker.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./auth-profiles/credential-fixtures.test-support.js";
+import {
+  createPreparedModelCatalogWorkerInput,
+  type PreparedModelCatalogWorkerTask,
+  type PreparedModelWorkerResult,
+} from "./prepared-model-catalog-worker.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
-
-// Exercise the worker request handler without bootstrapping it on Vitest's own worker port.
-vi.mock("node:worker_threads", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:worker_threads")>()),
-  parentPort: null,
-}));
 
 describe("ClawRouter cold prepared catalog", () => {
   let state: OpenClawTestState;
+  let server: Awaited<ReturnType<typeof reserveTestPortListener<Server>>> | undefined;
+  let pool: WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult> | undefined;
 
   afterEach(async () => {
-    vi.unstubAllGlobals();
+    await pool?.close();
+    pool = undefined;
+    if (server) {
+      server.listener.closeAllConnections();
+      await server.releaseListener();
+      await server.claim.release();
+      server = undefined;
+    }
     await state.cleanup();
   });
 
@@ -54,9 +71,37 @@ describe("ClawRouter cold prepared catalog", () => {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
     });
-    // Distinct catalog URLs keep each scenario cold across plugin module loaders.
-    const scope = refreshedAuth ? "refreshed" : sibling ? "mixed" : "single";
-    const baseUrl = `https://${scope}.example.test/private`;
+    const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    server = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, response) => {
+          requests.push({ url: request.url, authorization: request.headers.authorization });
+          response.setHeader("content-type", "application/json");
+          response.end(
+            JSON.stringify({
+              providers: [
+                {
+                  id: "private",
+                  displayName: "Synthetic provider",
+                  openaiCompatible: true,
+                  nativeBaseUrl: "/v1/native/private",
+                  models: [
+                    {
+                      id: "codex-latest",
+                      displayName: "Codex (Latest)",
+                      upstream: "codex-latest",
+                      capabilities: ["llm.responses"],
+                      supportedReasoningEfforts: ["low", "high"],
+                    },
+                  ],
+                },
+              ],
+            }),
+          );
+        }),
+    });
+    const baseUrl = `http://127.0.0.1:${server.claim.port}/private`;
     const agentId = "private-openclaw";
     const config: OpenClawConfig = {
       plugins: {
@@ -105,31 +150,6 @@ describe("ClawRouter cold prepared catalog", () => {
         ],
       },
     };
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const request = new Request(input, init);
-      expect(request.url).toBe(`${baseUrl}/v1/catalog`);
-      expect(request.headers.get("authorization")).toBe("Bearer catalog-test-key");
-      return Response.json({
-        providers: [
-          {
-            id: "private",
-            displayName: "Synthetic provider",
-            openaiCompatible: true,
-            nativeBaseUrl: "/v1/native/private",
-            models: [
-              {
-                id: "codex-latest",
-                displayName: "Codex (Latest)",
-                upstream: "codex-latest",
-                capabilities: ["llm.responses"],
-                supportedReasoningEfforts: ["low", "high"],
-              },
-            ],
-          },
-        ],
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
     const input = {
       agentId,
       agentDir: state.agentDir(agentId),
@@ -151,27 +171,44 @@ describe("ClawRouter cold prepared catalog", () => {
       // without a configured model preloading its provider into the startup scope.
       expect(value.providerIds).not.toContain("clawrouter");
       await state.writeAuthProfiles(
-        {
-          version: 1,
-          profiles: {
-            "clawrouter:default": {
-              type: "api_key",
-              provider: "clawrouter",
-              key: "catalog-test-key",
-            },
-          },
-        },
+        createAuthProfileStoreFixture({
+          "clawrouter:default": createApiKeyCredential("clawrouter", "catalog-test-key"),
+        }),
         agentId,
       );
     }
-    const result = await runPreparedModelCatalogWorkerRequest(value, {
-      kind: "catalog",
-      syntheticAuth: [],
+    const sourceCaptureDirectory = state.path("worker-captures");
+    fs.mkdirSync(sourceCaptureDirectory);
+    pool = new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
+      workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+      restartOnError: false,
+      workerOptions: { env: state.env, workerData: { sourceCaptureDirectory } },
     });
+    const result = await pool.run(
+      {
+        value,
+        request: {
+          kind: "catalog",
+          syntheticAuth: [],
+          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: state.env }),
+        },
+      },
+      { timeoutMs: 30_000 },
+    );
     expect(result.status).toBe("ok");
     if (result.status !== "ok" || result.kind !== "catalog") {
       throw new Error("catalog worker did not publish a catalog");
     }
+    expect(result.runtimeModels.get("clawrouter")).toContainEqual(
+      expect.objectContaining({
+        provider: "clawrouter",
+        id: "codex-latest",
+        api: "openai-responses",
+        baseUrl: `${baseUrl}/v1`,
+      }),
+    );
     const projector = createGatewayAgentModelCatalogProjector({
       cfg: config,
       agentId,
@@ -181,7 +218,10 @@ describe("ClawRouter cold prepared catalog", () => {
       preparedRuntimeAuthModes: result.authModes,
     });
     const catalog = await buildModelsListResult({
-      context: { getRuntimeConfig: () => config } as GatewayRequestContext,
+      source: {
+        kind: "gateway",
+        context: { getRuntimeConfig: () => config } as GatewayRequestContext,
+      },
       agentId,
       params: { view: refreshedAuth ? "all" : "configured", preparedOnly: true },
       preloadedCatalog: { agentId, config, snapshot: result.snapshot },
@@ -197,6 +237,8 @@ describe("ClawRouter cold prepared catalog", () => {
         available: true,
       }),
     );
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(requests).toEqual([
+      { url: "/private/v1/catalog", authorization: "Bearer catalog-test-key" },
+    ]);
   });
 });

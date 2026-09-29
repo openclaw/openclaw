@@ -121,7 +121,7 @@ async function withReadGeneration<T>(key: string, run: () => Promise<T>): Promis
   try {
     return await run();
   } finally {
-    release();
+    await release();
   }
 }
 
@@ -209,12 +209,12 @@ describe("memory index generation lease", () => {
     try {
       expect(await readChildLine(child)).toBe("contended");
       const acquired = readChildLine(child);
-      release();
+      await release();
       released = true;
       expect(await acquired).toBe("acquired");
     } finally {
       if (!released) {
-        release();
+        await release();
       }
       await stopChild(child);
     }
@@ -284,14 +284,10 @@ describe("memory index generation lease", () => {
     const publisher = spawnLeaseFixture("write", databasePath);
     const controller = new AbortController();
     const abortError = new Error("memory search cancelled while waiting for publication");
-    const acquireWithSignal = acquireMemoryIndexReadGeneration as (
-      path: string,
-      signal: AbortSignal,
-    ) => Promise<() => void>;
-    let pendingReader: Promise<() => void> | undefined;
+    let pendingReader: ReturnType<typeof acquireMemoryIndexReadGeneration> | undefined;
     try {
       expect(await readChildLine(publisher)).toBe("acquired");
-      pendingReader = acquireWithSignal(databasePath, controller.signal);
+      pendingReader = acquireMemoryIndexReadGeneration(databasePath, controller.signal);
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 50);
       });
@@ -309,7 +305,7 @@ describe("memory index generation lease", () => {
     } finally {
       await stopChild(publisher);
       const release = await pendingReader?.catch(() => undefined);
-      release?.();
+      await release?.();
     }
   });
 });

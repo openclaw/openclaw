@@ -1,4 +1,3 @@
-// Mattermost plugin module implements target resolution behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -12,6 +11,7 @@ import {
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
   parseMattermostApiStatus,
+  type MattermostClient,
 } from "./client.js";
 import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -93,15 +93,8 @@ export function parseMattermostTarget(raw: string): MattermostTarget {
     }
     return { kind: "channel", id };
   }
-  if (lower.startsWith("user:")) {
-    const id = trimmed.slice("user:".length).trim();
-    if (!id) {
-      throw new Error("User id is required for Mattermost sends");
-    }
-    return { kind: "user", id };
-  }
-  if (lower.startsWith("mattermost:")) {
-    const id = trimmed.slice("mattermost:".length).trim();
+  if (lower.startsWith("user:") || lower.startsWith("mattermost:")) {
+    const id = trimmed.slice(trimmed.indexOf(":") + 1).trim();
     if (!id) {
       throw new Error("User id is required for Mattermost sends");
     }
@@ -127,55 +120,44 @@ export function parseMattermostTarget(raw: string): MattermostTarget {
   return { kind: "channel", id: trimmed };
 }
 
-function isExplicitMattermostTarget(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return (
-    /^(channel|user|mattermost):/i.test(trimmed) ||
-    trimmed.startsWith("@") ||
-    trimmed.startsWith("#")
-  );
-}
-
-export async function resolveMattermostOpaqueTarget(params: {
-  input: string;
-  cfg?: OpenClawConfig;
-  accountId?: string | null;
-  token?: string;
-  baseUrl?: string;
-}): Promise<MattermostOpaqueTargetResolution | null> {
+export async function resolveMattermostOpaqueTarget(
+  params: { input: string } & (
+    | { cfg: OpenClawConfig; accountId?: string | null }
+    | { client: MattermostClient }
+  ),
+): Promise<MattermostOpaqueTargetResolution | null> {
   const input = params.input.trim();
-  if (!input || isExplicitMattermostTarget(input) || !isMattermostId(input)) {
+  if (!isMattermostId(input)) {
     return null;
   }
 
-  const account =
-    params.cfg && (!params.token || !params.baseUrl)
-      ? resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId })
-      : null;
-  if (account && !account.enabled) {
-    throw new Error(`Mattermost account "${account.accountId}" is disabled`);
-  }
-  const token = normalizeOptionalString(params.token) ?? normalizeOptionalString(account?.botToken);
-  const baseUrl = normalizeMattermostBaseUrl(params.baseUrl ?? account?.baseUrl);
-  if (!token || !baseUrl) {
-    return null;
+  let client: MattermostClient;
+  if ("client" in params) {
+    client = params.client;
+  } else {
+    const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
+    if (!account.enabled) {
+      throw new Error(`Mattermost account "${account.accountId}" is disabled`);
+    }
+    const token = normalizeOptionalString(account.botToken);
+    const baseUrl = normalizeMattermostBaseUrl(account.baseUrl);
+    if (!token || !baseUrl) {
+      return null;
+    }
+    client = createMattermostClient({
+      baseUrl,
+      botToken: token,
+      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    });
   }
 
-  const key = cacheKey(baseUrl, token, input);
+  const key = cacheKey(client.baseUrl, client.token, input);
   const cachedKind = getCachedMattermostOpaqueTargetKind(key);
   if (cachedKind) {
     const to = cachedKind === "user" ? `user:${input}` : `channel:${input}`;
     return { kind: cachedKind, id: input, to };
   }
 
-  const client = createMattermostClient({
-    baseUrl,
-    botToken: token,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account?.config),
-  });
   try {
     await fetchMattermostUser(client, input);
     cacheMattermostOpaqueTarget(key, "user");

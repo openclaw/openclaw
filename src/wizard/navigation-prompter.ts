@@ -73,16 +73,6 @@ function buildPromptSignature(
   });
 }
 
-function applyNavigation<Params extends { navigation?: unknown }>(
-  params: Params,
-  navigation: { canGoBack: boolean; canGoForward: boolean },
-): Params {
-  return {
-    ...params,
-    navigation,
-  };
-}
-
 class WizardPromptNavigator {
   private cursor = 0;
   private targetIndex: number | undefined;
@@ -99,35 +89,15 @@ class WizardPromptNavigator {
   }
 
   readonly prompter: WizardPrompter = {
-    intro: async (title) => {
-      if (!this.shouldSuppressOutput()) {
-        await this.base.intro(title);
-      }
-    },
-    outro: async (message) => {
-      if (!this.shouldSuppressOutput()) {
-        await this.base.outro(message);
-      }
-    },
-    note: async (message, title) => {
-      if (!this.shouldSuppressOutput()) {
-        await this.base.note(message, title);
-      }
-    },
+    intro: (title) => this.display(() => this.base.intro(title)),
+    outro: (message) => this.display(() => this.base.outro(message)),
+    note: (message, title) => this.display(() => this.base.note(message, title)),
     ...(this.base.deviceCode
       ? {
-          deviceCode: async (params) => {
-            if (!this.shouldSuppressOutput()) {
-              await this.base.deviceCode?.(params);
-            }
-          },
+          deviceCode: (params) => this.display(() => this.base.deviceCode?.(params)),
         }
       : {}),
-    plain: async (message) => {
-      if (!this.shouldSuppressOutput()) {
-        await this.base.plain?.(message);
-      }
-    },
+    plain: (message) => this.display(() => this.base.plain?.(message)),
     select: async <T>(params: WizardSelectParams<T>) =>
       await this.prompt<T, WizardSelectParams<T>>({
         kind: "select",
@@ -180,11 +150,7 @@ class WizardPromptNavigator {
       this.shouldSuppressOutput() ? inertProgress() : this.base.progress(label),
     ...(this.base.openUrl
       ? {
-          openUrl: async (url) => {
-            if (!this.shouldSuppressOutput()) {
-              await this.base.openUrl?.(url);
-            }
-          },
+          openUrl: (url) => this.display(() => this.base.openUrl?.(url)),
         }
       : {}),
     disableBackNavigation: () => {
@@ -193,22 +159,37 @@ class WizardPromptNavigator {
     },
   };
 
-  beginPass() {
-    this.cursor = 0;
-    this.restartRequested = false;
-    this.boundaryBackRequested = false;
-  }
-
-  hasRestartRequest(): boolean {
-    return this.restartRequested;
-  }
-
-  hasBoundaryBackRequest(): boolean {
-    return this.boundaryBackRequested;
+  async run<T>(
+    runner: (prompter: WizardPrompter) => Promise<T>,
+  ): Promise<WizardPromptNavigationScopeOutcome<T>> {
+    while (true) {
+      this.cursor = 0;
+      this.restartRequested = false;
+      this.boundaryBackRequested = false;
+      try {
+        return { status: "completed", value: await runner(this.prompter) };
+      } catch (error) {
+        if (error instanceof WizardNavigationError && error.direction === "back") {
+          if (this.restartRequested) {
+            continue;
+          }
+          if (this.boundaryBackRequested) {
+            return { status: "back" };
+          }
+        }
+        throw error;
+      }
+    }
   }
 
   private shouldSuppressOutput(): boolean {
     return this.targetIndex !== undefined && this.cursor <= this.targetIndex;
+  }
+
+  private async display(write: () => Promise<void> | undefined): Promise<void> {
+    if (!this.shouldSuppressOutput()) {
+      await write();
+    }
   }
 
   private matchingRecord(index: number, kind: PromptKind, signature: string) {
@@ -226,7 +207,7 @@ class WizardPromptNavigator {
     return undefined;
   }
 
-  private remember(index: number, request: PromptRequest<unknown, unknown>, answer: unknown) {
+  private remember<T, Params>(index: number, request: PromptRequest<T, Params>, answer: T) {
     if (!request.cacheAnswer) {
       this.records[index] = undefined;
       this.records.splice(index + 1);
@@ -260,15 +241,18 @@ class WizardPromptNavigator {
     const paramsWithInitial = record
       ? request.withInitial(request.params, record.answer)
       : request.params;
-    const paramsWithNavigation = applyNavigation(paramsWithInitial, {
-      canGoBack:
-        !this.backNavigationDisabled && (index > 0 || this.options.allowBackFromStart === true),
-      canGoForward: record !== undefined,
-    });
+    const paramsWithNavigation = {
+      ...paramsWithInitial,
+      navigation: {
+        canGoBack:
+          !this.backNavigationDisabled && (index > 0 || this.options.allowBackFromStart === true),
+        canGoForward: record !== undefined,
+      },
+    };
 
     try {
       const answer = await request.call(paramsWithNavigation);
-      this.remember(index, request as PromptRequest<unknown, unknown>, answer);
+      this.remember(index, request, answer);
       this.cursor = index + 1;
       if (this.targetIndex !== undefined && index >= this.targetIndex) {
         this.targetIndex = undefined;
@@ -305,48 +289,14 @@ export async function runWizardWithPromptNavigationScope<T>(
   basePrompter: WizardPrompter,
   runner: (prompter: WizardPrompter) => Promise<T>,
 ): Promise<WizardPromptNavigationScopeOutcome<T>> {
-  const navigator = new WizardPromptNavigator(unwrapNavigationPrompter(basePrompter), {
+  return new WizardPromptNavigator(unwrapNavigationPrompter(basePrompter), {
     allowBackFromStart: true,
-  });
-
-  while (true) {
-    navigator.beginPass();
-    try {
-      return { status: "completed", value: await runner(navigator.prompter) };
-    } catch (error) {
-      if (error instanceof WizardNavigationError && error.direction === "back") {
-        if (navigator.hasRestartRequest()) {
-          continue;
-        }
-        if (navigator.hasBoundaryBackRequest()) {
-          return { status: "back" };
-        }
-      }
-      throw error;
-    }
-  }
+  }).run(runner);
 }
 
 export async function runWizardWithPromptNavigation(
   basePrompter: WizardPrompter,
   runner: (prompter: WizardPrompter) => Promise<void>,
 ): Promise<void> {
-  const navigator = new WizardPromptNavigator(basePrompter);
-
-  while (true) {
-    navigator.beginPass();
-    try {
-      await runner(navigator.prompter);
-      return;
-    } catch (error) {
-      if (
-        error instanceof WizardNavigationError &&
-        error.direction === "back" &&
-        navigator.hasRestartRequest()
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
+  await new WizardPromptNavigator(basePrompter).run(runner);
 }

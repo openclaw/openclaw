@@ -1,9 +1,14 @@
-// Memory Host SDK module implements batch runner behavior.
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
+import { formatBatchErrorDetail } from "./batch-error-utils.js";
+import { applyEmbeddingBatchOutputLine, readEmbeddingBatchJsonl } from "./batch-output.js";
+import type { EmbeddingBatchStatus, ProviderBatchOutputLine } from "./batch-provider-common.js";
+import {
+  resolveCompletedBatchResult,
+  throwIfBatchCompletionError,
+  type BatchCompletionResult,
+} from "./batch-status.js";
 import { splitBatchRequestsByLimits } from "./batch-utils.js";
-import { runMemoryHostTasksWithConcurrency } from "./internal.js";
-
-// Shared runner for splitting and executing remote embedding batch groups.
+import { runWithConcurrency } from "./concurrency.js";
 
 /** Execution controls for provider embedding batch submissions and polling. */
 export type EmbeddingBatchExecutionParams = {
@@ -86,9 +91,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
         throw error;
       }
       const splitAt = Math.ceil(group.length / 2);
-      const parts = [group.slice(0, splitAt), group.slice(splitAt)].filter(
-        (part) => part.length > 0,
-      );
+      const parts = [group.slice(0, splitAt), group.slice(splitAt)];
       params.onSplitGroup?.({
         error,
         group,
@@ -102,9 +105,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
       }
     }
   };
-  const tasks = groups.map((group, groupIndex) => async () => {
-    await runGroup(group, groupIndex);
-  });
+  const tasks = groups.map((group, groupIndex) => () => runGroup(group, groupIndex));
 
   params.debug?.(params.debugLabel, {
     requests: params.requests.length,
@@ -117,7 +118,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
     timeoutMs: params.timeoutMs,
   });
 
-  await runMemoryHostTasksWithConcurrency(tasks, params.concurrency);
+  await runWithConcurrency(tasks, params.concurrency);
   return byCustomId;
 }
 
@@ -138,4 +139,78 @@ export function buildEmbeddingBatchGroupOptions<TRequest>(
     debug: params.debug,
     debugLabel: options.debugLabel,
   };
+}
+
+/** Run compatible batch jobs while providers retain submission, polling, and HTTP ownership. */
+export async function runEmbeddingBatches<
+  TRequest extends { custom_id: string },
+  TStatus extends EmbeddingBatchStatus,
+>(
+  params: Omit<Parameters<typeof runEmbeddingBatchGroups<TRequest>>[0], "runGroup"> & {
+    provider: string;
+    submit: (group: TRequest[]) => Promise<TStatus>;
+    waitForBatch: (
+      status: TStatus & { id: string },
+      pollIntervalMs: number,
+      timeoutMs: number,
+    ) => Promise<BatchCompletionResult>;
+    readError: (errorFileId: string) => Promise<string | undefined>;
+    readOutput: (fileId: string, read: (response: Response) => Promise<void>) => Promise<void>;
+  },
+): Promise<Map<string, number[]>> {
+  return await runEmbeddingBatchGroups({
+    ...params,
+    runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
+      const status = await params.submit(group);
+      if (!status.id) {
+        throw new Error(`${params.provider} batch create failed: missing batch id`);
+      }
+      const batchId = status.id;
+      params.debug?.(`memory embeddings: ${params.provider} batch created`, {
+        batchId,
+        status: status.status,
+        group: groupIndex + 1,
+        groups,
+        requests: group.length,
+      });
+      // A completed error file takes precedence over requiring or downloading success output.
+      await throwIfBatchCompletionError({
+        provider: params.provider,
+        status,
+        readError: params.readError,
+      });
+      const completed = await resolveCompletedBatchResult({
+        provider: params.provider,
+        status,
+        wait: params.wait,
+        waitForBatch: () =>
+          params.waitForBatch({ ...status, id: batchId }, pollIntervalMs, timeoutMs),
+      });
+      const errors: string[] = [];
+      const remaining = new Set(group.map((request) => request.custom_id));
+      await params.readOutput(completed.outputFileId, async (response) => {
+        await readEmbeddingBatchJsonl<ProviderBatchOutputLine>(response, {
+          label: `${params.provider}.batch-file-content`,
+          maxRecords: group.length,
+          onRecord: (line) => {
+            // Only the first response for a submitted id may mutate results.
+            if (line.custom_id && remaining.has(line.custom_id)) {
+              applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+            }
+            return errors.length === 0 && remaining.size > 0;
+          },
+        });
+      });
+      if (errors.length > 0) {
+        throw new Error(
+          `${params.provider} batch ${batchId} failed: ${formatBatchErrorDetail(errors[0]) ?? "unknown error"}`,
+        );
+      }
+      if (remaining.size > 0) {
+        throw new Error(
+          `${params.provider} batch ${batchId} missing ${remaining.size} embedding responses`,
+        );
+      }
+    },
+  });
 }

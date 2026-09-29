@@ -127,6 +127,20 @@ describe("Anthropic provider usage", () => {
     }
   });
 
+  it.each([
+    { name: "inference keys", key: "sk-ant-api03-test", accepted: false },
+    { name: "setup tokens", key: `sk-ant-oat01-${"a".repeat(80)}`, accepted: true },
+  ])("classifies $name through the real usage auth owner", async ({ key, accepted }) => {
+    const result = await resolveAnthropicUsageAuth({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      resolveApiKeyFromConfigAndStore: () => key,
+      resolveOAuthToken: async () => null,
+    });
+    expect(result).toEqual(accepted ? { token: key } : { handled: true });
+  });
+
   it("uses explicit Admin API credentials before Claude OAuth", async () => {
     const result = await resolveAnthropicUsageAuth({
       config: {},

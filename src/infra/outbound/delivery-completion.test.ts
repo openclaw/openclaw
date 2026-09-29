@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { commitMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { rejectDurableDelivery, settlePendingFinalDelivery } from "./delivery-completion.js";
 
 const recoveryMocks = vi.hoisted(() => ({
@@ -56,6 +57,7 @@ describe("pending-final delivery completion", () => {
   });
 
   afterEach(async () => {
+    await cleanupSessionStateForTest({ stateDir: tmpDir });
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -233,7 +235,7 @@ describe("pending-final delivery completion", () => {
     );
 
     await expect(
-      settlePendingFinalDelivery(completion, "delivered", undefined, tmpDir),
+      settlePendingFinalDelivery(completion, "delivered", undefined, { stateDir: tmpDir }),
     ).resolves.toEqual({ state: "delivered" });
 
     expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith({

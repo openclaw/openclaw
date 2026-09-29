@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import {
   normalizeOptionalString,
-  normalizeStringifiedOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
 
@@ -90,18 +90,11 @@ export function readConfigMutationFileSync(
   }
 }
 
-export function hasBatchMode(opts: ConfigSetOptions): boolean {
-  return Boolean(
-    normalizeOptionalString(opts.batchJson) || normalizeOptionalString(opts.batchFile),
-  );
-}
-
-export function hasRefBuilderOptions(opts: ConfigSetOptions): boolean {
-  return Boolean(opts.refProvider || opts.refSource || opts.refId);
-}
-
-export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
-  return Boolean(
+export function resolveConfigSetMode(
+  opts: ConfigSetOptions,
+): "value" | "json" | "ref_builder" | "provider_builder" | "batch" {
+  const hasRef = Boolean(opts.refProvider || opts.refSource || opts.refId);
+  const hasProvider = Boolean(
     opts.providerSource ||
     opts.providerAllowlist?.length ||
     opts.providerPath ||
@@ -117,6 +110,26 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
     opts.providerPassEnv?.length ||
     opts.providerTrustedDir?.length,
   );
+  if (opts.batchJson !== undefined || opts.batchFile !== undefined) {
+    if (hasRef || hasProvider) {
+      throw new Error(
+        "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined with ref builder (--ref-*) or provider builder (--provider-*) flags.",
+      );
+    }
+    return "batch";
+  }
+  if (hasRef && hasProvider) {
+    throw new Error(
+      "config set mode error: choose exactly one mode: ref builder (--ref-provider/--ref-source/--ref-id) or provider builder (--provider-*), not both.",
+    );
+  }
+  return hasRef
+    ? "ref_builder"
+    : hasProvider
+      ? "provider_builder"
+      : opts.strictJson || opts.json
+        ? "json"
+        : "value";
 }
 
 function parseJson5Raw(raw: string, label: string): unknown {
@@ -211,10 +224,9 @@ export function parseConfigSetCurrentExpectation(
 
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
   // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
-  const batchJson = normalizeOptionalString(opts.batchJson);
-  const batchFile = normalizeOptionalString(opts.batchFile);
-  const hasInline = Boolean(batchJson);
-  const hasFile = Boolean(batchFile);
+  const batchJson = opts.batchJson;
+  const hasInline = batchJson !== undefined;
+  const hasFile = opts.batchFile !== undefined;
   if (!hasInline && !hasFile) {
     return null;
   }
@@ -222,9 +234,9 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
     throw new Error("Use either --batch-json or --batch-file, not both.");
   }
   if (hasInline) {
-    return parseBatchEntries(batchJson as string, "--batch-json");
+    return parseBatchEntries(batchJson, "--batch-json");
   }
-  const pathname = normalizeStringifiedOptionalString(opts.batchFile) ?? "";
+  const pathname = readNonBlankString(opts.batchFile);
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }

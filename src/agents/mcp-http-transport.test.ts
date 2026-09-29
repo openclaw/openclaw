@@ -1,5 +1,8 @@
+import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, it, vi } from "vitest";
+import { settlesWithin } from "../shared/settle-within.js";
 import { disposeMcpClient } from "./mcp-client-lifecycle.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
 import {
@@ -18,13 +21,12 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
 
 function initializedFetch(params: {
   onGet: () => Promise<Response> | Response;
-  onDelete?: (init: RequestInit) => void;
+  onDelete?: (init: RequestInit) => Response | void;
   onPost?: (message: { id?: string | number; method?: string }) => Promise<Response> | Response;
 }) {
   return vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "DELETE") {
-      params.onDelete?.(init);
-      return new Response(null, { status: 204 });
+      return params.onDelete?.(init) ?? new Response(null, { status: 204 });
     }
     if (init?.method === "GET") {
       return await params.onGet();
@@ -60,15 +62,33 @@ const OVERSIZED_MCP_TEXT = "x".repeat(MCP_HTTP_MAX_PARSE_BYTES + 1024);
 function mcpResultResponse(
   id: string | number | undefined,
   result: unknown,
-  options?: { contentType?: string; stream?: boolean },
+  options?: { contentType?: string; stream?: boolean; lineEnding?: string; chunkBytes?: number },
 ): Response {
   const payload = JSON.stringify({ jsonrpc: "2.0", id, result });
-  return new Response(options?.stream ? `event: message\ndata: ${payload}\n\n` : payload, {
-    headers: {
-      "content-type":
-        options?.contentType ?? (options?.stream ? "text/event-stream" : "application/json"),
+  const lineEnding = options?.lineEnding ?? "\n";
+  const body = options?.stream
+    ? `: keepalive${lineEnding}event: message${lineEnding}data: ${payload}${lineEnding}${lineEnding}: end${lineEnding}`
+    : payload;
+  const bytes = new TextEncoder().encode(body);
+  const chunkBytes = options?.chunkBytes;
+  return new Response(
+    chunkBytes
+      ? new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (let cursor = 0; cursor < bytes.length; cursor += chunkBytes) {
+              controller.enqueue(bytes.subarray(cursor, cursor + chunkBytes));
+            }
+            controller.close();
+          },
+        })
+      : bytes,
+    {
+      headers: {
+        "content-type":
+          options?.contentType ?? (options?.stream ? "text/event-stream" : "application/json"),
+      },
     },
-  });
+  );
 }
 
 describe("OpenClaw MCP HTTP lifecycle adapters", () => {
@@ -112,53 +132,77 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     }
   });
 
-  it("rejects an oversized SSE message before the SDK parses it", async () => {
-    const fetchMock = initializedFetch({
-      onGet: () => new Response(null, { status: 405 }),
-      onPost: (message) => {
-        if (message.method !== "tools/call") {
-          return new Response(null, { status: 202 });
-        }
-        const payload = JSON.stringify({
-          jsonrpc: "2.0",
-          id: message.id,
-          result: { content: [{ type: "text", text: OVERSIZED_MCP_TEXT }] },
-        });
-        return new Response(`event: message\ndata: ${payload}\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        });
-      },
-    });
-    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
-      fetch: fetchMock,
-    });
-    const client = new Client({ name: "test", version: "1" });
-    const onerror = vi.fn();
-    // MCP clients expose callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    client.onerror = onerror;
-
-    try {
-      await client.connect(transport);
-      const error = await client
-        .callTool({ name: "oversized", arguments: {} }, undefined, { timeout: 100 })
-        .then(
-          () => undefined,
-          (reason: unknown) => reason,
-        );
-      expect(String(error)).toContain("Connection closed");
-      expect(onerror).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining("SSE event exceeds 10485760") }),
+  it.each([false, true])(
+    "rejects an oversized SSE message before parsing (multiline=%s)",
+    async (multiline) => {
+      const fetchMock = initializedFetch({
+        onGet: () => new Response(null, { status: 405 }),
+        onPost: (message) => {
+          if (message.method !== "tools/call") {
+            return new Response(null, { status: 202 });
+          }
+          const midpoint = Math.floor(OVERSIZED_MCP_TEXT.length / 2);
+          const payload = JSON.stringify(
+            {
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                content: [
+                  { type: "text", text: OVERSIZED_MCP_TEXT.slice(0, midpoint) },
+                  { type: "text", text: OVERSIZED_MCP_TEXT.slice(midpoint) },
+                ],
+              },
+            },
+            null,
+            multiline ? 2 : undefined,
+          );
+          const event = payload
+            .split("\n")
+            .map((line) => `data: ${line}`)
+            .join("\n");
+          return new Response(`event: message\n${event}\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      });
+      const transport = new OpenClawStreamableHTTPClientTransport(
+        new URL("http://mcp.invalid/mcp"),
+        {
+          fetch: fetchMock,
+        },
       );
-    } finally {
-      await disposeMcpClient({ client, transport, transportType: "streamable-http" });
-    }
-  });
+      const client = new Client({ name: "test", version: "1" });
+      const onerror = vi.fn();
+      // MCP clients expose callback properties rather than EventTarget listeners.
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener
+      client.onerror = onerror;
+
+      try {
+        await client.connect(transport);
+        const error = await client
+          .callTool({ name: "oversized", arguments: {} }, undefined, { timeout: 100 })
+          .then(
+            () => undefined,
+            (reason: unknown) => reason,
+          );
+        expect(String(error)).toContain("Connection closed");
+        expect(onerror).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringContaining("SSE event exceeds 10485760"),
+          }),
+        );
+      } finally {
+        await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+      }
+    },
+  );
 
   it.each([
     { label: "JSON", stream: false },
-    { label: "SSE", stream: true },
-  ])("accepts an under-limit $label message", async ({ stream }) => {
+    { label: "SSE LF", stream: true, lineEnding: "\n" },
+    { label: "SSE CR", stream: true, lineEnding: "\r" },
+    { label: "SSE split CRLF", stream: true, lineEnding: "\r\n", chunkBytes: 1 },
+  ])("accepts an under-limit $label message", async ({ stream, lineEnding, chunkBytes }) => {
     const fetchMock = initializedFetch({
       onGet: () => new Response(null, { status: 405 }),
       onPost: (message) =>
@@ -166,7 +210,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           ? mcpResultResponse(
               message.id,
               { content: [{ type: "text", text: "under-limit" }] },
-              { stream },
+              { stream, lineEnding, chunkBytes },
             )
           : new Response(null, { status: 202 }),
     });
@@ -427,6 +471,201 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       "allocated-before-failure",
     );
     expect(deleteRequests[0]?.signal?.aborted).toBe(false);
+  });
+
+  it.each(["pending", "rejecting"])(
+    "finishes termination with %s DELETE body cancellation",
+    async (cancellation) => {
+      let deleteCount = 0;
+      const sockets = new Set<Socket>();
+      const server = createServer((request, response) => {
+        response.on("error", () => {});
+        if (request.method === "DELETE") {
+          deleteCount += 1;
+          response.writeHead(200).end("terminated");
+          return;
+        }
+        if (request.method === "GET") {
+          response.writeHead(405).end();
+          return;
+        }
+        response.writeHead(500, { "mcp-session-id": "hang-cancel-session" });
+        response.end("initialize failed");
+      });
+      try {
+        server.on("connection", (socket) => {
+          sockets.add(socket);
+          socket.once("close", () => sockets.delete(socket));
+        });
+        server.on("clientError", (_err, socket) => socket.destroy());
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("expected loopback TCP address");
+        }
+        const baseUrl = new URL(`http://127.0.0.1:${address.port}/mcp`);
+
+        // Replace only cancellation after the real DELETE has completed.
+        const cleanupFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+          const response = await fetch(input, init);
+          if (init?.method !== "DELETE") {
+            return response;
+          }
+          expect(response.status).toBe(200);
+          await response.arrayBuffer();
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("bye"));
+              },
+              cancel() {
+                return cancellation === "rejecting"
+                  ? Promise.reject(new Error("synthetic cancellation rejection"))
+                  : new Promise(() => {});
+              },
+            }),
+            {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+            },
+          );
+        };
+
+        const transport = new OpenClawStreamableHTTPClientTransport(baseUrl, {
+          fetch: cleanupFetch,
+        });
+        const client = new Client({ name: "test", version: "1" });
+
+        await expect(client.connect(transport)).rejects.toThrow("initialize failed");
+        expect(transport.sessionId).toBe("hang-cancel-session");
+
+        await expect(settlesWithin(transport.terminateSession(), 1_000)).resolves.toBe(true);
+        expect(deleteCount).toBe(1);
+
+        // Marked terminated — a second call must not issue another DELETE.
+        await transport.terminateSession();
+        expect(deleteCount).toBe(1);
+
+        await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+        expect(deleteCount).toBe(1);
+      } finally {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeAllConnections();
+        });
+      }
+    },
+  );
+
+  it("treats a server-already-terminated DELETE 404 as successful cleanup", async () => {
+    let deleteCount = 0;
+    const server = createServer((request, response) => {
+      if (request.method === "POST") {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => (body += chunk));
+        request.on("end", () => {
+          const message = JSON.parse(body) as { id?: number };
+          response.writeHead(200, {
+            "content-type": "application/json",
+            "mcp-session-id": "already-terminated",
+          });
+          response.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-06-18",
+                capabilities: {},
+                serverInfo: { name: "fixture", version: "1" },
+              },
+            }),
+          );
+        });
+        return;
+      }
+      if (request.method === "DELETE") {
+        deleteCount += 1;
+        response.writeHead(404, { "content-type": "text/plain" });
+        response.end("session already gone");
+        return;
+      }
+      response.writeHead(405).end();
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback TCP address");
+      }
+      const transport = new OpenClawStreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${address.port}/mcp`),
+      );
+      const client = new Client({ name: "test", version: "1" });
+      await client.connect(transport);
+
+      await expect(transport.terminateSession()).resolves.toBeUndefined();
+      await transport.terminateSession();
+      expect(deleteCount).toBe(1);
+      await expect(
+        disposeMcpClient({ client, transport, transportType: "streamable-http" }),
+      ).resolves.toBe("closed");
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+    }
+  });
+
+  it("accepts unsupported session DELETE without sending it again", async () => {
+    const onDelete = vi.fn(() => new Response(null, { status: 405 }));
+    const fetchMock = initializedFetch({
+      onGet: () => new Response(null, { status: 405 }),
+      onDelete,
+    });
+    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+      fetch: fetchMock,
+    });
+    const client = new Client({ name: "test", version: "1" });
+    await client.connect(transport);
+    await transport.terminateSession();
+    await transport.terminateSession();
+    await expect(
+      disposeMcpClient({ client, transport, transportType: "streamable-http" }),
+    ).resolves.toBe("closed");
+    expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("does not record a rejected DELETE as successful termination", async () => {
+    const onDelete = vi.fn(() => new Response("refused", { status: 500, statusText: "Rejected" }));
+    const fetchMock = initializedFetch({
+      onGet: () => new Response(null, { status: 405 }),
+      onDelete,
+    });
+    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+      fetch: fetchMock,
+    });
+    const client = new Client({ name: "test", version: "1" });
+    await client.connect(transport);
+    await expect(transport.terminateSession()).rejects.toThrow(
+      "Failed to terminate session: Rejected",
+    );
+    await expect(transport.terminateSession()).rejects.toThrow(
+      "Failed to terminate session: Rejected",
+    );
+    await expect(
+      disposeMcpClient({ client, transport, transportType: "streamable-http" }),
+    ).resolves.toBe("uncertain");
+    expect(onDelete).toHaveBeenCalledTimes(3);
   });
 
   it("does not fetch another notification stream after close returns", async () => {

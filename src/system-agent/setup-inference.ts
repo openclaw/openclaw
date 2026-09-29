@@ -21,6 +21,7 @@ export type {
   CompleteSetupInferenceResult,
   DetectSetupInferenceDeps,
   ProviderAutoSetupInferenceKind,
+  SavedAuthSetupInferenceKind,
   SetupInferenceCandidate,
   SetupInferenceDetection,
   SetupInferenceFailureStatus,
@@ -37,5 +38,5 @@ export {
   resolvePersistentApplyInference,
   verifySetupInference,
   verifySetupInferenceConfig,
-} from "./setup-inference-verify.js";
-export type { ResolvePersistentApplyInferenceDeps } from "./setup-inference-verify.js";
+} from "./setup-inference-turn.js";
+export type { ResolvePersistentApplyInferenceDeps } from "./setup-inference-turn.js";

@@ -7,13 +7,7 @@ import {
 } from "../../agents/embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
-
-export type WorkerLiveTrajectoryTarget = {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-};
+import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
 
 export type WorkerLiveTrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
@@ -47,27 +41,24 @@ export function isDefinitiveWorkerTerminalEvent(event: WorkerLiveEventParams["ev
 
 export function createWorkerLiveTrajectoryRecorder(params: {
   runId: string;
-  target: WorkerLiveTrajectoryTarget;
+  source: WorkerTurnTranscriptSource;
 }): WorkerLiveTrajectoryRecorder {
+  const target = params.source.sessionTarget;
   return createTrajectoryRuntimeRecorder({
     runId: params.runId,
-    sessionId: params.target.sessionId,
-    sessionKey: params.target.sessionKey,
-    sessionTarget: {
-      agentId: params.target.agentId ?? "main",
-      sessionId: params.target.sessionId,
-      sessionKey: params.target.sessionKey,
-      storePath: params.target.storePath,
-    },
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+    assertCommitAllowed: params.source.receiptAuthority,
   });
 }
 
 export function recordWorkerLiveTrajectoryEvent(
   recorder: WorkerLiveTrajectoryRecorder,
   event: WorkerLiveEventParams["event"],
-): void {
+): Promise<void> | undefined {
   if (!recorder) {
-    return;
+    return undefined;
   }
   // Live listeners can mutate their copy; prepare independent diagnostics only
   // for phases that the trajectory records.
@@ -80,7 +71,7 @@ export function recordWorkerLiveTrajectoryEvent(
         success: !event.payload.isError,
       });
     } else {
-      return;
+      return undefined;
     }
   } else if (event.kind === "approval") {
     recorder.recordEvent(`approval.${event.payload.phase}`, prepareWorkerLiveEventData(event));
@@ -110,12 +101,12 @@ export function recordWorkerLiveTrajectoryEvent(
         status: interrupted ? "interrupted" : failed ? "error" : "success",
       });
     } else {
-      return;
+      return undefined;
     }
   } else {
-    return;
+    return undefined;
   }
   // Live delivery is authoritative; trajectory diagnostics must never reject a
-  // worker event. SQLite flushing begins synchronously and failures stay isolated.
-  void recorder.flush().catch(() => undefined);
+  // worker event, but its acknowledgment still owns the accepted write through settlement.
+  return recorder.flush().catch(() => undefined);
 }

@@ -1,4 +1,3 @@
-// Memory Core plugin module implements dreaming narrative behavior.
 import {
   extractErrorCode,
   formatErrorMessage,
@@ -135,45 +134,22 @@ function isConfiguredModelUnavailableNarrativeError(error: unknown): boolean {
   return errors.some((entry) => isModelUnavailableMessage(entry.message));
 }
 
-function isModelUnavailableMessage(raw: string): boolean {
-  const message = raw.trim();
-  if (!message) {
-    return false;
-  }
-  if (/requested model may be(?: temporarily)? unavailable/i.test(message)) {
-    return true;
-  }
-  if (/model unavailable/i.test(message)) {
-    return true;
-  }
-  if (/no endpoints found for/i.test(message)) {
-    return true;
-  }
-  if (/unknown model/i.test(message)) {
-    return true;
-  }
-  if (/model(?:[_\-\s])?not(?:[_\-\s])?found/i.test(message)) {
-    return true;
-  }
-  if (/\b404\b/.test(message) && /not(?:[_\-\s])?found/i.test(message)) {
-    return true;
-  }
-  if (/not_found_error/i.test(message)) {
-    return true;
-  }
-  if (/models\/[^\s]+ is not found/i.test(message)) {
-    return true;
-  }
-  if (/model/i.test(message) && /does not exist/i.test(message)) {
-    return true;
-  }
-  if (/unsupported model/i.test(message)) {
-    return true;
-  }
-  if (/is not a valid model id/i.test(message)) {
-    return true;
-  }
-  return false;
+function isModelUnavailableMessage(message: string): boolean {
+  return (
+    [
+      /requested model may be(?: temporarily)? unavailable/i,
+      /model unavailable/i,
+      /no endpoints found for/i,
+      /unknown model/i,
+      /model(?:[_\-\s])?not(?:[_\-\s])?found/i,
+      /not_found_error/i,
+      /models\/[^\s]+ is not found/i,
+      /unsupported model/i,
+      /is not a valid model id/i,
+    ].some((pattern) => pattern.test(message)) ||
+    (/\b404\b/.test(message) && /not(?:[_\-\s])?found/i.test(message)) ||
+    (/model/i.test(message) && /does not exist/i.test(message))
+  );
 }
 
 // ── Prompt building ────────────────────────────────────────────────────

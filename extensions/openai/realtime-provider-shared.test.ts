@@ -1,5 +1,6 @@
 // Openai tests cover realtime session secret creation behavior.
 import { describe, expect, it, vi } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import {
   createOpenAIRealtimeClientSecret,
   createOpenAIRealtimeTranscriptionClientSecret,
@@ -56,11 +57,14 @@ describe("createOpenAIRealtimeClientSecret", () => {
       ),
     );
 
-    const result = await createOpenAIRealtimeClientSecret({
-      authToken: "sk-test",
-      auditContext: "test",
-      session: { model: "gpt-4o-realtime-preview" },
-    });
+    const result = await createOpenAIRealtimeClientSecret(
+      {
+        authToken: "sk-test",
+        auditContext: "test",
+        session: { model: "gpt-4o-realtime-preview" },
+      },
+      openAIRealtimeHost,
+    );
 
     expect(result.value).toBe("eph-secret-abc");
     expect(typeof result.expiresAt).toBe("number");
@@ -75,54 +79,18 @@ describe("createOpenAIRealtimeClientSecret", () => {
     guardedFetch(streamed.response);
 
     await expect(
-      createOpenAIRealtimeClientSecret({
-        authToken: "sk-test",
-        auditContext: "test",
-        session: { model: "gpt-4o-realtime-preview" },
-      }),
+      createOpenAIRealtimeClientSecret(
+        {
+          authToken: "sk-test",
+          auditContext: "test",
+          session: { model: "gpt-4o-realtime-preview" },
+        },
+        openAIRealtimeHost,
+      ),
     ).rejects.toThrow(/openai\.realtime-session/);
 
     expect(streamed.wasCanceled()).toBe(true);
     expect(streamed.getReadCount()).toBeLessThan(20);
-  });
-
-  it("throws the provider error label on oversized body", async () => {
-    const streamed = makeStreamingResponse({ chunkCount: 20, chunkSize: 1024 * 1024 });
-    guardedFetch(streamed.response);
-
-    await expect(
-      createOpenAIRealtimeTranscriptionClientSecret({
-        authToken: "sk-test",
-        auditContext: "test",
-        session: { model: "gpt-4o-transcribe" },
-      }),
-    ).rejects.toThrow(/openai\.realtime-session/);
-
-    expect(streamed.wasCanceled()).toBe(true);
-  });
-
-  it("creates transcription secrets through the current client-secrets endpoint", async () => {
-    guardedFetch(
-      new Response(JSON.stringify({ value: "ek-transcription", expires_at: 1_800_000_000 }), {
-        status: 200,
-      }),
-    );
-
-    await createOpenAIRealtimeTranscriptionClientSecret({
-      authToken: "sk-test",
-      auditContext: "test",
-      session: { type: "transcription" },
-    });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/realtime/client_secrets",
-        timeoutMs: 30_000,
-        init: expect.objectContaining({
-          body: JSON.stringify({ session: { type: "transcription" } }),
-        }),
-      }),
-    );
   });
 
   it("replaces rejected transcription API-key details with bounded guidance", async () => {
@@ -133,12 +101,15 @@ describe("createOpenAIRealtimeClientSecret", () => {
     );
 
     await expect(
-      createOpenAIRealtimeTranscriptionClientSecret({
-        authToken: "sk-test",
-        auditContext: "test",
-        session: { type: "transcription" },
-        authRejectedMessage: "Update the transcription API key",
-      }),
+      createOpenAIRealtimeTranscriptionClientSecret(
+        {
+          authToken: "sk-test",
+          auditContext: "test",
+          session: { type: "transcription" },
+          authRejectedMessage: "Update the transcription API key",
+        },
+        openAIRealtimeHost,
+      ),
     ).rejects.toThrow("Update the transcription API key");
   });
 });

@@ -1,95 +1,59 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
+import { Type, type Static } from "typebox";
+import { Value } from "typebox/value";
+import {
+  QuestionOptionSchema,
+  QuestionRequestQuestionSchema,
+  type QuestionRequestQuestion,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { questionShapeError } from "../../gateway/question-validation.js";
 import { ToolInputError } from "./common.js";
 
 export const DEFAULT_ASK_USER_TIMEOUT_SECONDS = 900;
+export const QUESTION_RPC_GRACE_MS = 10_000;
 const MIN_ASK_USER_TIMEOUT_SECONDS = 30;
 const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
-const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 export type NormalizedAskUserParams = {
   questions: QuestionRequestQuestion[];
   timeoutSeconds: number;
 };
 
-function readRequiredString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new ToolInputError(`${label} must be a non-empty string`);
-  }
-  return value.trim();
-}
-
-function normalizeOption(value: unknown, questionIndex: number, optionIndex: number) {
-  const labelPrefix = `questions[${questionIndex}].options[${optionIndex}]`;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new ToolInputError(`${labelPrefix} must be an object`);
-  }
-  const record = value as Record<string, unknown>;
-  const label = readRequiredString(record.label, `${labelPrefix}.label`);
-  if (label.length > 64) {
-    throw new ToolInputError(`${labelPrefix}.label must be at most 64 characters (use 1-5 words)`);
-  }
-  if (record.description !== undefined && typeof record.description !== "string") {
-    throw new ToolInputError(`${labelPrefix}.description must be a string`);
-  }
-  const description =
-    typeof record.description === "string" ? record.description.trim() : undefined;
-  return { label, ...(description ? { description } : {}) };
-}
-
 /** Validates and canonicalizes model-authored ask_user arguments. */
 export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new ToolInputError("ask_user arguments must be an object");
+  if (!Value.Check(AskUserToolSchema, value)) {
+    throw new ToolInputError("ask_user arguments do not match the model-facing question contract");
   }
-  const params = value as Record<string, unknown>;
+  const params = value as Static<typeof AskUserToolSchema>;
+  const questions: QuestionRequestQuestion[] = params.questions.map((question) => ({
+    questionId: question.id.trim(),
+    header: truncateUtf16Safe(question.header.trim(), 12),
+    question: question.question.trim(),
+    options: question.options.map((option) => ({
+      label: option.label.trim(),
+      ...(option.description?.trim() ? { description: option.description.trim() } : {}),
+    })),
+    ...(question.multiSelect === true ? { multiSelect: true } : {}),
+    isOther: true,
+  }));
+
+  if (!questions.every((question) => Value.Check(QuestionRequestQuestionSchema, question))) {
+    throw new ToolInputError("ask_user questions do not match the canonical question contract");
+  }
   if (
-    !Array.isArray(params.questions) ||
-    params.questions.length < 1 ||
-    params.questions.length > 3
+    questions.some(
+      ({ header, options }) => !header || options.some(({ label }) => label.length > 64),
+    )
   ) {
-    throw new ToolInputError("questions must contain 1 to 3 questions");
+    throw new ToolInputError("ask_user questions exceed the model-facing display contract");
   }
-  const ids = new Set<string>();
-  const questions = params.questions.map(
-    (questionValue, questionIndex): QuestionRequestQuestion => {
-      const prefix = `questions[${questionIndex}]`;
-      if (!questionValue || typeof questionValue !== "object" || Array.isArray(questionValue)) {
-        throw new ToolInputError(`${prefix} must be an object`);
-      }
-      const question = questionValue as Record<string, unknown>;
-      const id = readRequiredString(question.id, `${prefix}.id`);
-      if (!QUESTION_ID_PATTERN.test(id)) {
-        throw new ToolInputError(`${prefix}.id must be snake_case (for example, deploy_target)`);
-      }
-      if (ids.has(id)) {
-        throw new ToolInputError(`duplicate question id '${id}'`);
-      }
-      ids.add(id);
-      const header = truncateUtf16Safe(readRequiredString(question.header, `${prefix}.header`), 12);
-      const questionText = readRequiredString(question.question, `${prefix}.question`);
-      if (
-        !Array.isArray(question.options) ||
-        question.options.length < 2 ||
-        question.options.length > 4
-      ) {
-        throw new ToolInputError(`${prefix}.options must contain 2 to 4 options`);
-      }
-      if (question.multiSelect !== undefined && typeof question.multiSelect !== "boolean") {
-        throw new ToolInputError(`${prefix}.multiSelect must be a boolean`);
-      }
-      return {
-        questionId: id,
-        header,
-        question: questionText,
-        options: question.options.map((option, optionIndex) =>
-          normalizeOption(option, questionIndex, optionIndex),
-        ),
-        ...(question.multiSelect === true ? { multiSelect: true } : {}),
-        isOther: true,
-      };
-    },
-  );
+  const semanticError = questionShapeError(questions, {
+    allowPlainSecretQuestions: false,
+    validateUrls: true,
+  });
+  if (semanticError) {
+    throw new ToolInputError(semanticError);
+  }
 
   return { questions, timeoutSeconds: normalizeQuestionTimeoutSeconds(params.timeoutSeconds) };
 }
@@ -109,3 +73,48 @@ export function normalizeQuestionTimeoutSeconds(rawTimeoutSeconds: unknown): num
     Math.max(MIN_ASK_USER_TIMEOUT_SECONDS, rawTimeoutSeconds ?? DEFAULT_ASK_USER_TIMEOUT_SECONDS),
   );
 }
+
+export function resolveQuestionTimeoutMs(rawTimeoutSeconds: unknown): number {
+  return normalizeQuestionTimeoutSeconds(rawTimeoutSeconds) * 1_000 + QUESTION_RPC_GRACE_MS;
+}
+
+const AskUserQuestionSchema = Type.Object(
+  {
+    id: {
+      ...QuestionRequestQuestionSchema.properties.questionId,
+      description: "Unique snake_case answer key.",
+    },
+    header: Type.String({
+      minLength: 1,
+      description: "Short chip label; longer input is truncated to 12 characters.",
+    }),
+    question: {
+      ...QuestionRequestQuestionSchema.properties.question,
+      description: "Single-sentence question only. Put all selectable choices in options.",
+    },
+    options: Type.Array(QuestionOptionSchema, {
+      minItems: 2,
+      maxItems: 4,
+      description:
+        "Every selectable choice. Put the recommended choice first; do not repeat choices only in the question text.",
+    }),
+    multiSelect: Type.Optional({
+      ...QuestionRequestQuestionSchema.properties.multiSelect,
+      description: "True only when the user may choose several options at once.",
+    }),
+  },
+  { additionalProperties: false },
+);
+
+export const AskUserToolSchema = Type.Object(
+  {
+    questions: Type.Array(AskUserQuestionSchema, { minItems: 1, maxItems: 3 }),
+    timeoutSeconds: Type.Optional(
+      Type.Integer({
+        description:
+          "Maximum human wait in seconds; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);

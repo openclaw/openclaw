@@ -1,9 +1,48 @@
+import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   clawPackageRemovalSelector,
   type ClawPackageInspection,
   type ClawPackageRemovalDecision,
   type ClawReferencedCleanup,
 } from "./package-remove.js";
+import type { PersistedClawInstall } from "./provenance.js";
+
+export function orderClawPackageRemovals(decisions: ClawPackageRemovalDecision[]) {
+  return decisions.toSorted(
+    (left, right) =>
+      Number(left.packageRef.relationship === "referenced") -
+      Number(right.packageRef.relationship === "referenced"),
+  );
+}
+
+/** Comparison facts only; removers must still validate their current journal and leases. */
+export function digestClawRemovalState(value: unknown): string {
+  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
+}
+
+/** Omitted cleanup options and their defaults must have the same identity across JSON RPC. */
+export function normalizeClawPackageCleanup(cleanup?: ClawReferencedCleanup) {
+  return {
+    mode: cleanup?.mode ?? "retain",
+    selected: [...(cleanup?.selected ?? [])],
+    allowConflicts: cleanup?.allowConflicts === true,
+  };
+}
+
+export function digestClawPackageRemovalPlan(
+  decisions: ClawPackageRemovalDecision[],
+  cleanup: ClawReferencedCleanup,
+): string {
+  return digestClawRemovalState({
+    decisions: orderClawPackageRemovals(decisions),
+    cleanup: normalizeClawPackageCleanup(cleanup),
+  });
+}
+
+export function digestClawRemovalInstall(install: PersistedClawInstall | undefined): string {
+  return digestClawRemovalState(install ?? null);
+}
 
 type PackageRemoveAction = {
   kind: "packageRef";
@@ -16,6 +55,20 @@ type PackageRemoveAction = {
 };
 
 type PackageRemoveBlocker = { code: string; message: string };
+
+export function filterReferencedCleanup(
+  cleanup: ClawReferencedCleanup | undefined,
+  kind: "package" | "mcp",
+): ClawReferencedCleanup | undefined {
+  return cleanup
+    ? {
+        ...cleanup,
+        selected: (cleanup.selected ?? []).filter(
+          (selector) => selector.startsWith("mcp:") === (kind === "mcp"),
+        ),
+      }
+    : undefined;
+}
 
 export function projectClawPackageRemovePlan(params: {
   decisions: ClawPackageRemovalDecision[];

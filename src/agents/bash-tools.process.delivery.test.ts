@@ -1,12 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, test, vi } from "vitest";
 import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import { typeCheckSources } from "../../test/helpers/typescript.js";
 import {
-  drainSystemEventEntries,
   enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
+  resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import {
   initializeGlobalHookRunner,
@@ -24,58 +25,50 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { boundCodeModeError } from "./code-mode-json.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
+  createCodeModeHarness,
   resetCodeModeTestState,
   resultDetails,
+  runUntilCompleted,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
+import { createLazyProcessTool } from "./lazy-process-tool.js";
 import type { AgentMessage, AgentToolResult } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { SessionManager } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 
-afterEach(() => {
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  resetSystemEventsForTest();
   resetGlobalHookRunner();
-  resetCodeModeTestState();
+  await resetCodeModeTestState();
   resetProcessRegistryForTests();
 });
 
-function processTurn(toolCallId: string, sessionId: string) {
-  const toolCall = {
-    type: "toolCall" as const,
-    id: toolCallId,
-    name: "process",
-    arguments: { action: "poll", sessionId },
-  };
+function createSession(output = "", id = "process") {
+  const session = createProcessSessionFixture({ id, backgrounded: true });
+  addSession(session);
+  if (output) {
+    appendOutput(session, "stdout", output);
+  }
+  return session;
+}
+
+function toolTurn(id: string, name: string, args: Record<string, unknown>) {
+  const toolCall = { type: "toolCall" as const, id, name, arguments: args };
   return {
-    assistantMessage: makeAgentAssistantMessage({
-      content: [toolCall],
-      stopReason: "toolUse",
-    }),
     toolCall,
+    assistantMessage: makeAgentAssistantMessage({ content: [toolCall], stopReason: "toolUse" }),
   };
 }
 
-async function poll(
-  processTool: ReturnType<typeof createProcessTool>,
-  sessionId: string,
-  toolCallId: string,
-  turn = processTurn(toolCallId, sessionId),
-  timeout?: number,
-) {
-  return await runWithAgentToolExecutionContext(turn, () =>
-    processTool.execute(toolCallId, {
-      action: "poll",
-      sessionId,
-      ...(timeout === undefined ? {} : { timeout }),
-    }),
-  );
-}
-
-function resultText(result: AgentToolResult<unknown>): string {
+function resultText(result: AgentToolResult<unknown>) {
   return result.content.find((part) => part.type === "text")?.text ?? "";
 }
 
@@ -84,7 +77,7 @@ function toolResultMessage(
   result: AgentToolResult<unknown>,
 ): Extract<AgentMessage, { role: "toolResult" }> {
   return copyInternalToolResultState(result, {
-    role: "toolResult" as const,
+    role: "toolResult",
     toolCallId,
     toolName: "process",
     content: result.content,
@@ -94,136 +87,103 @@ function toolResultMessage(
   });
 }
 
-function persistResult(
-  manager: ReturnType<typeof SessionManager.inMemory>,
-  toolCallId: string,
-  result: AgentToolResult<unknown>,
-): void {
-  manager.appendMessage(toolResultMessage(toolCallId, result));
+function pollFixture(output = "") {
+  const session = createSession(output);
+  const tool = createProcessTool();
+  const manager = SessionManager.inMemory();
+  const guard = (options?: Parameters<typeof installSessionToolResultGuard>[1]) =>
+    installSessionToolResultGuard(manager, options);
+  const turn = (id: string) => toolTurn(id, "process", { action: "poll", sessionId: session.id });
+  const poll = (id: string, timeout?: number, context = turn(id)) =>
+    runWithAgentToolExecutionContext(context, () =>
+      tool.execute(id, {
+        action: "poll",
+        sessionId: session.id,
+        ...(timeout === undefined ? {} : { timeout }),
+      }),
+    );
+  const persist = (id: string, result: AgentToolResult<unknown>) =>
+    manager.appendMessage(toolResultMessage(id, result));
+  return { session, manager, guard, turn, poll, persist };
 }
 
-test.each(["finished", "waiting"])(
-  "retains a %s poll completion through failed persistence and acknowledges late receipts",
-  async (phase) => {
-    const session = createProcessSessionFixture({
-      id: `persist-notify-${phase}`,
-      backgrounded: true,
-    });
-    const sessionKey = `agent:main:${session.id}`;
-    const eventOptions = { sessionKey, contextKey: `exec:${session.id}` };
-    const unrelated = enqueueSystemEventEntry("unrelated", eventOptions);
-    const recordCompletion = () =>
-      recordNotifyOnExitRemoval(
-        session,
-        expectDefined(
-          enqueueSystemEventWithReceipt("terminal output", eventOptions, { allowDuplicate: true }),
-          "completion receipt",
-        ),
-      );
-    addSession(session);
-    const processTool = createProcessTool();
-    const turn = processTurn("persist-notify", session.id);
-    const finish = () => {
-      appendOutput(session, "stdout", "terminal output");
-      markExited(session, 0, null, "completed");
-      if (phase === "finished") {
-        recordCompletion();
-      }
-    };
-    let result: AgentToolResult<unknown>;
-    if (phase === "waiting") {
-      vi.useFakeTimers();
-      try {
-        const pending = poll(processTool, session.id, turn.toolCall.id, turn, 1_000);
-        finish();
-        await vi.advanceTimersByTimeAsync(250);
-        result = await pending;
-      } finally {
-        vi.useRealTimers();
-      }
-    } else {
-      finish();
-      result = await poll(processTool, session.id, turn.toolCall.id, turn);
-    }
-    const manager = SessionManager.inMemory();
-    const append = manager.appendMessageWithTranscriptAnchor.bind(manager);
-    let rejectAppend = true;
-    const spy = vi
-      .spyOn(manager, "appendMessageWithTranscriptAnchor")
-      .mockImplementation((message, options) => {
-        if (message.role === "toolResult" && rejectAppend) {
-          throw new Error("result persistence failed");
-        }
-        return append(message, options);
-      });
-    try {
-      installSessionToolResultGuard(manager);
-      manager.appendMessage(turn.assistantMessage);
-      expect(() => persistResult(manager, turn.toolCall.id, result)).toThrow(
-        "result persistence failed",
-      );
-      if (phase === "waiting") {
-        recordCompletion();
-      }
-      expect(peekSystemEventEntries(sessionKey)).toHaveLength(2);
-      expect(session.terminalPollObserved).not.toBe(true);
-      rejectAppend = false;
-      persistResult(manager, turn.toolCall.id, result);
-      expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
-      expect(session.terminalPollObserved).toBe(true);
-      recordCompletion();
-      expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
-    } finally {
-      spy.mockRestore();
-      drainSystemEventEntries(sessionKey);
-    }
-  },
-);
+async function runProcessInCodeMode(args: Record<string, unknown>) {
+  const h = createCodeModeHarness();
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createProcessTool()] });
+  return await runUntilCompleted({
+    execTool: expectDefined(h.tools[0], "Code Mode exec"),
+    waitTool: expectDefined(h.tools[1], "Code Mode wait"),
+    code: `return await process(${JSON.stringify(args)});`,
+  });
+}
 
-test.each(["running", "completed"] as const)(
-  "replays $status poll output after transcript repair and consumes it after persistence",
-  async (status) => {
-    const sessionId = `delivery-${status}`;
-    const session = createProcessSessionFixture({
-      id: sessionId,
-      backgrounded: true,
-    });
-    addSession(session);
-    appendOutput(session, "stdout", `${status}-output\n`);
-    if (status === "completed") {
-      markExited(session, 0, null, "completed");
-    }
-    const processTool = createProcessTool();
-    const manager = SessionManager.inMemory();
-    const guard = installSessionToolResultGuard(manager);
-
-    const droppedTurn = processTurn(`${status}-dropped`, sessionId);
-    const dropped = snapshotToolSearchTargetTranscriptResult(
-      await poll(processTool, sessionId, droppedTurn.toolCall.id, droppedTurn),
+test("retains a waiting poll completion through failed persistence and acknowledges late receipts", async () => {
+  vi.useFakeTimers();
+  const h = pollFixture();
+  const sessionKey = "agent:main:persist-notify";
+  const eventOptions = { sessionKey, contextKey: `exec:${h.session.id}` };
+  const unrelated = enqueueSystemEventEntry("unrelated", eventOptions);
+  const recordCompletion = () =>
+    recordNotifyOnExitRemoval(
+      h.session,
+      expectDefined(
+        enqueueSystemEventWithReceipt("terminal output", eventOptions, { allowDuplicate: true }),
+        "completion receipt",
+      ),
     );
-    expect(resultText(dropped)).toContain(`${status}-output`);
-    manager.appendMessage(droppedTurn.assistantMessage);
-    guard.flushPendingToolResults();
+  const pending = h.poll("persist-notify", 1_000);
+  appendOutput(h.session, "stdout", "terminal output");
+  markExited(h.session, 0, null, "completed");
+  await vi.advanceTimersByTimeAsync(250);
+  const result = await pending;
+  expect(resultText(result)).toContain("terminal output");
+  const append = h.manager.appendMessageWithTranscriptAnchor.bind(h.manager);
+  let rejectAppend = true;
+  vi.spyOn(h.manager, "appendMessageWithTranscriptAnchor").mockImplementation(
+    (message, options) => {
+      if (message.role === "toolResult" && rejectAppend) {
+        throw new Error("result persistence failed");
+      }
+      return append(message, options);
+    },
+  );
+  h.guard();
+  h.manager.appendMessage(h.turn("persist-notify").assistantMessage);
+  expect(() => h.persist("persist-notify", result)).toThrow("result persistence failed");
+  recordCompletion();
+  expect(peekSystemEventEntries(sessionKey)).toHaveLength(2);
+  rejectAppend = false;
+  h.persist("persist-notify", result);
+  expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
+  expect(resultText(await h.poll("observed"))).not.toContain("terminal output");
+  recordCompletion();
+  expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
+});
 
-    const retryTurn = processTurn(`${status}-retry`, sessionId);
-    const retry = snapshotToolSearchTargetTranscriptResult(
-      await poll(processTool, sessionId, retryTurn.toolCall.id, retryTurn),
-    );
-    expect(resultText(retry)).toContain(`${status}-output`);
-    manager.appendMessage(retryTurn.assistantMessage);
-    persistResult(manager, retryTurn.toolCall.id, retry);
+test("replays repaired poll output and consumes it after transformed persistence", async () => {
+  const h = pollFixture("running-output\n");
+  const guard = h.guard({
+    runId: "transformed-run",
+    maxToolResultChars: 16,
+    transformMessageForPersistence: (message) => ({ ...message }),
+    transformToolResultForPersistence: (message) => ({ ...message }),
+    beforeMessageWriteHook: ({ message }) => ({ message: { ...message } }),
+  });
+  const dropped = snapshotToolSearchTargetTranscriptResult(await h.poll("dropped"));
+  expect(resultText(dropped)).toContain("running-output");
+  h.manager.appendMessage(h.turn("dropped").assistantMessage);
+  guard.flushPendingToolResults();
+  const retry = snapshotToolSearchTargetTranscriptResult(await h.poll("retry"));
+  expect(resultText(retry)).toContain("running-output");
+  h.manager.appendMessage(h.turn("retry").assistantMessage);
+  h.persist("retry", retry);
+  expect(resultText(await h.poll("observed"))).not.toContain("running-output");
+});
 
-    const observed = await poll(processTool, sessionId, `${status}-observed`);
-    expect(resultText(observed)).not.toContain(`${status}-output`);
-  },
-);
-
-test.each(["transformed", "blocked", "error"] as const)(
+test.each(["blocked", "error"] as const)(
   "preserves poll acknowledgement through %s nested activity persistence",
   async (mode) => {
-    const session = createProcessSessionFixture({ id: "nested-poll", backgrounded: true });
-    addSession(session);
-    appendOutput(session, "stdout", "nested-output\n");
+    const session = createSession("nested-output\n", "nested-poll");
     if (mode === "error") {
       markExited(session, 1, null, "failed");
     }
@@ -242,173 +202,161 @@ test.each(["transformed", "blocked", "error"] as const)(
       },
     });
     initializeGlobalHookRunner(registry);
-    const harness = createSubscribedCodeModeHarness({ name: "poll-persistence" });
-    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, createProcessTool()] });
-    const execTool = expectDefined(harness.tools[0], "Code Mode exec tool");
-    const waitTool = expectDefined(harness.tools[1], "Code Mode wait tool");
+    const h = createSubscribedCodeModeHarness({ name: "poll-persistence" });
+    applyCodeModeCatalog({ ...h, tools: [...h.tools, createProcessTool()] });
+    const execTool = expectDefined(h.tools[0], "Code Mode exec tool");
+    const waitTool = expectDefined(h.tools[1], "Code Mode wait tool");
     const code = 'return await process({ action: "poll", sessionId: "nested-poll" });';
-    const pollThroughBridge = async (id: string) => {
-      const toolCall = { type: "toolCall" as const, id, name: execTool.name, arguments: { code } };
-      const assistantMessage = makeAgentAssistantMessage({
-        content: [toolCall],
-        stopReason: "toolUse",
-      });
-      return await runWithAgentToolExecutionContext({ assistantMessage, toolCall }, async () => {
-        const details = resultDetails(await execTool.execute(id, { code }));
-        return await waitUntilCompleted({ details, waitTool });
-      });
-    };
+    const poll = (id: string) =>
+      runWithAgentToolExecutionContext(toolTurn(id, execTool.name, { code }), async () =>
+        waitUntilCompleted({
+          details: resultDetails(await execTool.execute(id, { code })),
+          waitTool,
+        }),
+      );
+    const output = expect.objectContaining({
+      type: "text",
+      text: expect.stringContaining("nested-output"),
+    });
     try {
-      expect(await pollThroughBridge("nested-first")).toMatchObject({ status: "completed" });
-      expect(harness.nestedToolActivities).toHaveLength(1);
-      expect(harness.nestedToolActivities[0]?.details.result.content).toContainEqual(
-        expect.objectContaining({ type: "text", text: expect.stringContaining("nested-output") }),
-      );
+      const first = await poll("nested-first");
+      expect(first, boundCodeModeError(JSON.stringify(first), 1_024)).toMatchObject({
+        status: "completed",
+      });
+      expect(h.nestedToolActivities).toHaveLength(1);
+      expect(h.nestedToolActivities[0]?.details.result.content).toContainEqual(output);
       if (mode === "error") {
-        expect(harness.nestedToolActivities[0]?.details.isError).toBe(true);
+        expect(h.nestedToolActivities[0]?.details.isError).toBe(true);
       }
-
-      expect(await pollThroughBridge("nested-next-turn")).toMatchObject({ status: "completed" });
-      expect(harness.nestedToolActivities).toHaveLength(2);
+      expect(await poll("nested-next-turn")).toMatchObject({ status: "completed" });
+      expect(h.nestedToolActivities).toHaveLength(2);
       if (mode === "blocked") {
-        expect(harness.nestedToolActivities[1]?.details.result.content).toContainEqual(
-          expect.objectContaining({ type: "text", text: expect.stringContaining("nested-output") }),
-        );
-        expect(await pollThroughBridge("nested-after-retry")).toMatchObject({
-          status: "completed",
-        });
+        expect(h.nestedToolActivities[1]?.details.result.content).toContainEqual(output);
+        expect(await poll("nested-after-retry")).toMatchObject({ status: "completed" });
       }
-      expect(harness.nestedToolActivities.at(-1)?.details.result.content).not.toContainEqual(
-        expect.objectContaining({ type: "text", text: expect.stringContaining("nested-output") }),
-      );
-      expect(writes).toBe(mode === "blocked" ? 3 : 2);
+      expect(h.nestedToolActivities.at(-1)?.details.result.content).not.toContainEqual(output);
       expect(
-        harness.sessionManager
+        h.sessionManager
           .getEntries()
           .filter((entry) => entry.type === "message" && entry.message.role === "custom"),
       ).toHaveLength(2);
     } finally {
-      harness.dispose();
+      h.dispose();
     }
   },
 );
 
-test("a retained old snapshot cannot consume a successor poll delivery", async () => {
-  const session = createProcessSessionFixture({ id: "retained-poll", backgrounded: true });
-  addSession(session);
-  appendOutput(session, "stdout", "old-output\n");
-  const processTool = createProcessTool();
-  const firstTurn = processTurn("old-result", session.id);
-  const result = await poll(processTool, session.id, firstTurn.toolCall.id, firstTurn);
-  const retained = snapshotToolSearchTargetTranscriptResult(result);
-  const manager = SessionManager.inMemory();
-  installSessionToolResultGuard(manager);
-  manager.appendMessage(firstTurn.assistantMessage);
-  persistResult(manager, firstTurn.toolCall.id, result);
-
-  appendOutput(session, "stdout", "successor-output\n");
-  expect(resultText(await poll(processTool, session.id, "successor-dropped"))).toContain(
-    "successor-output",
-  );
-  const retainedTurn = processTurn("retained-old-result", session.id);
-  manager.appendMessage(retainedTurn.assistantMessage);
-  persistResult(manager, retainedTurn.toolCall.id, retained);
-
-  expect(resultText(await poll(processTool, session.id, "successor-retry"))).toContain(
-    "successor-output",
-  );
+test("Code Mode pages retained logs after showing the default tail and continuation hint", async () => {
+  const lines = Array.from({ length: 205 }, (_, index) => `line-${index}`);
+  const session = createSession(lines.join("\n"));
+  markExited(session, 0, null, "completed");
+  expect(await runProcessInCodeMode({ action: "log", sessionId: session.id })).toMatchObject({
+    status: "completed",
+    value: {
+      status: "completed",
+      totalLines: 205,
+      output: `${lines.slice(5).join("\n")}\n\n[showing last 200 of 205 lines; pass offset/limit to page]`,
+    },
+  });
+  expect(
+    await runProcessInCodeMode({ action: "log", sessionId: session.id, offset: 1, limit: 1 }),
+  ).toMatchObject({
+    status: "completed",
+    value: { status: "completed", output: "line-1", totalLines: 205 },
+  });
 });
 
-test.each(["initial", "retry"] as const)(
-  "does not duplicate $phase output across parallel polls from one assistant turn",
-  async (phase) => {
-    const session: ProcessSession = createProcessSessionFixture({
-      id: `parallel-${phase}-delivery`,
-      backgrounded: true,
-    });
-    addSession(session);
-    appendOutput(session, "stdout", "one-copy\n");
-    const processTool = createProcessTool();
-    if (phase === "retry") {
-      await poll(processTool, session.id, "parallel-dropped");
-    }
-    const turn = processTurn("parallel-first", session.id);
-
-    const first = await poll(processTool, session.id, "parallel-first", turn);
-    const second = await poll(processTool, session.id, "parallel-second", turn);
-
-    expect(resultText(first)).toContain("one-copy");
-    expect(resultText(second)).not.toContain("one-copy");
+test.each([
+  { action: "paste", text: "", bracketed: false, error: "No paste text provided." },
+  {
+    action: "send-keys",
+    keys: ["up"],
+    error:
+      "Session process cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.",
   },
-);
-
-test("consumes staged output after transformed transcript persistence", async () => {
-  const session = createProcessSessionFixture({
-    id: "transformed-delivery",
-    backgrounded: true,
+])("Code Mode preserves actionable $action failures", async ({ error, ...args }) => {
+  const session = createSession();
+  session.cursorKeyMode = "unknown";
+  const write = vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, callback) =>
+    callback?.(),
+  );
+  session.stdin = { write, end: vi.fn() };
+  expect(await runProcessInCodeMode({ sessionId: session.id, ...args })).toMatchObject({
+    status: "completed",
+    value: { status: "failed", error },
   });
-  addSession(session);
-  appendOutput(session, "stdout", "transformed-output\n");
-  const processTool = createProcessTool();
-  const turn = processTurn("transformed-result", session.id);
-  const result = await poll(processTool, session.id, turn.toolCall.id, turn);
-  const manager = SessionManager.inMemory();
-  installSessionToolResultGuard(manager, {
-    runId: "transformed-run",
-    maxToolResultChars: 16,
-    transformMessageForPersistence: (message) => ({ ...message }),
-    transformToolResultForPersistence: (message) => ({ ...message }),
-    beforeMessageWriteHook: ({ message }) => ({ message: { ...message } }),
-  });
+  expect(write).not.toHaveBeenCalled();
+});
 
-  manager.appendMessage(turn.assistantMessage);
-  persistResult(manager, turn.toolCall.id, result);
+test("a retained old snapshot cannot consume a successor poll delivery", async () => {
+  const h = pollFixture("old-output\n");
+  h.guard();
+  const result = await h.poll("old-result");
+  const retained = snapshotToolSearchTargetTranscriptResult(result);
+  h.manager.appendMessage(h.turn("old-result").assistantMessage);
+  h.persist("old-result", result);
+  appendOutput(h.session, "stdout", "successor-output\n");
+  expect(resultText(await h.poll("successor-dropped"))).toContain("successor-output");
+  h.manager.appendMessage(h.turn("retained-old-result").assistantMessage);
+  h.persist("retained-old-result", retained);
+  expect(resultText(await h.poll("successor-retry"))).toContain("successor-output");
+});
 
-  const observed = await poll(processTool, session.id, "transformed-observed");
-  expect(resultText(observed)).not.toContain("transformed-output");
+test("does not duplicate retry output across parallel polls from one assistant turn", async () => {
+  const h = pollFixture("one-copy\n");
+  await h.poll("parallel-dropped");
+  const turn = h.turn("parallel-first");
+  expect(resultText(await h.poll("parallel-first", undefined, turn))).toContain("one-copy");
+  expect(resultText(await h.poll("parallel-second", undefined, turn))).not.toContain("one-copy");
 });
 
 test("replays blocked poll output immediately when the retry has a timeout", async () => {
-  const session = createProcessSessionFixture({
-    id: "blocked-delivery",
-    backgrounded: true,
-  });
-  addSession(session);
-  appendOutput(session, "stdout", "blocked-output\n");
-  const processTool = createProcessTool();
-  const droppedTurn = processTurn("blocked-result", session.id);
-  const dropped = await poll(processTool, session.id, droppedTurn.toolCall.id, droppedTurn);
-  const manager = SessionManager.inMemory();
-  installSessionToolResultGuard(manager, {
-    beforeMessageWriteHook(event) {
-      return event.message.role === "toolResult" && event.message.toolCallId === "blocked-result"
+  const h = pollFixture("blocked-output\n");
+  h.guard({
+    beforeMessageWriteHook: ({ message }) =>
+      message.role === "toolResult" && message.toolCallId === "blocked-result"
         ? { block: true }
-        : undefined;
-    },
+        : undefined,
   });
-  manager.appendMessage(droppedTurn.assistantMessage);
-  expect(
-    manager.appendMessage(toolResultMessage(droppedTurn.toolCall.id, dropped)),
-  ).toBeUndefined();
-
+  const dropped = await h.poll("blocked-result");
+  h.manager.appendMessage(h.turn("blocked-result").assistantMessage);
+  expect(h.persist("blocked-result", dropped)).toBeUndefined();
   vi.useFakeTimers();
-  try {
-    const retryTurn = processTurn("blocked-retry", session.id);
-    let settled = false;
-    const retryPromise = poll(
-      processTool,
-      session.id,
-      retryTurn.toolCall.id,
-      retryTurn,
-      30_000,
-    ).then((result) => {
-      settled = true;
-      return result;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toBe(true);
-    expect(resultText(await retryPromise)).toContain("blocked-output");
-  } finally {
-    vi.useRealTimers();
-  }
+  let settled = false;
+  const retry = h.poll("blocked-retry", 30_000).then((result) => {
+    settled = true;
+    return result;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(settled).toBe(true);
+  expect(resultText(await retry)).toContain("blocked-output");
+});
+
+test("composes lazy process actions through generated declarations and JavaScript", async () => {
+  createSession("first\nsecond", "typed-process");
+  const h = createCodeModeHarness();
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createLazyProcessTool()] });
+  const run = (code: string) =>
+    runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code });
+  const composition = `
+    async function consume() {
+      const listed = await process({ action: "list" });
+      if (listed.status === "failed") throw new Error(listed.error);
+      const running = listed.sessions.filter(session => session.status === "running");
+      return await Promise.all(running.map(async session => {
+        const log = await process({ action: "log", sessionId: session.sessionId });
+        if ("error" in log) throw new Error(log.error);
+        return { id: session.sessionId, lines: log.totalLines, output: log.output.toUpperCase() };
+      }));
+    }
+  `;
+  const declaration = await run('return await API.read("tools/process.d.ts");');
+  expect(declaration).toMatchObject({ status: "completed" });
+  const file = declaration.value as { content: string };
+  expect(typeCheckSources({ "/process-consumer.ts": file.content + composition })).toEqual([]);
+  const result = await run(`${composition}\nreturn await consume();`);
+  expect(result, JSON.stringify(result)).toMatchObject({
+    status: "completed",
+    value: [{ id: "typed-process", lines: 2, output: "FIRST\nSECOND" }],
+  });
 });

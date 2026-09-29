@@ -67,6 +67,10 @@ describe("createQaStateBackedTransportAdapter", () => {
     const resetTransport = vi.fn(() => {
       expect(state.getSnapshot().messages).toHaveLength(1);
     });
+    const captureArtifacts = vi.fn(async () => ({
+      artifacts: [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }],
+    }));
+    const createRuntimePreloads = vi.fn(() => ["file:///qa-preload.mjs"]);
     const adapter = createQaStateBackedTransportAdapter(state, {
       id: "live",
       label: "Live",
@@ -75,6 +79,8 @@ describe("createQaStateBackedTransportAdapter", () => {
       prepareFlow: vi.fn(),
       supportedActions: [],
       resetTransport,
+      captureArtifacts,
+      createRuntimePreloads,
       sendInbound: async (input) => state.addInboundMessage(input),
       createGatewayConfig: () => ({}),
       waitReady: async () => undefined,
@@ -92,6 +98,12 @@ describe("createQaStateBackedTransportAdapter", () => {
 
     expect(resetTransport).toHaveBeenCalledOnce();
     expect(adapter.prepareFlow).toBeTypeOf("function");
+    await expect(adapter.captureArtifacts?.({ outputDir: "/qa-output" })).resolves.toEqual({
+      artifacts: [{ kind: "channel-driver-smoke", path: "readiness.json" }],
+    });
+    expect(captureArtifacts).toHaveBeenCalledWith({ outputDir: "/qa-output" });
+    expect(adapter.createRuntimePreloads?.()).toEqual(["file:///qa-preload.mjs"]);
+    expect(createRuntimePreloads).toHaveBeenCalledOnce();
     expect(state.getSnapshot().messages).toHaveLength(0);
   });
 

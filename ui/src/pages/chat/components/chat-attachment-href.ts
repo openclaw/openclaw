@@ -1,6 +1,17 @@
 const SAFE_ATTACHMENT_PROTOCOLS = new Set(["http:", "https:", "blob:"]);
 const SAFE_MEDIA_DATA_URL = /^data:(audio|video)\/[a-z0-9!#$&^_.+-]+;base64,([a-z0-9+/]+={0,2})$/i;
 
+export function isCrossOriginHttpSource(source: string): boolean {
+  try {
+    const url = new URL(source, window.location.href);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Returns only attachment links that are safe to expose as clickable anchors. */
 export function safeAttachmentHref(value: string): string | undefined {
   const href = value.trim();
@@ -31,4 +42,15 @@ export function safeMediaAttachmentHref(
       : undefined;
   }
   return safeAttachmentHref(href);
+}
+
+/** Plain-text clipboard sources are inert and retain their original downloadable bytes. */
+export function safePlainTextAttachmentHref(value: string): string | undefined {
+  const href = value.trim();
+  const payload = /^data:text\/plain;base64,([a-z0-9+/]*={0,2})$/i.exec(href)?.[1];
+  return payload !== undefined
+    ? payload.length % 4 === 0
+      ? href
+      : undefined
+    : safeAttachmentHref(href);
 }

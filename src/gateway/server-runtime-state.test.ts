@@ -7,6 +7,7 @@ import { connect } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
@@ -546,30 +547,33 @@ describe("createGatewayRuntimeState", () => {
     );
   });
 
-  it("starts the shared sandbox host on a dedicated adjacent-port origin", async () => {
-    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
-      cfg: { mcp: { apps: { enabled: true } } },
-      port: 18789,
-    });
+  it.each([undefined, 19100])(
+    "starts the normal sandbox host with configured port %s",
+    async (sandboxPort) => {
+      const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+        cfg: { mcp: { apps: { enabled: true, sandboxPort } } },
+        port: 18789,
+      });
 
-    expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
-    await runtimeState.startListening();
+      expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
+      await runtimeState.startListening();
 
-    expect(runtimeState.getMcpAppSandboxPort()).toBe(18790);
-    expect(runtimeState.httpServers).toHaveLength(2);
-    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
-    );
-    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        bindHost: "127.0.0.1",
-        port: 18790,
-        retryEaddrinuse: false,
-      }),
-    );
-  });
+      expect(runtimeState.getMcpAppSandboxPort()).toBe(sandboxPort ?? 18790);
+      expect(runtimeState.httpServers).toHaveLength(2);
+      expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
+      );
+      expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          bindHost: "127.0.0.1",
+          port: sandboxPort ?? 18790,
+          retryEaddrinuse: false,
+        }),
+      );
+    },
+  );
 
   it("starts the shared sandbox host lazily when MCP Apps are disabled", async () => {
     const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
@@ -591,12 +595,28 @@ describe("createGatewayRuntimeState", () => {
     );
   });
 
+  it("keeps an update canary off the configured sandbox listener, including lazy acquisition", async () => {
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      cfg: { mcp: { apps: { enabled: true, sandboxPort: 18790 } } },
+      port: 19000,
+      updateCanary: true,
+    });
+
+    await runtimeState.startListening();
+
+    expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
+    expect(runtimeState.httpServers).toHaveLength(1);
+    await expect(runtimeState.ensureSandboxHostPort()).rejects.toThrow(
+      "Sandbox host is disabled during update validation",
+    );
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ bindHost: "127.0.0.1", port: 19000 }),
+    );
+  });
+
   it("waits for every gateway bind host before freezing lazy sandbox listeners", async () => {
     mocks.resolveGatewayListenHosts.mockResolvedValue(["127.0.0.1", "::1"]);
-    let releaseSecondBind: () => void = () => {};
-    const secondBind = new Promise<void>((resolve) => {
-      releaseSecondBind = resolve;
-    });
+    const { promise: secondBind, resolve: releaseSecondBind } = createDeferred();
     mocks.listenGatewayHttpServer.mockImplementation(async ({ bindHost, port }) => {
       if (bindHost === "::1" && port === 18789) {
         await secondBind;

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
@@ -37,18 +37,15 @@ type SandboxScriptInfo = {
   cwd: string;
 };
 
-function resolveSandboxScript(
-  scriptRel: string,
-  options: { argv1?: string; cwd?: string } = {},
-): SandboxScriptInfo | null {
+function resolveSandboxScript(scriptRel: string): SandboxScriptInfo | null {
   // Scan every openclaw package root the shared resolver finds (symlinked launcher via realpath,
   // then cwd) and return the first that actually holds the script. The resolver follows npm/pnpm
   // global bins and version-manager links, but a published package root can resolve first and ship
   // without scripts/sandbox-setup.sh (the npm files allowlist drops scripts/); stopping at the
   // first root would then skip a valid source-checkout cwd that still has it.
   const roots = resolveOpenClawPackageRootsSync({
-    cwd: options.cwd ?? process.cwd(),
-    argv1: options.argv1 ?? process.argv[1],
+    cwd: process.cwd(),
+    argv1: process.argv[1],
   });
   for (const root of roots) {
     const scriptPath = path.join(root, scriptRel);
@@ -57,12 +54,6 @@ function resolveSandboxScript(
     }
   }
   return null;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.doctorSandboxTestApi")] = {
-    resolveSandboxScript,
-  };
 }
 
 async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise<boolean> {
@@ -210,65 +201,11 @@ async function containerImageExists(command: "docker" | "podman", image: string)
   }
 }
 
-function resolveSandboxDockerImage(cfg: OpenClawConfig): string {
-  const image = cfg.agents?.defaults?.sandbox?.docker?.image?.trim();
-  return image ? image : DEFAULT_SANDBOX_IMAGE;
-}
-
-function resolveSandboxBackend(cfg: OpenClawConfig): string {
-  const backend = cfg.agents?.defaults?.sandbox?.backend?.trim();
-  return (backend || "docker").toLowerCase();
-}
-
-function resolveSandboxBrowserImage(cfg: OpenClawConfig): string {
-  const image = cfg.agents?.defaults?.sandbox?.browser?.image?.trim();
-  return image ? image : DEFAULT_SANDBOX_BROWSER_IMAGE;
-}
-
-function updateSandboxDockerImage(cfg: OpenClawConfig, image: string): OpenClawConfig {
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        sandbox: {
-          ...cfg.agents?.defaults?.sandbox,
-          docker: {
-            ...cfg.agents?.defaults?.sandbox?.docker,
-            image,
-          },
-        },
-      },
-    },
-  };
-}
-
-function updateSandboxBrowserImage(cfg: OpenClawConfig, image: string): OpenClawConfig {
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        sandbox: {
-          ...cfg.agents?.defaults?.sandbox,
-          browser: {
-            ...cfg.agents?.defaults?.sandbox?.browser,
-            image,
-          },
-        },
-      },
-    },
-  };
-}
-
 type SandboxImageCheck = {
   engineCommand: "docker" | "podman";
   kind: string;
   image: string;
   buildScript?: string;
-  updateConfig: (image: string) => void;
 };
 
 async function handleMissingSandboxImage(
@@ -313,7 +250,7 @@ export async function maybeRepairSandboxImages(
   if (!sandbox || mode === "off") {
     return cfg;
   }
-  const backend = resolveSandboxBackend(cfg);
+  const backend = (sandbox.backend?.trim() || "docker").toLowerCase();
   if (backend !== "docker" && backend !== "podman") {
     if (sandbox.browser?.enabled) {
       note(
@@ -353,10 +290,7 @@ export async function maybeRepairSandboxImages(
   await validateSandboxContainerEngineTarget(containerEngine);
   await noteCodexBwrapNamespaceWarning(cfg, containerEngine.displayName);
 
-  let next = cfg;
-  const changes: string[] = [];
-
-  const dockerImage = resolveSandboxDockerImage(cfg);
+  const dockerImage = sandbox.docker?.image?.trim() || DEFAULT_SANDBOX_IMAGE;
   await handleMissingSandboxImage(
     {
       engineCommand: containerEngine.command,
@@ -370,10 +304,6 @@ export async function maybeRepairSandboxImages(
             : dockerImage === DEFAULT_SANDBOX_IMAGE
               ? "scripts/sandbox-setup.sh"
               : undefined,
-      updateConfig: (image) => {
-        next = updateSandboxDockerImage(next, image);
-        changes.push(`Updated agents.defaults.sandbox.docker.image → ${image}`);
-      },
     },
     runtime,
     prompter,
@@ -384,12 +314,8 @@ export async function maybeRepairSandboxImages(
       {
         engineCommand: containerEngine.command,
         kind: "browser",
-        image: resolveSandboxBrowserImage(cfg),
+        image: sandbox.browser.image?.trim() || DEFAULT_SANDBOX_BROWSER_IMAGE,
         buildScript: "scripts/sandbox-browser-setup.sh",
-        updateConfig: (image) => {
-          next = updateSandboxBrowserImage(next, image);
-          changes.push(`Updated agents.defaults.sandbox.browser.image → ${image}`);
-        },
       },
       runtime,
       prompter,
@@ -401,11 +327,7 @@ export async function maybeRepairSandboxImages(
     );
   }
 
-  if (changes.length > 0) {
-    note(changes.join("\n"), "Doctor changes");
-  }
-
-  return next;
+  return cfg;
 }
 
 function formatLegacyRegistryInspectionLine(file: LegacySandboxRegistryInspection): string {
@@ -496,7 +418,7 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
   const warnings: string[] = [];
 
-  for (const agent of listAgentEntries(cfg)) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const agentId = agent.id;
     const agentSandbox = agent.sandbox;
     if (!agentSandbox) {
@@ -511,24 +433,19 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
       continue;
     }
 
-    const overrides: string[] = [];
-    if (agentSandbox.docker && Object.keys(agentSandbox.docker).length > 0) {
-      overrides.push("docker");
-    }
-    if (agentSandbox.browser && Object.keys(agentSandbox.browser).length > 0) {
-      overrides.push("browser");
-    }
-    if (agentSandbox.prune && Object.keys(agentSandbox.prune).length > 0) {
-      overrides.push("prune");
-    }
+    const overrides = (["docker", "browser", "prune"] as const).filter(
+      (key) => agentSandbox[key] && Object.keys(agentSandbox[key]).length > 0,
+    );
 
     if (overrides.length === 0) {
       continue;
     }
 
+    const agentPath =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list (id "${agentId}")`;
     warnings.push(
       [
-        `- agents.entries.${agentId} sandbox ${overrides.join("/")} overrides ignored.`,
+        `- ${agentPath} sandbox ${overrides.join("/")} overrides ignored.`,
         `  scope resolves to "shared".`,
       ].join("\n"),
     );

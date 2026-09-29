@@ -1,16 +1,13 @@
-export type MeetingRealtimeAudioTransportHealth = {
+import type { MeetingOutputLoopbackHealth } from "./output-loopback-verifier.js";
+
+export type MeetingRealtimeAudioTransportHealth = Partial<MeetingOutputLoopbackHealth> & {
   consecutiveInputErrors?: number;
   lastInputError?: string;
-  lastOutputLoopbackAt?: string;
-  lastOutputLoopbackCorrelation?: number;
-  lastOutputLoopbackPeak?: number;
-  lastOutputLoopbackRms?: number;
-  outputLoopbackSignalBytes?: number;
-  outputGeneration?: number;
-  verifiedOutputGeneration?: number;
 };
 
 export interface MeetingRealtimeAudioTransport {
+  /** Input contains browser playback only, excluding native microphone injection. */
+  inputAudioIsolated?: boolean;
   /** Delivers a prior failure immediately so provider setup cannot outrun transport teardown. */
   onFatal(handler: () => void): void;
   startInput(onAudio: (audio: Buffer) => void): void;

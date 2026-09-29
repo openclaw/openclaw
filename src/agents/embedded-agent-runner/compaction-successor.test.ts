@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { HookRunner } from "../../plugins/hooks.js";
@@ -11,6 +11,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type {
@@ -246,6 +247,70 @@ function enableLifecycleHooks() {
 }
 
 describe("acceptCompactionSuccessor", () => {
+  it.each(["rotation", "unchanged", "cancel-after-commit"] as const)(
+    "owns MCP predecessor cleanup after %s",
+    async (kind) => {
+      await withAcceptanceFixture({}, async (fixture) => {
+        const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+          await import("../agent-bundle-mcp-manager.test-support.js");
+        const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+          await import("../agent-bundle-mcp-manager-api.js");
+        const scheduler = createTestGatewayScheduler();
+        onTestFinished(() => scheduler.stop());
+        await setSessionMcpRuntimeScheduler(scheduler);
+        const manager = getSessionMcpRuntimeManagerForTesting();
+        const create = (sessionId: string) =>
+          getOrCreateSessionMcpRuntime({
+            sessionId,
+            sessionKey: fixture.target.sessionKey,
+            workspaceDir: path.dirname(fixture.target.storePath),
+            cfg: unopenedMcpConfig,
+            manifestRegistry: { plugins: [] },
+          });
+        try {
+          const original = await create(fixture.target.sessionId);
+          const release = original.acquireLease?.();
+          const successor = await create(fixture.successorId);
+          if (kind === "cancel-after-commit") {
+            fixture.observeIdentity(fixture.stop);
+          }
+          const accepted = await fixture.accept(
+            kind === "unchanged" ? { result: { ok: true, compacted: true } } : {},
+          );
+          if (kind !== "unchanged") {
+            await create(original.sessionId);
+          }
+          release?.();
+          await manager.completeDeferredRetirement(original.sessionId, original);
+          expect(manager.peekSession({ sessionId: original.sessionId })).toBe(
+            kind === "unchanged" ? original : undefined,
+          );
+          expect(manager.peekSession({ sessionId: successor.sessionId })).toBe(successor);
+          if (kind === "rotation") {
+            const latest = await create(randomUUID());
+            await fixture.accept({
+              currentTarget: accepted.sessionTarget,
+              expectedEntry: {
+                sessionId: accepted.entry.sessionId,
+                lifecycleRevision: accepted.entry.lifecycleRevision,
+                activeWriterRunId: accepted.entry.activeWriterRunId,
+              },
+              result: {
+                ok: true,
+                compacted: true,
+                result: { tokensBefore: 1, sessionTarget: { sessionId: latest.sessionId } },
+              },
+            });
+            expect(manager.peekSession({ sessionId: successor.sessionId })).toBeUndefined();
+            expect(manager.peekSession({ sessionId: latest.sessionId })).toBe(latest);
+          }
+        } finally {
+          await manager.disposeAll();
+        }
+      });
+    },
+  );
+
   it.each([true, false])(
     "transfers the declared identity without reclaiming its writer (claimed=%s)",
     async (claimWriter) => {

@@ -1,4 +1,3 @@
-// Telegram plugin module implements doctor behavior.
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorEmptyAllowlistAccountContext,
@@ -10,13 +9,19 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  classifyGatewayProbePath,
+  isProtectedPluginRoutePathFromContext,
+  resolvePluginRoutePathContext,
+  resolveGatewayPort,
+} from "openclaw/plugin-sdk/gateway-config-runtime";
+import {
   asObjectRecord,
   collectChannelAccountScopes,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramLegacyWebhookListener } from "./account-config.js";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
-  listEnabledTelegramAccounts,
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
@@ -30,14 +35,18 @@ import {
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
+import { telegramWebhookHost } from "./webhook-legacy.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
 type TelegramMalformedGroupsHit = { path: string; actualType: string };
-type TelegramSelectedQuoteToolProgressHit = { path: string; replyToMode: string };
+type TelegramSelectedQuoteToolProgressHit = {
+  path: string;
+  replyToMode: string;
+  streamMode: ReturnType<typeof resolveTelegramPreviewStreamMode>;
+};
 type TelegramApiRootBotEndpointHit = {
   path: string;
   pathSegments: string[];
-  value: string;
   normalized: string;
 };
 type DoctorAllowFromList = Array<string | number>;
@@ -190,7 +199,6 @@ function scanTelegramBotEndpointApiRoots(cfg: OpenClawConfig): TelegramApiRootBo
     hits.push({
       path: `${scope.prefix}.apiRoot`,
       pathSegments: [...scope.pathSegments, "apiRoot"],
-      value,
       normalized: normalizeTelegramApiRoot(value),
     });
   }
@@ -232,7 +240,8 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
     if (replyToMode === "off") {
       return [];
     }
-    if (resolveTelegramPreviewStreamMode(account) === "off") {
+    const streamMode = resolveTelegramPreviewStreamMode(account);
+    if (streamMode === "off") {
       return [];
     }
     const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account, {
@@ -241,11 +250,7 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
     });
     if (
       blockStreamingEnabled ||
-      !resolveChannelStreamingPreviewToolProgress(
-        account,
-        true,
-        resolveTelegramPreviewStreamMode(account),
-      )
+      !resolveChannelStreamingPreviewToolProgress(account, streamMode !== "progress", streamMode)
     ) {
       return [];
     }
@@ -253,6 +258,7 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
       {
         path: formatTelegramAccountConfigPath(cfg, accountId),
         replyToMode,
+        streamMode,
       },
     ];
   });
@@ -261,13 +267,14 @@ function scanTelegramSelectedQuoteToolProgressWarnings(
 function collectTelegramSelectedQuoteToolProgressWarnings(params: {
   hits: TelegramSelectedQuoteToolProgressHit[];
 }): string[] {
-  if (params.hits.length === 0) {
+  const sample = params.hits[0];
+  if (!sample) {
     return [];
   }
-  const sample = params.hits[0] ?? { path: "channels.telegram", replyToMode: "first" };
+  const toolProgressSection = sample.streamMode === "progress" ? "progress" : "preview";
   return [
     `- ${sanitizeForLog(sample.path)} has replyToMode: "${sanitizeForLog(sample.replyToMode)}" while Telegram preview tool-progress is enabled. Telegram selected quote replies must send the final answer through the native quote-reply path, so those turns skip the short "Working" tool-progress preview. Current-message replies without selected quote text still keep preview streaming.`,
-    '- Set replyToMode: "off" when tool-progress preview matters more than native quote replies, or set streaming.preview.toolProgress: false to keep quote replies and silence this warning.',
+    `- Set replyToMode: "off" when tool-progress preview matters more than native quote replies, or set streaming.${toolProgressSection}.toolProgress: false to keep quote replies and silence this warning.`,
   ];
 }
 
@@ -507,9 +514,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
 }
 
 function hasConfiguredGroups(account: DoctorAccountRecord, parent?: DoctorAccountRecord): boolean {
-  const groups =
-    (asObjectRecord(account.groups) as DoctorAccountRecord | null) ??
-    (asObjectRecord(parent?.groups) as DoctorAccountRecord | null);
+  const groups = asObjectRecord(account.groups) ?? asObjectRecord(parent?.groups);
   return Boolean(groups) && Object.keys(groups ?? {}).length > 0;
 }
 
@@ -585,17 +590,56 @@ export const telegramDoctor: ChannelDoctorAdapter = {
       hits: scanTelegramBotEndpointApiRoots(cfg),
       doctorFixCommand,
     }),
-    ...listEnabledTelegramAccounts(cfg)
-      .filter(({ config }) => Boolean(config.webhookUrl) && config.webhookPath === "/healthz")
-      .map(
-        ({ accountId }) =>
-          `- Telegram account "${accountId}" resolves webhookPath to /healthz, which is reserved for webhook listener health checks. Change webhookPath and the public webhook URL or proxy route before restarting OpenClaw.`,
-      ),
     ...collectTelegramSelectedQuoteToolProgressWarnings({
       hits: scanTelegramSelectedQuoteToolProgressWarnings(cfg),
     }),
   ],
-  repairConfig: async ({ cfg }) => await repairTelegramConfig({ cfg }),
+  runConfigSequence: ({ cfg, env }) => {
+    const infoNotes: string[] = [];
+    const warningNotes: string[] = [];
+    const accountIds = cfg.channels?.telegram?.enabled === false ? [] : listTelegramAccountIds(cfg);
+    for (const accountId of accountIds) {
+      const config = mergeTelegramAccountConfig(cfg, accountId);
+      if (config.enabled === false || !config.webhookUrl) {
+        continue;
+      }
+      const legacyListener = resolveTelegramLegacyWebhookListener(config.legacyWebhook);
+      const path = config.webhookPath ?? "/telegram-webhook";
+      const pathname = URL.parse(path, "http://localhost")?.pathname ?? path;
+      const probe = classifyGatewayProbePath(pathname);
+      const pathConflict =
+        path === "/healthz"
+          ? "is reserved for webhook listener health checks"
+          : probe === "live" || probe === "ready" || probe === "startup"
+            ? "is reserved for Gateway probes"
+            : isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))
+              ? "requires Gateway authentication"
+              : undefined;
+      if (pathConflict) {
+        warningNotes.push(
+          `Telegram account "${accountId}" resolves webhookPath to ${path}, which ${pathConflict}. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping. ${legacyListener && path !== "/healthz" ? "The legacy listener remains available; verify delivery on the new route before setting legacyWebhook: false." : "This account cannot start until its webhook path is changed."}`,
+        );
+        continue;
+      }
+      const destination = `Gateway port ${resolveGatewayPort(cfg, env)}${path}`;
+      if (!telegramWebhookHost.getWebhookLegacyListener) {
+        // The shipped host collects warningNotes, but does not render infoNotes.
+        warningNotes.push(
+          legacyListener
+            ? `Telegram account "${accountId}": the 2026.9.6 compatibility listener ${legacyListener.host}:${legacyListener.port} serves this account directly. This host cannot share a legacy port across accounts; use distinct endpoints or move the reverse proxy for ${config.webhookUrl} to ${destination}, verify delivery, then set legacyWebhook: false.`
+            : `Telegram account "${accountId}": legacyWebhook: false disables the 2026.9.6 compatibility listener. Route ${config.webhookUrl} to ${destination}.`,
+        );
+        continue;
+      }
+      infoNotes.push(
+        legacyListener
+          ? `Telegram account "${accountId}": legacy listener ${legacyListener.host}:${legacyListener.port} forwards to ${destination}. Move the reverse proxy for ${config.webhookUrl} to that Gateway route, verify delivery, then set legacyWebhook: false to disable legacy forwarding for this account.`
+          : `Telegram account "${accountId}": legacyWebhook: false disables legacy forwarding for this account. Route ${config.webhookUrl} to ${destination}.`,
+      );
+    }
+    return { changeNotes: [], infoNotes, warningNotes };
+  },
+  repairConfig: repairTelegramConfig,
   collectEmptyAllowlistExtraWarnings: collectTelegramEmptyAllowlistExtraWarnings,
   shouldSkipDefaultEmptyGroupAllowlistWarning: (params) => params.channelName === "telegram",
 };

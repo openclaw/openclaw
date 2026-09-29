@@ -17,7 +17,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
-  DEFAULT_LIVE_RETRIES,
   DEFAULT_RESOURCE_LIMITS,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mts";
@@ -25,7 +24,6 @@ import {
   appendBoundedShellCapture,
   buildLaneRerunCommand,
   canStartSchedulerLane,
-  describeDockerSchedulerLimits,
   dockerPreflightContainerNames,
   dockerPreflightSmokeCommand,
   githubWorkflowRerunCommand,
@@ -41,9 +39,12 @@ import {
   validateDockerCandidateEnvironment,
   writeRunSummary,
 } from "../../scripts/test-docker-all.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { waitForChildClose } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const { createPrepublishPluginRegistryArtifact } = vi.hoisted(() => ({
   createPrepublishPluginRegistryArtifact: vi.fn(),
@@ -337,41 +338,11 @@ async function runReadyTimedCommand<T>(
   }
 }
 
-async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
-  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("child did not close before timeout"));
-      }, timeoutMs);
-      child.once("close", (code, signal) => {
-        clearTimeout(timeout);
-        resolve({ code, signal });
-      });
-    },
-  );
-}
-
 describe("scripts/test-docker-all scheduler", () => {
-  it("parses the supported CLI options", () => {
-    expect(parseDockerAllCliArgs([])).toEqual({
-      help: false,
-      planJson: false,
-      preparePluginRegistry: false,
-    });
-    expect(parseDockerAllCliArgs(["--plan-json"])).toEqual({
-      help: false,
-      planJson: true,
-      preparePluginRegistry: false,
-    });
+  it("parses CLI modes and rejects conflicts", () => {
     expect(parseDockerAllCliArgs(["--help"])).toEqual({
       help: true,
       planJson: false,
-      preparePluginRegistry: false,
-    });
-    expect(parseDockerAllCliArgs(["--prepare-only=/tmp/candidate.json"])).toEqual({
-      help: false,
-      planJson: false,
-      prepareOnly: "/tmp/candidate.json",
       preparePluginRegistry: false,
     });
     expect(parseDockerAllCliArgs(["--prepare-plugin-registry"])).toEqual({
@@ -406,7 +377,6 @@ describe("scripts/test-docker-all scheduler", () => {
       allowFrozenTargetScenarioOmissions: true,
       includeOpenWebUI: false,
       liveMode: "all",
-      liveRetries: DEFAULT_LIVE_RETRIES,
       orderLanes: <T>(lanes: T[]) => lanes,
       planReleaseAll: false,
       profile: "all",
@@ -659,13 +629,19 @@ describe("scripts/test-docker-all scheduler", () => {
           ...process.env,
           OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL: "1",
           OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base legacy-operator-state",
           OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: process.cwd(),
         },
       },
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ profile: "release-path" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      profile: "release-path",
+      lanes: expect.arrayContaining([
+        expect.objectContaining({ name: "published-upgrade-survivor-legacy-operator-state" }),
+      ]),
+    });
   });
 
   it("rejects loose numeric runner env vars without a stack trace", () => {
@@ -767,8 +743,10 @@ describe("scripts/test-docker-all scheduler", () => {
 
       const failureIndexFile = path.join(logDir, "failures.json");
       const failureIndex = JSON.parse(readFileSync(failureIndexFile, "utf8"));
+      expect(failureIndex).not.toHaveProperty("status");
       expect(failureIndex.combinedGhWorkflowCommand).toContain("allow_unreleased_changelog=true");
 
+      const rerunOutputs: string[] = [];
       for (const artifact of [summaryFile, failureIndexFile]) {
         const rerun = spawnSync(
           process.execPath,
@@ -780,9 +758,12 @@ describe("scripts/test-docker-all scheduler", () => {
           },
         );
         expect(rerun.status, rerun.stderr).toBe(0);
+        rerunOutputs.push(rerun.stdout);
         expect(rerun.stdout).toContain(`-f ref='${selectedSha}'`);
+        expect(rerun.stdout).toContain("docker_lanes='install-e2e'");
         expect(rerun.stdout).toContain("allow_unreleased_changelog=true");
       }
+      expect(rerunOutputs[1]).toBe(rerunOutputs[0]);
     } finally {
       rmSync(logDir, { force: true, recursive: true });
     }
@@ -880,7 +861,7 @@ describe("scripts/test-docker-all scheduler", () => {
     }
   });
 
-  it("fails with truthful artifacts when a frozen target cannot run selected survivor lanes", () => {
+  it("records a successful no-op when an authorized frozen target cannot run selected lanes", () => {
     const root = tempDirs.make("openclaw-docker-all-filtered-");
     const logDir = path.join(root, "logs");
     try {
@@ -900,20 +881,27 @@ describe("scripts/test-docker-all scheduler", () => {
         },
       });
 
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(0);
       expect(result.stdout).toContain("Docker lanes omitted");
-      expect(result.stderr).toContain("resolved zero runnable Docker lanes");
-      expect(result.stderr).toContain("published-upgrade-survivor");
+      expect(result.stdout).toContain(
+        "No selected Docker lane is supported by the frozen target; finalizing run summary",
+      );
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
-      expect(summary.status).toBe("failed");
+      expect(summary.status).toBe("passed");
       expect(summary.lanes).toEqual([]);
-      expect(summary.omittedUnsupportedLanes).toHaveLength(12);
+      expect(summary.omittedUnsupportedLanes).toHaveLength(14);
       expect(summary.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
+      expect(summary.omittedUnsupportedLanes).toContain(
+        "published-upgrade-survivor-custom-plugin-siblings",
+      );
+      expect(summary.omittedUnsupportedLanes).toContain(
+        "published-upgrade-survivor-legacy-operator-state",
+      );
       expect(summary.omittedUnsupportedLanes).toContain(
         "published-upgrade-survivor-versioned-runtime-deps",
       );
       const failures = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
-      expect(failures.status).toBe("failed");
+      expect(failures).not.toHaveProperty("status");
       expect(failures.lanes).toEqual([]);
     } finally {
       rmSync(root, { force: true, recursive: true });
@@ -951,7 +939,13 @@ describe("scripts/test-docker-all scheduler", () => {
       } else {
         const plan = JSON.parse(result.stdout);
         expect(plan.lanes).toEqual([]);
-        expect(plan.omittedUnsupportedLanes).toHaveLength(12);
+        expect(plan.omittedUnsupportedLanes).toHaveLength(14);
+        expect(plan.omittedUnsupportedLanes).toContain(
+          "published-upgrade-survivor-custom-plugin-siblings",
+        );
+        expect(plan.omittedUnsupportedLanes).toContain(
+          "published-upgrade-survivor-legacy-operator-state",
+        );
       }
       expect(existsSync(path.join(logDir, "summary.json"))).toBe(false);
       expect(existsSync(path.join(logDir, "failures.json"))).toBe(false);
@@ -1050,7 +1044,7 @@ process.exit(0);
       });
 
       const failureIndex = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
-      expect(failureIndex.status).toBe("failed");
+      expect(failureIndex).not.toHaveProperty("status");
       expect(failureIndex.combinedGhWorkflowCommand).toBeUndefined();
       expect(failureIndex.lanes[0]?.ghWorkflowCommand).toBeUndefined();
       expect(failureIndex.lanes).toEqual([
@@ -1157,48 +1151,6 @@ process.exit(0);
     ).toBe(false);
   });
 
-  it("keeps resource and weight limits as co-scheduling limits", () => {
-    expect(
-      canStartSchedulerLane(
-        {
-          name: "npm-smoke",
-          resources: ["npm"],
-          weight: 1,
-        },
-        activePool({
-          count: 1,
-          resources: {
-            docker: 1,
-            npm: 1,
-          },
-          weight: 1,
-        }),
-        2,
-        limits,
-      ),
-    ).toBe(true);
-
-    expect(
-      canStartSchedulerLane(
-        {
-          name: "npm-heavy",
-          resources: ["npm"],
-          weight: 2,
-        },
-        activePool({
-          count: 1,
-          resources: {
-            docker: 1,
-            npm: 1,
-          },
-          weight: 1,
-        }),
-        2,
-        limits,
-      ),
-    ).toBe(false);
-  });
-
   it("serializes live OpenAI Docker lanes by default", () => {
     expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
   });
@@ -1268,6 +1220,49 @@ postgres Created
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  posixIt.each(["extra field", "oversized", "two receipts", "injected phase"])(
+    "never promotes logs or invalid %s metadata into an annotation",
+    async (kind) => {
+      const root = tempDirs.make("docker-failure-metadata-");
+      const logFile = path.join(root, "lane.log");
+      const metadata = { phase: "update-candidate", exitStatus: 7, signal: null };
+      const valid = JSON.stringify(metadata);
+      const payload =
+        kind === "oversized"
+          ? "x".repeat(1025)
+          : kind === "two receipts"
+            ? valid + valid
+            : JSON.stringify(
+                kind === "extra field"
+                  ? { ...metadata, secret: "PRIVATE_ENV_BYTES" }
+                  : { ...metadata, phase: "update\n::error::PRIVATE_LOG_BYTES" },
+              );
+      const program = [
+        "const fs = require('node:fs');",
+        "console.error(" + JSON.stringify(valid) + ");",
+        "fs.writeSync(3," + JSON.stringify(payload) + ");",
+        "process.exitCode = 7;",
+      ].join("\n");
+      const entry = path.join(root, "metadata.cjs");
+      writeFileSync(entry, program);
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const result = await runShellCommand({
+          command: JSON.stringify(process.execPath) + " " + JSON.stringify(entry),
+          env: { ...process.env, GITHUB_ACTIONS: "true" },
+          label: "metadata",
+          logFile,
+          captureUpgradeFailure: true,
+        });
+        expect(result).toMatchObject({ status: 7, timedOut: false, noOutputTimedOut: false });
+        expect(error.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
+        expect(readFileSync(logFile, "utf8")).toContain(valid);
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
 
   posixIt("clamps oversized shell command timers before scheduling", async () => {
     const result = await runShellCommand({
@@ -1480,7 +1475,7 @@ const startedAt = realNow();
 Date.now = () => startedAt + (realNow() - startedAt) * 100;
 
 const { runShellCommand } = await import(${JSON.stringify(
-        new URL("../../scripts/test-docker-all.mts", import.meta.url).href,
+        resolveRuntimeWorkerUrl(toolingMtsEntrypoints.dockerAll).href,
       )});
 
 await runShellCommand({
@@ -1523,7 +1518,15 @@ await runShellCommand({
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe"],
       });
+      let runnerStderr = "";
+      runner.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+        runnerStderr += chunk;
+      });
       await waitFor(() => {
+        // A runner that fails to load never becomes ready; report its error, not a timeout.
+        if (runner?.exitCode !== null) {
+          throw new Error(`runner exited before readiness:\n${runnerStderr}`);
+        }
         grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
         return existsSync(readyPath) && grandchildPid > 0;
       });
@@ -1552,11 +1555,5 @@ await runShellCommand({
         runner.kill("SIGKILL");
       }
     }
-  });
-
-  it("describes effective scheduler limits for operator errors", () => {
-    expect(describeDockerSchedulerLimits(2, limits)).toBe(
-      "parallelism=2 weightLimit=2 resources=docker=2 npm=2",
-    );
   });
 });

@@ -17,7 +17,8 @@ import {
   runSingleCheck,
   selectChecksForShard,
 } from "../../scripts/run-additional-boundary-checks.mts";
-import { waitForFile, waitForPidFile } from "../helpers/process-wait.js";
+import { waitForChildClose, waitForFile, waitForPidFile } from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 
 function createOutputBuffer() {
   const chunks: string[] = [];
@@ -87,21 +88,6 @@ async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> 
   throw new Error(`process still running: ${pid}`);
 }
 
-async function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs: number,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
-}
-
 describe("run-additional-boundary-checks", () => {
   it("keeps prompt snapshot drift checks out of boundary shards", () => {
     // The snapshot check regenerates prompt fixtures over the full agent
@@ -161,7 +147,7 @@ describe("run-additional-boundary-checks", () => {
     expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
   });
 
-  it("parses and applies CI shard specs", () => {
+  it.each([1, 2, 3, 4, 8])("covers every check once across %i shards", (count) => {
     expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
     expect(parseShardSelection("2/4,3/4")).toEqual([
       { count: 4, index: 1, label: "2/4" },
@@ -173,16 +159,17 @@ describe("run-additional-boundary-checks", () => {
     expect(selectChecksForShard(BOUNDARY_CHECKS, "2/4,3/4")).toEqual(
       BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 1 || index % 4 === 2),
     );
-    const shardedLabels = [1, 2, 3, 4].flatMap((index) =>
-      selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`).map((check) => check.label),
+    const indices = Array.from({ length: count }, (_, index) => index + 1);
+    const shardedLabels = indices.flatMap((index) =>
+      selectChecksForShard(BOUNDARY_CHECKS, `${index}/${count}`).map((check) => check.label),
     );
     expect(shardedLabels.toSorted((a, b) => a.localeCompare(b))).toEqual(
       BOUNDARY_CHECKS.map((check) => check.label).toSorted((a, b) => a.localeCompare(b)),
     );
     expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
-    const transferred = [1, 2, 3, 4].flatMap((index) => {
-      const full = selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`);
-      const selected = selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`, "test-types");
+    const transferred = indices.flatMap((index) => {
+      const full = selectChecksForShard(BOUNDARY_CHECKS, `${index}/${count}`);
+      const selected = selectChecksForShard(BOUNDARY_CHECKS, `${index}/${count}`, "test-types");
       expect(selected).toEqual(
         full.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary"),
       );
@@ -295,12 +282,20 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
-  it("keeps the production plugin normalization boundary in CI checks", () => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
-      label: "extension-normalization-core-bypass-boundary",
-      command: "pnpm",
-      args: ["run", "lint:extensions:no-normalization-core-bypass"],
-    });
+  it("runs all production plugin SDK boundaries in one CI check", () => {
+    const checks = BOUNDARY_CHECKS.filter((check) => check.label.startsWith("extension-"));
+    expect(checks).toEqual([
+      {
+        label: "extension-plugin-sdk-boundaries",
+        command: "node",
+        args: [
+          "--import",
+          "./scripts/tsx.mjs",
+          "scripts/check-extension-plugin-sdk-boundary.mts",
+          "--all",
+        ],
+      },
+    ]);
   });
 
   it("keeps native and Node state schema versions aligned in CI", () => {
@@ -409,45 +404,73 @@ describe("run-additional-boundary-checks", () => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-timeout-"));
       const childPidPath = path.join(tempDir, "child.pid");
       let childPid: number | undefined;
+      let releaseAndWait: (() => ReturnType<typeof runSingleCheck>) | undefined;
+      const errors: unknown[] = [];
       try {
         const childScript = [
+          "const fs = require('node:fs');",
           "process.on('SIGTERM', () => {});",
           "setInterval(() => {}, 1000);",
+          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(process.pid));",
+          "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
         ].join("");
         const parentScript = [
           "const { spawn } = require('node:child_process');",
-          "const fs = require('node:fs');",
-          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(child.pid));",
-          "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
+          `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
           "setInterval(() => {}, 1000);",
         ].join("");
 
-        const resultPromise = runSingleCheck(
-          {
-            label: "wrapper-exits",
-            command: process.execPath,
-            args: ["-e", parentScript],
-          },
-          {
-            checkTimeoutMs: 100,
-            cwd: process.cwd(),
-            env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-            outputMaxBytes: 4096,
-          },
+        releaseAndWait = startProcessWatchdogFixture(() =>
+          runSingleCheck(
+            {
+              label: "wrapper-exits",
+              command: process.execPath,
+              args: ["-e", parentScript],
+            },
+            {
+              checkTimeoutMs: 100,
+              cwd: process.cwd(),
+              env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+              outputMaxBytes: 4096,
+            },
+          ),
         );
 
         childPid = await waitForPidFile(childPidPath, 2000);
-        const result = await resultPromise;
+        expect(isProcessAlive(childPid)).toBe(true);
+        const result = await releaseAndWait();
 
         expect(result.code).toBe(1);
         expect(result.timedOut).toBe(true);
         await waitForDead(childPid, 2000);
+      } catch (error) {
+        errors.push(error);
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        try {
+          await releaseAndWait?.();
+        } catch (error) {
+          if (!errors.includes(error)) {
+            errors.push(error);
+          }
         }
-        fs.rmSync(tempDir, { force: true, recursive: true });
+        try {
+          if (childPid !== undefined && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          fs.rmSync(tempDir, { force: true, recursive: true });
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Boundary timeout fixture failed", { cause: errors[0] });
       }
     },
   );

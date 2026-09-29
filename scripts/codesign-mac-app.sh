@@ -1,10 +1,9 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 APP_BUNDLE="dist/OpenClaw.app"
-IDENTITY="${SIGN_IDENTITY:-}"
 SIGNING_VARIANT="${OPENCLAW_MAC_SIGNING_VARIANT:-standard}"
-ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mac-signing-identity.sh"
 ELEVATION_TEAM_ID="FWJYW4S8P8"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 CODESIGN_TIMESTAMP_RETRY_ATTEMPTS="${CODESIGN_TIMESTAMP_RETRY_ATTEMPTS:-8}"
@@ -44,9 +43,6 @@ case "$SIGNING_VARIANT" in
     ;;
 esac
 
-if [[ "$SIGNING_VARIANT" == "elevation-host" && -z "$IDENTITY" ]]; then
-  IDENTITY="$ELEVATION_IDENTITY"
-fi
 if [[ "$SIGNING_VARIANT" == "elevation-host" && "$DISABLE_LIBRARY_VALIDATION" == "1" ]]; then
   echo "ERROR: Elevation host signing forbids DISABLE_LIBRARY_VALIDATION=1." >&2
   exit 1
@@ -87,61 +83,7 @@ fi
 # Freeze the physical policy root now; resolving it after a swap could authorize the replacement.
 APP_MUTATION_ROOT="$(cd -P -- "$APP_BUNDLE" && pwd -P)"
 
-select_identity() {
-  local preferred available first
-
-  # Prefer a Developer ID Application cert.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
-
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Next, try Apple Distribution.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Distribution/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Then, try Apple Development.
-  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Development/ { print $2; exit }')"
-  if [ -n "$preferred" ]; then
-    echo "$preferred"
-    return
-  fi
-
-  # Fallback to the first valid signing identity.
-  available="$(security find-identity -p codesigning -v 2>/dev/null \
-    | sed -n 's/.*\"\\(.*\\)\"/\\1/p')"
-
-  if [ -n "$available" ]; then
-    first="$(printf '%s\n' "$available" | head -n1)"
-    echo "$first"
-    return
-  fi
-
-  return 1
-}
-
-if [ -z "$IDENTITY" ]; then
-  if ! IDENTITY="$(select_identity)"; then
-    if [[ "${ALLOW_ADHOC_SIGNING:-}" == "1" ]]; then
-      echo "WARN: No signing identity found. Falling back to ad-hoc signing (-)." >&2
-      echo "      !!! WARNING: Ad-hoc signed apps do NOT persist TCC permissions (Accessibility, etc) !!!" >&2
-      echo "      !!! You will need to re-grant permissions every time you restart the app.         !!!" >&2
-      IDENTITY="-"
-    else
-      echo "ERROR: No signing identity found. Set SIGN_IDENTITY to a valid codesigning certificate." >&2
-      echo "       Alternatively, set ALLOW_ADHOC_SIGNING=1 to fallback to ad-hoc signing (limitations apply)." >&2
-      exit 1
-    fi
-  fi
-fi
+IDENTITY="$(resolve_mac_signing_identity)"
 
 echo "Using signing identity: $IDENTITY"
 if [[ "$IDENTITY" == "-" ]]; then
@@ -431,6 +373,11 @@ fi
 run_bundle_mutation xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
 # Sign bundled helper binaries before signing the app bundle.
+MAC_CONTROL_CLI="$APP_BUNDLE/Contents/MacOS/openclaw-mac"
+if [ -f "$MAC_CONTROL_CLI" ]; then
+  echo "Signing macOS control CLI"; sign_plain_item "$MAC_CONTROL_CLI"
+fi
+
 MLX_TTS_HELPER="$APP_BUNDLE/Contents/MacOS/openclaw-mlx-tts"
 if [ -f "$MLX_TTS_HELPER" ]; then
   echo "Signing MLX TTS helper"; sign_plain_item "$MLX_TTS_HELPER"
@@ -440,6 +387,13 @@ CUA_DRIVER="$APP_BUNDLE/Contents/Resources/cua-driver"
 if [ -f "$CUA_DRIVER" ]; then
   echo "Signing embedded CUA driver"; sign_plain_item "$CUA_DRIVER"
 fi
+
+while IFS= read -r -d '' helper_kind && IFS= read -r -d '' helper_file; do
+  [[ "$helper_kind" == "executable" ]] || continue
+  [[ "$helper_file" == "$APP_BUNDLE/Contents/Resources/cloudflared/"* ]] || continue
+  sign_plain_item "$helper_file"
+  codesign --verify --strict "$helper_file"
+done < "$NATIVE_INVENTORY"
 
 # Seal all native payloads before the enclosing app; npm packages can carry
 # standalone executables and addons below arbitrarily nested dependency roots.

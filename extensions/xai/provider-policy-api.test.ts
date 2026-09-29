@@ -1,13 +1,9 @@
-// Xai tests cover provider policy api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("xai provider thinking policy", () => {
   it.each([
     ["xai", "grok-4.3"],
-    ["xai", "grok-4.3-latest"],
-    ["xai", "grok-latest"],
-    ["x-ai", "grok-4.3"],
     ["x-ai", "grok-4.3-latest"],
     ["x-ai", "grok-latest"],
   ])("exposes Grok 4.3 thinking levels for %s/%s", (provider, modelId) => {
@@ -28,10 +24,6 @@ describe("xai provider thinking policy", () => {
 
   it.each([
     ["xai", "grok-4.5"],
-    ["xai", "grok-4.5-latest"],
-    ["xai", "grok-build-latest"],
-    ["x-ai", "grok-4.5"],
-    ["x-ai", "grok-4.5-latest"],
     ["x-ai", "grok-build-latest"],
   ])("uses xAI's high reasoning default for %s/%s", (provider, modelId) => {
     const profile = resolveThinkingProfile({
@@ -45,32 +37,30 @@ describe("xai provider thinking policy", () => {
     });
   });
 
-  it.each(["xai", "x-ai"])("exposes Grok 4.6 xhigh reasoning for %s", (provider) => {
-    expect(resolveThinkingProfile({ provider, modelId: "grok-4.6" })).toEqual({
+  it.each([
+    ["xai", "grok-4.7"],
+    ["x-ai", "grok-4.7"],
+    ["xai", "grok-4.6"],
+    // Releases newer than the manifest follow xAI's "grok-4.6 and later" rule.
+    ["xai", "grok-4.8"],
+    ["xai", "grok-4.8-latest"],
+    ["xai", "grok-5"],
+  ])("exposes xhigh reasoning for %s/%s", (provider, modelId) => {
+    expect(resolveThinkingProfile({ provider, modelId })).toEqual({
       levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
       defaultLevel: "high",
     });
   });
 
-  it.each([
-    ["grok-4.6", [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }]],
-    ["grok-4.5", [{ id: "low" }, { id: "medium" }, { id: "high" }]],
-  ] as const)(
-    "resolves the OAuth auto alias to its canonical %s target",
-    (canonicalModelId, levels) => {
-      expect(
-        resolveThinkingProfile({
-          provider: "xai",
-          modelId: "auto",
-          reasoning: true,
-          params: { canonicalModelId },
-        }),
-      ).toEqual({ levels, defaultLevel: "high" });
-    },
-  );
-
-  it("keeps the OAuth auto alias off-only without a canonical target", () => {
-    expect(resolveThinkingProfile({ provider: "xai", modelId: "auto", reasoning: true })).toEqual({
+  it("does not infer thinking controls from retired canonical-target metadata", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "xai",
+        modelId: "auto",
+        reasoning: true,
+        params: { canonicalModelId: "grok-4.6" },
+      }),
+    ).toEqual({
       levels: [{ id: "off" }],
       defaultLevel: "off",
     });
@@ -95,11 +85,11 @@ describe("xai provider thinking policy", () => {
 
   it.each([
     ["xai", "grok-build-0.1"],
-    ["xai", "grok-4.20-0309-reasoning"],
-    ["xai", "grok-4.20-beta-latest-reasoning"],
-    ["x-ai", "grok-build-0.1"],
     ["x-ai", "grok-4.20-0309-reasoning"],
-    ["x-ai", "grok-4.20-beta-latest-reasoning"],
+    // Grok 4.20 predates 4.3, and variant suffixes are separate model contracts.
+    ["xai", "grok-4.20"],
+    ["xai", "grok-4-0709"],
+    ["xai", "grok-4.8-fast"],
   ])("does not advertise configurable reasoning for %s/%s", (provider, modelId) => {
     expect(resolveThinkingProfile({ provider, modelId })).toEqual({
       levels: [{ id: "off" }],

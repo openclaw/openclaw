@@ -5,6 +5,7 @@ import type {
   CronRunsResult,
   CronStatus,
 } from "../ui/src/api/types.ts";
+import { cronListResponseFixture } from "../ui/src/test-helpers/cron.ts";
 
 const CRON_LIST_SNAPSHOT_REVISION = "control-ui-mock-cron";
 
@@ -46,7 +47,10 @@ function singleJobListCases(jobs: CronJob[], match: Record<string, unknown>) {
   }));
 }
 
-export function buildCronMocks(baseTime: number, options: { richAttention?: boolean } = {}) {
+export function buildCronMocks(
+  baseTime: number,
+  options: { richAttention?: boolean; secondAgentId?: string } = {},
+) {
   const richAttention = options.richAttention === true;
   const minute = 60_000;
   const hour = 60 * minute;
@@ -67,6 +71,14 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       message: "Sync the team calendar and summarize schedule conflicts.",
     },
     delivery: { mode: "announce", channel: "telegram", to: "@operations" },
+    failureAlert: {
+      after: 2,
+      channel: "telegram",
+      to: "@operations",
+      cooldownMs: 3_600_000,
+      includeSkipped: false,
+      mode: "announce",
+    },
     state: {
       nextRunAtMs: baseTime + 5 * hour,
       lastRunAtMs: baseTime - 5 * minute,
@@ -188,7 +200,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
     : [];
   const healthyJob: CronJob = {
     id: "mock-cron-release-digest",
-    agentId: "main",
+    agentId: options.secondAgentId ?? "main",
     name: "Publish release digest",
     description: "Summarize merged changes for the engineering channel.",
     enabled: true,
@@ -220,7 +232,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
     durationMs: job.state?.lastDurationMs,
     error: job.state?.lastError,
     deliveryStatus: "not-requested",
-    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5.6-sol",
+    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5",
     provider: index === 1 ? "anthropic" : "openai",
   }));
   const runs: CronRunLogEntry[] = [
@@ -249,7 +261,8 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       durationMs: overdueJob.state?.lastDurationMs,
       summary: "Classified 23 messages and prepared 6 replies.",
       deliveryStatus: "not-requested",
-      model: "gpt-5.6-sol",
+      deliverySuppressionReason: "Delivery mode is none for this inbox-only automation.",
+      model: "gpt-5",
       provider: "openai",
     },
   ];
@@ -265,10 +278,20 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       durationMs: 42_000 + index * 2_500,
       summary: `Completed an on-demand run for ${job.name}.`,
       deliveryStatus: "not-requested",
-      model: "gpt-5.6-sol",
+      model: "gpt-5",
       provider: "openai",
     },
   }));
+  for (const run of queuedRuns) {
+    run.entry.runId = run.runId;
+  }
+  const transcriptRuns = [...runs, ...queuedRuns.map((run) => run.entry)];
+  for (const [index, entry] of transcriptRuns.entries()) {
+    entry.runId ??= `mock-cron-history-${index}`;
+    const agentId = jobs.find((job) => job.id === entry.jobId)?.agentId ?? "main";
+    entry.sessionKey = `agent:${agentId}:cron:${entry.jobId}:run:${entry.runId}`;
+    entry.sessionId = `mock-cron-transcript-${index}`;
+  }
   const status: CronStatus = {
     enabled: true,
     triggersEnabled: true,
@@ -280,63 +303,42 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
     ),
   };
   const runByJobId = new Map(runs.map((entry) => [entry.jobId, entry]));
-  const sortedJobLists = [
-    {
-      match: { sortBy: "nextRunAtMs", sortDir: "asc" },
-      jobs: jobs.toSorted(
-        (left, right) => (left.state?.nextRunAtMs ?? 0) - (right.state?.nextRunAtMs ?? 0),
-      ),
-    },
-    {
-      match: { sortBy: "nextRunAtMs", sortDir: "desc" },
-      jobs: jobs.toSorted(
-        (left, right) => (right.state?.nextRunAtMs ?? 0) - (left.state?.nextRunAtMs ?? 0),
-      ),
-    },
-    {
-      match: { sortBy: "updatedAtMs", sortDir: "asc" },
-      jobs: jobs.toSorted((left, right) => (left.updatedAtMs ?? 0) - (right.updatedAtMs ?? 0)),
-    },
-    {
-      match: { sortBy: "updatedAtMs", sortDir: "desc" },
-      jobs: jobs.toSorted((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0)),
-    },
-    {
-      match: { sortBy: "name", sortDir: "asc" },
-      jobs: jobs.toSorted((left, right) => left.name.localeCompare(right.name)),
-    },
-    {
-      match: { sortBy: "name", sortDir: "desc" },
-      jobs: jobs.toSorted((left, right) => right.name.localeCompare(left.name)),
-    },
-  ];
+  const sortComparators: Record<string, (left: CronJob, right: CronJob) => number> = {
+    nextRunAtMs: (left, right) => (left.state?.nextRunAtMs ?? 0) - (right.state?.nextRunAtMs ?? 0),
+    updatedAtMs: (left, right) => (left.updatedAtMs ?? 0) - (right.updatedAtMs ?? 0),
+    name: (left, right) => left.name.localeCompare(right.name),
+  };
+  const sortedJobLists = Object.entries(sortComparators).flatMap(([sortBy, compare]) =>
+    ["asc", "desc"].map((sortDir) => ({
+      match: { sortBy, sortDir },
+      jobs: jobs.toSorted(sortDir === "asc" ? compare : (left, right) => compare(right, left)),
+    })),
+  );
 
   return {
     "cron.status": status,
-    "cron.list": {
+    "cron.list": cronListResponseFixture([
       // Cases mirror the concrete queries today's Cron UI issues. Unknown combinations fall back
       // to the full fixture list; dynamic evaluation is intentionally out of scope because the
       // scenario is JSON-serialized into the page rather than installed as a live responder.
-      cases: [
-        {
-          match: { enabled: "enabled", lastRunStatus: "error" },
-          response: listResult(failedJobs, { limit: failedJobs.length }),
-        },
-        { match: { enabled: "disabled" }, response: listResult([]) },
-        ...singleJobListCases(jobs, {
-          enabled: "enabled",
-          sortBy: "nextRunAtMs",
-          sortDir: "asc",
-          limit: 1,
-        }),
-        ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
-        ...sortedJobLists.map((entry) => ({
-          match: entry.match,
-          response: listResult(entry.jobs),
-        })),
-        { response: listResult(jobs) },
-      ],
-    },
+      {
+        match: { enabled: "enabled", lastRunStatus: "error" },
+        response: listResult(failedJobs, { limit: failedJobs.length }),
+      },
+      { match: { enabled: "disabled" }, response: listResult([]) },
+      ...singleJobListCases(jobs, {
+        enabled: "enabled",
+        sortBy: "nextRunAtMs",
+        sortDir: "asc",
+        limit: 1,
+      }),
+      ...singleJobListCases(jobs, { includeDisabled: true, limit: 1 }),
+      ...sortedJobLists.map((entry) => ({
+        match: entry.match,
+        response: listResult(entry.jobs),
+      })),
+      { response: listResult(jobs) },
+    ]),
     "cron.runs": {
       cases: [
         ...queuedRuns.map((run) => ({
@@ -359,6 +361,23 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
         { match: { statuses: ["error"] }, response: runsResult(failedRuns) },
         { response: runsResult(runs) },
       ],
+    },
+    "cron.history": {
+      cases: transcriptRuns.map((entry) => ({
+        match: { id: entry.jobId, runId: entry.runId },
+        response: {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: entry.summary ?? entry.error ?? "Automation completed." },
+              ],
+              timestamp: entry.ts,
+              __openclaw: { id: `cron-result-${entry.runId}` },
+            },
+          ],
+        },
+      })),
     },
     // Writes acknowledge the UI action but intentionally keep the fixture snapshot immutable.
     "cron.add": { id: "mock-cron-created" },

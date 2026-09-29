@@ -16,6 +16,37 @@ export function registerManagedTerminalResultTests(
   expect: typeof import("vitest").expect,
   tempDirs: Set<string>,
 ): void {
+  itUnix.each(["ready", "unready"] as const)(
+    "finishes a cancelled handoff ledger when recovery is %s without a Gateway boot",
+    async (gatewayHealth) => {
+      const { run } = await runManagedServiceManagerBoundary("systemd", {
+        ledger: true,
+        cancelAfterPark: true,
+        gatewayHealth,
+      });
+      expect(run).toMatchObject({
+        phase: "finished",
+        status: gatewayHealth === "ready" ? "skipped" : "failed",
+        reason:
+          gatewayHealth === "ready"
+            ? "managed-service-handoff-cancelled"
+            : "managed-service-handoff-restore-failed",
+        verification: { serviceRunning: true, runningVersion: "1.0.0", versionMatch: true },
+      });
+      expect(run?.verification.booted).toBeUndefined();
+      expect(run?.downtimeMs).toEqual(gatewayHealth === "ready" ? expect.any(Number) : null);
+      expect(run?.steps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            step: "service-stop",
+            status: "completed",
+            startedAtMs: expect.any(Number),
+          }),
+        ]),
+      );
+    },
+  );
+
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
       (["git", "npm"] as const).flatMap((mode) =>
@@ -137,34 +168,104 @@ export function registerManagedRecoveryOutcomeTests(
   ) => Promise<ManagedServiceManagerBoundaryResult>,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
+  kinds: readonly ("systemd" | "launchd")[],
 ): void {
   itUnix.each(
-    (["systemd", "launchd"] as const).flatMap((kind) =>
-      [false, true].map((contradictory) => ({ kind, contradictory })),
+    kinds.flatMap((kind) =>
+      (["ready", "exited", "throw"] as const).map((gatewayHealth) => ({ kind, gatewayHealth })),
     ),
   )(
-    "keeps $kind parked on unsafe exit 79 (contradictory stdout=$contradictory)",
-    async ({ kind, contradictory }) => {
+    "restores the verified previous $kind generation after updater exit 79 (health=$gatewayHealth)",
+    async ({ kind, gatewayHealth }) => {
+      const { run, state, log } = await runManagedServiceManagerBoundary(kind, {
+        ledger: true,
+        rollbackRestoration: true,
+        updaterExitCode: 79,
+        helperExitCode: gatewayHealth === "ready" ? 1 : 79,
+        gatewayHealth,
+        updaterResult: {
+          status: "error",
+          mode: "npm",
+          reason: "restart-unhealthy",
+          before: { version: "1.0.0" },
+          after: { version: "1.0.0" },
+          recovery: { serviceRestartSafe: true, packageRollbackVerified: true, version: "1.0.0" },
+        },
+      });
+      expect(state).toMatchObject({
+        restored: true,
+        healthProbeCount: 1,
+        expectedVersion: "1.0.0",
+        recoveryAllowance: "1",
+        triageObservedRestored: true,
+      });
+      expect(state.triageRecoveryAllowance).toBeUndefined();
+      expect(run, log).toMatchObject({
+        status: gatewayHealth === "ready" ? "rolled-back" : "failed",
+        reason:
+          gatewayHealth === "ready"
+            ? "restart-unhealthy"
+            : "managed-service-handoff-restore-failed",
+        after: { version: "1.0.0" },
+        verification: {
+          serviceRunning: gatewayHealth !== "exited",
+        },
+        downtimeMs: gatewayHealth === "ready" ? expect.any(Number) : null,
+      });
+      expect(run?.verification.runningVersion).toBe(
+        gatewayHealth === "throw" ? undefined : "1.0.0",
+      );
+      expect(run?.verification.versionMatch).toBe(gatewayHealth === "throw" ? undefined : true);
+      expect(run?.verification.pid).toBe(gatewayHealth === "exited" ? undefined : process.pid);
+      expect(run?.verification.readyz).toBeUndefined();
+      expect(run?.verification.settled).toBe(
+        gatewayHealth === "throw" ? undefined : gatewayHealth === "ready",
+      );
+      expect(run?.verification.channelsReady).toBe(
+        gatewayHealth === "throw" ? undefined : gatewayHealth === "ready",
+      );
+      expect(run?.verification.pluginErrors).toEqual(gatewayHealth === "throw" ? undefined : []);
+      expect(log).not.toContain("keep the gateway stopped");
+    },
+  );
+
+  itUnix.each(
+    kinds.flatMap((kind) =>
+      (["none", "stdout-only", "ledger-only"] as const).map((proof) => ({ kind, proof })),
+    ),
+  )(
+    "keeps $kind parked on unsafe exit 79 without a complete recovery verdict (proof=$proof)",
+    async ({ kind, proof }) => {
       const { commands, sentinel, state } = await runManagedServiceManagerBoundary(kind, {
         updaterExitCode: 79,
-        recordedFailure: contradictory
-          ? {
-              error: "Diagnostic restart safety must not override the direct updater outcome",
-              result: {
+        ledger: proof === "ledger-only",
+        rollbackRestoration: proof === "ledger-only",
+        recordedFailure:
+          proof === "stdout-only"
+            ? {
+                error: "Diagnostic restart safety must not override the direct updater outcome",
+                result: {
+                  status: "error",
+                  mode: "npm",
+                  recovery: { serviceRestartSafe: true },
+                  steps: [],
+                },
+              }
+            : undefined,
+        updaterResult:
+          proof === "stdout-only"
+            ? {
                 status: "error",
                 mode: "npm",
-                recovery: { serviceRestartSafe: true },
-                steps: [],
-              },
-            }
-          : undefined,
-        updaterResult: contradictory
-          ? {
-              status: "error",
-              mode: "npm",
-              recovery: { serviceRestartSafe: true, version: "1.0.0" },
-            }
-          : undefined,
+                before: { version: "1.0.0" },
+                after: { version: "1.0.0" },
+                recovery: {
+                  serviceRestartSafe: true,
+                  packageRollbackVerified: true,
+                  version: "1.0.0",
+                },
+              }
+            : undefined,
       });
 
       expect(state.parked).toBe(true);
@@ -186,7 +287,7 @@ export function registerManagedRecoveryOutcomeTests(
     },
   );
 
-  itUnix.each(["systemd", "launchd"] as const)(
+  itUnix.each(kinds)(
     "%s never overrides a rejected or missing updater recovery result",
     async (kind) => {
       for (const updaterResult of [
@@ -220,7 +321,7 @@ export function registerManagedRecoveryOutcomeTests(
   );
 
   itUnix.each([
-    ...(["systemd", "launchd"] as const).flatMap((kind) =>
+    ...kinds.flatMap((kind) =>
       (["error", "skipped"] as const).flatMap((status) =>
         ([undefined, "published", "consumed"] as const).map((updaterNotification) => ({
           kind,
@@ -230,7 +331,7 @@ export function registerManagedRecoveryOutcomeTests(
         })),
       ),
     ),
-    ...(["systemd", "launchd"] as const).map((kind) => ({
+    ...kinds.map((kind) => ({
       kind,
       status: "error" as const,
       updaterNotification: "published" as const,
@@ -282,7 +383,7 @@ export function registerManagedRecoveryOutcomeTests(
   );
 
   itUnix.each(
-    (["systemd", "launchd"] as const).flatMap((kind) =>
+    kinds.flatMap((kind) =>
       (["error", "skipped"] as const).flatMap((status) =>
         [
           undefined,
@@ -306,7 +407,8 @@ export function registerManagedRecoveryOutcomeTests(
     "$kind preserves terminal foreground $status outcomes and rejects unverified recovery ($recoveryLabel)",
     async ({ kind, status, recovery }) => {
       const reason = status === "skipped" ? "no-upstream" : "preflight-fetch";
-      const { commands, state, sentinel, log } = await runManagedServiceManagerBoundary(kind, {
+      const { commands, state, sentinel, log, run } = await runManagedServiceManagerBoundary(kind, {
+        ledger: true,
         updaterExitCode: status === "skipped" ? 0 : 7,
         helperExitCode: status === "skipped" ? 1 : 7,
         updaterNotification: "consumed",
@@ -319,6 +421,19 @@ export function registerManagedRecoveryOutcomeTests(
       ).toBe(false);
       expect(state.healthProbed).toBeUndefined();
       expect(log).toContain("managed update recovery not attempted:");
+      const availabilityUnverified =
+        !recovery || !("service" in recovery) || recovery.service === "failed";
+      if (availabilityUnverified) {
+        expect(log).toContain("Gateway recovery failed after the update");
+        expect(run?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "warning:gateway-availability",
+            detail: expect.stringContaining("Gateway recovery failed after the update"),
+          }),
+        );
+      } else {
+        expect(log).not.toContain("Gateway recovery failed after the update");
+      }
       if (recovery && "service" in recovery) {
         expect(sentinel).toBeNull();
       } else {
@@ -329,7 +444,7 @@ export function registerManagedRecoveryOutcomeTests(
     },
   );
 
-  itUnix.each(["systemd", "launchd"] as const)(
+  itUnix.each(kinds)(
     "%s fails a zero-exit skip when restored Gateway readiness or identity fails",
     async (kind) => {
       for (const gatewayHealth of ["unready", "wrong-version", "wrong-build", "exited"] as const) {
@@ -367,7 +482,7 @@ export function registerManagedRecoveryOutcomeTests(
     },
   );
 
-  itUnix.each(["systemd", "launchd"] as const)(
+  itUnix.each(kinds)(
     "%s parks an updater with missing, malformed, oversized, interrupted, or rootless output",
     async (kind) => {
       for (const fault of [
@@ -409,7 +524,7 @@ export function registerManagedRecoveryOutcomeTests(
     },
   );
 
-  itUnix.each(["systemd", "launchd"] as const)(
+  itUnix.each(kinds)(
     "%s verifies readiness and expected version before claiming restored service health",
     async (kind) => {
       for (const gatewayHealth of [

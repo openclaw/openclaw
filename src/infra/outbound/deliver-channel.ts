@@ -30,6 +30,7 @@ import type {
   OutboundDurableDeliverySupport,
   PlatformSendRoute,
 } from "./deliver-contracts.js";
+import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import { PlatformMessageNotDispatchedError, type OutboundDeliveryResult } from "./deliver-types.js";
 import {
   attachOutboundDeliveryCommitHook,
@@ -43,16 +44,6 @@ const loadChannelBootstrapRuntime = createLazyRuntimeModule(
   () => import("./channel-bootstrap.runtime.js"),
 );
 const loadChannelPluginFromRegistry = createChannelRegistryLoader((entry) => entry.plugin);
-export async function resolveChannelOutboundDirectiveOptions(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  channel: string;
-}): Promise<{ extractMarkdownImages?: boolean }> {
-  const { plugin } = await loadBootstrappedChannelPlugin(params);
-  return {
-    extractMarkdownImages: plugin?.outbound?.extractMarkdownImages === true ? true : undefined,
-  };
-}
 
 export async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
   const { plugin, pluginRegistry } = await loadBootstrappedChannelPlugin(params);
@@ -78,8 +69,8 @@ async function loadBootstrappedChannelPlugin(params: {
     // surface. A second lookup could attach another plugin's send lifecycle.
     return { plugin, pluginRegistry: scopedRegistry };
   }
-  const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
-  const pluginRegistry = bootstrapOutboundChannelPlugin({
+  const { bootstrapOutboundChannelPluginAsync } = await loadChannelBootstrapRuntime();
+  const pluginRegistry = await bootstrapOutboundChannelPluginAsync({
     channel: params.channel,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -184,18 +175,14 @@ function createPluginHandler(
   const messageMedia = params.message?.send?.media;
   const messagePayload = params.message?.send?.payload;
   const messageLifecycle = params.message?.send?.lifecycle;
+  const durableFinal = params.message?.durableFinal;
+  const supportsUnknownSendKind = (kind: ChannelMessageSendAttemptKind): boolean =>
+    !params.requiredUnknownSendReconciliation ||
+    durableFinal?.capabilities?.reconcileUnknownSend !== true ||
+    durableFinal.reconcileUnknownSendKinds === undefined ||
+    durableFinal.reconcileUnknownSendKinds[kind] === true;
   const assertUnknownSendReconciliationKind = (kind: ChannelMessageSendAttemptKind): void => {
-    const durableFinal = params.message?.durableFinal;
-    if (
-      !params.requiredUnknownSendReconciliation ||
-      durableFinal?.capabilities?.reconcileUnknownSend !== true
-    ) {
-      return;
-    }
-    if (
-      durableFinal.reconcileUnknownSendKinds !== undefined &&
-      durableFinal.reconcileUnknownSendKinds[kind] !== true
-    ) {
+    if (!supportsUnknownSendKind(kind)) {
       throw new Error(
         `Required durable message send became unsupported after outbound transforms: ${kind} unknown-send reconciliation is unavailable for ${params.channel}`,
       );
@@ -213,12 +200,17 @@ function createPluginHandler(
     route: PlatformSendRoute,
     send: () => Promise<T>,
   ): Promise<T> => {
-    await params.onPlatformSendStart?.(route);
-    await params.onDirectAdapterHandoff?.();
+    try {
+      await params.onPlatformSendStart?.(route);
+      await params.onDirectAdapterHandoff?.();
+    } catch (error) {
+      assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+      throw error;
+    }
     // Keep the final authority check and adapter invocation in one synchronous
     // call stack. An awaited callback leaves a microtask gap where custody can
     // change after validation but before recipient-visible transport code runs.
-    params.assertDirectAdapterHandoff?.();
+    assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
     return await send();
   };
   // A prepared transport id identifies one atomic platform message. Splitting it
@@ -244,7 +236,12 @@ function createPluginHandler(
     let result: ChannelMessageSendResult;
     let afterCommit: OutboundDeliveryCommitHook | undefined;
     try {
-      attemptToken = await messageLifecycle.beforeSendAttempt?.(ctx);
+      try {
+        attemptToken = await messageLifecycle.beforeSendAttempt?.(ctx);
+      } catch (error) {
+        assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+        throw error;
+      }
       result = await dispatchToAdapter(ctx, () => send(ctx));
       if (result.outcome !== "not_sent") {
         const successCtx = {
@@ -315,6 +312,7 @@ function createPluginHandler(
     chunkerMode,
     chunkedTextFormatting: outbound?.chunkedTextFormatting,
     textChunkLimit: outbound?.textChunkLimit,
+    extractMarkdownImages: outbound?.extractMarkdownImages === true ? true : undefined,
     preserveMarkdownDetails:
       outbound?.preserveMarkdownDetails?.({
         cfg: params.cfg,
@@ -324,6 +322,13 @@ function createPluginHandler(
     // over sendMedia), so leaving it out here silently drops media for
     // formatted-only adapters and records the fallback as a plain sent text.
     supportsMedia: Boolean(messageMedia ?? sendMedia ?? outbound?.sendFormattedMedia),
+    // Whole media payloads are optional; keep exact media-only reconciliation
+    // on its declared transport even when a fallback payload method exists.
+    supportsMediaPayload:
+      outbound?.sendPayloadGroupsMedia === true &&
+      (durableFinal?.capabilities ?? outbound?.deliveryCapabilities?.durableFinal)?.payload ===
+        true &&
+      supportsUnknownSendKind("payload"),
     sanitizeText: outbound?.sanitizeText
       ? (payload) =>
           outbound.sanitizeText!({
@@ -388,13 +393,14 @@ function createPluginHandler(
         }
       : undefined,
     pinDeliveredMessage: outbound?.pinDeliveredMessage
-      ? async ({ target, messageId, pin, gatewayClientScopes }) =>
+      ? async ({ target, messageId, pin, gatewayClientScopes, assertDirectAdapterHandoff }) =>
           outbound.pinDeliveredMessage!({
             cfg: params.cfg,
             target,
             messageId,
             pin,
             gatewayClientScopes,
+            assertDirectAdapterHandoff,
           })
       : undefined,
     afterDeliverPayload: outbound?.afterDeliverPayload

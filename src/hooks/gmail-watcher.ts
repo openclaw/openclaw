@@ -8,6 +8,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import process from "node:process";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { releaseChildProcessOutputAfterExit } from "../process/child-process.js";
 import { formatCommandResult } from "../process/command-error.js";
@@ -30,9 +31,7 @@ const log = createSubsystemLogger("gmail-watcher");
 const GMAIL_WATCHER_STDERR_TAIL_CHARS = 512;
 
 let watcherProcess: ChildProcess | null = null;
-let renewInterval: ReturnType<typeof setInterval> | null = null;
-let renewalInFlight: Promise<boolean> | null = null;
-let renewalAbortController: AbortController | null = null;
+let renewalScope: GatewaySchedulerScope | undefined;
 let shuttingDown = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
 let respawnTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -236,26 +235,22 @@ function settleProcess(proc: ChildProcess): Promise<void> {
   });
 }
 
-async function stopPeriodicRenewal(): Promise<void> {
-  if (renewInterval) {
-    clearInterval(renewInterval);
-    renewInterval = null;
+async function stopWatcherResources(onProcessStop?: () => void): Promise<void> {
+  shuttingDown = true;
+  if (respawnTimeout) {
+    clearTimeout(respawnTimeout);
+    respawnTimeout = null;
   }
-
-  const renewal = renewalInFlight;
-  const controller = renewalAbortController;
-  if (!renewal) {
-    renewalAbortController = null;
-    return;
+  const renewal = renewalScope;
+  await renewal?.stop();
+  if (renewalScope === renewal) {
+    renewalScope = undefined;
   }
-
-  controller?.abort();
-  await renewal;
-  if (renewalInFlight === renewal) {
-    renewalInFlight = null;
-  }
-  if (renewalAbortController === controller) {
-    renewalAbortController = null;
+  if (watcherProcess) {
+    onProcessStop?.();
+    const proc = watcherProcess;
+    watcherProcess = null;
+    await settleProcess(proc);
   }
 }
 
@@ -266,6 +261,7 @@ type GmailWatcherStartResult = {
 
 type GmailWatcherStartOptions = {
   signal?: AbortSignal;
+  scheduler: GatewayScheduler;
 };
 
 function cancelledGmailWatcherStart(
@@ -283,7 +279,7 @@ function cancelledGmailWatcherStart(
  */
 export async function startGmailWatcher(
   cfg: OpenClawConfig,
-  options: GmailWatcherStartOptions = {},
+  options: GmailWatcherStartOptions,
 ): Promise<GmailWatcherStartResult> {
   // Check if gmail hooks are configured
   if (!cfg.hooks?.enabled) {
@@ -311,7 +307,7 @@ export async function startGmailWatcher(
 /** Start the shared watcher lifecycle after the caller resolves config and prerequisites. */
 export async function startGmailWatcherService(
   runtimeConfig: GmailHookRuntimeConfig,
-  options: GmailWatcherStartOptions = {},
+  options: GmailWatcherStartOptions,
 ): Promise<GmailWatcherStartResult> {
   if (options.signal?.aborted) {
     return cancelledGmailWatcherStart(runtimeConfig);
@@ -322,18 +318,8 @@ export async function startGmailWatcherService(
   // does not orphan the old serve process or leave a dangling timer.
   // This must run before Tailscale/watch-start to prevent the old
   // process from exiting and queuing a respawn during async work.
-  if (watcherProcess || renewInterval || renewalInFlight || respawnTimeout) {
-    shuttingDown = true;
-    if (respawnTimeout) {
-      clearTimeout(respawnTimeout);
-      respawnTimeout = null;
-    }
-    await stopPeriodicRenewal();
-    if (watcherProcess) {
-      const oldProcess = watcherProcess;
-      watcherProcess = null;
-      await settleProcess(oldProcess);
-    }
+  if (watcherProcess || renewalScope || respawnTimeout) {
+    await stopWatcherResources();
     shuttingDown = false;
   }
 
@@ -378,22 +364,14 @@ export async function startGmailWatcherService(
   shuttingDown = false;
   watcherProcess = spawnGogServe(runtimeConfig);
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
-  renewInterval = setInterval(() => {
-    if (shuttingDown || renewalInFlight) {
-      return;
-    }
-    const controller = new AbortController();
-    renewalAbortController = controller;
-    const renewal = startGmailWatch(runtimeConfig, { signal: controller.signal }).finally(() => {
-      if (renewalInFlight === renewal) {
-        renewalInFlight = null;
-      }
-      if (renewalAbortController === controller) {
-        renewalAbortController = null;
-      }
-    });
-    renewalInFlight = renewal;
-  }, renewMs);
+  const renewal = options.scheduler.scope();
+  renewalScope = renewal;
+  renewal.schedule({
+    id: "gmail-watch-renewal",
+    delayMs: renewMs,
+    everyMs: renewMs,
+    run: () => startGmailWatch(runtimeConfig, { signal: renewal.signal }),
+  });
 
   log.info(
     `gmail watcher started for ${runtimeConfig.account} (renew every ${runtimeConfig.renewEveryMinutes}m)`,
@@ -406,20 +384,7 @@ export async function startGmailWatcherService(
  * Stop the Gmail watcher service.
  */
 export async function stopGmailWatcher(): Promise<void> {
-  shuttingDown = true;
-
-  if (respawnTimeout) {
-    clearTimeout(respawnTimeout);
-    respawnTimeout = null;
-  }
-  await stopPeriodicRenewal();
-
-  if (watcherProcess) {
-    log.info("stopping gmail watcher");
-    const proc = watcherProcess;
-    watcherProcess = null;
-    await settleProcess(proc);
-  }
+  await stopWatcherResources(() => log.info("stopping gmail watcher"));
 
   currentConfig = null;
   log.info("gmail watcher stopped");

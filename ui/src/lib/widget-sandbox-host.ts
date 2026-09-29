@@ -1,14 +1,19 @@
 import { toStringifiedError } from "@openclaw/normalization-core";
+import { generateUUID } from "./uuid.ts";
 
 export const WIDGET_LOAD_TIMEOUT_MS = 10_000;
+export class WidgetRenderTimeoutError extends Error {}
 
 type WidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
   sandboxOrigin: string;
   sandboxUrl: string;
   documentKey: string;
+  /** Restricts the untrusted inner document, not the trusted transport shell. */
+  allowScripts?: boolean;
   loadDocument: (signal: AbortSignal) => Promise<string>;
   onLoaded: () => void;
+  onRendered?: () => void;
   onError: (error: unknown) => void;
   onReadyTimeout: () => void;
 };
@@ -18,9 +23,10 @@ export class WidgetSandboxHost {
   private active = true;
   private proxyReady = false;
   private readyTimer: number | null = null;
-  private loadedDocumentKey: string | null = null;
-  private pendingDocument: { key: string; html: string } | null = null;
-  private activeLoad: { key: string; controller: AbortController; timeout: number } | null = null;
+  private documentLoaded = false;
+  private renderId: string | null = null;
+  private pendingDocument: string | null = null;
+  private activeLoad: { controller: AbortController; timeout: number } | null = null;
 
   constructor(private options: WidgetSandboxHostOptions) {
     // Owners finish installing their bridge before an immediate load can report back.
@@ -36,7 +42,7 @@ export class WidgetSandboxHost {
   }
 
   get loaded(): boolean {
-    return this.loadedDocumentKey === this.options.documentKey;
+    return this.documentLoaded;
   }
 
   update(options: WidgetSandboxHostOptions): void {
@@ -50,7 +56,6 @@ export class WidgetSandboxHost {
     if (sandboxChanged) {
       // Bytes may arrive early, but only the new proxy can enforce the new CSP.
       this.proxyReady = false;
-      this.clearReadyTimeout();
     }
     this.start();
   }
@@ -70,21 +75,31 @@ export class WidgetSandboxHost {
 
   reset(): void {
     this.cancelLoad();
-    this.loadedDocumentKey = null;
+    this.clearReadyTimeout();
+    this.renderId = null;
+    this.documentLoaded = false;
     this.pendingDocument = null;
   }
 
   dispose(): void {
     this.active = false;
-    this.clearReadyTimeout();
     this.reset();
     this.proxyReady = false;
   }
 
   handleMessage(event: MessageEvent): void {
+    if (event.source !== this.frame.contentWindow || event.origin !== this.options.sandboxOrigin) {
+      return;
+    }
+    if (event.data?.method === "ui/notifications/sandbox-resource-loaded") {
+      if (this.renderId && event.data?.params?.renderId === this.renderId) {
+        this.clearReadyTimeout();
+        this.renderId = null;
+        this.options.onRendered?.();
+      }
+      return;
+    }
     if (
-      event.source !== this.frame.contentWindow ||
-      event.origin !== this.options.sandboxOrigin ||
       event.data?.method !== "ui/notifications/sandbox-proxy-ready" ||
       event.data?.params?.sandboxUrl !== this.options.sandboxUrl
     ) {
@@ -121,13 +136,22 @@ export class WidgetSandboxHost {
   }
 
   private scheduleReadyTimeout(): void {
-    if (this.proxyReady || this.readyTimer !== null) {
+    if (
+      (this.proxyReady && (!this.renderId || !this.options.onRendered)) ||
+      this.readyTimer !== null
+    ) {
       return;
     }
     this.readyTimer = window.setTimeout(() => {
       this.readyTimer = null;
       if (this.active && !this.proxyReady && this.frame.isConnected) {
         this.retrySandboxFrame();
+      } else if (this.active && this.renderId && this.frame.isConnected) {
+        this.options.onError(
+          new WidgetRenderTimeoutError(
+            "Widget content did not finish loading. Reload the dashboard to try again.",
+          ),
+        );
       }
     }, WIDGET_LOAD_TIMEOUT_MS);
   }
@@ -152,19 +176,17 @@ export class WidgetSandboxHost {
   }
 
   private async loadDocument(): Promise<void> {
-    const { documentKey, loadDocument } = this.options;
+    const { loadDocument } = this.options;
     if (
       this.loaded ||
-      this.pendingDocument?.key === documentKey ||
-      this.activeLoad?.key === documentKey ||
+      this.pendingDocument !== null ||
+      this.activeLoad !== null ||
       !this.frame.contentWindow
     ) {
       return;
     }
-    this.cancelLoad();
     const controller = new AbortController();
     const load = {
-      key: documentKey,
       controller,
       timeout: window.setTimeout(
         () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
@@ -182,7 +204,7 @@ export class WidgetSandboxHost {
       if (!this.active || this.activeLoad !== load || !this.frame.isConnected) {
         return;
       }
-      this.pendingDocument = { key: documentKey, html };
+      this.pendingDocument = html;
       this.deliverDocument();
     } catch (error) {
       if (this.activeLoad === load && this.active && this.frame.isConnected) {
@@ -199,19 +221,25 @@ export class WidgetSandboxHost {
 
   private deliverDocument(): void {
     const document = this.pendingDocument;
-    if (!this.active || !this.proxyReady || !document || !this.frame.isConnected) {
+    if (!this.active || !this.proxyReady || document === null || !this.frame.isConnected) {
       return;
     }
+    this.renderId = generateUUID();
+    this.scheduleReadyTimeout();
     this.frame.contentWindow?.postMessage(
       {
         jsonrpc: "2.0",
         method: "ui/notifications/sandbox-resource-ready",
-        params: { html: document.html },
+        params: {
+          html: document,
+          renderId: this.renderId,
+          ...(this.options.allowScripts === false ? { allowScripts: false } : {}),
+        },
       },
       this.options.sandboxOrigin,
     );
     this.pendingDocument = null;
-    this.loadedDocumentKey = document.key;
+    this.documentLoaded = true;
     this.options.onLoaded();
   }
 }

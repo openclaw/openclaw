@@ -1,9 +1,4 @@
-/**
- * Shared channel config-write policy helpers.
- *
- * Authorizes config writes by origin/target channel and account scope.
- */
-import { resolveAccountEntry } from "../../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 
 type AccountConfigWithWrites = {
@@ -50,18 +45,6 @@ export type ConfigWriteAuthorizationResultLike<TChannelId extends string = strin
       };
     };
 
-function listConfigWriteTargetScopes<TChannelId extends string>(
-  target?: ConfigWriteTargetLike<TChannelId>,
-): ConfigWriteScopeLike<TChannelId>[] {
-  if (!target || target.kind === "global") {
-    return [];
-  }
-  if (target.kind === "ambiguous") {
-    return target.scopes;
-  }
-  return [target.scope];
-}
-
 function resolveChannelConfig(
   cfg: ConfigWritePolicyConfig,
   channelId?: string | null,
@@ -75,13 +58,6 @@ function resolveChannelConfig(
     : undefined;
 }
 
-function resolveChannelAccountConfig(
-  channelConfig: ChannelConfigWithAccounts,
-  accountId?: string | null,
-): AccountConfigWithWrites | undefined {
-  return resolveAccountEntry(channelConfig.accounts, normalizeAccountId(accountId));
-}
-
 /**
  * Resolves whether config writes are enabled for a channel/account scope.
  */
@@ -91,10 +67,14 @@ export function resolveChannelConfigWritesShared(params: {
   accountId?: string | null;
 }): boolean {
   const channelConfig = resolveChannelConfig(params.cfg, params.channelId);
-  if (!channelConfig) {
+  if (!channelConfig || !params.channelId) {
     return true;
   }
-  const accountConfig = resolveChannelAccountConfig(channelConfig, params.accountId);
+  const accountConfig = resolveChannelAccountEntry(
+    channelConfig.accounts,
+    normalizeAccountId(params.accountId),
+    params.channelId,
+  );
   const value = accountConfig?.configWrites ?? channelConfig.configWrites;
   return value !== false;
 }
@@ -114,43 +94,27 @@ export function authorizeConfigWriteShared<TChannelId extends string>(params: {
   if (params.target?.kind === "ambiguous") {
     return { allowed: false, reason: "ambiguous-target" };
   }
-  // Both the message origin and the target section can disable channel-initiated config writes.
-  if (
-    params.origin?.channelId &&
-    !resolveChannelConfigWritesShared({
-      cfg: params.cfg,
-      channelId: params.origin.channelId,
-      accountId: params.origin.accountId,
-    })
-  ) {
-    return {
-      allowed: false,
-      reason: "origin-disabled",
-      blockedScope: { kind: "origin", scope: params.origin },
-    };
-  }
-  const seen = new Set<string>();
-  for (const target of listConfigWriteTargetScopes(params.target)) {
-    if (!target.channelId) {
-      continue;
-    }
-    const key = `${target.channelId}:${normalizeAccountId(target.accountId)}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    // Deduplicate account scopes so a broad path does not report the same block twice.
-    seen.add(key);
+  const target = params.target;
+  // Check the origin first so denial reporting preserves the initiating boundary.
+  const scopes: Array<
+    readonly ["origin" | "target", ConfigWriteScopeLike<TChannelId> | undefined]
+  > = [
+    ["origin", params.origin],
+    ["target", target && target.kind !== "global" ? target.scope : undefined],
+  ];
+  for (const [kind, scope] of scopes) {
     if (
+      scope?.channelId &&
       !resolveChannelConfigWritesShared({
         cfg: params.cfg,
-        channelId: target.channelId,
-        accountId: target.accountId,
+        channelId: scope.channelId,
+        accountId: scope.accountId,
       })
     ) {
       return {
         allowed: false,
-        reason: "target-disabled",
-        blockedScope: { kind: "target", scope: target },
+        reason: kind === "origin" ? "origin-disabled" : "target-disabled",
+        blockedScope: { kind, scope },
       };
     }
   }
@@ -167,7 +131,7 @@ export function resolveExplicitConfigWriteTargetShared<TChannelId extends string
     return { kind: "global" };
   }
   const accountId = normalizeAccountId(scope.accountId);
-  if (!accountId || accountId === DEFAULT_ACCOUNT_ID) {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
     return { kind: "channel", scope: { channelId: scope.channelId } };
   }
   return { kind: "account", scope: { channelId: scope.channelId, accountId } };
@@ -201,7 +165,7 @@ export function resolveConfigWriteTargetFromPathShared<TChannelId extends string
   }
   return resolveExplicitConfigWriteTargetShared({
     channelId,
-    accountId: normalizeAccountId(params.path[3]),
+    accountId: params.path[3],
   });
 }
 

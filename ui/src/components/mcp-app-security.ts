@@ -30,7 +30,7 @@ function resolveWidgetPromptText(raw: unknown): string | null {
   return text;
 }
 
-function allowWidgetPrompt(key: string, nowMs: number): boolean {
+export function allowWidgetPrompt(key: string, nowMs: number): boolean {
   const cutoff = nowMs - WIDGET_PROMPT_RATE_WINDOW_MS;
   const timestamps = (widgetPromptTimestampsByKey.get(key) ?? []).filter((ts) => ts > cutoff);
   if (

@@ -6,11 +6,14 @@ import {
   type SkillWorkshopRevisionAdmissionOutcome,
 } from "../../app/skill-workshop-revision-admissions.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SkillWorkshopProposal } from "./page-types.ts";
 import { resolveSkillWorkshopAgentId } from "./proposals.ts";
 import { requestSkillWorkshopRevisionAdmission } from "./revision-admission.ts";
 import type { SkillWorkshopState } from "./state.ts";
+
+registerSkillWorkshopEnglish();
 
 const admissionsByContext = new WeakMap<
   ApplicationContext,
@@ -51,7 +54,6 @@ export class SkillWorkshopRevisionRecoveryController {
     instructions: string;
     proposal: SkillWorkshopProposal;
     proposalAgentId: string;
-    state: SkillWorkshopState;
   }): Promise<SkillWorkshopRevisionAdmissionOutcome> {
     const admissions = skillWorkshopRevisionAdmissionsFor(params.context);
     const run = this.recoveryId
@@ -71,7 +73,6 @@ export class SkillWorkshopRevisionRecoveryController {
               ? { proposalOriginSessionKey: params.proposal.origin.sessionKey }
               : {}),
             proposalSlug: params.proposal.slug,
-            useCurrentChatForRevisions: params.state.skillWorkshopUseCurrentChatForRevisions,
           },
           (entry, materialize) =>
             requestSkillWorkshopRevisionAdmission({

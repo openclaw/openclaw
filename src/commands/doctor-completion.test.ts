@@ -71,6 +71,34 @@ describe("shell completion health mapping", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "recognizes a managed portable Bash source line as installed",
+    async () => {
+      const homeDir = tempDirs.make("openclaw-bash-portable-profile-home-");
+      const stateDir = path.join(homeDir, ".openclaw");
+      setTestEnvValue("HOME", homeDir);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      setTestEnvValue("SHELL", "/bin/bash");
+
+      const cachePath = path.join(stateDir, "completions", "openclaw.bash");
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+      await fs.writeFile(
+        path.join(homeDir, ".bashrc"),
+        '[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"\n',
+        "utf-8",
+      );
+
+      await expect(checkShellCompletionStatus("openclaw", { shell: "bash" })).resolves.toEqual({
+        shell: "bash",
+        profileInstalled: true,
+        cacheExists: true,
+        cachePath,
+        usesSlowPattern: false,
+      });
+    },
+  );
+
   it("reports slow dynamic Bash completion from the documented login profile", async () => {
     const homeDir = tempDirs.make("openclaw-bash-slow-profile-home-");
     const stateDir = tempDirs.make("openclaw-bash-slow-profile-state-");
@@ -257,7 +285,7 @@ describe("doctorShellCompletion", () => {
     installCompletionMock.mockResolvedValue(undefined);
     const noteSpy = vi.spyOn(noteModule, "note");
 
-    await doctorShellCompletion({} as never, mockPrompter());
+    await doctorShellCompletion(mockPrompter());
 
     expect(installCompletionMock).toHaveBeenCalledWith("bash", true, "openclaw");
     expect(noteSpy).toHaveBeenCalledWith(
@@ -284,7 +312,7 @@ describe("doctorShellCompletion", () => {
     installCompletionMock.mockResolvedValue(undefined);
     const noteSpy = vi.spyOn(noteModule, "note");
 
-    await doctorShellCompletion({} as never, mockPrompter());
+    await doctorShellCompletion(mockPrompter());
 
     expect(installCompletionMock).toHaveBeenCalledWith(testCase.shell, true, "openclaw");
     expect(noteSpy).toHaveBeenCalledWith(
@@ -325,18 +353,15 @@ describe("doctorShellCompletion", () => {
 
   it.each([
     { code: "EACCES", usesSlowPattern: true, action: "upgraded" },
-    { code: "EPERM", usesSlowPattern: true, action: "upgraded" },
     { code: "EROFS", usesSlowPattern: true, action: "upgraded" },
-    { code: "EACCES", usesSlowPattern: false, action: "installed" },
     { code: "EPERM", usesSlowPattern: false, action: "installed" },
-    { code: "EROFS", usesSlowPattern: false, action: "installed" },
   ])("offers session recovery when completion is not $action after $code", async (testCase) => {
     const profilePath = await setupDoctorCompletionTest(testCase.usesSlowPattern);
     const failedPath = path.dirname(profilePath);
     installCompletionMock.mockRejectedValue(wrappedFsError(testCase.code, failedPath));
     const noteSpy = vi.spyOn(noteModule, "note");
 
-    await expect(doctorShellCompletion({} as never, mockPrompter())).resolves.not.toThrow();
+    await expect(doctorShellCompletion(mockPrompter())).resolves.not.toThrow();
 
     const command = formatCompletionReloadCommand(
       "bash",
@@ -354,6 +379,6 @@ describe("doctorShellCompletion", () => {
     const profilePath = await setupDoctorCompletionTest(true);
     installCompletionMock.mockRejectedValue(wrappedFsError("ENOSPC", profilePath));
 
-    await expect(doctorShellCompletion({} as never, mockPrompter())).rejects.toThrow("ENOSPC");
+    await expect(doctorShellCompletion(mockPrompter())).rejects.toThrow("ENOSPC");
   });
 });

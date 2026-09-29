@@ -7,7 +7,7 @@ import type { ProviderUsageRequestResult } from "../../lib/provider-usage-reques
 
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
-type UsageRefreshReason = "focus" | "manual" | "poll" | "reconnect";
+type UsageRefreshReason = "focus" | "manual" | "poll" | "publication" | "reconnect";
 type UsageRefreshDecision = "defer" | "fetch" | "skip";
 
 function decideUsageRefresh(params: {
@@ -38,7 +38,7 @@ function decideUsageRefresh(params: {
 
 type UsageRefreshPolicyOptions = {
   isLoading: () => boolean;
-  reload: () => void | Promise<void>;
+  reload: (reason: UsageRefreshReason) => void | Promise<void>;
   onIncompleteUsageExhausted?: () => void;
 };
 
@@ -46,9 +46,12 @@ type UsageRefreshPolicyOptions = {
 export class UsageRefreshPolicy {
   private lastLoadedAtMs: number | null = null;
   private pendingAutomaticRefresh = false;
+  private publicationPending = false;
   private reloadPending = false;
   private readonly incompleteUsageRetry = new IncompleteUsageRetry({
     retry: () => this.requestAndWait("poll"),
+    // Let the Gateway's 30s aggregate cache expire without increasing request volume.
+    retryMs: (attempt) => 5_000 * 2 ** (attempt - 1),
     onExhausted: () => this.options.onIncompleteUsageExhausted?.(),
   });
 
@@ -78,6 +81,7 @@ export class UsageRefreshPolicy {
   resetPayload(): void {
     this.applyLoadState(null, false);
     this.reloadPending = false;
+    this.publicationPending = false;
   }
 
   dispose(): void {
@@ -107,16 +111,15 @@ export class UsageRefreshPolicy {
     this.reloadPending = false;
   }
 
-  private async reloadAndWait(): Promise<void> {
-    this.pendingAutomaticRefresh = false;
-    await this.options.reload();
-  }
-
   request(reason: UsageRefreshReason): void {
     void this.requestAndWait(reason);
   }
 
   private async requestAndWait(reason: UsageRefreshReason): Promise<void> {
+    if (reason === "publication") {
+      this.publicationPending = true;
+      this.reloadPending = true;
+    }
     if (this.options.isLoading() && reason !== "manual") {
       this.pendingAutomaticRefresh = true;
       return;
@@ -130,10 +133,11 @@ export class UsageRefreshPolicy {
       lastLoadedAtMs: this.lastLoadedAtMs,
     });
     if (decision === "fetch") {
-      if (reason !== "poll") {
+      if (reason === "manual" || (reason !== "poll" && !this.publicationPending)) {
         this.incompleteUsageRetry.startCycle();
       }
-      await this.reloadAndWait();
+      this.publicationPending = false;
+      await this.options.reload(reason);
     }
   }
 

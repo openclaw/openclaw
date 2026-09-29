@@ -72,6 +72,24 @@ export function resolveMacFormFactor(identifier?: string): MacFormFactor | undef
   return APPLE_SILICON_FORM_FACTORS[model];
 }
 
+/** Presentation hint for inventories that expose a display name, not a hardware identifier. */
+export function resolveMacFormFactorFromName(name?: string): MacFormFactor | undefined {
+  const label = name?.replace(/[_-]+/g, " ");
+  if (!label) {
+    return undefined;
+  }
+  if (/\bmac\s*book(?:\s*(?:pro|air))?\b/i.test(label)) {
+    return "laptop";
+  }
+  if (/\bmac\s*mini\b/i.test(label)) {
+    return "mini";
+  }
+  if (/\bmac\s*studio\b/i.test(label)) {
+    return "studio";
+  }
+  return undefined;
+}
+
 export function macFamilyLabel(identifier?: string): string | undefined {
   const model = identifier?.trim();
   if (!model) {

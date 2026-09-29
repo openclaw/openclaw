@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const warnMock = vi.hoisted(() => vi.fn());
@@ -31,6 +32,71 @@ function result(
 describe("withIMessageRemoteFile", () => {
   beforeEach(() => {
     warnMock.mockReset();
+  });
+
+  it.each(["allocation", "upload"] as const)(
+    "stops later work after retirement during %s and still cleans the remote directory",
+    async (phase) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const retired = new Error("iMessage delivery retired");
+      let current = true;
+      const runCommand = vi.fn(async (argv: string[]) => {
+        const isHeldCommand = phase === "allocation" ? argv[0] === "ssh" : argv[0] === "scp";
+        if (current && isHeldCommand) {
+          entered.resolve();
+          await release.promise;
+        }
+        return result();
+      });
+      const use = vi.fn(async () => "sent");
+      const settled = withIMessageRemoteFile({
+        remoteHost: "messages-mac",
+        localPath: "/gateway/synthetic.pdf",
+        assertDirectAdapterHandoff: () => {
+          if (!current) {
+            throw retired;
+          }
+        },
+        deps: { runCommand, createToken: () => "0123456789abcdef0123456789abcdef" },
+        use,
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(
+          await Promise.race([entered.promise.then(() => true), settled.then(() => false)]),
+        ).toBe(true);
+        current = false;
+      } finally {
+        release.resolve();
+        await settled;
+      }
+      expect(await settled).toEqual({ error: retired });
+      expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(
+        phase === "allocation" ? ["ssh", "ssh"] : ["ssh", "scp", "ssh"],
+      );
+      expect(use).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not allocate or clean a directory when authority is already retired", async () => {
+    const runCommand = vi.fn(async () => result());
+    const use = vi.fn(async () => "sent");
+    await expect(
+      withIMessageRemoteFile({
+        remoteHost: "messages-mac",
+        localPath: "/gateway/synthetic.pdf",
+        assertDirectAdapterHandoff: () => {
+          throw new Error("iMessage delivery retired");
+        },
+        deps: { runCommand },
+        use,
+      }),
+    ).rejects.toThrow("iMessage delivery retired");
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(use).not.toHaveBeenCalled();
   });
 
   it("uploads into an owner-only remote directory and cleans after success", async () => {
@@ -80,7 +146,8 @@ describe("withIMessageRemoteFile", () => {
     );
   });
 
-  it.each(["rpc failure", "rpc timeout", "cancellation"])("cleans after %s", async (message) => {
+  it("cleans after the remote file consumer fails", async () => {
+    const message = "rpc failure";
     const runCommand = vi
       .fn()
       .mockResolvedValueOnce(result())

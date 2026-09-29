@@ -1,0 +1,274 @@
+import { realpath } from "node:fs/promises";
+import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import {
+  acquireAgentRunPreparedModelRuntimeMock,
+  contextEngineCompactMock,
+  enqueueCommandInLaneMock,
+  resolveContextEngineMock,
+  resolveModelAsyncMock,
+  getApiKeyForModelMock,
+  loadCompactHooksHarness,
+  resetCompactHooksHarnessMocks,
+  resolveModelMock,
+  sessionCompactImpl,
+} from "./compact.hooks.harness.js";
+
+const { compactEmbeddedAgentSession, compactEmbeddedAgentSessionDirect } =
+  await loadCompactHooksHarness();
+const [
+  { upsertSessionEntryCore },
+  { closeOpenClawAgentDatabasesForTest },
+  { ensureAuthProfileStoreWithoutExternalProfiles },
+  { AsyncWorkScope },
+  { prepareProviderRuntimeAuth },
+] = await Promise.all([
+  import("../../config/sessions/session-accessor.js"),
+  import("../../state/openclaw-agent-db.js"),
+  import("../model-auth.js"),
+  import("../../shared/async-work-scope.js"),
+  import("../../plugins/provider-runtime.js"),
+]);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    cleanup();
+  }),
+);
+
+async function prepareCompactionParams() {
+  const workspaceDir = await realpath(tempDirs.make("openclaw-compaction-auth-"));
+  resetCompactHooksHarnessMocks(workspaceDir);
+  const sessionTarget = {
+    agentId: "main",
+    sessionId: "compaction-auth",
+    sessionKey: "agent:main:compaction-auth",
+    storePath: join(workspaceDir, "sessions.sqlite"),
+  };
+  await upsertSessionEntryCore(sessionTarget, {
+    sessionId: sessionTarget.sessionId,
+    updatedAt: 1,
+  });
+  return { ...sessionTarget, sessionTarget, sessionFile: sessionTarget.sessionKey, workspaceDir };
+}
+
+async function runOwnedCompaction(run: () => ReturnType<typeof compactEmbeddedAgentSessionDirect>) {
+  const parent = new AsyncWorkScope();
+  try {
+    return await parent.run(run);
+  } finally {
+    await AsyncWorkScope.runWhenAllIdle(
+      () => [parent],
+      () => parent.drain(),
+    );
+  }
+}
+
+it.each(["lookup", "hook", "allowed"] as const)(
+  "honors direct compaction cancellation across provider auth (%s)",
+  async (stage) => {
+    const baseParams = await prepareCompactionParams();
+    const controller = new AbortController();
+    const cancel = () => controller.abort(new Error("compaction source revoked"));
+    getApiKeyForModelMock.mockImplementation(async (params) => {
+      if (stage === "lookup") {
+        cancel();
+      }
+      return {
+        apiKey: "lookup-fixture-key",
+        mode: "api-key",
+        source: "compaction auth fixture",
+        profileId: params?.profileId,
+      };
+    });
+    const prepareAuth = vi.mocked(prepareProviderRuntimeAuth);
+    const previousPrepareAuth = prepareAuth.getMockImplementation();
+    onTestFinished(() => {
+      prepareAuth.mockReset();
+      if (previousPrepareAuth) {
+        prepareAuth.mockImplementation(previousPrepareAuth);
+      }
+    });
+    prepareAuth.mockReset();
+    prepareAuth.mockImplementation(async () => {
+      if (stage === "hook") {
+        cancel();
+      }
+      return { apiKey: "prepared-fixture-key" };
+    });
+    const result = await runOwnedCompaction(() =>
+      compactEmbeddedAgentSessionDirect({
+        ...baseParams,
+        provider: "openai",
+        model: "gpt-primary",
+        trigger: "budget",
+        abortSignal: controller.signal,
+        config: { agents: { defaults: { compaction: { model: "openai/gpt-primary" } } } },
+      }),
+    );
+    expect(getApiKeyForModelMock).toHaveBeenCalled();
+    expect(prepareAuth).toHaveBeenCalledTimes(stage === "lookup" ? 0 : 1);
+    expect(result.ok).toBe(stage === "allowed");
+    if (stage !== "allowed") {
+      expect(result.reason).toContain("compaction source revoked");
+    }
+    expect(resolveModelMock).toHaveBeenCalled();
+    for (const resolution of resolveModelMock.mock.results) {
+      if (resolution.type === "return") {
+        expect(resolution.value.authStorage.setRuntimeApiKey).toHaveBeenCalledTimes(
+          stage === "allowed" ? 1 : 0,
+        );
+      }
+    }
+  },
+);
+
+it.each(["direct", "queued"] as const)(
+  "returns a compaction failure when %s auth preparation is cooldowned",
+  async (mode) => {
+    const baseParams = await prepareCompactionParams();
+    const authStore = {
+      version: 1,
+      profiles: {
+        "summary:default": createApiKeyCredential("summary", "test-summary-key"),
+      },
+      order: { summary: ["summary:default"] },
+      usageStats: { "summary:default": { cooldownUntil: Date.now() + 60_000 } },
+    };
+    const originalAuthStore = structuredClone(authStore);
+    vi.mocked(ensureAuthProfileStoreWithoutExternalProfiles).mockReturnValue(authStore);
+    const params = {
+      ...baseParams,
+      provider: "openai",
+      model: "gpt-primary",
+      trigger: "budget" as const,
+      forcePreflight: true,
+      preflightRequired: true,
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-primary", fallbacks: ["openai/gpt-fallback"] },
+            compaction: { model: "summary/compact-model" },
+          },
+        },
+      },
+      enqueue: async <T>(task: () => Promise<T> | T) => await task(),
+    };
+
+    const result = await runOwnedCompaction(() =>
+      mode === "direct"
+        ? compactEmbeddedAgentSessionDirect(params)
+        : compactEmbeddedAgentSession(params),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason:
+        'Auth profile "summary:default" is temporarily unavailable for summary/compact-model.',
+    });
+    expect(resolveModelMock).toHaveBeenCalledTimes(1);
+    expect(resolveModelMock.mock.calls[0]?.slice(0, 2)).toEqual(["summary", "compact-model"]);
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    expect(sessionCompactImpl).not.toHaveBeenCalled();
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(authStore).toEqual(originalAuthStore);
+  },
+);
+
+it("uses the admitted config, storage, and persisted parent budget throughout queued compaction", async () => {
+  const { workspaceDir, sessionTarget } = await prepareCompactionParams();
+  const [lanes, actualLanes] = await Promise.all([
+    import("./lanes.js"),
+    vi.importActual<typeof import("./lanes.js")>("./lanes.js"),
+  ]);
+  const resolveGlobalLane = vi.mocked(lanes.resolveGlobalLane);
+  const previousResolveGlobalLane = resolveGlobalLane.getMockImplementation();
+  resolveGlobalLane.mockImplementation(actualLanes.resolveGlobalLane);
+  onTestFinished(() => {
+    resolveGlobalLane.mockReset();
+    if (previousResolveGlobalLane) {
+      resolveGlobalLane.mockImplementation(previousResolveGlobalLane);
+    }
+  });
+  const spawningSessionKey = "agent:main:compaction-parent";
+  await upsertSessionEntryCore(sessionTarget, {
+    sessionId: sessionTarget.sessionId,
+    spawnedBy: spawningSessionKey,
+    updatedAt: 1,
+  });
+  const admittedAgentDir = join(workspaceDir, "admitted-agent");
+  const requestedConfig = {
+    agents: { defaults: { compaction: { model: "openai/requested-model" } } },
+  };
+  const admittedConfig = {
+    agents: { defaults: { compaction: { model: "openai/admitted-model" } } },
+  };
+  const acquire = expectDefined(
+    acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
+    "prepared runtime acquisition",
+  );
+  acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(async (input) =>
+    acquire({ ...input, config: admittedConfig, agentDir: admittedAgentDir }),
+  );
+
+  const result = await runOwnedCompaction(() =>
+    compactEmbeddedAgentSession({
+      ...sessionTarget,
+      sessionTarget,
+      sessionFile: sessionTarget.sessionKey,
+      workspaceDir,
+      allowGatewaySubagentBinding: true,
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      config: requestedConfig,
+      lane: "subagent",
+    }),
+  );
+
+  expect(result).toMatchObject({ ok: true, compacted: true });
+  expect(enqueueCommandInLaneMock).toHaveBeenCalledWith(
+    `subagent:${spawningSessionKey}`,
+    expect.any(Function),
+    expect.any(Object),
+  );
+  const { snapshot, [Symbol.asyncDispose]: release } = await expectDefined(
+    acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value,
+    "admitted runtime lease",
+  );
+  const derive = expectDefined(
+    acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[1]?.deriveRuntimePluginSelections,
+    "admitted compaction selection recipe",
+  );
+  expect(
+    derive({ config: admittedConfig, metadataSnapshot: snapshot.metadataSnapshot }),
+  ).toMatchObject([{ provider: "openai", modelId: "admitted-model", agentId: "main" }]);
+  expect(resolveContextEngineMock).toHaveBeenCalledWith(admittedConfig, {
+    agentDir: admittedAgentDir,
+    workspaceDir,
+  });
+  expect(resolveModelAsyncMock).toHaveBeenCalledWith(
+    "openai",
+    "admitted-model",
+    admittedAgentDir,
+    admittedConfig,
+    expect.objectContaining({ preparedModelRuntime: snapshot, skipAgentDiscovery: true }),
+  );
+  expect(contextEngineCompactMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      runtimeContext: expect.objectContaining({
+        config: admittedConfig,
+        agentDir: admittedAgentDir,
+        workspaceDir,
+        provider: "openai",
+        model: "admitted-model",
+        sessionTarget,
+      }),
+    }),
+  );
+  expect(release).toHaveBeenCalledOnce();
+  expect(requestedConfig.agents.defaults.compaction.model).toBe("openai/requested-model");
+});

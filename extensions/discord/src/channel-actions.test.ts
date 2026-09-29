@@ -4,6 +4,45 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
+function expectedDiscordActions(omitted: string[] = []): string[] {
+  return [
+    "send",
+    "poll",
+    "react",
+    "reactions",
+    "emoji-list",
+    "upload-file",
+    "read",
+    "edit",
+    "delete",
+    "pin",
+    "unpin",
+    "list-pins",
+    "permissions",
+    "thread-create",
+    "thread-list",
+    "thread-reply",
+    "search",
+    "sticker",
+    "member-info",
+    "role-info",
+    "emoji-upload",
+    "sticker-upload",
+    "channel-info",
+    "channel-list",
+    "channel-create",
+    "channel-edit",
+    "channel-delete",
+    "channel-move",
+    "category-create",
+    "category-edit",
+    "category-delete",
+    "voice-status",
+    "event-list",
+    "event-create",
+  ].filter((action) => !omitted.includes(action));
+}
+
 const handleDiscordMessageActionMock = vi.hoisted(() =>
   vi.fn(async () => ({ content: [], details: { ok: true } })),
 );
@@ -62,35 +101,17 @@ describe("discordMessageActions", () => {
     });
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
-    expect(discovery?.actions).toEqual([
-      "send",
-      "poll",
-      "react",
-      "reactions",
-      "emoji-list",
-      "upload-file",
-      "read",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "permissions",
-      "thread-create",
-      "thread-list",
-      "thread-reply",
-      "search",
-      "sticker",
-      "member-info",
-      "role-info",
-      "emoji-upload",
-      "sticker-upload",
-      "channel-info",
-      "channel-list",
-      "voice-status",
-      "event-list",
-      "event-create",
-    ]);
+    expect(discovery?.actions).toEqual(
+      expectedDiscordActions([
+        "channel-create",
+        "channel-edit",
+        "channel-delete",
+        "channel-move",
+        "category-create",
+        "category-edit",
+        "category-delete",
+      ]),
+    );
   });
 
   it("describes actions when the Discord token is an unresolved SecretRef", () => {
@@ -109,42 +130,7 @@ describe("discordMessageActions", () => {
     });
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
-    expect(discovery?.actions).toEqual([
-      "send",
-      "poll",
-      "react",
-      "reactions",
-      "emoji-list",
-      "upload-file",
-      "read",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "permissions",
-      "thread-create",
-      "thread-list",
-      "thread-reply",
-      "search",
-      "sticker",
-      "member-info",
-      "role-info",
-      "emoji-upload",
-      "sticker-upload",
-      "channel-info",
-      "channel-list",
-      "channel-create",
-      "channel-edit",
-      "channel-delete",
-      "channel-move",
-      "category-create",
-      "category-edit",
-      "category-delete",
-      "voice-status",
-      "event-list",
-      "event-create",
-    ]);
+    expect(discovery?.actions).toEqual(expectedDiscordActions());
   });
 
   it("requires trusted requester sender for privileged guild admin actions from tool contexts", () => {
@@ -199,41 +185,7 @@ describe("discordMessageActions", () => {
       accountId: "ops",
     });
 
-    expect(discovery?.actions).toEqual([
-      "send",
-      "react",
-      "reactions",
-      "emoji-list",
-      "upload-file",
-      "read",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "permissions",
-      "thread-create",
-      "thread-list",
-      "thread-reply",
-      "search",
-      "sticker",
-      "member-info",
-      "role-info",
-      "emoji-upload",
-      "sticker-upload",
-      "channel-info",
-      "channel-list",
-      "channel-create",
-      "channel-edit",
-      "channel-delete",
-      "channel-move",
-      "category-create",
-      "category-edit",
-      "category-delete",
-      "voice-status",
-      "event-list",
-      "event-create",
-    ]);
+    expect(discovery?.actions).toEqual(expectedDiscordActions(["poll"]));
   });
 
   it("honors account-scoped action gates during discovery", () => {
@@ -267,74 +219,10 @@ describe("discordMessageActions", () => {
       accountId: "work",
     });
 
-    expect(defaultDiscovery?.actions).toEqual([
-      "send",
-      "poll",
-      "upload-file",
-      "read",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "permissions",
-      "thread-create",
-      "thread-list",
-      "thread-reply",
-      "search",
-      "sticker",
-      "member-info",
-      "role-info",
-      "emoji-upload",
-      "sticker-upload",
-      "channel-info",
-      "channel-list",
-      "channel-create",
-      "channel-edit",
-      "channel-delete",
-      "channel-move",
-      "category-create",
-      "category-edit",
-      "category-delete",
-      "voice-status",
-      "event-list",
-      "event-create",
-    ]);
-    expect(workDiscovery?.actions).toEqual([
-      "send",
-      "react",
-      "reactions",
-      "emoji-list",
-      "upload-file",
-      "read",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "permissions",
-      "thread-create",
-      "thread-list",
-      "thread-reply",
-      "search",
-      "sticker",
-      "member-info",
-      "role-info",
-      "emoji-upload",
-      "sticker-upload",
-      "channel-info",
-      "channel-list",
-      "channel-create",
-      "channel-edit",
-      "channel-delete",
-      "channel-move",
-      "category-create",
-      "category-edit",
-      "category-delete",
-      "voice-status",
-      "event-list",
-      "event-create",
-    ]);
+    expect(defaultDiscovery?.actions).toEqual(
+      expectedDiscordActions(["react", "reactions", "emoji-list"]),
+    );
+    expect(workDiscovery?.actions).toEqual(expectedDiscordActions(["poll"]));
     expect(schemaForAction(defaultDiscovery, "send")).toMatchObject({
       actions: ["send"],
       properties: {
@@ -416,27 +304,14 @@ describe("discordMessageActions", () => {
     });
   });
 
-  it.each(["read", "search", "edit", "delete", "react", "pin", "channel-info"])(
-    "routes %s actions through gateway execution mode",
+  it.each(["sticker", "emoji-upload", "sticker-upload", "event-create"])(
+    "keeps %s on local execution mode",
     (action) => {
       expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
-        "gateway",
+        "local",
       );
     },
   );
-
-  it.each([
-    "send",
-    "poll",
-    "upload-file",
-    "thread-reply",
-    "sticker",
-    "emoji-upload",
-    "sticker-upload",
-    "event-create",
-  ])("keeps %s on local execution mode", (action) => {
-    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe("local");
-  });
 
   it("extracts send targets for message and thread reply actions", () => {
     expect(

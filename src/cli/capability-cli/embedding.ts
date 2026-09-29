@@ -1,40 +1,18 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
-import { getRuntimeConfig } from "../../config/config.js";
-import { createEmbeddingProvider } from "../../plugin-sdk/memory-core-bundled-runtime.js";
-import { listEmbeddingProviders } from "../../plugins/embedding-provider-runtime.js";
-import { listRegisteredMemoryEmbeddingProviderAdapters } from "../../plugins/memory-embedding-provider-runtime.js";
-import { defaultRuntime } from "../../runtime.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
-import { getMemoryEmbeddingCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
-import {
-  emitJsonOrText,
-  formatEnvelopeForText,
-  providerHasGenericConfig,
-  providerSummaryText,
-  requireProviderModelOverride,
-  resolveCapabilityAgentOption,
-  resolveCapabilityProviderAgentId,
-  resolveLocalCapabilityRuntimeConfig,
-} from "./shared.js";
+import { formatEnvelopeForText, providerSummaryText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 async function closeEmbeddingProviderWithRetry(provider: {
   close?: () => Promise<void> | void;
 }): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await provider.close?.();
-      return;
-    } catch (err) {
-      lastError = err;
-    }
+  try {
+    await provider.close?.();
+  } catch {
+    await provider.close?.();
   }
-  throw lastError;
 }
 
 async function runMemoryEmbeddingCreate(params: {
@@ -43,17 +21,21 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
   agent?: string;
 }) {
+  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
+  const { getMemoryEmbeddingCommandSecretTargetIds } = await import("../command-secret-targets.js");
+  const { createEmbeddingProvider } =
+    await import("../../plugin-sdk/memory-core-bundled-runtime.js");
   const modelRef = requireProviderModelOverride(params.model);
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  const { cfg, agentDir } = await resolveLocalCapabilityAgent({
     commandName: "infer embedding create",
     targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
+    agent: params.agent,
   });
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
   const result = await createEmbeddingProvider({
     config: cfg,
-    agentDir: resolveAgentDir(cfg, agentId),
+    agentDir,
     provider: requestedProvider,
     fallback: "none",
     model: modelRef?.model ?? "",
@@ -62,29 +44,15 @@ async function runMemoryEmbeddingCreate(params: {
     throw new Error(result.providerUnavailableReason ?? "No embedding provider available.");
   }
   const provider = result.provider;
-  let embeddings: number[][] = [];
-  let operationError: unknown;
-  let operationFailed = false;
+  let embeddings: number[][];
   try {
     embeddings = await provider.embedBatch(params.texts, { inputType: "document" });
   } catch (err) {
-    operationError = err;
-    operationFailed = true;
+    // Cleanup failure must not replace the embedding error.
+    await closeEmbeddingProviderWithRetry(provider).catch(() => {});
+    throw err;
   }
-  let closeError: unknown;
-  let closeFailed = false;
-  try {
-    await closeEmbeddingProviderWithRetry(provider);
-  } catch (err) {
-    closeError = err;
-    closeFailed = true;
-  }
-  if (operationFailed) {
-    throw operationError;
-  }
-  if (closeFailed) {
-    throw closeError;
-  }
+  await closeEmbeddingProviderWithRetry(provider);
   return {
     ok: true,
     capability: "embedding.create",
@@ -119,80 +87,78 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runMemoryEmbeddingCreate({
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
+        const { resolveCapabilityAgentOption } = await import("./shared.js");
+        return runMemoryEmbeddingCreate({
           texts: opts.text as string[],
           agent: resolveCapabilityAgentOption(command, opts.agent),
           provider: opts.provider as string | undefined,
           model: opts.model as string | undefined,
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+      }),
+    );
 
-  embedding
-    .command("providers")
-    .description("List embedding providers")
-    .option("--agent <id>", "Agent whose provider state should be inspected")
-    .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(
-          cfg,
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
-        const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
-        const selectedProvider = resolvedMemory?.provider;
-        const providers = new Map(
-          listRegisteredMemoryEmbeddingProviderAdapters().map((provider) => [
-            provider.id,
-            {
-              id: provider.id,
-              defaultModel: provider.defaultModel,
-              transport: provider.transport,
-              autoSelectPriority: provider.autoSelectPriority,
-            },
-          ]),
-        );
-        for (const provider of listEmbeddingProviders(cfg)) {
-          if (providers.has(provider.id)) {
-            continue;
-          }
-          providers.set(provider.id, {
+  registerLocalProvidersCommand(
+    embedding,
+    "List embedding providers",
+    async (cfg, agentId) => {
+      const { providerHasGenericConfig } = await import("./shared.js");
+      const { resolveMemorySearchConfig } = await import("../../agents/memory-search.js");
+      const { listEmbeddingProviders } =
+        await import("../../plugins/embedding-provider-runtime.js");
+      const { listRegisteredMemoryEmbeddingProviderAdapters } =
+        await import("../../plugins/memory-embedding-provider-runtime.js");
+      const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
+      const selectedProvider = resolvedMemory?.provider;
+      const providers = new Map(
+        listRegisteredMemoryEmbeddingProviderAdapters().map((provider) => [
+          provider.id,
+          {
             id: provider.id,
             defaultModel: provider.defaultModel,
             transport: provider.transport,
-            autoSelectPriority: undefined,
-          });
+            autoSelectPriority: provider.autoSelectPriority,
+          },
+        ]),
+      );
+      for (const provider of listEmbeddingProviders(cfg)) {
+        if (providers.has(provider.id)) {
+          continue;
         }
-        if (selectedProvider && !providers.has(selectedProvider)) {
-          providers.set(selectedProvider, {
-            id: selectedProvider,
-            defaultModel: resolvedMemory?.model || undefined,
-            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider, agentId })
-              ? "remote"
-              : undefined,
-            autoSelectPriority: undefined,
-          });
-        }
-        const result = Array.from(providers.values()).map((provider) => ({
-          available: true,
-          configured:
-            provider.id === selectedProvider ||
-            providerHasGenericConfig({
-              cfg,
-              providerId: provider.id,
-              agentId,
-            }),
-          selected: provider.id === selectedProvider,
+        providers.set(provider.id, {
           id: provider.id,
           defaultModel: provider.defaultModel,
           transport: provider.transport,
-          autoSelectPriority: provider.autoSelectPriority,
-        }));
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
-      });
-    });
+          autoSelectPriority: undefined,
+        });
+      }
+      if (selectedProvider && !providers.has(selectedProvider)) {
+        providers.set(selectedProvider, {
+          id: selectedProvider,
+          defaultModel: resolvedMemory?.model || undefined,
+          transport: providerHasGenericConfig({ cfg, providerId: selectedProvider, agentId })
+            ? "remote"
+            : undefined,
+          autoSelectPriority: undefined,
+        });
+      }
+      return Array.from(providers.values()).map((provider) => ({
+        available: true,
+        configured:
+          provider.id === selectedProvider ||
+          providerHasGenericConfig({
+            cfg,
+            providerId: provider.id,
+            agentId,
+          }),
+        selected: provider.id === selectedProvider,
+        id: provider.id,
+        defaultModel: provider.defaultModel,
+        transport: provider.transport,
+        autoSelectPriority: provider.autoSelectPriority,
+      }));
+    },
+    providerSummaryText,
+  );
 }

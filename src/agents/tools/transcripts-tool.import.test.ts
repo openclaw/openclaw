@@ -2,15 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function currentDateDir(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function storeFor(stateDir: string): TranscriptsStore {
   return new TranscriptsStore(path.join(stateDir, "transcripts"), {
@@ -23,7 +22,8 @@ function createTool(stateDir: string) {
 }
 
 describe("transcripts tool imports", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -46,21 +46,17 @@ describe("transcripts tool imports", () => {
     expect(result).toMatchObject({
       details: { sessionId: "design-review", utteranceCount: 2 },
     });
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "summary.md"),
-        "utf8",
-      ),
-    ).resolves.toContain("Sam: Action item: add Slack import later.");
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "summary.json"),
-        "utf8",
-      ),
-    ).resolves.toContain('"Alex: We decided to ship Discord first."');
-    const stored = await storeFor(stateDir).readSession("design-review");
+    const store = storeFor(stateDir);
+    const stored = await store.readSession("design-review");
     expect(stored).toBeDefined();
-    await expect(storeFor(stateDir).readUtterancesForSession(stored!)).resolves.toEqual([
+    const sessionDir = store.sessionDir(stored!);
+    await expect(fs.readFile(path.join(sessionDir, "summary.md"), "utf8")).resolves.toContain(
+      "Sam: Action item: add Slack import later.",
+    );
+    await expect(fs.readFile(path.join(sessionDir, "summary.json"), "utf8")).resolves.toContain(
+      '"Alex: We decided to ship Discord first."',
+    );
+    await expect(store.readUtterancesForSession(stored!)).resolves.toEqual([
       expect.objectContaining({ text: "We decided to ship Discord first." }),
       expect.objectContaining({ text: "Action item: add Slack import later." }),
     ]);
@@ -86,40 +82,14 @@ describe("transcripts tool imports", () => {
       vi.fn(),
     );
 
-    const summary = await fs.readFile(
-      path.join(stateDir, "transcripts", currentDateDir(), "long-meeting", "summary.md"),
-      "utf8",
-    );
+    const store = storeFor(stateDir);
+    const stored = await store.readSession("long-meeting");
+    expect(stored).toBeDefined();
+    const summary = await fs.readFile(path.join(store.sessionDir(stored!), "summary.md"), "utf8");
     expect(summary).not.toContain("transcript line 0\n");
     expect(summary).toContain("transcript line 2000");
-    const stored = await storeFor(stateDir).readSession("long-meeting");
-    expect(stored).toBeDefined();
-    const storedTranscript = await storeFor(stateDir).readUtterancesForSession(stored!);
+    const storedTranscript = await store.readUtterancesForSession(stored!);
     expect(storedTranscript[0]?.text).toContain("transcript line 0");
     expect(storedTranscript.at(-1)?.text).toContain("transcript line 2000");
-  });
-
-  it("requires date-qualified selectors for repeated stored session ids", async () => {
-    const stateDir = tempDirs.make("openclaw-transcripts-");
-    const store = storeFor(stateDir);
-    await store.writeSession({
-      sessionId: "standup",
-      title: "Tuesday standup",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-05-21T10:00:00.000Z",
-    });
-    await store.writeSession({
-      sessionId: "standup",
-      title: "Wednesday standup",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-05-22T10:00:00.000Z",
-    });
-
-    await expect(store.readSession("standup")).rejects.toThrow(
-      "multiple transcripts sessions match standup",
-    );
-    await expect(store.readSession("2026-05-21/standup")).resolves.toMatchObject({
-      title: "Tuesday standup",
-    });
   });
 });

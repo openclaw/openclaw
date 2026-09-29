@@ -1,14 +1,5 @@
-/**
- * FileConsentCard utilities for MS Teams large file uploads (>4MB) in personal chats.
- *
- * Teams requires user consent before the bot can upload large files. This module provides
- * utilities for:
- * - Building FileConsentCard attachments (to request upload permission)
- * - Building FileInfoCard attachments (to confirm upload completion)
- * - Parsing fileConsent/invoke activities
- */
-
 import { lookup } from "node:dns/promises";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -36,12 +27,6 @@ const CONSENT_UPLOAD_HOST_ALLOWLIST = [
 ] as const;
 
 /**
- * Returns true if the given IPv4 or IPv6 address is private, internal, or
- * special-use and must never be reached via consent uploads.
- */
-const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
-
-/**
  * Validate that a consent upload URL is safe to PUT to.
  * Checks:
  * 1. Protocol is HTTPS
@@ -64,12 +49,10 @@ async function validateConsentUploadUrl(
     throw new Error("Consent upload URL is not a valid URL");
   }
 
-  // 1. Protocol check
   if (parsed.protocol !== "https:") {
     throw new Error(`Consent upload URL must use HTTPS, got ${parsed.protocol}`);
   }
 
-  // 2. Hostname allowlist check
   const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
   const allowlist = opts?.allowlist ?? CONSENT_UPLOAD_HOST_ALLOWLIST;
   const hostAllowed = allowlist.some(
@@ -91,7 +74,7 @@ async function validateConsentUploadUrl(
   }
 
   for (const entry of resolved) {
-    if (isPrivateOrReservedIP(entry.address)) {
+    if (isPrivateIpAddress(entry.address)) {
       throw new Error(`Consent upload URL resolves to a private/reserved IP (${entry.address})`);
     }
   }
@@ -219,7 +202,7 @@ export async function uploadToConsentUrl(params: {
         "Content-Type": params.contentType ?? "application/octet-stream",
         "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
       },
-      body: new Uint8Array(params.buffer),
+      body: new Blob([bufferToBlobPart(params.buffer)]),
     },
     params.timeoutMs ?? resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
     fetchFn,

@@ -42,7 +42,12 @@ async function captureLoadingState(
   }
   const skeletons = target.locator(".settings-loading-skeleton");
   await expect.poll(() => skeletons.count()).toBeGreaterThan(0);
-  expect(await target.textContent()).not.toContain("Loading");
+  expect(
+    await target
+      .getByText(/Loading/)
+      .filter({ visible: true })
+      .count(),
+  ).toBe(0);
 }
 
 async function withPage(run: (page: import("playwright").Page) => Promise<void>): Promise<void> {
@@ -94,7 +99,7 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       await gateway.deferNext("models.authStatus");
       await gateway.deferNext("models.authStatus");
-      const agentPicker = page.locator(".agent-scope-control openclaw-agent-select");
+      const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker.locator('wa-dropdown-item[aria-label="Reviewer"]').click();
       await expect
@@ -189,11 +194,11 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}settings/plugins`);
       await gateway.waitForRequest("plugins.list");
-      await captureLoadingState(page.locator(".plugins-panel"), "plugins-panel");
+      await captureLoadingState(page.locator("#plugin-settings-panel"), "plugins-panel");
     });
   });
 
-  it("renders the Plugins MCP config load as a skeleton", async () => {
+  it("renders the advanced Plugins config load as a skeleton", async () => {
     await withPage(async (page) => {
       await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "plugins.list"],
@@ -206,9 +211,16 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}settings/plugins`);
-      const mcpSection = page.locator(".settings-section", { hasText: "MCP servers" }).first();
-      await captureLoadingState(mcpSection, "plugins-mcp");
+      await page.goto(`${suite.server.baseUrl}settings/plugins?tab=advanced`);
+      await waitForControlUiRoute(page, {
+        pathname: "/settings/plugins",
+        routeId: "plugin-settings",
+        search: "?tab=advanced",
+      });
+      await captureLoadingState(
+        page.locator("#plugin-settings-advanced .settings-section"),
+        "plugins-advanced",
+      );
     });
   });
 
@@ -263,7 +275,7 @@ suite.define(() => {
       await gateway.waitForRequest("tools.effective");
       const panel = page.locator("#agent-panel");
       await captureLoadingState(
-        panel.locator(".settings-section", { hasText: "Available right now" }).first(),
+        panel.locator(".settings-section", { hasText: "Tool preview" }).first(),
         "agent-tools-available",
       );
       await captureLoadingState(

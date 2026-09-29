@@ -75,8 +75,8 @@ describe("postJson", () => {
     });
   });
 
-  it("applies abort signals while reading successful response bodies", async () => {
-    const fixture = createPendingResponse();
+  it.each([200, 429])("aborts response body reads for HTTP %s", async (status) => {
+    const fixture = createPendingResponse({ status });
     const controller = new AbortController();
     const expected = new Error("body aborted");
     remoteHttpMock.mockImplementationOnce(async (params) => {
@@ -112,28 +112,30 @@ describe("postJson", () => {
     }
   });
 
-  it("attaches status to thrown error when requested", async () => {
+  it("preserves HTTP cooldown and structured quota metadata", async () => {
     remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(textResponse("bad gateway", 502));
+      return await params.onResponse(
+        new Response(
+          JSON.stringify({ error: { code: "insufficient_quota", message: "Quota exhausted" } }),
+          { status: 429, headers: { "Retry-After": "18" } },
+        ),
+      );
     });
 
-    let error: unknown;
-    try {
-      await postJson({
+    await expect(
+      postJson({
         url: "https://memory.example/v1/post",
         headers: {},
         body: {},
         errorPrefix: "post failed",
-        attachStatus: true,
         parse: () => ({}),
-      });
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("post failed: 502 bad gateway");
-    expect((error as { status?: unknown }).status).toBe(502);
+      }),
+    ).rejects.toMatchObject({
+      status: 429,
+      statusCode: 429,
+      errorCode: "insufficient_quota",
+      retryAfterMs: 18_000,
+    });
   });
 
   it("bounds non-ok response bodies before formatting the error", async () => {
@@ -158,7 +160,7 @@ describe("postJson", () => {
         errorPrefix: "post failed",
         parse: () => ({}),
       }),
-    ).rejects.toThrow(`post failed: 502 ${"x".repeat(1_000)}... [truncated]`);
+    ).rejects.toMatchObject({ status: 502, errorBody: `${"x".repeat(499)}…` });
     expect(canceled).toBe(true);
   });
 

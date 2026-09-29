@@ -1,18 +1,10 @@
-// QA Lab Matrix substrate implements E2EE client behavior.
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type {
   EncryptedFile,
-  MatrixDeviceVerificationStatus,
   MatrixClient,
-  MatrixOwnDeviceDeleteResult,
-  MatrixOwnDeviceInfo,
   MatrixRawEvent,
-  MatrixRecoveryKeyVerificationResult,
-  MatrixRoomKeyBackupResetResult,
-  MatrixRoomKeyBackupRestoreResult,
   MatrixVerificationBootstrapResult,
-  MatrixVerificationMethod,
   MatrixVerificationSummary,
   MessageEventContent,
 } from "@openclaw/matrix/test-api.js";
@@ -32,9 +24,9 @@ import {
 } from "./e2ee-client-internals.js";
 import { findMatrixQaObservedEventMatch, normalizeMatrixQaObservedEvent } from "./events.js";
 import type { MatrixQaObservedEvent } from "./events.js";
-import type { MatrixQaRoomEventWaitResult } from "./sync.js";
 
 type MatrixQaE2eeRuntime = typeof import("@openclaw/matrix/test-api.js");
+type MatrixQaCrypto = NonNullable<MatrixClient["crypto"]>;
 
 type MatrixQaE2eeClientParams = {
   accessToken: string;
@@ -102,7 +94,7 @@ function enforceMatrixQaPluginStateLimit(
 
 function createMatrixQaPluginStateSyncKeyedStore<T>(
   options: OpenKeyedStoreOptions,
-): PluginStateSyncKeyedStore<T> {
+): PluginStateSyncKeyedStore<T> & Required<Pick<PluginStateSyncKeyedStore<T>, "lookupMany">> {
   const rows = resolveMatrixQaPluginStateRows(options);
   const resolveExpiresAt = (ttlMs?: number) => {
     const effectiveTtlMs = ttlMs ?? options.defaultTtlMs;
@@ -139,6 +131,11 @@ function createMatrixQaPluginStateSyncKeyedStore<T>(
     lookup(key) {
       pruneMatrixQaExpiredPluginState(rows);
       return rows.get(key)?.value as T | undefined;
+    },
+    lookupMany(keys) {
+      pruneMatrixQaExpiredPluginState(rows);
+      // SAFETY: This namespace contains only values registered with the store's T contract.
+      return keys.map((key) => ({ ok: true, value: rows.get(key)?.value as T | undefined }));
     },
     consume(key) {
       pruneMatrixQaExpiredPluginState(rows);
@@ -179,91 +176,16 @@ function createMatrixQaPluginStateKeyedStore<T>(
     registerIfAbsent: async (...args) => syncStore.registerIfAbsent(...args),
     update: async (...args) => syncStore.update?.(...args) ?? false,
     lookup: async (...args) => syncStore.lookup(...args),
+    lookupMany: async (...args) => syncStore.lookupMany(...args),
     consume: async (...args) => syncStore.consume(...args),
-    delete: async (...args) => syncStore.delete(...args),
+    delete: async (key, opts) => {
+      opts?.assertCurrent?.();
+      return syncStore.delete(key);
+    },
     entries: async () => syncStore.entries(),
     clear: async () => syncStore.clear(),
   };
 }
-
-export type MatrixQaE2eeScenarioClient = {
-  acceptVerification(id: string): Promise<MatrixVerificationSummary>;
-  bootstrapOwnDeviceVerification(params?: {
-    allowAutomaticCrossSigningReset?: boolean;
-    forceResetCrossSigning?: boolean;
-    recoveryKey?: string;
-    verifyOwnIdentity?: boolean;
-  }): Promise<MatrixVerificationBootstrapResult>;
-  confirmVerificationReciprocateQr(id: string): Promise<MatrixVerificationSummary>;
-  confirmVerificationSas(id: string): Promise<MatrixVerificationSummary>;
-  deleteOwnDevices(deviceIds: string[]): Promise<MatrixOwnDeviceDeleteResult>;
-  generateVerificationQr(id: string): Promise<{ qrDataBase64: string }>;
-  getDeviceVerificationStatus(
-    userId: string,
-    deviceId: string,
-  ): Promise<MatrixDeviceVerificationStatus>;
-  getRecoveryKey(): Promise<{
-    encodedPrivateKey?: string;
-    keyId?: string | null;
-    createdAt?: string;
-  } | null>;
-  listOwnDevices(): Promise<MatrixOwnDeviceInfo[]>;
-  listVerifications(): Promise<MatrixVerificationSummary[]>;
-  prime(): Promise<string | undefined>;
-  requestVerification(params: {
-    deviceId?: string;
-    ownUser?: boolean;
-    roomId?: string;
-    userId?: string;
-  }): Promise<MatrixVerificationSummary>;
-  resetRoomKeyBackup(params?: {
-    rotateRecoveryKey?: boolean;
-  }): Promise<MatrixRoomKeyBackupResetResult>;
-  restoreRoomKeyBackup(params?: {
-    recoveryKey?: string;
-  }): Promise<MatrixRoomKeyBackupRestoreResult>;
-  scanVerificationQr(id: string, qrDataBase64: string): Promise<MatrixVerificationSummary>;
-  verifyWithRecoveryKey(rawRecoveryKey: string): Promise<MatrixRecoveryKeyVerificationResult>;
-  sendTextMessage(opts: {
-    body: string;
-    mentionUserIds?: string[];
-    replyToEventId?: string;
-    roomId: string;
-    threadRootEventId?: string;
-  }): Promise<string>;
-  sendNoticeMessage(opts: {
-    body: string;
-    mentionUserIds?: string[];
-    roomId: string;
-  }): Promise<string>;
-  sendImageMessage(opts: {
-    body: string;
-    buffer: Buffer;
-    contentType: string;
-    fileName: string;
-    mentionUserIds?: string[];
-    roomId: string;
-  }): Promise<string>;
-  startVerification(
-    id: string,
-    method?: MatrixVerificationMethod,
-  ): Promise<MatrixVerificationSummary>;
-  stop(): Promise<void>;
-  waitForOptionalRoomEvent(params: {
-    predicate: (event: MatrixQaObservedEvent) => boolean;
-    roomId: string;
-    timeoutMs: number;
-  }): Promise<MatrixQaRoomEventWaitResult>;
-  waitForJoinedMember(params: { roomId: string; timeoutMs: number; userId: string }): Promise<void>;
-  waitForRoomEvent(params: {
-    predicate: (event: MatrixQaObservedEvent) => boolean;
-    roomId: string;
-    timeoutMs: number;
-  }): Promise<{
-    event: MatrixQaObservedEvent;
-    since?: string;
-  }>;
-};
 
 export async function loadMatrixQaE2eeRuntime(): Promise<MatrixQaE2eeRuntime> {
   const { loadQaRunnerBundledPluginTestApi } =
@@ -312,7 +234,7 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
     password: params.password,
     recoveryKeyPath: storage.recoveryKeyPath,
     ssrfPolicy: { allowPrivateNetwork: true },
-    storageRootDir: path.dirname(storage.storagePath),
+    syncStore: await runtime.SqliteBackedMatrixSyncStore.create(path.dirname(storage.storagePath)),
     syncFilter: MATRIX_QA_E2EE_SYNC_FILTER,
     userId: params.userId,
   });
@@ -322,7 +244,7 @@ export async function createMatrixQaE2eeScenarioClient(
   params: MatrixQaE2eeClientParams & {
     observedEvents: MatrixQaObservedEvent[];
   },
-): Promise<MatrixQaE2eeScenarioClient> {
+) {
   const client: MatrixClient = await createMatrixQaE2eeMatrixClient(params);
   const localEvents: MatrixQaObservedEvent[] = [];
   const verificationSummaries: MatrixVerificationSummary[] = [];
@@ -369,9 +291,11 @@ export async function createMatrixQaE2eeScenarioClient(
     cursorIndexByRoom.clear();
     return `e2ee:${primeCursorIndex}`;
   };
-  const waitForOptionalRoomEvent: MatrixQaE2eeScenarioClient["waitForOptionalRoomEvent"] = async (
-    waitParams,
-  ) => {
+  const waitForOptionalRoomEvent = async (waitParams: {
+    predicate: (event: MatrixQaObservedEvent) => boolean;
+    roomId: string;
+    timeoutMs: number;
+  }) => {
     const cursorIndex = cursorIndexByRoom.get(waitParams.roomId) ?? primeCursorIndex;
     const startedAt = Date.now();
     let scanIndex = cursorIndex;
@@ -387,7 +311,7 @@ export async function createMatrixQaE2eeScenarioClient(
         cursorIndexByRoom.set(waitParams.roomId, nextCursorIndex);
         return {
           event: matched.event,
-          matched: true,
+          matched: true as const,
           since: `e2ee:${nextCursorIndex}`,
         };
       }
@@ -397,7 +321,7 @@ export async function createMatrixQaE2eeScenarioClient(
     const nextCursorIndex = Math.max(cursorIndex, scanIndex);
     cursorIndexByRoom.set(waitParams.roomId, nextCursorIndex);
     return {
-      matched: false,
+      matched: false as const,
       since: `e2ee:${nextCursorIndex}`,
     };
   };
@@ -416,33 +340,25 @@ export async function createMatrixQaE2eeScenarioClient(
     });
 
   return {
-    async acceptVerification(id) {
+    async acceptVerification(id: string) {
       return await requireCrypto().acceptVerification(id);
     },
-    async bootstrapOwnDeviceVerification(opts) {
-      return await client.bootstrapOwnDeviceVerification(opts);
-    },
-    async confirmVerificationReciprocateQr(id) {
+    bootstrapOwnDeviceVerification: client.bootstrapOwnDeviceVerification.bind(client),
+    async confirmVerificationReciprocateQr(id: string) {
       return await requireCrypto().confirmVerificationReciprocateQr(id);
     },
-    async confirmVerificationSas(id) {
+    async confirmVerificationSas(id: string) {
       return await requireCrypto().confirmVerificationSas(id);
     },
-    async deleteOwnDevices(deviceIds) {
-      return await client.deleteOwnDevices(deviceIds);
-    },
-    async generateVerificationQr(id) {
+    deleteOwnDevices: client.deleteOwnDevices.bind(client),
+    async generateVerificationQr(id: string) {
       return await requireCrypto().generateVerificationQr(id);
     },
-    async getDeviceVerificationStatus(userId, deviceId) {
-      return await client.getDeviceVerificationStatus(userId, deviceId);
-    },
+    getDeviceVerificationStatus: client.getDeviceVerificationStatus.bind(client),
     async getRecoveryKey() {
       return await requireCrypto().getRecoveryKey();
     },
-    async listOwnDevices() {
-      return await client.listOwnDevices();
-    },
+    listOwnDevices: client.listOwnDevices.bind(client),
     async listVerifications() {
       const current = await requireCrypto().listVerifications();
       return [...verificationSummaries, ...current].toSorted((a, b) =>
@@ -450,7 +366,7 @@ export async function createMatrixQaE2eeScenarioClient(
       );
     },
     prime,
-    async waitForJoinedMember(opts) {
+    async waitForJoinedMember(opts: { roomId: string; timeoutMs: number; userId: string }) {
       const startedAt = Date.now();
       while (Date.now() - startedAt < opts.timeoutMs) {
         if (client.hasSyncedJoinedRoomMember(opts.roomId, opts.userId)) {
@@ -462,24 +378,28 @@ export async function createMatrixQaE2eeScenarioClient(
         `Matrix E2EE client did not sync joined membership for ${opts.userId} in ${opts.roomId}`,
       );
     },
-    async requestVerification(opts) {
+    async requestVerification(opts: Parameters<MatrixQaCrypto["requestVerification"]>[0]) {
       return await requireCrypto().requestVerification(opts);
     },
-    async resetRoomKeyBackup(paramsLocal) {
-      return await client.resetRoomKeyBackup(paramsLocal);
-    },
-    async restoreRoomKeyBackup(opts) {
-      return await client.restoreRoomKeyBackup(opts);
-    },
-    async scanVerificationQr(id, qrDataBase64) {
+    resetRoomKeyBackup: client.resetRoomKeyBackup.bind(client),
+    restoreRoomKeyBackup: client.restoreRoomKeyBackup.bind(client),
+    async scanVerificationQr(id: string, qrDataBase64: string) {
       return await requireCrypto().scanVerificationQr(id, qrDataBase64);
     },
-    async sendTextMessage(opts) {
+    async sendTextMessage(
+      opts: Parameters<typeof buildMatrixQaMessageContent>[0] & {
+        roomId: string;
+      },
+    ) {
       return await runClientOperation("Matrix E2EE text send", () =>
         client.sendMessage(opts.roomId, buildMatrixQaMessageContent(opts) as MessageEventContent),
       );
     },
-    async sendNoticeMessage(opts) {
+    async sendNoticeMessage(
+      opts: Parameters<typeof buildMatrixQaMessageContent>[0] & {
+        roomId: string;
+      },
+    ) {
       return await runClientOperation("Matrix E2EE notice send", () =>
         client.sendMessage(opts.roomId, {
           ...buildMatrixQaMessageContent(opts),
@@ -487,7 +407,14 @@ export async function createMatrixQaE2eeScenarioClient(
         } as MessageEventContent),
       );
     },
-    async sendImageMessage(opts) {
+    async sendImageMessage(opts: {
+      body: string;
+      buffer: Buffer;
+      contentType: string;
+      fileName: string;
+      mentionUserIds?: string[];
+      roomId: string;
+    }) {
       const encrypted = await requireCrypto().encryptMedia(opts.buffer);
       const contentUri = await client.uploadContent(
         encrypted.buffer,
@@ -511,12 +438,15 @@ export async function createMatrixQaE2eeScenarioClient(
         } as MessageEventContent),
       );
     },
-    async startVerification(id, method) {
+    async startVerification(
+      id: string,
+      method?: Parameters<MatrixQaCrypto["startVerification"]>[1],
+    ) {
       return await requireCrypto().startVerification(id, method);
     },
     stop: lifecycle.stop,
     waitForOptionalRoomEvent,
-    async waitForRoomEvent(waitParams) {
+    async waitForRoomEvent(waitParams: Parameters<typeof waitForOptionalRoomEvent>[0]) {
       const result = await waitForOptionalRoomEvent(waitParams);
       if (result.matched) {
         return {
@@ -526,11 +456,13 @@ export async function createMatrixQaE2eeScenarioClient(
       }
       throw new Error(`timed out after ${waitParams.timeoutMs}ms waiting for Matrix E2EE event`);
     },
-    async verifyWithRecoveryKey(rawRecoveryKey) {
-      return await client.verifyWithRecoveryKey(rawRecoveryKey);
-    },
+    verifyWithRecoveryKey: client.verifyWithRecoveryKey.bind(client),
   };
 }
+
+export type MatrixQaE2eeScenarioClient = Awaited<
+  ReturnType<typeof createMatrixQaE2eeScenarioClient>
+>;
 
 export async function runMatrixQaE2eeBootstrap(
   params: MatrixQaE2eeClientParams,

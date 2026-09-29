@@ -20,6 +20,7 @@ import type {
   RealtimeVoiceResponseOutcome,
   RealtimeVoiceRole,
 } from "./provider-types.js";
+import { resolveRealtimeVoiceBargeIn } from "./realtime-session-policy.js";
 import {
   extendRealtimeVoiceOutputEchoSuppression,
   getRealtimeVoiceBridgeEventHealth,
@@ -141,6 +142,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
 }): RealtimeVoiceSessionHarness<TForcedConsultContext> {
   let closed = false;
   let bridge: RealtimeVoiceBridgeSession | undefined;
+  let bridgeCapabilities: RealtimeVoiceBridgeSessionParams["capabilities"];
   let lastInputAt: string | undefined;
   let lastOutputAt: string | undefined;
   let lastSuppressedInputAt: string | undefined;
@@ -153,7 +155,6 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
   let responseOwnerId: string | undefined;
   let suppressNextUnkeyedLegacyTerminal = false;
   const settledResponseIds = new Set<string>();
-  const settledResponseIdOrder: string[] = [];
   const transcript: RealtimeVoiceTranscriptEntry[] = [];
   const bridgeEvents: RealtimeVoiceBridgeEventLogEntry[] = [];
   const outputActivity = createRealtimeVoiceOutputActivityTracker();
@@ -189,9 +190,8 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       return;
     }
     settledResponseIds.add(responseId);
-    settledResponseIdOrder.push(responseId);
-    if (settledResponseIdOrder.length > MAX_SETTLED_RESPONSE_IDS) {
-      const oldest = settledResponseIdOrder.shift();
+    if (settledResponseIds.size > MAX_SETTLED_RESPONSE_IDS) {
+      const oldest = settledResponseIds.values().next().value;
       if (oldest) {
         settledResponseIds.delete(oldest);
       }
@@ -309,17 +309,19 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       responseOwnerId = undefined;
     },
     createBridge(bridgeParams) {
+      bridgeCapabilities = bridgeParams.capabilities;
       bridge = createRealtimeVoiceBridgeSession({
         ...bridgeParams,
         onResponseRequest: () => {
           ensureTurn();
           bridgeParams.onResponseRequest?.();
         },
-        onTranscript: (role, text, isFinal) => {
+        onTranscript: (...args) => {
+          const [role, text, isFinal] = args;
           if (isFinal) {
             harness.recordTranscript(role, text);
           }
-          bridgeParams.onTranscript?.(role, text, isFinal);
+          bridgeParams.onTranscript?.(...args);
         },
         onEvent: (event) => {
           claimResponseEvent(event);
@@ -383,6 +385,16 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       };
     },
     handleBargeIn(options, fallbackFlush) {
+      if (
+        !resolveRealtimeVoiceBargeIn({
+          configuredBargeIn: true,
+          interruptResponseOnInputAudio: true,
+          capabilities: bridgeCapabilities,
+          outputAudioMode: bridge?.bridge.outputAudioMode,
+        })
+      ) {
+        return;
+      }
       suppressInputUntilMs = 0;
       const flushGeneration = outputFlushGeneration;
       bridge?.handleBargeIn(options);

@@ -1,9 +1,8 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import {
-  type WorkerSessionsSendParams,
   WorkerSessionsSendParamsSchema,
-  type WorkerSessionsSpawnParams,
+  WorkerPresenceParamsSchema,
   WorkerSessionsSpawnParamsSchema,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
@@ -11,23 +10,20 @@ import {
   runBeforeToolCallHook,
 } from "../../agents/agent-tools.before-tool-call.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerSessionToolRequest } from "./worker-session-tool-result.js";
 import type { WorkerSessionToolSource } from "./worker-session-tool-topology.js";
 
-export type WorkerSessionOperationRequest = {
-  identity: WorkerConnectionIdentity;
-  signal?: AbortSignal;
-} & (
-  | { toolName: "sessions_spawn"; request: WorkerSessionsSpawnParams }
-  | { toolName: "sessions_send"; request: WorkerSessionsSendParams }
-);
+type WorkerSessionOperationRequest = Extract<
+  WorkerSessionToolRequest,
+  { toolName: "sessions_spawn" | "sessions_send" | "presence" }
+>;
 
-export async function applyWorkerSessionToolPolicy(params: {
-  request: WorkerSessionOperationRequest;
+export async function applyWorkerSessionToolPolicy<
+  T extends WorkerSessionOperationRequest,
+>(params: {
+  request: T;
   source: Pick<WorkerSessionToolSource, "agentId" | "sessionId" | "sessionKey">;
-}): Promise<
-  { request: WorkerSessionOperationRequest } | { result: ReturnType<typeof buildBlockedToolResult> }
-> {
+}): Promise<{ request: T } | { result: ReturnType<typeof buildBlockedToolResult> }> {
   const { toolCallId, ...toolParams } = params.request.request;
   const runId = params.request.identity.runId ?? undefined;
   const outcome = await runBeforeToolCallHook({
@@ -58,7 +54,9 @@ export async function applyWorkerSessionToolPolicy(params: {
   const schema =
     params.request.toolName === "sessions_spawn"
       ? WorkerSessionsSpawnParamsSchema
-      : WorkerSessionsSendParamsSchema;
+      : params.request.toolName === "presence"
+        ? WorkerPresenceParamsSchema
+        : WorkerSessionsSendParamsSchema;
   if (!Value.Check(schema, adjustedRequest)) {
     return {
       result: buildBlockedToolResult({
@@ -70,6 +68,6 @@ export async function applyWorkerSessionToolPolicy(params: {
   }
   return {
     // SAFETY: Value.Check used the schema selected by this unchanged toolName discriminant.
-    request: { ...params.request, request: adjustedRequest } as WorkerSessionOperationRequest,
+    request: { ...params.request, request: adjustedRequest } as T,
   };
 }

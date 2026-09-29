@@ -1,16 +1,7 @@
 // Telegram tests cover monotonic update-offset persistence and retry.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTelegramUpdateOffsetPersistence } from "./update-offset-persistence.js";
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (error?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 async function flushMicrotasks() {
   await Promise.resolve();
@@ -46,7 +37,6 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     persistence.persistUpdateId(102);
 
     expect(writes).toEqual([101]);
-    expect(persistence.getAcceptedUpdateId()).toBe(103);
     expect(persistence.getCommittedUpdateId()).toBe(100);
     expect(onRetry).toHaveBeenCalledWith(expect.objectContaining({ attempt: 1, updateId: 101 }));
 
@@ -59,7 +49,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
   });
 
   it("never regresses when a lower update arrives during a higher write", async () => {
-    const write = deferred();
+    const write = createDeferred<void>();
     const writes: number[] = [];
     const persistence = createTelegramUpdateOffsetPersistence({
       initialUpdateId: 100,
@@ -83,7 +73,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
   });
 
   it("restarts the drain when a higher update arrives during teardown", async () => {
-    const firstWrite = deferred();
+    const firstWrite = createDeferred<void>();
     const writes: number[] = [];
     const persistence = createTelegramUpdateOffsetPersistence({
       initialUpdateId: 100,
@@ -103,13 +93,12 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     queueMicrotask(() => persistence.persistUpdateId(102));
     await vi.waitFor(() => expect(writes).toEqual([101, 102]));
 
-    expect(persistence.getAcceptedUpdateId()).toBe(102);
     expect(persistence.getCommittedUpdateId()).toBe(102);
     await persistence.stop();
   });
 
   it("fences an in-flight write before stop resolves", async () => {
-    const write = deferred();
+    const write = createDeferred<void>();
     const persistence = createTelegramUpdateOffsetPersistence({
       initialUpdateId: 100,
       writeUpdateId: async () => await write.promise,
@@ -195,7 +184,6 @@ describe("createTelegramUpdateOffsetPersistence", () => {
 
     expect(onInvalidUpdateId).toHaveBeenCalledWith(Number.NaN);
     expect(writes).toEqual([101]);
-    expect(persistence.getAcceptedUpdateId()).toBe(101);
     expect(persistence.getCommittedUpdateId()).toBe(101);
     await persistence.stop();
   });

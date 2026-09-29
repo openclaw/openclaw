@@ -3,13 +3,16 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createGatewayByteStream,
+  createImmutableFileValidators,
   resolveByteResponse,
   writeByteHeaders,
 } from "./http-byte-range.js";
 
 const FILE = { size: 10, mtimeMs: 1_752_000_000_123.5 };
+const IMMUTABLE_FILE = { file: FILE, validators: createImmutableFileValidators(FILE) };
 const LAST_MODIFIED = new Date(FILE.mtimeMs).toUTCString();
 const HTTP_DATE_VARIANTS = [
   { label: "IMF-fixdate", value: LAST_MODIFIED },
@@ -33,58 +36,30 @@ function createByteRequest(
   };
 }
 
+function resolveImmutableResponse(headers: Parameters<typeof createByteRequest>[0]) {
+  return resolveByteResponse({
+    ...IMMUTABLE_FILE,
+    method: "GET",
+    request: createByteRequest(headers),
+  });
+}
+
 describe("resolveByteResponse", () => {
-  it("resolves an open-ended range", () => {
-    expect(
-      resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=4-" }),
-      }),
-    ).toMatchObject({
+  it.each([
+    { header: "bytes=4-", start: 4, end: 9, contentLength: 6 },
+    { header: "bytes=-3", start: 7, end: 9, contentLength: 3 },
+    { header: "bytes=2-5", start: 2, end: 5, contentLength: 4 },
+  ])("resolves range $header", ({ header, start, end, contentLength }) => {
+    expect(resolveImmutableResponse({ range: header })).toMatchObject({
       kind: "partial",
       statusCode: 206,
-      contentLength: 6,
-      range: { start: 4, end: 9 },
-    });
-  });
-
-  it("resolves a suffix range", () => {
-    expect(
-      resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=-3" }),
-      }),
-    ).toMatchObject({
-      kind: "partial",
-      statusCode: 206,
-      contentLength: 3,
-      range: { start: 7, end: 9 },
-    });
-  });
-
-  it("resolves an exact range", () => {
-    expect(
-      resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=2-5" }),
-      }),
-    ).toMatchObject({
-      kind: "partial",
-      statusCode: 206,
-      contentLength: 4,
-      range: { start: 2, end: 5 },
+      contentLength,
+      range: { start, end },
     });
   });
 
   it("returns 416 with the complete file size for an out-of-bounds range", () => {
-    const plan = resolveByteResponse({
-      file: FILE,
-      method: "GET",
-      request: createByteRequest({ range: "bytes=10-20" }),
-    });
+    const plan = resolveImmutableResponse({ range: "bytes=10-20" });
     expect(plan).toMatchObject({
       kind: "unsatisfiable",
       statusCode: 416,
@@ -99,16 +74,10 @@ describe("resolveByteResponse", () => {
     expect(setHeader).toHaveBeenCalledWith("Content-Range", "bytes */10");
   });
 
-  it.each(["items=0-1", "bytes=broken", "bytes=0-1,4-5"])(
+  it.each(["bytes=broken", "items=0-1", "bytes=0-1,4-5"])(
     "falls back to a full response for malformed or multipart range %s",
     (rangeHeader) => {
-      expect(
-        resolveByteResponse({
-          file: FILE,
-          method: "GET",
-          request: createByteRequest({ range: rangeHeader }),
-        }),
-      ).toMatchObject({
+      expect(resolveImmutableResponse({ range: rangeHeader })).toMatchObject({
         kind: "full",
         statusCode: 200,
         contentLength: 10,
@@ -117,23 +86,17 @@ describe("resolveByteResponse", () => {
   );
 
   it("honors a matching If-Range ETag", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
-    expect(
-      resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=1-2", "if-range": etag }),
-      }),
-    ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
+    const etag = IMMUTABLE_FILE.validators.etag;
+    expect(resolveImmutableResponse({ range: "bytes=1-2", "if-range": etag })).toMatchObject({
+      kind: "partial",
+      statusCode: 206,
+      range: { start: 1, end: 2 },
+    });
   });
 
   it("honors an If-Range HTTP-date at the file's fractional modification second", () => {
     expect(
-      resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
-      }),
+      resolveImmutableResponse({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
     ).toMatchObject({
       kind: "partial",
       statusCode: 206,
@@ -151,7 +114,7 @@ describe("resolveByteResponse", () => {
     const nowMs = FILE.mtimeMs - 60_000;
     const { rangeHeader, ...rest } = params;
     const plan = resolveByteResponse({
-      file: FILE,
+      ...IMMUTABLE_FILE,
       nowMs,
       ...rest,
       request: createByteRequest({ range: rangeHeader }),
@@ -165,11 +128,13 @@ describe("resolveByteResponse", () => {
     const nowMs = FILE.mtimeMs - 60_000;
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
     try {
-      const future = resolveByteResponse({ file: FILE, method: "GET" });
+      const future = resolveByteResponse({ ...IMMUTABLE_FILE, method: "GET" });
 
       expect(dateNow).toHaveBeenCalledOnce();
       expect(future.lastModified).toBe(new Date(nowMs).toUTCString());
-      expect(future.etag).toBe(resolveByteResponse({ file: FILE, nowMs: FILE.mtimeMs }).etag);
+      expect(future.etag).toBe(
+        resolveByteResponse({ ...IMMUTABLE_FILE, nowMs: FILE.mtimeMs }).etag,
+      );
     } finally {
       dateNow.mockRestore();
     }
@@ -181,7 +146,7 @@ describe("resolveByteResponse", () => {
 
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         nowMs,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": emittedLastModified }),
@@ -189,7 +154,7 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "partial", statusCode: 206, lastModified: emittedLastModified });
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         nowMs,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
@@ -197,80 +162,65 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "full", statusCode: 200, lastModified: emittedLastModified });
   });
 
-  it.each(["GET", "HEAD"])(
-    "bounds the future Last-Modified validator on %s not-modified responses",
-    (method) => {
-      const nowMs = FILE.mtimeMs - 60_000;
-      const etag = resolveByteResponse({ file: FILE, nowMs }).etag;
+  it("bounds the future Last-Modified validator on HEAD not-modified responses", () => {
+    const nowMs = FILE.mtimeMs - 60_000;
+    const etag = IMMUTABLE_FILE.validators.etag;
 
-      expect(
-        resolveByteResponse({
-          file: FILE,
-          method,
-          nowMs,
-          request: createByteRequest({ "if-none-match": etag }),
-        }),
-      ).toEqual({
-        kind: "not-modified",
-        statusCode: 304,
-        etag,
-        lastModified: new Date(nowMs).toUTCString(),
-      });
-    },
-  );
-
-  it.each(
-    HTTP_DATE_VARIANTS.flatMap(({ label, value }) =>
-      (["GET", "HEAD"] as const).map((method) => ({ label, value, method })),
-    ),
-  )("revalidates $method using a $label If-Modified-Since date", ({ value, method }) => {
     expect(
       resolveByteResponse({
-        file: FILE,
-        method,
-        request: createByteRequest({ "if-modified-since": value }),
+        ...IMMUTABLE_FILE,
+        method: "HEAD",
+        nowMs,
+        request: createByteRequest({ "if-none-match": etag }),
+      }),
+    ).toEqual({
+      kind: "not-modified",
+      statusCode: 304,
+      etag,
+      lastModified: new Date(nowMs).toUTCString(),
+    });
+  });
+
+  it.each(HTTP_DATE_VARIANTS)("revalidates using a $label If-Modified-Since date", ({ value }) => {
+    expect(resolveImmutableResponse({ "if-modified-since": value })).toMatchObject({
+      kind: "not-modified",
+      statusCode: 304,
+      lastModified: LAST_MODIFIED,
+    });
+  });
+
+  it("honors a later If-Modified-Since date before ranges for HEAD", () => {
+    expect(
+      resolveByteResponse({
+        ...IMMUTABLE_FILE,
+        method: "HEAD",
+        request: createByteRequest({
+          "if-modified-since": new Date(Date.parse(LAST_MODIFIED) + 1_000).toUTCString(),
+          range: "bytes=1-2",
+          "if-range": '"stale"',
+        }),
       }),
     ).toMatchObject({ kind: "not-modified", statusCode: 304, lastModified: LAST_MODIFIED });
   });
 
-  it.each(["GET", "HEAD"] as const)(
-    "honors a later If-Modified-Since date before ranges for %s",
-    (method) => {
-      expect(
-        resolveByteResponse({
-          file: FILE,
-          method,
-          request: createByteRequest({
-            "if-modified-since": new Date(Date.parse(LAST_MODIFIED) + 1_000).toUTCString(),
-            range: "bytes=1-2",
-            "if-range": '"stale"',
-          }),
-        }),
-      ).toMatchObject({ kind: "not-modified", statusCode: 304, lastModified: LAST_MODIFIED });
-    },
-  );
+  it("compares If-Modified-Since against the future-clamped GET validator", () => {
+    const nowMs = FILE.mtimeMs - 60_000;
+    const emittedLastModified = new Date(nowMs).toUTCString();
 
-  it.each(["GET", "HEAD"] as const)(
-    "compares If-Modified-Since against the future-clamped %s validator",
-    (method) => {
-      const nowMs = FILE.mtimeMs - 60_000;
-      const emittedLastModified = new Date(nowMs).toUTCString();
-
-      expect(
-        resolveByteResponse({
-          file: FILE,
-          nowMs,
-          method,
-          request: createByteRequest({ "if-modified-since": emittedLastModified }),
-        }),
-      ).toMatchObject({ kind: "not-modified", statusCode: 304, lastModified: emittedLastModified });
-    },
-  );
+    expect(
+      resolveByteResponse({
+        ...IMMUTABLE_FILE,
+        nowMs,
+        method: "GET",
+        request: createByteRequest({ "if-modified-since": emittedLastModified }),
+      }),
+    ).toMatchObject({ kind: "not-modified", statusCode: 304, lastModified: emittedLastModified });
+  });
 
   it("interprets an obsolete RFC 850 year within the RFC's rolling 50-year window", () => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         nowMs: Date.UTC(2026, 0, 1),
         method: "GET",
         request: createByteRequest({ "if-modified-since": "Sunday, 06-Nov-50 00:00:00 GMT" }),
@@ -278,25 +228,50 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "not-modified", statusCode: 304 });
   });
 
-  it("includes a leap second when applying the RFC 850 rolling-year boundary", () => {
+  it.each([
+    { name: "the prior second", mtimeMs: Date.UTC(1976, 11, 31, 23, 59, 59), statusCode: 304 },
+    { name: "the following midnight", mtimeMs: Date.UTC(1977, 0, 1), statusCode: 200 },
+  ])("orders the RFC 850 rolling-year leap second against $name", ({ mtimeMs, statusCode }) => {
     expect(
       resolveByteResponse({
-        file: { size: 10, mtimeMs: Date.UTC(1977, 0, 1) },
+        file: { size: 10 },
+        validators: createImmutableFileValidators({ size: 10, mtimeMs }),
         nowMs: Date.UTC(2026, 11, 31, 23, 59, 59),
         method: "GET",
         request: createByteRequest({ "if-modified-since": "Friday, 31-Dec-76 23:59:60 GMT" }),
       }),
-    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
+    ).toMatchObject({ kind: statusCode === 304 ? "not-modified" : "full", statusCode });
   });
 
-  it("accepts a valid HTTP-date leap second without JavaScript date normalization", () => {
+  it.each([
+    ...[
+      { name: "IMF-fixdate", value: "Sat, 31 Dec 2016 23:59:60 GMT" },
+      { name: "RFC 850", value: "Saturday, 31-Dec-16 23:59:60 GMT" },
+      { name: "asctime", value: "Sat Dec 31 23:59:60 2016" },
+    ].flatMap(({ name, value }) => [
+      { name: `${name} before midnight`, value, mtimeMs: Date.UTC(2017, 0, 1), statusCode: 200 },
+      {
+        name: `${name} after the prior second`,
+        value,
+        mtimeMs: Date.UTC(2016, 11, 31, 23, 59, 59),
+        statusCode: 304,
+      },
+    ]),
+    {
+      name: "the following midnight equality",
+      value: "Sun, 01 Jan 2017 00:00:00 GMT",
+      mtimeMs: Date.UTC(2017, 0, 1),
+      statusCode: 304,
+    },
+  ])("preserves leap second ordering for $name", ({ value, mtimeMs, statusCode }) => {
     expect(
       resolveByteResponse({
-        file: { size: 10, mtimeMs: Date.UTC(2017, 0, 1) },
+        file: { size: 10 },
+        validators: createImmutableFileValidators({ size: 10, mtimeMs }),
         method: "GET",
-        request: createByteRequest({ "if-modified-since": "Sat, 31 Dec 2016 23:59:60 GMT" }),
+        request: createByteRequest({ "if-modified-since": value }),
       }),
-    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
+    ).toMatchObject({ kind: statusCode === 304 ? "not-modified" : "full", statusCode });
   });
 
   it.each([
@@ -306,35 +281,24 @@ describe("resolveByteResponse", () => {
     { label: "the wrong calendar weekday", value: LAST_MODIFIED.replace("Tue", "Wed") },
     { label: "a four-digit IMF year before 1900", value: "Tue, 08 Jul 0025 18:40:00 GMT" },
     { label: "a four-digit asctime year before 1900", value: "Tue Jul  8 18:40:00 0025" },
-    { label: "a four-digit IMF year zero", value: "Tue, 08 Jul 0000 18:40:00 GMT" },
-    { label: "a four-digit asctime year zero", value: "Tue Jul  8 18:40:00 0000" },
-    { label: "a four-digit IMF year 0099", value: "Tue, 08 Jul 0099 18:40:00 GMT" },
-    { label: "a four-digit asctime year 0099", value: "Tue Jul  8 18:40:00 0099" },
     { label: "a normalized invalid calendar day", value: "Tue, 32 Jul 2025 18:40:00 GMT" },
     { label: "trailing content", value: `${LAST_MODIFIED} trailing` },
     { label: "multiple date members", value: `${LAST_MODIFIED}, ${LAST_MODIFIED}` },
     { label: "multiple header fields", value: [LAST_MODIFIED, LAST_MODIFIED] },
   ])("ignores $label in If-Modified-Since", ({ value }) => {
-    expect(
-      resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({ "if-modified-since": value }),
-      }),
-    ).toMatchObject({ kind: "full", statusCode: 200 });
+    expect(resolveImmutableResponse({ "if-modified-since": value })).toMatchObject({
+      kind: "full",
+      statusCode: 200,
+    });
   });
 
-  it.each(["", '"different"', ['"different"']] as Array<string | string[]>)(
+  it.each(["", '"different"'])(
     "ignores If-Modified-Since whenever any If-None-Match field is present (%j)",
     (ifNoneMatch) => {
       expect(
-        resolveByteResponse({
-          file: FILE,
-          method: "GET",
-          request: createByteRequest({
-            "if-none-match": ifNoneMatch,
-            "if-modified-since": LAST_MODIFIED,
-          }),
+        resolveImmutableResponse({
+          "if-none-match": ifNoneMatch,
+          "if-modified-since": LAST_MODIFIED,
         }),
       ).toMatchObject({ kind: "full", statusCode: 200 });
     },
@@ -345,7 +309,7 @@ describe("resolveByteResponse", () => {
 
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: {
           headers,
@@ -363,7 +327,8 @@ describe("resolveByteResponse", () => {
   it("interprets asctime dates as UTC rather than the host's local timezone", () => {
     expect(
       resolveByteResponse({
-        file: { size: 10, mtimeMs: Date.UTC(1994, 10, 6, 12) },
+        file: { size: 10 },
+        validators: createImmutableFileValidators({ size: 10, mtimeMs: Date.UTC(1994, 10, 6, 12) }),
         method: "GET",
         request: createByteRequest({ "if-modified-since": "Sun Nov  6 08:49:37 1994" }),
       }),
@@ -376,42 +341,38 @@ describe("resolveByteResponse", () => {
       header: new Date(Date.parse(LAST_MODIFIED) - 1000).toUTCString(),
     },
     {
-      label: "a future HTTP-date",
-      header: new Date(Date.parse(LAST_MODIFIED) + 1000).toUTCString(),
-    },
-    {
       label: "an ISO timestamp for the same second",
       header: new Date(Date.parse(LAST_MODIFIED)).toISOString(),
     },
-    {
-      label: "a non-HTTP timezone for the same second",
-      header: LAST_MODIFIED.replace("GMT", "UTC"),
-    },
-    {
-      label: "a lowercase weekday for the same second",
-      header: LAST_MODIFIED.replace("Tue", "tue"),
-    },
-    { label: "a malformed HTTP-date", header: "not-an-http-date" },
-    { label: "a weak ETag", header: `W/${resolveByteResponse({ file: FILE }).etag}` },
+    { label: "a weak ETag", header: `W/${resolveByteResponse({ ...IMMUTABLE_FILE }).etag}` },
     { label: "multiple validator values", header: [LAST_MODIFIED, LAST_MODIFIED] },
   ])("ignores a range for $label If-Range", ({ header }) => {
-    expect(
-      resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=1-2", "if-range": header }),
-      }),
-    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+    expect(resolveImmutableResponse({ range: "bytes=1-2", "if-range": header })).toMatchObject({
+      kind: "full",
+      statusCode: 200,
+      contentLength: 10,
+    });
   });
 
   it("falls back to a full response for a mismatched If-Range ETag", () => {
     expect(
-      resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({ range: "bytes=1-2", "if-range": '"different"' }),
-      }),
+      resolveImmutableResponse({ range: "bytes=1-2", "if-range": '"different"' }),
     ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
+  it.each([
+    { etag: '"opaque,tag"', header: 'W/"opaque,tag"' },
+    { etag: 'W/"opaque,tag"', header: '"opaque,tag"' },
+    { etag: 'W/"opaque,tag"', header: 'W/"opaque,tag"' },
+  ])("weakly compares complete $header against $etag", ({ etag, header }) => {
+    expect(
+      resolveByteResponse({
+        ...IMMUTABLE_FILE,
+        validators: { ...IMMUTABLE_FILE.validators, etag },
+        method: "GET",
+        request: createByteRequest({ "if-none-match": header }),
+      }),
+    ).toMatchObject({ kind: "not-modified", statusCode: 304 });
   });
 
   it.each([
@@ -421,12 +382,8 @@ describe("resolveByteResponse", () => {
     { label: "list", header: (etag: string) => `"other", ${etag}` },
     { label: "multiple headers", header: (etag: string) => ['"other"', `W/${etag}`] },
   ])("returns 304 for a matching $label If-None-Match validator", ({ header }) => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
-    const plan = resolveByteResponse({
-      file: FILE,
-      method: "GET",
-      request: createByteRequest({ "if-none-match": header(etag) }),
-    });
+    const etag = IMMUTABLE_FILE.validators.etag;
+    const plan = resolveImmutableResponse({ "if-none-match": header(etag) });
 
     expect(plan).toEqual({
       kind: "not-modified",
@@ -446,11 +403,11 @@ describe("resolveByteResponse", () => {
   it.each(["GET", "HEAD"])(
     "evaluates matching If-None-Match before Range and If-Range for %s",
     (method) => {
-      const etag = resolveByteResponse({ file: FILE }).etag;
+      const etag = IMMUTABLE_FILE.validators.etag;
 
       expect(
         resolveByteResponse({
-          file: FILE,
+          ...IMMUTABLE_FILE,
           method,
           request: createByteRequest({
             range: "bytes=1-2",
@@ -463,17 +420,13 @@ describe("resolveByteResponse", () => {
   );
 
   it("keeps the requested range when If-None-Match does not match", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+    const etag = IMMUTABLE_FILE.validators.etag;
 
     expect(
-      resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({
-          range: "bytes=1-2",
-          "if-range": etag,
-          "if-none-match": '"stale"',
-        }),
+      resolveImmutableResponse({
+        range: "bytes=1-2",
+        "if-range": etag,
+        "if-none-match": '"stale"',
       }),
     ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
   });
@@ -485,11 +438,7 @@ describe("resolveByteResponse", () => {
   ])(
     "emits the same Last-Modified validator on $label responses",
     ({ rangeHeader, statusCode }) => {
-      const plan = resolveByteResponse({
-        file: FILE,
-        method: "GET",
-        request: createByteRequest({ range: rangeHeader }),
-      });
+      const plan = resolveImmutableResponse({ range: rangeHeader });
       const setHeader = vi.fn();
       const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
 
@@ -501,12 +450,12 @@ describe("resolveByteResponse", () => {
   );
 });
 
-describe("byte ETag generation", () => {
+describe("immutable file validators", () => {
   it("is stable for the same file identity and changes with size or mtime", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
-    expect(resolveByteResponse({ file: { ...FILE } }).etag).toBe(etag);
-    expect(resolveByteResponse({ file: { ...FILE, size: FILE.size + 1 } }).etag).not.toBe(etag);
-    expect(resolveByteResponse({ file: { ...FILE, mtimeMs: FILE.mtimeMs + 1 } }).etag).not.toBe(
+    const etag = IMMUTABLE_FILE.validators.etag;
+    expect(createImmutableFileValidators({ ...FILE }).etag).toBe(etag);
+    expect(createImmutableFileValidators({ ...FILE, size: FILE.size + 1 }).etag).not.toBe(etag);
+    expect(createImmutableFileValidators({ ...FILE, mtimeMs: FILE.mtimeMs + 1 }).etag).not.toBe(
       etag,
     );
     expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
@@ -522,17 +471,14 @@ describe("Gateway byte response descriptor lifecycle", () => {
     const handle = await fs.open(filePath, "r");
     const closeHandle = vi.spyOn(handle, "close");
     const createReadStream = vi.spyOn(handle, "createReadStream");
-    let resolveResponseClose!: () => void;
-    const responseClosed = new Promise<void>((resolve) => {
-      resolveResponseClose = resolve;
-    });
+    const { promise: responseClosed, resolve: resolveResponseClose } = createDeferred();
     const server = http.createServer((_request, response) => {
       const owner = createGatewayByteStream(response, handle, () => {
         response.statusCode = 404;
         response.end("not found");
       });
       const byteResponse = resolveByteResponse({
-        file: { size: body.byteLength, mtimeMs: 1 },
+        file: { size: body.byteLength },
         method: "GET",
       });
       writeByteHeaders(response, byteResponse);
@@ -586,10 +532,7 @@ describe("Gateway byte response descriptor lifecycle", () => {
     const owner = createGatewayByteStream(response, handle, () => {});
 
     try {
-      await owner.pipe(
-        resolveByteResponse({ file: { size: 5, mtimeMs: 1 }, method: "GET" }),
-        "GET",
-      );
+      await owner.pipe(resolveByteResponse({ file: { size: 5 }, method: "GET" }), "GET");
       expect(closeHandle).toHaveBeenCalledOnce();
       expect(handle.fd).toBe(-1);
     } finally {

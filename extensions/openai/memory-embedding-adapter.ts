@@ -1,15 +1,10 @@
-// Openai plugin module implements memory embedding adapter behavior.
 import {
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
   type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { OPENAI_BATCH_ENDPOINT, runOpenAiEmbeddingBatches } from "./embedding-batch.js";
-import {
-  createOpenAiEmbeddingProvider,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
-} from "./embedding-provider.js";
+} from "openclaw/plugin-sdk/embedding-provider-adapter";
+import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "./default-models.js";
 
 function resolveEmbeddingCacheExcludedHeaders(providerId: string, baseUrl: string): string[] {
   const excludedHeaders = ["authorization", "x-api-key", "api-key"];
@@ -30,7 +25,7 @@ function resolveEmbeddingCacheExcludedHeaders(providerId: string, baseUrl: strin
 
 export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "openai",
-  defaultModel: DEFAULT_OPENAI_EMBEDDING_MODEL,
+  defaultModel: OPENAI_DEFAULT_EMBEDDING_MODEL,
   transport: "remote",
   authProviderId: "openai",
   autoSelectPriority: 20,
@@ -38,6 +33,7 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
     const resolvedProvider = options.provider ?? "openai";
+    const { createOpenAiEmbeddingProvider } = await import("./embedding-provider.js");
     const { provider, client } = await createOpenAiEmbeddingProvider({
       ...options,
       provider: resolvedProvider,
@@ -61,6 +57,8 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
         },
         batchEmbed: async (batch) => {
           const inputType = client.documentInputType ?? client.inputType;
+          const { OPENAI_BATCH_ENDPOINT, runOpenAiEmbeddingBatches } =
+            await import("./embedding-batch.js");
           const byCustomId = await runOpenAiEmbeddingBatches({
             openAi: client,
             agentId: batch.agentId,

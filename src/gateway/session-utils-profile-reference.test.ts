@@ -10,8 +10,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail, resolveUserProfileId } from "../state/user-profiles.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
-import { listSessionsFromStoreAsync } from "./session-utils.js";
 
 const roots = createTempDirTracker();
 let stateRoot: string;
@@ -41,7 +41,7 @@ function listActivity(
   involvingProfileId: string,
   options: Partial<SessionsListParams> = {},
 ) {
-  return listSessionsFromStoreAsync({
+  return listSessionFixture({
     cfg: {},
     storePath: stateRoot,
     store: Object.fromEntries(
@@ -102,6 +102,39 @@ it("keeps old person references working after profile merges and counts merge al
   }
 });
 
+it.each(["owned", "created", "involving"] as const)(
+  "resolves %s inventory relationships through profile merges",
+  async (relationship) => {
+    const original = "12345678-a123-4123-8123-123456789abc";
+    const current = "87654321-c123-4123-8123-123456789abc";
+    createProfile(original);
+    createProfile(current);
+    linkEmail(original + "@activity.test", current);
+    for (const profileId of [original, current]) {
+      const result = await listSessionFixture({
+        cfg: {},
+        storePath: stateRoot,
+        store: {
+          "agent:main:merged-profile": {
+            sessionId: "merged-profile",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: original },
+            owner: { actor: { type: "human", id: original } },
+            participants: [{ identity: { type: "profile", id: original } }],
+          },
+        },
+        opts: {
+          profileRelation: { profileId, relationship },
+          ...(relationship === "owned" ? { ownerId: original } : {}),
+          ...(relationship === "created" ? { creatorId: original } : {}),
+        },
+      });
+      expect(result.sessions.map((row) => row.sessionId)).toEqual(["merged-profile"]);
+      expect(result.sessions[0]?.createdActor?.id).toBe(original);
+    }
+  },
+);
+
 it("prefers an exact profile identifier over a UUID prefix", async () => {
   const exact = "deadbeef";
   const longer = "deadbeef-a123-4123-8123-123456789abc";
@@ -151,7 +184,7 @@ it.each(["12345678-a123-4123-8123-123456789abc", "12345678-A123-4123-8123-123456
 
 it("resolves qualified retained creators without treating legacy human IDs as profiles", async () => {
   const retained = "12345678-a123-4123-8123-123456789abc";
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg: {},
     storePath: stateRoot,
     store: {
@@ -227,7 +260,7 @@ it.each([
   };
   for (const reference of ["12345678a123", hiddenId, hiddenId.replaceAll("-", "")]) {
     entryFilter.mockClear();
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg: {},
       storePath: stateRoot,
       store,
@@ -257,7 +290,7 @@ it("resolves merge aliases for visible owners without considering hidden profile
       authenticatedUserProfile: { profileId: target },
     } as GatewayClient,
   });
-  const result = await listSessionsFromStoreAsync({
+  const result = await listSessionFixture({
     cfg: {},
     storePath: stateRoot,
     entryFilter,

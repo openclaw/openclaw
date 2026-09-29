@@ -3,7 +3,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
-import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
+import {
+  acquirePluginRegistryWithInternalOverrides,
+  loadOpenClawPluginsWithInternalOverrides,
+} from "./loader-runtime-load.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -26,23 +29,36 @@ function createCapabilityRegistrationRuntime(
   };
 }
 
-export function loadBundledCapabilityRuntimeRegistry(
-  params: Pick<
-    PluginLoadOptions,
-    | "env"
-    | "config"
-    | "workspaceDir"
-    | "installRecords"
-    | "manifestRegistry"
-    | "activationSourceConfig"
-    | "autoEnabledReasons"
-    | "preferBuiltPluginArtifacts"
-    | "pluginSdkResolution"
-  > & {
-    pluginIds: readonly string[];
-    discovery?: PluginDiscoveryResult;
-  },
-) {
+type BundledCapabilityRuntimeParams = Pick<
+  PluginLoadOptions,
+  | "env"
+  | "config"
+  | "workspaceDir"
+  | "installRecords"
+  | "manifestRegistry"
+  | "activationSourceConfig"
+  | "autoEnabledReasons"
+  | "preferBuiltPluginArtifacts"
+  | "pluginSdkResolution"
+> & {
+  pluginIds: readonly string[];
+  discovery?: PluginDiscoveryResult;
+};
+
+export function loadBundledCapabilityRuntimeRegistry(params: BundledCapabilityRuntimeParams) {
+  const { options, overrides } = prepareBundledCapabilityRuntime(params);
+  return loadOpenClawPluginsWithInternalOverrides(options, overrides);
+}
+
+export function acquireBundledCapabilityRuntimeRegistry(params: BundledCapabilityRuntimeParams) {
+  const { options, overrides } = prepareBundledCapabilityRuntime(params);
+  return acquirePluginRegistryWithInternalOverrides(options, overrides);
+}
+
+function prepareBundledCapabilityRuntime(params: BundledCapabilityRuntimeParams): {
+  options: PluginLoadOptions & { cache: false; activate: false };
+  overrides: Parameters<typeof loadOpenClawPluginsWithInternalOverrides>[1];
+} {
   const { pluginIds: requestedPluginIds, ...loadOptions } = params;
   const env = params.env ?? process.env;
   // Only the speech owner may opt into legacy global-disable compatibility before capture.
@@ -84,8 +100,8 @@ export function loadBundledCapabilityRuntimeRegistry(
     ),
     diagnostics: manifestRegistry.diagnostics,
   };
-  return loadOpenClawPluginsWithInternalOverrides(
-    {
+  return {
+    options: {
       ...loadOptions,
       config,
       env,
@@ -102,7 +118,7 @@ export function loadBundledCapabilityRuntimeRegistry(
         debug: (message) => log.debug(message),
       },
     },
-    {
+    overrides: {
       // Discovery needs the current config, but not the full host runtime graph. The registry
       // still supplies its scoped lazy methods around this narrow base runtime.
       runtime: createCapabilityRegistrationRuntime(config),
@@ -111,5 +127,5 @@ export function loadBundledCapabilityRuntimeRegistry(
         loaderFilename: import.meta.url,
       },
     },
-  );
+  };
 }

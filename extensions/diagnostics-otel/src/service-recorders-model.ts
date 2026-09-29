@@ -1,7 +1,11 @@
-import { SpanStatusCode } from "@opentelemetry/api";
+import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
   addUpstreamRequestIdSpanEvent,
   assignGenAiModelCallAttrs,
@@ -9,10 +13,8 @@ import {
   assignModelCallSizeTimingAttrs,
   assignModelCallUsageAttrs,
   genAiOperationName,
-  modelCallSpanKind,
   modelCallSpanName,
   modelCallObservationUnit,
-  positiveFiniteNumber,
 } from "./service-genai-attributes.js";
 import { assignOtelModelContentAttributes } from "./service-genai-content.js";
 import type { OtelModelCallContent } from "./service-genai-content.js";
@@ -32,6 +34,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     getTrackedInternalOrTrustedSpan,
     takeTrackedTrustedSpan,
     setSpanAttrs,
+    addRunAttrs,
     contentCapturePolicy,
     tracesEnabled,
   } = runtime;
@@ -43,37 +46,19 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     "openclaw.transport": normalizeDiagnosticValue(evt.transport),
     "openclaw.model_call.observation_unit": modelCallObservationUnit(evt),
   });
-  const genAiModelCallMetricAttrs = (
-    evt: ModelCallLifecycleDiagnosticEvent,
-    errorType?: string,
-  ) => ({
-    "gen_ai.operation.name": genAiOperationName(evt.api, evt.observationUnit),
-    "gen_ai.provider.name": normalizeDiagnosticValue(evt.provider),
-    "gen_ai.request.model": normalizeDiagnosticValue(evt.model),
-    ...(errorType ? { "error.type": errorType } : {}),
-  });
-  const recordGenAiModelCallDuration = (
-    evt: ModelCallLifecycleDiagnosticEvent,
-    errorType?: string,
-  ) => {
-    genAiOperationDurationHistogram.record(
-      evt.durationMs / 1000,
-      genAiModelCallMetricAttrs(evt, errorType),
-    );
-  };
   const recordModelCallSizeTimingMetrics = (
     evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" | "model.call.error" }>,
     attrs: ReturnType<typeof modelCallMetricAttrs>,
   ) => {
-    const requestPayloadBytes = positiveFiniteNumber(evt.requestPayloadBytes);
+    const requestPayloadBytes = asPositiveFiniteNumber(evt.requestPayloadBytes);
     if (requestPayloadBytes !== undefined) {
       modelCallRequestBytesHistogram.record(requestPayloadBytes, attrs);
     }
-    const responseStreamBytes = positiveFiniteNumber(evt.responseStreamBytes);
+    const responseStreamBytes = asPositiveFiniteNumber(evt.responseStreamBytes);
     if (responseStreamBytes !== undefined) {
       modelCallResponseBytesHistogram.record(responseStreamBytes, attrs);
     }
-    const timeToFirstByteMs = positiveFiniteNumber(evt.timeToFirstByteMs);
+    const timeToFirstByteMs = asPositiveFiniteNumber(evt.timeToFirstByteMs);
     if (timeToFirstByteMs !== undefined) {
       modelCallTimeToFirstByteHistogram.record(timeToFirstByteMs, attrs);
     }
@@ -94,6 +79,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
       "openclaw.provider": evt.provider,
       "openclaw.model": evt.model,
     };
+    addRunAttrs(spanAttrs, evt);
     assignGenAiModelCallAttrs(spanAttrs, evt);
     if (evt.api) {
       spanAttrs["openclaw.api"] = evt.api;
@@ -106,78 +92,49 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
       evt,
       metadata,
       spanWithDuration(modelCallSpanName(evt), spanAttrs, undefined, {
-        kind: modelCallSpanKind(),
+        kind: SpanKind.CLIENT,
         parentContext: activeTrustedParentContext(evt, metadata),
         startTimeMs: evt.ts,
       }),
     ).spanContext();
   };
 
-  const recordModelCallCompleted = (
-    evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" }>,
+  const recordModelCallFinished = (
+    evt: ModelCallLifecycleDiagnosticEvent,
     metadata: DiagnosticEventMetadata,
     modelContent?: OtelModelCallContent,
   ) => {
-    const metricAttrs = modelCallMetricAttrs(evt);
-    modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
-    recordModelCallSizeTimingMetrics(evt, metricAttrs);
-    recordGenAiModelCallDuration(evt);
-    if (!tracesEnabled) {
-      return;
-    }
-    const spanAttrs: Record<string, string | number | boolean> = {
-      "openclaw.provider": evt.provider,
-      "openclaw.model": evt.model,
-    };
-    assignGenAiModelCallAttrs(spanAttrs, evt);
-    if (evt.api) {
-      spanAttrs["openclaw.api"] = evt.api;
-    }
-    if (evt.transport) {
-      spanAttrs["openclaw.transport"] = evt.transport;
-    }
-    assignModelCallSizeTimingAttrs(spanAttrs, evt);
-    assignModelCallPromptStatsAttrs(spanAttrs, evt);
-    assignModelCallUsageAttrs(spanAttrs, evt);
-    assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
-    const span =
-      takeTrackedTrustedSpan(evt, metadata) ??
-      spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
-        kind: modelCallSpanKind(),
-        parentContext: activeTrustedParentContext(evt, metadata),
-        endTimeMs: evt.ts,
-      });
-    setSpanAttrs(span, spanAttrs);
-    addUpstreamRequestIdSpanEvent(span, evt.upstreamRequestIdHash);
-    span.end(evt.ts);
-  };
-
-  const recordModelCallError = (
-    evt: Extract<DiagnosticEventPayload, { type: "model.call.error" }>,
-    metadata: DiagnosticEventMetadata,
-    modelContent?: OtelModelCallContent,
-  ) => {
-    const errorType = normalizeDiagnosticValue(evt.errorCategory, "other");
+    const errorType =
+      evt.type === "model.call.error"
+        ? normalizeDiagnosticValue(evt.errorCategory, "other")
+        : undefined;
     const metricAttrs = {
       ...modelCallMetricAttrs(evt),
-      "openclaw.errorCategory": errorType,
-      ...(evt.failureKind
+      ...(errorType !== undefined ? { "openclaw.errorCategory": errorType } : {}),
+      ...(evt.type === "model.call.error" && evt.failureKind
         ? { "openclaw.failureKind": normalizeDiagnosticValue(evt.failureKind, "other") }
         : {}),
     };
     modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
     recordModelCallSizeTimingMetrics(evt, metricAttrs);
-    recordGenAiModelCallDuration(evt, errorType);
+    genAiOperationDurationHistogram.record(evt.durationMs / 1000, {
+      "gen_ai.operation.name": genAiOperationName(evt.api, evt.observationUnit),
+      "gen_ai.provider.name": normalizeDiagnosticValue(evt.provider),
+      "gen_ai.request.model": normalizeDiagnosticValue(evt.model),
+      ...(errorType ? { "error.type": errorType } : {}),
+    });
     if (!tracesEnabled) {
       return;
     }
     const spanAttrs: Record<string, string | number | boolean> = {
       "openclaw.provider": evt.provider,
       "openclaw.model": evt.model,
-      "openclaw.errorCategory": errorType,
-      "error.type": errorType,
+      ...(errorType !== undefined
+        ? { "openclaw.errorCategory": errorType, "error.type": errorType }
+        : {}),
     };
-    if (evt.failureKind) {
+    addRunAttrs(spanAttrs, evt);
+    if (evt.type === "model.call.error" && evt.failureKind) {
       spanAttrs["openclaw.failureKind"] = normalizeDiagnosticValue(evt.failureKind, "other");
     }
     assignGenAiModelCallAttrs(spanAttrs, evt);
@@ -194,23 +151,23 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     const span =
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
-        kind: modelCallSpanKind(),
+        kind: SpanKind.CLIENT,
         parentContext: activeTrustedParentContext(evt, metadata),
         endTimeMs: evt.ts,
       });
     setSpanAttrs(span, spanAttrs);
     addUpstreamRequestIdSpanEvent(span, evt.upstreamRequestIdHash);
-    span.setStatus({
-      code: SpanStatusCode.ERROR,
-      message: redactSensitiveText(evt.errorCategory),
-    });
+    if (evt.type === "model.call.error") {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: redactSensitiveText(evt.errorCategory),
+      });
+    }
     span.end(evt.ts);
   };
 
   return {
-    recordModelCallSizeTimingMetrics,
     recordModelCallStarted,
-    recordModelCallCompleted,
-    recordModelCallError,
+    recordModelCallFinished,
   };
 }

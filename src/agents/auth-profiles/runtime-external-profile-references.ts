@@ -36,8 +36,10 @@ export function removeRuntimeExternalProfileReferences(params: {
     return params.store;
   }
   const next = cloneAuthProfileStore(params.store);
+  const runtimeNext: RuntimeAuthProfileStore = next;
   for (const profileId of params.profileIds) {
     delete next.profiles[profileId];
+    delete runtimeNext.runtimeCredentialSources?.[profileId];
     if (next.usageStats) {
       delete next.usageStats[profileId];
     }
@@ -117,7 +119,12 @@ export function mergeRuntimeExternalProfileReferences(params: {
   if (params.next.runtimeExternalProfileIdsAuthoritative === true) {
     return params.next;
   }
-  if (runtimeExternalProfileIds.size === 0) {
+  // A completed empty lookup is still authoritative; durable refreshes must
+  // not turn it back into an unknown external-profile set.
+  if (
+    runtimeExternalProfileIds.size === 0 &&
+    params.existing.runtimeExternalProfileIdsAuthoritative !== true
+  ) {
     return params.next;
   }
   const merged = cloneAuthProfileStore(params.next);

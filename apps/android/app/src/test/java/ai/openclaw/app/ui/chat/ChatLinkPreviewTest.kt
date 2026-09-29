@@ -38,6 +38,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.UnknownHostException
@@ -526,6 +527,7 @@ class ChatLinkPreviewTest {
   }
 
   @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
   fun imageDecodeDownsamplesLargeSource() {
     val decoded = decodeRemoteImageBitmap(pngBytes(width = 2_400, height = 1_200))
 

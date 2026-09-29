@@ -4,38 +4,161 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
+import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import {
+  configureExecutionIdentityAdmissionSink,
+  type ExecutionIdentityAdmissionWork,
+} from "../../audit/execution-identity-admission.js";
 import {
   combineChannelAdmissionEvidence,
-  configureChannelAdmissionDecisionSink,
-  configureChannelAdmissionEvidenceCollection,
+  createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
 } from "../../channels/message-access/admission-evidence.js";
-import { consumeChannelRunAdmission, prepareChannelRunAdmission } from "./channel-run-admission.js";
+import { prepareGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 
 const identityConfig = { logging: { audit: { executionIdentity: true } } } as const;
 
 describe("channel run admission", () => {
-  it("projects a hardened channel handoff as boundary-verified assurance", () => {
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const evidence = createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        participantId: "person-1",
+  it.each(["profileless", "unresolved", "copied", "forged"] as const)(
+    "records only owner-prepared Gateway facts for a %s carrier",
+    async (kind) => {
+      const identityWork: ExecutionIdentityAdmissionWork[] = [];
+      const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
+        identityWork.push(work);
+        return true;
       });
+      const ingress = prepareGatewayLocalUserIngress({
+        authMethod: "token",
+        authenticatedUserExpected: kind !== "profileless",
+        ...(kind === "copied" ? { profile: { profileId: "copied-person" } } : {}),
+        isLocalClient: false,
+      });
+      const gatewayLocalUserIngress =
+        kind === "copied"
+          ? { ...ingress }
+          : kind === "forged"
+            ? {
+                get facts(): typeof ingress.facts {
+                  throw new Error("Unminted Gateway facts must not be read");
+                },
+              }
+            : ingress;
+      const prepared = prepareChannelRunAdmission({
+        cfg: identityConfig,
+        runId: `gateway-${kind}`,
+        agentId: "main",
+        ingressKind: "channel",
+        boundary: "auto-reply.agent-runner",
+        gatewayLocalUserIngress,
+      });
+      try {
+        await prepared.admit("embedded");
+        expect(identityWork).toHaveLength(1);
+        const captured = identityWork[0];
+        expect(captured?.kind).toBe("capture");
+        if (captured?.kind !== "capture") {
+          throw new Error("Expected the admitted identity envelope");
+        }
+        expect(captured.envelope.ingress).toEqual(
+          kind === "profileless" || kind === "unresolved"
+            ? {
+                kind: "gateway-client",
+                boundary: "gateway.ws.authenticated-connect",
+                state: "present",
+              }
+            : { kind: "channel", boundary: "auto-reply.agent-runner", state: "unknown" },
+        );
+        if (kind === "profileless") {
+          expect(captured.envelope).not.toHaveProperty("invoker");
+        } else {
+          expect(captured.envelope.invoker).toEqual({ state: "unknown" });
+        }
+        expect(captured.envelope.assurance).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ kind: "durable-profile" })]),
+        );
+      } finally {
+        prepared.close();
+        clearIdentitySink();
+      }
+    },
+  );
 
-      expect(consumeChannelRunAdmission(evidence).facts).toMatchObject({
-        invoker: { state: "present", kind: "person" },
-        assurance: [
-          {
-            kind: "channel-admission",
-            rawEvidenceRef: "channel-admission",
-            strength: "boundary-verified",
-          },
-        ],
+  it("rejects a retired Gateway binding before host tool I/O", async () => {
+    const current: { value?: GatewayRequestContext } = {};
+    const prepared = prepareChannelRunAdmission({
+      cfg: {},
+      runId: "run-without-gateway-context",
+      agentId: "main",
+      ingressKind: "channel",
+      boundary: "channel/auto-reply",
+      onAdmitted: (context) => bindGatewayContextResolver(context, () => current.value),
+    });
+    const admittedRunContext = await prepared.admit("plugin-harness", "channel-harness");
+    const host = createAgentHarnessHostCapabilities({
+      attempt: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-without-gateway-context",
+        cwd: "/attempt/worktree",
+        workspaceDir: "/workspace",
+        currentChannelId: "chat-1",
+        messageChannel: "whatsapp",
+        admittedRunContext,
+      },
+      pluginId: "codex",
+    });
+
+    try {
+      expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
+      current.value = {} as GatewayRequestContext;
+      expect(() => host.capabilities.assertActive()).toThrow("no longer active");
+      await host.runWithScope(async () => {
+        expect(getGatewayToolCallerIdentity()?.gatewayContextResolver?.()).toBeUndefined();
+        expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
       });
     } finally {
-      clearCollection();
+      host.close();
+      prepared.close();
+      resetAgentRunRegistryForTest();
+    }
+  });
+
+  it("keeps an unbound run usable without Gateway context", async () => {
+    const prepared = prepareChannelRunAdmission({
+      cfg: {},
+      runId: "run-without-gateway-binding",
+      agentId: "main",
+      ingressKind: "channel",
+      boundary: "channel/auto-reply",
+    });
+    const admittedRunContext = await prepared.admit("plugin-harness", "channel-harness");
+    const host = createAgentHarnessHostCapabilities({
+      attempt: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-without-gateway-binding",
+        cwd: "/attempt/worktree",
+        workspaceDir: "/workspace",
+        currentChannelId: "chat-1",
+        messageChannel: "whatsapp",
+        admittedRunContext,
+      },
+      pluginId: "codex",
+    });
+
+    try {
+      expect(() => host.capabilities.preparedEnvironment?.()).not.toThrow();
+    } finally {
+      host.close();
+      prepared.close();
+      resetAgentRunRegistryForTest();
     }
   });
 
@@ -43,17 +166,21 @@ describe("channel run admission", () => {
     const identityWork: unknown[] = [];
     const decisions: unknown[] = [];
     const admittedContexts: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({
+      enabled: true,
+      decisionSink: (receipt) => {
+        decisions.push(receipt);
+        return true;
+      },
+    });
+    const clearCollection = () => audit.close();
     const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
       identityWork.push(work);
       return true;
     });
-    const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
-      decisions.push(receipt);
-      return true;
-    });
     try {
       const evidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "test",
         participantId: "person-1",
       });
@@ -67,11 +194,27 @@ describe("channel run admission", () => {
         onAdmitted: (context) => admittedContexts.push(context),
       });
 
+      expect(() => prepared.assertSourceCurrent()).not.toThrow();
+      expect(identityWork).toHaveLength(0);
       const first = await prepared.admit("embedded");
       const fallback = await prepared.admit("embedded");
 
       expect(fallback).toBe(first);
-      expect(identityWork).toHaveLength(1);
+      expect(identityWork).toMatchObject([
+        {
+          kind: "capture",
+          envelope: {
+            invoker: { state: "present", kind: "person" },
+            assurance: [
+              {
+                kind: "channel-admission",
+                rawEvidenceRef: "channel-admission",
+                strength: "boundary-verified",
+              },
+            ],
+          },
+        },
+      ]);
       expect(decisions).toHaveLength(1);
       expect(admittedContexts).toEqual([first]);
       expect(decisions).toMatchObject([
@@ -85,11 +228,11 @@ describe("channel run admission", () => {
       });
 
       prepared.close();
+      expect(() => prepared.assertSourceCurrent()).not.toThrow();
       await expect(prepared.admit("embedded")).rejects.toThrow(
         "prepared execution context is already closed",
       );
     } finally {
-      clearDecisionSink();
       clearIdentitySink();
       clearCollection();
     }
@@ -99,12 +242,15 @@ describe("channel run admission", () => {
     "explains identifier-authentication effects in the receipt with an unevaluated contribution: %s",
     async (includeUnevaluated) => {
       const decisions: unknown[] = [];
-      const clearCollection = configureChannelAdmissionEvidenceCollection(true);
-      const clearIdentitySink = configureExecutionIdentityAdmissionSink(() => true);
-      const clearDecisionSink = configureChannelAdmissionDecisionSink((receipt) => {
-        decisions.push(receipt);
-        return true;
+      const audit = createChannelAdmissionAudit({
+        enabled: true,
+        decisionSink: (receipt) => {
+          decisions.push(receipt);
+          return true;
+        },
       });
+      const clearCollection = () => audit.close();
+      const clearIdentitySink = configureExecutionIdentityAdmissionSink(() => true);
       try {
         const prepared = prepareChannelRunAdmission({
           cfg: identityConfig,
@@ -118,6 +264,7 @@ describe("channel run admission", () => {
               : (["affected"] as const)
             ).map((identifierAuthentication) =>
               createChannelParticipantAdmissionEvidence({
+                audit,
                 channelId: "test",
                 participantId: "private-person-value",
                 identifierAuthentication,
@@ -142,7 +289,6 @@ describe("channel run admission", () => {
         ]);
         expect(JSON.stringify(decisions)).not.toContain("private-person-value");
       } finally {
-        clearDecisionSink();
         clearIdentitySink();
         clearCollection();
       }
@@ -151,13 +297,15 @@ describe("channel run admission", () => {
 
   it("does not consume a cancelled pre-admission carrier or label internal ACP as a person", async () => {
     const identityWork: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    const clearCollection = () => audit.close();
     const clearIdentitySink = configureExecutionIdentityAdmissionSink((work) => {
       identityWork.push(work);
       return true;
     });
     try {
       const evidence = createChannelParticipantAdmissionEvidence({
+        audit,
         channelId: "test",
         participantId: "person-1",
       });

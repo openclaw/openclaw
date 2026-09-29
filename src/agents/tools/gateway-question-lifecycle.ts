@@ -5,6 +5,7 @@ import {
   QuestionWaitAnswerResultSchema,
   type QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import type { callGatewayTool } from "./gateway.js";
 
 /** Grace added to Gateway RPC deadlines so the question's own timeout wins. */
@@ -12,23 +13,39 @@ const QUESTION_RPC_GRACE_MS = 10_000;
 
 export type GatewayQuestionCall = (...args: Parameters<typeof callGatewayTool>) => Promise<unknown>;
 
+/** Publication ends with the answer, before cancellation or post-answer work. */
+export function createQuestionPromptLifetime(signal?: AbortSignal) {
+  const controller = new AbortController();
+  const close = () => controller.abort(createAbortError("Question publication ended"));
+  return {
+    signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+    close,
+    [Symbol.dispose]: close,
+  };
+}
+
 const TERMINAL_QUESTION_ERROR_REASONS = new Set([
   "QUESTION_ALREADY_TERMINAL",
   "QUESTION_NOT_FOUND",
 ]);
 
-/** Reads the Gateway's structured failure reason from a question RPC rejection. */
-export function readQuestionErrorReason(error: unknown): string | undefined {
+/** Reads the Gateway's structured failure from a question RPC rejection. */
+export function readQuestionRejection(
+  error: unknown,
+): { code: unknown; reason?: string } | undefined {
   const requestError = asNullableRecord(error);
   if (requestError?.name !== "GatewayClientRequestError") {
     return undefined;
   }
   const reason = asNullableRecord(requestError.details)?.reason;
-  return typeof reason === "string" ? reason : undefined;
+  return {
+    code: requestError.gatewayCode,
+    reason: typeof reason === "string" ? reason : undefined,
+  };
 }
 
-function isTerminalQuestionResolveError(error: unknown): boolean {
-  const reason = readQuestionErrorReason(error);
+export function isTerminalQuestionResolveError(error: unknown): boolean {
+  const reason = readQuestionRejection(error)?.reason;
   return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
 }
 
@@ -59,6 +76,7 @@ export async function awaitGatewayQuestionAnswer(params: {
 export function createGatewayQuestionCanceller(params: {
   gatewayCall: GatewayQuestionCall;
   questionId: string;
+  beforeCancel?: () => void;
 }): (
   resolvedBy: string,
 ) => Promise<Extract<QuestionWaitAnswerResult, { status: "answered" }> | undefined> {
@@ -66,6 +84,7 @@ export function createGatewayQuestionCanceller(params: {
     | Promise<Extract<QuestionWaitAnswerResult, { status: "answered" }> | undefined>
     | undefined;
   return (resolvedBy: string) => {
+    params.beforeCancel?.();
     cancellation ??= (async () => {
       try {
         await params.gatewayCall(

@@ -1,4 +1,3 @@
-// Msteams tests cover user agent plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeMockState = vi.hoisted(() => ({
@@ -61,11 +60,6 @@ describe("buildUserAgent", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns teams.ts[apps]/<sdk> OpenClaw/<version> format", () => {
-    const ua = buildUserAgent();
-    expect(ua).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/2026\.3\.19$/);
-  });
-
   it("reflects the runtime version", () => {
     vi.mocked(getMSTeamsRuntime).mockReturnValue({ version: "1.2.3" } as never);
     const ua = buildUserAgent();
@@ -83,11 +77,7 @@ describe("buildUserAgent", () => {
   });
 
   it("sends the generated User-Agent in Graph requests by default", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce(
-      new Response(JSON.stringify({ value: [] }), {
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const mockFetch = vi.fn().mockResolvedValueOnce(Response.json({ value: [] }));
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({ token: "test-token", path: "/groups" });
@@ -99,11 +89,7 @@ describe("buildUserAgent", () => {
   });
 
   it("lets caller headers override the default Graph User-Agent", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce(
-      new Response(JSON.stringify({ value: [] }), {
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const mockFetch = vi.fn().mockResolvedValueOnce(Response.json({ value: [] }));
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({

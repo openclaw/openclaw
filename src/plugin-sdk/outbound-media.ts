@@ -1,7 +1,7 @@
 // Outbound media helpers normalize plugin media attachments before channel delivery.
 import { randomBytes } from "node:crypto";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
-import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../media/load-options.js";
 import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
 import { loadWebMedia } from "./web-media.js";
@@ -35,21 +35,7 @@ export async function loadOutboundMediaFromUrl(
   mediaUrl: string,
   options: OutboundMediaLoadOptions = {},
 ) {
-  return await loadWebMedia(
-    mediaUrl,
-    buildOutboundMediaLoadOptions({
-      maxBytes: options.maxBytes,
-      mediaAccess: options.mediaAccess,
-      mediaLocalRoots: options.mediaLocalRoots,
-      mediaReadFile: options.mediaReadFile,
-      workspaceDir: options.workspaceDir,
-      proxyUrl: options.proxyUrl,
-      fetchImpl: options.fetchImpl,
-      requestInit: options.requestInit,
-      optimizeImages: options.optimizeImages,
-      trustExplicitProxyDns: options.trustExplicitProxyDns,
-    }),
-  );
+  return await loadWebMedia(mediaUrl, buildOutboundMediaLoadOptions(options));
 }
 
 export type HostedOutboundMediaMetadata = {
@@ -306,10 +292,6 @@ export function createHostedOutboundMediaStore(
     }
   }
 
-  async function deleteEntryRows(id: string, chunkCount: number): Promise<void> {
-    await deleteHostedOutboundMediaRows(id, options.metadataStore, options.chunkStore, chunkCount);
-  }
-
   async function readMetadataRecord(
     id: string,
     nowMs: number,
@@ -385,7 +367,10 @@ export function createHostedOutboundMediaStore(
       await close();
       return null;
     }
-    const meta = await readMetadataRecord(id, nowMs);
+    const meta = await readMetadataRecord(id, nowMs).catch(async (error: unknown) => {
+      await close();
+      throw error;
+    });
     if (!meta) {
       await close();
       return null;
@@ -531,7 +516,12 @@ export function createHostedOutboundMediaStore(
             { ttlMs: metadataPhysicalTtlMs },
           );
         } catch (error) {
-          await deleteEntryRows(id, chunkCount);
+          await deleteHostedOutboundMediaRows(
+            id,
+            options.metadataStore,
+            options.chunkStore,
+            chunkCount,
+          );
           throw error;
         }
         return `${params.publicBaseUrl}${params.routePath}${id}?token=${token}`;
@@ -569,10 +559,27 @@ export function createHostedOutboundMediaStore(
         }
         const buffer = Buffer.allocUnsafe(meta.byteLength);
         let offset = 0;
+        let chunkBatch:
+          | Awaited<ReturnType<NonNullable<typeof options.chunkStore.lookupMany>>>
+          | undefined;
+        const lookupBatchSize = 10_000;
         for (let index = 0; index < meta.chunkCount; index += 1) {
-          const chunk = await options.chunkStore.lookup(
-            buildHostedOutboundMediaChunkKey(id, index),
-          );
+          // Public store adapters can predate lookupMany; retain their point-read contract.
+          if (options.chunkStore.lookupMany && index % lookupBatchSize === 0) {
+            chunkBatch = await options.chunkStore.lookupMany(
+              Array.from(
+                { length: Math.min(lookupBatchSize, meta.chunkCount - index) },
+                (_, chunkOffset) => buildHostedOutboundMediaChunkKey(id, index + chunkOffset),
+              ),
+            );
+          }
+          const result = chunkBatch?.[index % lookupBatchSize];
+          if (result && !result.ok) {
+            throw result.error;
+          }
+          const chunk = chunkBatch
+            ? result?.value
+            : await options.chunkStore.lookup(buildHostedOutboundMediaChunkKey(id, index));
           if (!chunk || chunk.id !== id || chunk.index !== index) {
             await withCapacityMutation(async () => await deleteEntry(id));
             return null;

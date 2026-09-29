@@ -95,7 +95,6 @@ final class HealthStore {
         let revision: UInt64?
         var lease: GatewayConnection.ServerLease?
         var snapshot: HealthSnapshot?
-        var lastSuccess: Date?
         var lastError: String?
     }
 
@@ -113,10 +112,6 @@ final class HealthStore {
     private var activeRefresh: Refresh?
     var snapshot: HealthSnapshot? {
         self.sourceIsCurrent ? self.output.snapshot : nil
-    }
-
-    var lastSuccess: Date? {
-        self.sourceIsCurrent ? self.output.lastSuccess : nil
     }
 
     var lastError: String? {
@@ -257,7 +252,6 @@ final class HealthStore {
             guard self.refreshIsCurrent(refresh) else { return }
             if let decoded = decodeHealthSnapshot(from: data) {
                 self.output.snapshot = decoded
-                self.output.lastSuccess = Date()
                 self.output.lastError = nil
                 if previousError != nil {
                     Self.logger.info("health refresh recovered")
@@ -434,11 +428,10 @@ func decodeHealthSnapshot(from data: Data) -> HealthSnapshot? {
     if let snap = try? decoder.decode(HealthSnapshot.self, from: data) {
         return snap
     }
-    guard let text = String(data: data, encoding: .utf8) else { return nil }
-    guard let firstBrace = text.firstIndex(of: "{"), let lastBrace = text.lastIndex(of: "}") else {
+    guard let text = String(data: data, encoding: .utf8),
+          let extracted = JSONObjectExtractionSupport.extract(from: text)
+    else {
         return nil
     }
-    let slice = text[firstBrace...lastBrace]
-    let cleaned = Data(slice.utf8)
-    return try? decoder.decode(HealthSnapshot.self, from: cleaned)
+    return try? decoder.decode(HealthSnapshot.self, from: Data(extracted.text.utf8))
 }

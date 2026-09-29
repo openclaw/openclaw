@@ -13,9 +13,9 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import prettyMilliseconds from "pretty-ms";
 import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { resolveProviderConfig } from "../../lib/cross-os-release-checks/config.ts";
+import { formatDurationElapsed } from "../../lib/format-duration.mts";
 import {
   die,
   ensureValue,
@@ -49,6 +49,7 @@ import {
   type ProviderAuth,
 } from "./common.ts";
 import { runWindowsBackgroundPowerShell } from "./guest-transports.ts";
+import { resolveMacosPrlctlInvocation, runMacosHostCommand } from "./macos-exec.ts";
 import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
 import { ensureVmRunning, resolveMacosVmName, resolveUbuntuVmName } from "./parallels-vm.ts";
 import { runParallelsPrerequisiteEval } from "./provider-auth-prerequisite.mjs";
@@ -557,13 +558,10 @@ function formatDuration(durationMs: number): string {
     return "0ms";
   }
   const roundedMs = Math.round(durationMs);
-  if (roundedMs < 1000) {
-    return prettyMilliseconds(roundedMs);
-  }
-  return prettyMilliseconds(Math.round(durationMs / 1000) * 1000, {
-    hideYear: true,
-    unitCount: 2,
-  });
+  return formatDurationElapsed(
+    roundedMs < 1000 ? roundedMs : Math.round(durationMs / 1000) * 1000,
+    { showYears: false, unitCount: 2 },
+  );
 }
 
 function readHarnessCheckoutVersion(): string {
@@ -709,7 +707,7 @@ export class NpmUpdateSmoke {
     say(`Run fresh npm baseline: ${this.packageSpec}`);
     say(`Platforms: ${[...this.options.platforms].join(",")}`);
     say(`Run dir: ${this.runDir}`);
-    await this.runFreshBaselines();
+    await this.runFreshInstalls("fresh");
 
     await this.prepareUpdateTarget();
     say(`Run same-guest openclaw update to ${this.updateTargetEffective}`);
@@ -717,7 +715,7 @@ export class NpmUpdateSmoke {
 
     if (this.freshTargetSpec) {
       say(`Run fresh target npm install: ${this.freshTargetSpec}`);
-      await this.runFreshTargetInstalls();
+      await this.runFreshInstalls("fresh-target");
     }
 
     const summaryPath = await this.writeSummary();
@@ -729,75 +727,40 @@ export class NpmUpdateSmoke {
     }
   }
 
-  private async runFreshBaselines(): Promise<void> {
+  private async runFreshInstalls(phase: "fresh" | "fresh-target"): Promise<void> {
+    const packageSpec = phase === "fresh" ? this.packageSpec : this.freshTargetSpec;
     const jobs: Job[] = [];
-    if (this.options.platforms.has("macos")) {
-      jobs.push(this.spawnFresh("macOS", "macos", this.macosFreshArgs()));
-    }
-    if (this.options.platforms.has("windows")) {
-      jobs.push(this.spawnFresh("Windows", "windows", ["--vm", this.windowsVm]));
-    }
-    if (this.options.platforms.has("linux")) {
-      jobs.push(
-        this.spawnFresh("Linux", "linux", ["--vm", this.linuxVm], {
-          OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR: "1",
-        }),
-      );
-    }
-    await this.finishFreshJobs("fresh", "fresh baseline", jobs, this.freshStatus);
-  }
-
-  private async runFreshTargetInstalls(): Promise<void> {
-    const jobs: Job[] = [];
-    if (this.options.platforms.has("macos")) {
+    for (const [platform, label, vm] of [
+      ["macos", "macOS", this.macosVm],
+      ["windows", "Windows", this.windowsVm],
+      ["linux", "Linux", this.linuxVm],
+    ] as const) {
+      if (!this.options.platforms.has(platform)) {
+        continue;
+      }
       jobs.push(
         this.spawnFresh(
-          "macOS",
-          "macos",
-          this.macosFreshArgs(),
-          {},
-          this.freshTargetSpec,
-          "fresh-target",
+          label,
+          platform,
+          [
+            "--vm",
+            vm,
+            ...(platform === "macos" && this.options.macosSnapshotHint
+              ? ["--snapshot-hint", this.options.macosSnapshotHint]
+              : []),
+          ],
+          platform === "linux" ? { OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR: "1" } : {},
+          packageSpec,
+          phase,
         ),
       );
     }
-    if (this.options.platforms.has("windows")) {
-      jobs.push(
-        this.spawnFresh(
-          "Windows",
-          "windows",
-          ["--vm", this.windowsVm],
-          {},
-          this.freshTargetSpec,
-          "fresh-target",
-        ),
-      );
-    }
-    if (this.options.platforms.has("linux")) {
-      jobs.push(
-        this.spawnFresh(
-          "Linux",
-          "linux",
-          ["--vm", this.linuxVm],
-          {
-            OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR: "1",
-          },
-          this.freshTargetSpec,
-          "fresh-target",
-        ),
-      );
-    }
-    await this.finishFreshJobs("fresh-target", "fresh target", jobs, this.freshTargetStatus);
-  }
-
-  private macosFreshArgs(): string[] {
-    return [
-      "--vm",
-      this.macosVm,
-      ...(this.options.macosSnapshotHint
-        ? ["--snapshot-hint", this.options.macosSnapshotHint]
-        : []),
-    ];
+    await this.finishFreshJobs(
+      phase,
+      phase === "fresh" ? "fresh baseline" : "fresh target",
+      jobs,
+      phase === "fresh" ? this.freshStatus : this.freshTargetStatus,
+    );
   }
 
   private async finishFreshJobs(
@@ -1176,9 +1139,9 @@ export class NpmUpdateSmoke {
       this.macosVm,
       script,
       "openclaw-parallels-npm-update-macos",
-      { execArgs: macosUpdateExec.execArgs, mode: "700" },
+      { execArgs: macosUpdateExec.execArgs, mode: "700", runCommand: runMacosHostCommand },
     );
-    run(
+    runMacosHostCommand(
       "prlctl",
       ["exec", this.macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath],
       {
@@ -1186,9 +1149,14 @@ export class NpmUpdateSmoke {
       },
     );
     try {
-      const status = await this.runStreamingToJobLog(
+      const invocation = resolveMacosPrlctlInvocation(
         "prlctl",
         ["exec", this.macosVm, ...macosUpdateExec.execArgs, "/bin/bash", scriptPath],
+        timeoutMs,
+      );
+      const status = await this.runStreamingToJobLog(
+        invocation.command,
+        invocation.args,
         timeoutMs,
         ctx,
       );
@@ -1196,18 +1164,22 @@ export class NpmUpdateSmoke {
         throw new Error(`macOS update command failed with exit code ${status}`);
       }
     } finally {
-      this.removeGuestScript(this.macosVm, scriptPath);
+      this.removeGuestScript(this.macosVm, scriptPath, runMacosHostCommand);
     }
   }
 
   private resolveMacosUpdateExec(ctx: UpdateJobContext): MacosUpdateExec {
     const guestPath =
       "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
-    const currentUser = run("prlctl", ["exec", this.macosVm, "--current-user", "whoami"], {
-      check: false,
-      quiet: true,
-      timeoutMs: 45_000,
-    });
+    const currentUser = runMacosHostCommand(
+      "prlctl",
+      ["exec", this.macosVm, "--current-user", "whoami"],
+      {
+        check: false,
+        quiet: true,
+        timeoutMs: 45_000,
+      },
+    );
     const user = currentUser.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
     if (currentUser.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
       return {
@@ -1244,11 +1216,15 @@ export class NpmUpdateSmoke {
 
   private resolveMacosDesktopUser(): string {
     const consoleUser =
-      run("prlctl", ["exec", this.macosVm, "/usr/bin/stat", "-f", "%Su", "/dev/console"], {
-        check: false,
-        quiet: true,
-        timeoutMs: 30_000,
-      })
+      runMacosHostCommand(
+        "prlctl",
+        ["exec", this.macosVm, "/usr/bin/stat", "-f", "%Su", "/dev/console"],
+        {
+          check: false,
+          quiet: true,
+          timeoutMs: 30_000,
+        },
+      )
         .stdout.trim()
         .replaceAll("\r", "")
         .split("\n")
@@ -1260,7 +1236,7 @@ export class NpmUpdateSmoke {
     ) {
       return consoleUser;
     }
-    const users = run(
+    const users = runMacosHostCommand(
       "prlctl",
       ["exec", this.macosVm, "/usr/bin/dscl", ".", "-list", "/Users", "NFSHomeDirectory"],
       { check: false, quiet: true, timeoutMs: 30_000 },
@@ -1282,7 +1258,7 @@ export class NpmUpdateSmoke {
   }
 
   private resolveMacosDesktopHome(user: string): string {
-    const output = run(
+    const output = runMacosHostCommand(
       "prlctl",
       ["exec", this.macosVm, "/usr/bin/dscl", ".", "-read", `/Users/${user}`, "NFSHomeDirectory"],
       { check: false, quiet: true, timeoutMs: 30_000 },
@@ -1344,12 +1320,13 @@ export class NpmUpdateSmoke {
     vm: string,
     script: string,
     prefix: string,
-    options: { execArgs?: string[]; mode?: "700" | "755" } = {},
+    options: { execArgs?: string[]; mode?: "700" | "755"; runCommand?: typeof run } = {},
   ): string {
+    const runCommand = options.runCommand ?? run;
     const execArgs = options.execArgs ?? [];
     const mode = options.mode ?? "755";
     const scriptPath = `/tmp/${prefix}-${randomUUID()}.sh`;
-    const write = run("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
+    const write = runCommand("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
       check: false,
       input: script,
       quiet: true,
@@ -1359,24 +1336,28 @@ export class NpmUpdateSmoke {
       throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
     }
     try {
-      const chmod = run("prlctl", ["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath], {
-        check: false,
-        quiet: true,
-        timeoutMs: 30_000,
-      });
+      const chmod = runCommand(
+        "prlctl",
+        ["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath],
+        {
+          check: false,
+          quiet: true,
+          timeoutMs: 30_000,
+        },
+      );
       if (chmod.status !== 0) {
         throw new Error(`failed to chmod guest script ${scriptPath}: ${chmod.stderr.trim()}`);
       }
     } catch (error) {
-      this.removeGuestScript(vm, scriptPath);
+      this.removeGuestScript(vm, scriptPath, runCommand);
       throw error;
     }
     return scriptPath;
   }
 
-  private removeGuestScript(vm: string, scriptPath: string): void {
+  private removeGuestScript(vm: string, scriptPath: string, runCommand: typeof run = run): void {
     try {
-      run("prlctl", ["exec", vm, "/bin/rm", "-f", scriptPath], {
+      runCommand("prlctl", ["exec", vm, "/bin/rm", "-f", scriptPath], {
         check: false,
         quiet: true,
         timeoutMs: 30_000,

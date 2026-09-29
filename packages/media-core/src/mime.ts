@@ -1,4 +1,3 @@
-// Media Core module implements mime behavior.
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 import { extnameFromAnyPath } from "./file-name.js";
@@ -109,6 +108,8 @@ const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/webm": "video/webm",
 };
 
+const IMAGE_FORMATS = new Set(["avif", "jpg", "jpeg", "heic", "heif", "png", "webp", "gif"]);
+
 // file-type can return generic ZIP when package metadata is outside its sniff window.
 // Only ZIP-backed MIME families may refine that result; arbitrary headers cannot.
 const ZIP_CONTAINER_MIMES = new Set([
@@ -176,7 +177,9 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!cleaned) {
     return undefined;
   }
-  return MIME_SYNONYMS[cleaned] ?? cleaned;
+  // Object.hasOwn: a remote "__proto__"/"constructor" header would otherwise
+  // resolve to inherited Object.prototype members and break the string contract.
+  return Object.hasOwn(MIME_SYNONYMS, cleaned) ? MIME_SYNONYMS[cleaned] : cleaned;
 }
 
 /** Returns the bounded buffer prefix used for dependency MIME sniffing. */
@@ -291,7 +294,9 @@ export function extensionForMime(mime?: string | null): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return EXT_BY_MIME[normalized];
+  // Same prototype-key hazard as normalizeMimeType: a "__proto__" lookup would
+  // return Object.prototype where callers expect string | undefined.
+  return Object.hasOwn(EXT_BY_MIME, normalized) ? EXT_BY_MIME[normalized] : undefined;
 }
 
 /** Returns true when content type or filename identifies GIF media. */
@@ -311,25 +316,8 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
   if (!format) {
     return undefined;
   }
-  switch (format.toLowerCase()) {
-    case "avif":
-      return "image/avif";
-    case "jpg":
-    case "jpeg":
-      return "image/jpeg";
-    case "heic":
-      return "image/heic";
-    case "heif":
-      return "image/heif";
-    case "png":
-      return "image/png";
-    case "webp":
-      return "image/webp";
-    case "gif":
-      return "image/gif";
-    default:
-      return undefined;
-  }
+  const normalized = format.toLowerCase();
+  return IMAGE_FORMATS.has(normalized) ? MIME_BY_EXT[`.${normalized}`] : undefined;
 }
 
 /** Normalizes a MIME string before classifying it into a media family. */

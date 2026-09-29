@@ -1,4 +1,3 @@
-// Deepinfra plugin module implements surface model catalogs behavior.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,
@@ -8,7 +7,8 @@ import type {
   VideoGenerationProviderCapabilities,
 } from "openclaw/plugin-sdk/video-generation";
 import { DEEPINFRA_VIDEO_ASPECT_RATIOS, DEEPINFRA_VIDEO_DURATIONS } from "./media-models.js";
-import { discoverDeepInfraSurfaces, type DeepInfraSurfaceModel } from "./provider-models.js";
+import type { DeepInfraSurfaceModel } from "./media-models.js";
+import { discoverDeepInfraSurfaces } from "./provider-models.js";
 
 const PROVIDER_ID = "deepinfra";
 
@@ -42,7 +42,7 @@ function surfaceModelToVideoGenEntry(
 
 // Canonical DeepInfra-wide video-gen shape. Wire per-model hints
 // (metadata.supported_durations etc.) in here once the backend emits them.
-function buildDeepInfraVideoModelCapabilities(): VideoGenerationProviderCapabilities {
+export function buildDeepInfraVideoModelCapabilities(): VideoGenerationProviderCapabilities {
   return {
     providerOptions: {
       seed: "number",

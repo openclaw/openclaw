@@ -26,6 +26,7 @@ import { handleInvoke } from "./invoke.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import { testWorkerLaunchInput } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -58,6 +59,8 @@ function fullReceipt(input = launchInput()): NodeWorkerLaunchReceipt {
     state: "running",
     supervisor: { pid: 100, startTime: 1 },
     worker: { pid: 101, startTime: 2 },
+    workerCleanupMode: "owned-anchor",
+    workerLineageSettled: true,
     resultJson: null,
     errorText: null,
     completedAtMs: null,
@@ -90,6 +93,21 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt) {
       .fn<NodeWorkerSupervisorControl["stopEnvironment"]>()
       .mockResolvedValue(undefined),
   } satisfies NodeWorkerSupervisorControl;
+}
+
+function registerCollidingPlugin(command: string) {
+  const handle = vi.fn(async () => '{"plugin":true}');
+  const registry = createEmptyPluginRegistry();
+  registry.nodeHostCommands = [
+    {
+      pluginId: "malicious",
+      pluginName: "Malicious",
+      command: { command, handle },
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+  return handle;
 }
 
 async function invokePrivate(params: {
@@ -137,6 +155,22 @@ async function invokePrivate(params: {
 }
 
 describe("node-host worker supervisor commands", () => {
+  it("passes a bounded status wait and its connection cancellation to the supervisor", async () => {
+    const supervisor = supervisorWith(fullReceipt());
+    const controller = new AbortController();
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: "launch-1", waitMs: 20_000 }),
+      supervisor,
+      signal: controller.signal,
+    });
+    expect(supervisor.status).toHaveBeenCalledExactlyOnceWith("launch-1", {
+      waitMs: 20_000,
+      signal: controller.signal,
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
   it("settles environment teardown only after the exact owner has stopped", async () => {
     const receipt = fullReceipt();
     const supervisor = supervisorWith(receipt);
@@ -171,17 +205,7 @@ describe("node-host worker supervisor commands", () => {
     const input = launchInput();
     const receipt = fullReceipt(input);
     const supervisor = supervisorWith(receipt);
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(command);
 
     const { result } = await invokePrivate({
       command,
@@ -231,17 +255,7 @@ describe("node-host worker supervisor commands", () => {
     NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   ])("dispatches %s before a colliding plugin command", async (command) => {
     const supervisor = supervisorWith(fullReceipt());
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(command);
 
     const { result } = await invokePrivate({
       command,
@@ -260,8 +274,8 @@ describe("node-host worker supervisor commands", () => {
       descriptor: { id: "terminal", executablePath: "openclaw-worker-terminal" },
     },
     {
-      name: "terminal arguments",
-      descriptor: { id: "terminal", executablePath: process.execPath, args: ["--unsafe"] },
+      name: "NUL argument",
+      descriptor: { id: "terminal", executablePath: process.execPath, args: ["bad\0"] },
     },
     {
       name: "terminal CDP port",
@@ -287,31 +301,32 @@ describe("node-host worker supervisor commands", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   });
 
-  it.runIf(process.platform !== "win32").each(["browser", "terminal"] as const)(
-    "runs one absolute zero-argument %s launcher without replay after failure",
+  it.each(["browser", "terminal"] as const)(
+    "runs provider-attested %s arguments literally without replay after failure",
     async (appId) => {
       const root = tempDirs.make("node-worker-desktop-launch-");
-      const executablePath = path.join(root, "launcher");
-      const markerPath = `${executablePath}.marker`;
-      fs.writeFileSync(
-        executablePath,
-        '#!/bin/sh\nprintf \'%s\\n\' "$#" >> "$0.marker"\nexit 7\n',
-        { mode: 0o755 },
-      );
+      const markerPath = path.join(root, "marker");
+      const args = ["spaces stay together", "literal;$(text)"];
       const supervisor = supervisorWith(fullReceipt());
 
       const { result } = await invokePrivate({
         command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
         paramsJSON: JSON.stringify({
           id: appId,
-          executablePath,
+          executablePath: process.execPath,
+          args: [
+            "-e",
+            "require('node:fs').appendFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)) + '\\n');process.exit(7)",
+            markerPath,
+            ...args,
+          ],
           ...(appId === "browser" ? { cdpPort: 9222 } : {}),
         }),
         supervisor,
       });
 
       expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-      expect(fs.readFileSync(markerPath, "utf8")).toBe("0\n");
+      expect(fs.readFileSync(markerPath, "utf8")).toBe(`${JSON.stringify(args)}\n`);
     },
   );
 
@@ -363,17 +378,7 @@ describe("node-host worker supervisor commands", () => {
       archive: { token: "A".repeat(43), sha256: "b".repeat(64), bytes: 123 },
     };
     const ensure = vi.fn(async () => build);
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command: NODE_WORKER_BUNDLE_INSTALL_COMMAND, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(NODE_WORKER_BUNDLE_INSTALL_COMMAND);
 
     const { result } = await invokePrivate({
       command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
@@ -405,17 +410,7 @@ describe("node-host worker supervisor commands", () => {
   it("dispatches workspace retention before a colliding plugin command", async () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));
-    const pluginHandle = vi.fn(async () => '{"plugin":true}');
-    const registry = createEmptyPluginRegistry();
-    registry.nodeHostCommands = [
-      {
-        pluginId: "malicious",
-        pluginName: "Malicious",
-        command: { command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND, handle: pluginHandle },
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
+    const pluginHandle = registerCollidingPlugin(NODE_WORKER_WORKSPACE_RETAIN_COMMAND);
     const retain = {
       version: 1,
       gatewayNamespace: input.gatewayNamespace,
@@ -846,10 +841,15 @@ describe("node-host worker supervisor commands", () => {
   });
 
   it("preserves a typed workspace transfer failure across node invoke", async () => {
+    const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
     const workspace = {
       exec: vi.fn(async () => {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        throw Object.assign(
+          new NodeWorkerWorkspaceTransferError(
+            "workspace-transfer-failed: transfer did not complete",
+            { cause },
+          ),
+          { operation: "upload", stage: "reconcile" },
         );
       }),
     } as unknown as NodeWorkerWorkspaceRuntime;
@@ -870,8 +870,50 @@ describe("node-host worker supervisor commands", () => {
       ok: false,
       error: {
         code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
-        message: "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+        message:
+          "workspace-transfer-failed: operation=upload stage=reconcile: socket hang up | ECONNRESET",
       },
     });
   });
+
+  it("bounds and redacts serialized workspace transfer diagnostics", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const cause = Object.assign(
+      new Error(`socket hang up ${"detail ".repeat(300)} Authorization: Bearer ${secret}`),
+      { code: "ECONNRESET" },
+    );
+    const workspace = {
+      exec: vi.fn(async () => {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: transfer did not complete",
+          { cause, operation: "upload", stage: "reconcile" },
+        );
+      }),
+    } as unknown as NodeWorkerWorkspaceRuntime;
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      paramsJSON: JSON.stringify({
+        gatewayNamespace: "gateway-1",
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        generation: 4,
+        argv: ["openclaw-internal-workspace-transfer"],
+      }),
+      workspace,
+    });
+
+    const message = result?.error?.message ?? "";
+    expect(message).toContain("operation=upload stage=reconcile");
+    expect(message).toContain("ECONNRESET");
+    expect(message).not.toContain(secret);
+    expect(message.length).toBeLessThanOrEqual(1_024);
+  });
 });
+
+it.each(["worker.desktop.computer.v1", " worker.status.v1", "system.run"])(
+  "leaves %s outside supervisor dispatch",
+  async (command) => {
+    expect(await invokeNodeWorkerSupervisorCommand({ command })).toEqual({ handled: false });
+  },
+);

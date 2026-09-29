@@ -1,9 +1,11 @@
+import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type {
   PluginManifestCatalog,
   PluginManifestChannelConfig,
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
+  PluginManifestNativeSessionCatalogSetup,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
@@ -16,11 +18,13 @@ type ManifestKey = typeof MANIFEST_KEY;
 export type OfficialExternalProviderAuthChoice = {
   method?: string;
   choiceId?: string;
+  modelTarget?: "utility";
+  platforms?: readonly NodeJS.Platform[];
   deprecatedChoiceIds?: readonly string[];
   choiceLabel?: string;
   choiceHint?: string;
   assistantPriority?: number;
-  assistantVisibility?: "visible" | "manual-only";
+  assistantVisibility?: "visible" | "manual-only" | "detected-only";
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
@@ -77,6 +81,7 @@ export type OfficialExternalPluginCatalogManifest = {
   legacyPluginIds?: readonly string[];
   legacyNpmPackageNames?: readonly string[];
   setupFeatures?: OpenClawPackageManifest["setupFeatures"];
+  setup?: { nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup };
   plugin?: {
     id?: string;
     label?: string;
@@ -106,6 +111,7 @@ export type OfficialExternalPluginCatalogManifest = {
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
   install?: PluginPackageInstall & { sourceRef?: string };
   contracts?: PluginManifestContracts;
+  uiCapabilities?: PluginUiCapability[];
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
@@ -252,3 +258,11 @@ export type HostedOfficialExternalPluginCatalogLoadResult =
         checksum?: string;
       };
     };
+
+export type OfficialCatalogResult = Pick<
+  HostedOfficialExternalPluginCatalogLoadResult,
+  "entries"
+> & {
+  error?: string;
+  hostedFeaturedAuthoritative?: boolean;
+};

@@ -11,8 +11,8 @@ private enum TalkWaveformClock {
 /// TimelineView so lobes flow continuously instead of re-randomizing per power
 /// change.
 ///
-/// This file is also compiled directly into the watch target, which links no
-/// packages (see `apps/ios/project.yml`). Keep it dependency-free SwiftUI.
+/// This file is also compiled directly into the Watch target for shared styling
+/// (see `apps/ios/project.yml`). Keep it dependency-free SwiftUI.
 public enum TalkWaveformPhase: Equatable, Sendable {
     /// Voice surface is off or unavailable: flat, static, dimmed.
     case idle
@@ -51,6 +51,17 @@ public struct TalkWaveformPalette: Equatable, Sendable {
             Color(white: 0.72),
             Color(white: 0.82),
         ])
+
+    fileprivate func contourColors(for phase: TalkWaveformPhase) -> (primary: Color, secondary: Color) {
+        let primary = self.active.first ?? .red
+        let secondary = self.active.dropFirst().first ?? primary
+        switch phase {
+        case .listening:
+            return (secondary, primary)
+        case .idle, .thinking, .speaking:
+            return (primary, secondary)
+        }
+    }
 }
 
 public struct TalkWaveformView: View {
@@ -150,7 +161,7 @@ public struct TalkAvatarWaveformView<Avatar: View>: View {
     }
 
     private var measuredContour: some View {
-        let colors = self.contourColors
+        let colors = self.palette.contourColors(for: self.phase)
         let renderedSamples = self.reduceMotion ? [0.16] : self.renderedSamples
         let previousSamples = renderedSamples.count > 1
             ? Array(renderedSamples.dropLast())
@@ -187,7 +198,7 @@ public struct TalkAvatarWaveformView<Avatar: View>: View {
 
     private func fallbackContour(isActive: Bool) -> some View {
         let frozen = self.reduceMotion || !isActive
-        let colors = self.contourColors
+        let colors = self.palette.contourColors(for: self.phase)
 
         return TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: frozen)) { timeline in
             let time = frozen ? 0 : timeline.date.timeIntervalSince(TalkWaveformClock.born)
@@ -249,17 +260,6 @@ public struct TalkAvatarWaveformView<Avatar: View>: View {
             self.capturedSamples.removeFirst(self.capturedSamples.count - 16)
         }
     }
-
-    private var contourColors: (primary: Color, secondary: Color) {
-        let primary = self.palette.active.first ?? .red
-        let secondary = self.palette.active.dropFirst().first ?? primary
-        switch self.phase {
-        case .listening:
-            return (secondary, primary)
-        case .idle, .thinking, .speaking:
-            return (primary, secondary)
-        }
-    }
 }
 
 /// A compact, center-origin voice envelope for constrained surfaces such as
@@ -289,7 +289,7 @@ struct TalkVoiceTraceView: View {
 
     var body: some View {
         let isActive = self.phase != .idle
-        let colors = self.traceColors
+        let colors = self.palette.contourColors(for: self.phase)
         let renderedSamples = self.reduceMotion ? [0.16] : (self.samples.isEmpty ? [0.03] : self.samples)
         let previousSamples = renderedSamples.count > 1
             ? Array(renderedSamples.dropLast())
@@ -336,17 +336,6 @@ struct TalkVoiceTraceView: View {
         .shadow(color: colors.primary.opacity(0.22), radius: 2)
         .opacity(isActive ? 1 : 0)
         .accessibilityHidden(true)
-    }
-
-    private var traceColors: (primary: Color, secondary: Color) {
-        let primary = self.palette.active.first ?? .red
-        let secondary = self.palette.active.dropFirst().first ?? primary
-        switch self.phase {
-        case .listening:
-            return (secondary, primary)
-        case .idle, .thinking, .speaking:
-            return (primary, secondary)
-        }
     }
 }
 

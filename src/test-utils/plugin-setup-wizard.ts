@@ -22,9 +22,7 @@ type QueuedWizardPrompter = {
   prompter: WizardPrompter;
 };
 
-export async function selectFirstWizardOption<T>(params: {
-  options: Array<{ value: T }>;
-}): Promise<T> {
+async function selectFirstWizardOption<T>(params: { options: Array<{ value: T }> }): Promise<T> {
   const first = params.options[0];
   if (!first) {
     throw new Error("no options");

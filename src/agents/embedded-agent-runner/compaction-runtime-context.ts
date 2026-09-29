@@ -1,6 +1,5 @@
-/**
- * Builds runtime context for context-engine backed embedded compaction.
- */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,6 +12,7 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../defaults.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
@@ -23,7 +23,6 @@ import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { normalizeContextTokenBudget } from "./utils.js";
 
 type EmbeddedCompactionRuntimeContextParams = Omit<
@@ -67,6 +66,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   provider: string;
   modelId: string;
   inheritedLevel?: ThinkLevel;
+  compactionThinkingDefault?: ProviderRuntimeModel["compactionThinkingDefault"];
   catalog?: ThinkingCatalogEntry[];
   agentId?: string;
   sessionKey?: string;
@@ -74,7 +74,9 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
 }): ThinkLevel {
   const configuredLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
   const requestedLevel =
-    configuredLevel === "inherit" ? params.inheritedLevel : (configuredLevel ?? "low");
+    configuredLevel === "inherit"
+      ? params.inheritedLevel
+      : (configuredLevel ?? params.compactionThinkingDefault ?? "low");
   if (!requestedLevel) {
     return "off";
   }
@@ -108,6 +110,8 @@ export function resolveEmbeddedCompactionTarget(params: {
   modelSelectionLocked?: boolean;
   defaultProvider?: string;
   defaultModel?: string;
+  allowPluginNormalization?: boolean;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): {
   provider: string | undefined;
   runtimeProvider?: string;
@@ -123,34 +127,6 @@ export function resolveEmbeddedCompactionTarget(params: {
   const override = params.modelSelectionLocked
     ? undefined
     : params.config?.agents?.defaults?.compaction?.model?.trim();
-  const resolveTargetProviders = (
-    targetProvider: string | undefined,
-    authProfileId: string | undefined,
-  ) => {
-    if (!targetProvider) {
-      return {};
-    }
-    const selectedHarnessRuntime = normalizeOptionalAgentRuntimeId(params.harnessRuntime);
-    // Compaction follows the concrete session or prepared-plan owner. Provider
-    // defaults choose new runs; they cannot move an existing transcript.
-    const useNativeHarnessRuntime =
-      selectedHarnessRuntime !== undefined &&
-      selectedHarnessRuntime !== "openclaw" &&
-      !isDefaultAgentRuntimeId(selectedHarnessRuntime);
-    const harnessRuntime = useNativeHarnessRuntime ? selectedHarnessRuntime : "openclaw";
-    const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
-      provider: targetProvider,
-      harnessRuntime: harnessRuntime ?? undefined,
-      authProfileId,
-      config: params.config,
-    });
-    const routedRuntimeProvider = runtimeProvider === targetProvider ? undefined : runtimeProvider;
-    return {
-      runtimeProvider: routedRuntimeProvider,
-      contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
-      ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
-    };
-  };
   const assembleTarget = (targetProvider: string | undefined, targetModel: string | undefined) => {
     // A provider switch cannot inherit credentials selected for the session's
     // original provider; all target paths share that boundary.
@@ -158,7 +134,7 @@ export function resolveEmbeddedCompactionTarget(params: {
       targetProvider !== provider ? undefined : (params.authProfileId ?? undefined);
     return {
       provider: targetProvider,
-      ...resolveTargetProviders(targetProvider, authProfileId),
+      ...resolveCompactionTargetRuntime(targetProvider, params.harnessRuntime),
       model: targetModel,
       authProfileId,
     };
@@ -193,12 +169,17 @@ export function resolveEmbeddedCompactionTarget(params: {
     return assembleTarget(inferredLiteralProvider, override);
   }
   const defaultProvider = provider || DEFAULT_PROVIDER;
-  const aliasKey = normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model);
+  const aliasKey = normalizeLowercaseStringOrEmpty(splitTrailingAuthProfile(override).model);
   // Unrelated aliases must not cold-load provider runtime for a literal override.
   const alias = listModelAliasCandidates(config).some(
-    ({ alias: candidate }) => normalizeCompactionConfigKey(candidate) === aliasKey,
+    ({ alias: candidate }) => normalizeLowercaseStringOrEmpty(candidate) === aliasKey,
   )
-    ? buildModelAliasIndex({ cfg: config, defaultProvider }).byAlias.get(aliasKey)
+    ? buildModelAliasIndex({
+        cfg: config,
+        defaultProvider,
+        allowPluginNormalization: params.allowPluginNormalization,
+        manifestPlugins: params.manifestPlugins,
+      }).byAlias.get(aliasKey)
     : undefined;
   if (alias) {
     return assembleTarget(alias.ref.provider, alias.ref.model);
@@ -206,8 +187,27 @@ export function resolveEmbeddedCompactionTarget(params: {
   return assembleTarget(provider, override);
 }
 
-function normalizeCompactionConfigKey(value: string): string {
-  return value.trim().toLowerCase();
+/** Binds harness ownership without repeating model or alias selection. */
+export function resolveCompactionTargetRuntime(
+  provider: string | undefined,
+  harnessRuntime?: string | null,
+) {
+  if (!provider) {
+    return {};
+  }
+  const selectedHarnessRuntime = normalizeOptionalAgentRuntimeId(harnessRuntime);
+  // Provider defaults choose new runs; they cannot move an existing transcript.
+  const useNativeHarnessRuntime =
+    selectedHarnessRuntime !== undefined &&
+    selectedHarnessRuntime !== "openclaw" &&
+    !isDefaultAgentRuntimeId(selectedHarnessRuntime);
+  const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({ provider });
+  const routedRuntimeProvider = runtimeProvider === provider ? undefined : runtimeProvider;
+  return {
+    runtimeProvider: routedRuntimeProvider,
+    contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
+    ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
+  };
 }
 
 function hasBareConfiguredModelForProvider(params: {
@@ -215,8 +215,8 @@ function hasBareConfiguredModelForProvider(params: {
   provider: string;
   model: string;
 }): boolean {
-  const providerKey = normalizeCompactionConfigKey(params.provider);
-  const modelKey = normalizeCompactionConfigKey(params.model);
+  const providerKey = normalizeLowercaseStringOrEmpty(params.provider);
+  const modelKey = normalizeLowercaseStringOrEmpty(params.model);
   if (!providerKey || !modelKey || params.model.includes("/")) {
     return false;
   }
@@ -228,18 +228,18 @@ function hasBareConfiguredModelForProvider(params: {
     const rawProvider = rawRef.slice(0, slashIdx);
     const rawModel = rawRef.slice(slashIdx + 1);
     if (
-      normalizeCompactionConfigKey(rawProvider) === providerKey &&
-      normalizeCompactionConfigKey(rawModel) === modelKey
+      normalizeLowercaseStringOrEmpty(rawProvider) === providerKey &&
+      normalizeLowercaseStringOrEmpty(rawModel) === modelKey
     ) {
       return true;
     }
   }
-  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(([key]) => {
-    return normalizeCompactionConfigKey(key) === providerKey;
-  })?.[1];
-  return (configuredProvider?.models ?? []).some((entry) => {
-    return normalizeCompactionConfigKey(entry?.id ?? "") === modelKey;
-  });
+  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(
+    ([key]) => normalizeLowercaseStringOrEmpty(key) === providerKey,
+  )?.[1];
+  return (configuredProvider?.models ?? []).some(
+    (entry) => normalizeLowercaseStringOrEmpty(entry?.id ?? "") === modelKey,
+  );
 }
 
 /** Resolves the concrete harness already bound to this exact compaction target. */
@@ -272,13 +272,11 @@ export function resolveCompactionHarnessRuntime(params: {
   return normalizeOptionalAgentRuntimeId(params.configuredHarnessRuntime);
 }
 
-/** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionContextTokenBudget(params: {
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;
-  agentId?: string;
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
@@ -289,7 +287,7 @@ export function resolveCompactionContextTokenBudget(params: {
         cfg: params.config,
         provider: params.provider,
         modelId: params.modelId,
-        modelContextTokens: readAgentModelContextTokens(params.model),
+        modelContextTokens: asFiniteNumber(params.model?.contextTokens),
         modelContextWindow: params.model?.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
@@ -337,6 +335,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
     clientCaps: params.clientCaps,
+    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     chatType: params.chatType ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,
     conversationRoutePeerId: params.conversationRoutePeerId,
@@ -352,6 +351,8 @@ export function buildEmbeddedCompactionRuntimeContext(
     cwd: params.cwd ?? undefined,
     permissionMode: params.permissionMode,
     sessionRoot: params.sessionRoot,
+    requireWorkspaceOnly: params.requireWorkspaceOnly,
+    requireWritableSandbox: params.requireWritableSandbox,
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: params.toolOverrides,

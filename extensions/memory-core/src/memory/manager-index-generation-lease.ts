@@ -1,5 +1,5 @@
 // Memory Core coordinates published-index readers with atomic shadow publication.
-import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   acquireMemorySqliteWriterLease,
@@ -41,10 +41,10 @@ async function acquireCrossProcessLease(
   ): Promise<MemorySqliteLeaseHandle> => {
     while (true) {
       throwIfGenerationLeaseAborted(signal);
-      const lease = tryAcquireMemorySqliteLease(location, mode);
+      const lease = await tryAcquireMemorySqliteLease(location, mode);
       if (lease) {
         if (signal?.aborted) {
-          lease.release();
+          await lease.release();
           throw createGenerationLeaseAbortError(signal);
         }
         return lease;
@@ -76,28 +76,28 @@ async function acquireCrossProcessLease(
       kind === "read" ? "shared" : "exclusive",
     );
   } catch (err) {
-    admission.release();
+    await admission.release();
     throw err;
   }
   if (kind === "read") {
     try {
-      admission.release();
+      await admission.release();
     } catch (err) {
-      generation.release();
+      await generation.release();
       throw err;
     }
     if (signal?.aborted) {
-      generation.release();
+      await generation.release();
       throw createGenerationLeaseAbortError(signal);
     }
     return generation;
   }
   return {
-    release: () => {
+    release: async () => {
       try {
-        generation.release();
+        await generation.release();
       } finally {
-        admission.release();
+        await admission.release();
       }
     },
   };
@@ -117,25 +117,18 @@ function drain(key: string, state: GenerationLeaseState): void {
   if (state.writer) {
     return;
   }
-  if (state.readers > 0) {
-    // Readers already in the current generation may admit more readers until a
-    // writer reaches the queue head. Readers behind that writer wait for the next generation.
-    while (state.queue[0]?.kind === "read") {
-      const reader = state.queue.shift()!;
-      state.readers += 1;
-      reader.resolve(() => {
-        state.readers -= 1;
-        drain(key, state);
-      });
+  const first = state.queue[0];
+  if (!first) {
+    if (state.readers === 0) {
+      states.delete(key);
     }
     return;
   }
-  const first = state.queue.shift();
-  if (!first) {
-    states.delete(key);
-    return;
-  }
   if (first.kind === "write") {
+    if (state.readers > 0) {
+      return;
+    }
+    state.queue.shift();
     state.writer = true;
     first.resolve(() => {
       state.writer = false;
@@ -143,11 +136,13 @@ function drain(key: string, state: GenerationLeaseState): void {
     });
     return;
   }
-  const readers = [first];
+  // Admit the full consecutive group before resolving any caller: an aborted
+  // caller can release synchronously and must not let a writer overtake siblings.
+  const readers: Waiter[] = [];
   while (state.queue[0]?.kind === "read") {
     readers.push(state.queue.shift()!);
   }
-  state.readers = readers.length;
+  state.readers += readers.length;
   for (const reader of readers) {
     reader.resolve(() => {
       state.readers -= 1;
@@ -205,7 +200,7 @@ async function acquire(
   databasePath: string,
   kind: Waiter["kind"],
   signal?: AbortSignal,
-): Promise<() => void> {
+): Promise<() => Promise<void>> {
   const key = resolveUserPath(databasePath);
   const releaseLocal = await acquireLocal(key, kind, signal);
   let crossProcess: MemorySqliteLeaseHandle;
@@ -213,35 +208,26 @@ async function acquire(
     throwIfGenerationLeaseAborted(signal);
     crossProcess = await acquireCrossProcessLease(key, kind, signal);
     if (signal?.aborted) {
-      crossProcess.release();
+      await crossProcess.release();
       throw createGenerationLeaseAbortError(signal);
     }
   } catch (err) {
     releaseLocal();
     throw err;
   }
-  return () => {
+  return async () => {
     try {
-      crossProcess.release();
+      await crossProcess.release();
     } finally {
       releaseLocal();
     }
   };
 }
 
-async function withLease<T>(key: string, kind: Waiter["kind"], run: () => Promise<T>): Promise<T> {
-  const release = await acquire(key, kind);
-  try {
-    return await run();
-  } finally {
-    release();
-  }
-}
-
 export async function acquireMemoryIndexReadGeneration(
   databasePath: string,
   signal?: AbortSignal,
-): Promise<() => void> {
+): Promise<() => Promise<void>> {
   return await acquire(databasePath, "read", signal);
 }
 
@@ -249,5 +235,10 @@ export async function withMemoryIndexPublishGeneration<T>(
   databasePath: string,
   run: () => Promise<T>,
 ): Promise<T> {
-  return await withLease(databasePath, "write", run);
+  const release = await acquire(databasePath, "write");
+  try {
+    return await run();
+  } finally {
+    await release();
+  }
 }

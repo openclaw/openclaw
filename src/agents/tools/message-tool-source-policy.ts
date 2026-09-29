@@ -5,7 +5,6 @@ import {
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TObject } from "typebox";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { AgentRuntimeMessageActionContext } from "../../gateway/message-action-turn-capability.js";
@@ -42,17 +41,11 @@ const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]
 const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
   Type.Boolean({
     description:
-      "Set false for progress. Set true, or omit, for the completed current-source reply.",
+      "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
   }),
 );
 
-export function addSourceReplyFinalControl<T extends TObject>(
-  schema: T,
-  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined,
-): T | TObject {
-  if (sourceReplyDeliveryMode !== "message_tool_only") {
-    return schema;
-  }
+export function addSourceReplyFinalControl(schema: TObject): TObject {
   return Type.Object({ ...schema.properties, final: SOURCE_REPLY_FINAL_PROPERTY });
 }
 

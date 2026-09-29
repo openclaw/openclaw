@@ -1,4 +1,3 @@
-// Tui Pty Test Watch script supports OpenClaw repository automation.
 import { mkdir, open, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -6,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
 import { resolveVitestHomeSelection } from "../lib/vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "../lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "../lib/vitest-process.mts";
 
 type Options = {
@@ -48,10 +48,6 @@ type ChildStopper = {
 };
 
 type SignalChild = (child: KillableChild, signal: NodeJS.Signals) => void;
-
-function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
-  (timer as { unref?: () => void }).unref?.();
-}
 
 function readOption(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
@@ -115,10 +111,6 @@ function parseOptions(args = process.argv.slice(2)): Options {
   };
 }
 
-function shouldUseAltScreen(options: Options) {
-  return options.altScreen && process.stdout.isTTY;
-}
-
 function resolveVitestCliEntry(): string {
   const vitestPackageJson = require.resolve("vitest/package.json");
   return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
@@ -130,23 +122,14 @@ function currentTerminalDimension(value: number | undefined, fallback: number): 
 
 function createChildStopper(
   child: KillableChild,
-  options: {
-    signalChild?: SignalChild;
-    sigtermGraceMs?: number;
-    sigkillGraceMs?: number;
-  } = {},
+  signalChild: SignalChild = (targetChild, signal) =>
+    terminateManagedChild(targetChild, signal, {
+      onChildSignalError(error) {
+        throw error;
+      },
+      taskkillTimeoutMs: null,
+    }),
 ): ChildStopper {
-  const signalChild =
-    options.signalChild ??
-    ((targetChild, signal) =>
-      terminateManagedChild(targetChild, signal, {
-        onChildSignalError(error) {
-          throw error;
-        },
-        taskkillTimeoutMs: null,
-      }));
-  const sigtermGraceMs = options.sigtermGraceMs ?? CHILD_SIGTERM_GRACE_MS;
-  const sigkillGraceMs = options.sigkillGraceMs ?? CHILD_SIGKILL_GRACE_MS;
   let stopping = false;
   let termTimer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -172,18 +155,13 @@ function createChildStopper(
       signalChild(child, "SIGTERM");
       killTimer = setTimeout(() => {
         signalChild(child, "SIGKILL");
-      }, sigkillGraceMs);
-      unrefTimer(killTimer);
-    }, sigtermGraceMs);
-    unrefTimer(termTimer);
+      }, CHILD_SIGKILL_GRACE_MS);
+      killTimer.unref();
+    }, CHILD_SIGTERM_GRACE_MS);
+    termTimer.unref();
   };
 
   return { cancel, stop };
-}
-
-async function createMirrorFile(mirrorPath: string): Promise<void> {
-  await mkdir(path.dirname(mirrorPath), { recursive: true });
-  await writeFile(mirrorPath, "", "utf8");
 }
 
 async function readNewMirrorData(
@@ -242,8 +220,9 @@ async function main(): Promise<void> {
     process.stdout.write(`${usage()}\n`);
     return;
   }
-  const useAltScreen = shouldUseAltScreen(options);
-  await createMirrorFile(options.mirrorPath);
+  const useAltScreen = options.altScreen && process.stdout.isTTY;
+  await mkdir(path.dirname(options.mirrorPath), { recursive: true });
+  await writeFile(options.mirrorPath, "", "utf8");
 
   const { child, completion } = spawnOwnedVitestProcess({
     homeMode: resolveVitestHomeSelection(
@@ -252,7 +231,7 @@ async function main(): Promise<void> {
     ),
     command: process.execPath,
     args: [
-      "--no-maglev",
+      ...resolveVitestNodeArgs(),
       resolveVitestCliEntry(),
       "run",
       "--config",
@@ -278,7 +257,6 @@ async function main(): Promise<void> {
 
   let childStdout: Buffer = Buffer.alloc(0);
   let childStderr: Buffer = Buffer.alloc(0);
-  let restored = false;
   let mirrorOffset = 0;
   let mirrorFilterPending = "";
   let sawMirrorOutput = false;
@@ -317,16 +295,6 @@ async function main(): Promise<void> {
     process.stdout.write(filteredChunk);
   };
 
-  const restoreScreen = () => {
-    if (restored) {
-      return;
-    }
-    restored = true;
-    if (useAltScreen) {
-      process.stdout.write("\x1b[?1049l");
-    }
-  };
-
   const childStopper = createChildStopper(child);
   const stopChild = childStopper.stop;
 
@@ -351,13 +319,6 @@ async function main(): Promise<void> {
     if (!hadRawMode) {
       process.stdin.pause();
     }
-  };
-
-  const drainParentInput = async () => {
-    if (!useAltScreen || !process.stdin.isTTY) {
-      return;
-    }
-    await delay(100);
   };
 
   const renderWaitingStatus = () => {
@@ -424,7 +385,7 @@ async function main(): Promise<void> {
       await delay(sawMirrorOutput ? 25 : 250);
     }
 
-    mirrorOffset = await drainNewMirrorData(options.mirrorPath, mirrorOffset, writeMirrorChunk);
+    await drainNewMirrorData(options.mirrorPath, mirrorOffset, writeMirrorChunk);
   } finally {
     if (!childFinished) {
       stopChild();
@@ -433,12 +394,14 @@ async function main(): Promise<void> {
     for (const signal of parentSignals) {
       process.off(signal, stopChild);
     }
-    await drainParentInput();
+    if (useAltScreen && process.stdin.isTTY) {
+      await delay(100);
+    }
     restoreInput();
     if (useAltScreen) {
       process.stdout.write("\x1b[?2026l\x1b[?2004l\x1b[>4;0m\x1b[?25h");
+      process.stdout.write("\x1b[?1049l");
     }
-    restoreScreen();
   }
 
   const outcome = await childOutcome;

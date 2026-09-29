@@ -4,16 +4,11 @@
  */
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
+import { isToolCallBlockType } from "../shared/tool-block-contract.js";
 import type { AgentMessage } from "./runtime/index.js";
 
 const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
-const NON_CONVERSATION_BLOCK_TYPES = new Set([
-  "toolCall",
-  "toolUse",
-  "functionCall",
-  "thinking",
-  "reasoning",
-]);
+const NON_CONVERSATION_BLOCK_TYPES = new Set(["thinking", "reasoning"]);
 
 function hasMeaningfulText(text: string): boolean {
   const trimmed = text.trim();
@@ -29,7 +24,7 @@ function isSummaryRole(role: unknown): boolean {
 }
 
 /** Returns whether a message has content worth preserving as conversation. */
-export function hasMeaningfulConversationContent(message: AgentMessage): boolean {
+function hasMeaningfulConversationContent(message: AgentMessage): boolean {
   if ("excludeFromContext" in message && message.excludeFromContext === true) {
     return false;
   }
@@ -71,7 +66,7 @@ function hasMeaningfulMessageContent(content: unknown): boolean {
       if (typeof text === "string" && hasMeaningfulText(text)) {
         return true;
       }
-    } else if (typeof type !== "string" || !NON_CONVERSATION_BLOCK_TYPES.has(type)) {
+    } else if (!isToolCallBlockType(type) && !NON_CONVERSATION_BLOCK_TYPES.has(String(type))) {
       // Tool-call metadata and internal reasoning blocks do not make a
       // heartbeat-only transcript count as real conversation.
       sawMeaningfulNonTextBlock = true;

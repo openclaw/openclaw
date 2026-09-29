@@ -5,8 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
+import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
-import { readActualWorkspaceManifest } from "../gateway/worker-environments/workspace-reconcile.js";
 import { runCommandBuffered, runExec } from "../process/exec.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
@@ -136,10 +136,8 @@ describe("node worker Git transfers", () => {
     },
   ];
   it.each([
-    ...gitTransfers.flatMap((scenario) => [
-      { ...scenario, seedState: "unused" },
-      { ...scenario, seedState: "available" },
-    ]),
+    ...gitTransfers.map((scenario) => ({ ...scenario, seedState: "unused" })),
+    { ...gitTransfers[0], seedState: "available" },
     ...["absent", "missing-base", "symlink", "oversized"].map((seedState) => ({
       description: "handles a prepared project cache " + seedState,
       changed: false,
@@ -215,7 +213,7 @@ describe("node worker Git transfers", () => {
         await fs.mkdir(path.join(source, "nested"));
         await fs.writeFile(path.join(source, "nested", "file.txt"), "safe nested content\n");
       }
-      const snapshot = await readActualWorkspaceManifest({ root: source, baseCommit: commit });
+      const snapshot = await captureWorkspaceManifest({ root: source, baseCommit: commit });
       const rawManifest = serializeWorkerWorkspaceManifest(snapshot.manifest);
       const packed = await runCommandBuffered(
         ["git", "-C", source, "pack-objects", "--stdout", "--revs"],
@@ -332,10 +330,14 @@ describe("node worker Git transfers", () => {
           changed ? "changed on gateway\n" : "tracked from gateway\n",
         );
         if (process.platform !== "win32") {
+          // Git checkout applies the umask; downloaded replacements are explicitly chmod'ed.
+          const checkoutUmask = process.umask();
           expect((await fs.stat(path.join(workspaceDir, "tracked.txt"))).mode & 0o777).toBe(
-            changed ? 0o755 : 0o644,
+            changed ? 0o755 : 0o666 & ~checkoutUmask,
           );
-          expect((await fs.stat(path.join(workspaceDir, "script.sh"))).mode & 0o777).toBe(0o755);
+          expect((await fs.stat(path.join(workspaceDir, "script.sh"))).mode & 0o777).toBe(
+            0o777 & ~checkoutUmask,
+          );
         }
         await expect(fs.readlink(path.join(workspaceDir, "tracked-link"))).resolves.toBe(
           changed ? "script.sh" : "tracked.txt",

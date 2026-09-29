@@ -1,4 +1,3 @@
-// Pure platform and payload helpers for remote skill binary probes.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -62,10 +61,6 @@ export function isRemoteSkillEligibilityNode(
   );
 }
 
-export function supportsSystemWhich(commands?: string[]): boolean {
-  return Array.isArray(commands) && commands.includes("system.which");
-}
-
 export function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
   const bins = new Set<string>();
   for (const entry of entries) {
@@ -111,10 +106,7 @@ export function parseBinProbePayload(
         .filter(Boolean);
     }
     if (typeof parsed.stdout === "string") {
-      return parsed.stdout
-        .split(/\r?\n/)
-        .map((line) => normalizeOptionalString(line) ?? "")
-        .filter(Boolean);
+      return normalizeStringEntries(parsed.stdout.split(/\r?\n/));
     }
   } catch {
     return [];

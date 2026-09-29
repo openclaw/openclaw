@@ -1,4 +1,3 @@
-// Deepinfra provider module implements model/runtime integration.
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import {
   createOpenAiCompatibleImageGenerationProvider,
@@ -13,7 +12,7 @@ import {
   normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
-import type { DeepInfraSurfaceModel } from "./provider-models.js";
+import type { DeepInfraSurfaceModel } from "./media-models.js";
 
 const DEEPINFRA_IMAGE_SIZES = ["512x512", "1024x1024", "1024x1792", "1792x1024"] as const;
 const MAX_DEEPINFRA_INPUT_IMAGES = 1;

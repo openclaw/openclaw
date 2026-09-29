@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
@@ -13,6 +14,7 @@ import type {
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
+import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import {
   consumeNodeInvokePlacementGrant,
@@ -23,14 +25,6 @@ import { invokeNodeWithReadinessRetry } from "./node-invoke-readiness.js";
 import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-
-// Plugin node.invoke policies are the last gateway-side guard before a
-// plugin-declared dangerous node command reaches the node transport.
-function parseScopes(client: GatewayClient | null): string[] {
-  return Array.isArray(client?.connect?.scopes)
-    ? client.connect.scopes.filter((scope): scope is string => typeof scope === "string")
-    : [];
-}
 
 function parsePayload(payloadJSON: string | null | undefined, payload: unknown): unknown {
   if (!payloadJSON) {
@@ -110,6 +104,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   };
   timeoutMs?: number;
   signal?: AbortSignal;
+  deadlineAtMs?: number;
   resolveRemainingTimeoutMs?: () => number | undefined;
   onNodeCommandDispatched?: () => void;
   nodeInvokeStream?: GatewayNodeInvokeStream;
@@ -323,6 +318,12 @@ export async function applyPluginNodeInvokePolicy(params: {
           ? Math.min(requestedTimeoutMs, remainingTimeoutMs)
           : remainingTimeoutMs
         : requestedTimeoutMs;
+    const deadlineAtMs =
+      params.deadlineAtMs === undefined
+        ? undefined
+        : typeof requestedTimeoutMs === "number" && requestedTimeoutMs > 0
+          ? Math.min(params.deadlineAtMs, performance.now() + requestedTimeoutMs)
+          : params.deadlineAtMs;
     // Pairing and policy checks above may await. Revalidate the exact runtime
     // capability at the final transport handoff so closure wins that race.
     sessionAuthority?.assertCurrent();
@@ -431,7 +432,10 @@ export async function applyPluginNodeInvokePolicy(params: {
     };
     const res = params.privateTransport
       ? await params.privateTransport.invoke(request)
-      : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, request);
+      : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
+          ...request,
+          deadlineAtMs,
+        });
     if (!res.ok) {
       if (nodeCommandDispatched) {
         recordNodeDecision({
@@ -527,12 +531,13 @@ export async function applyPluginNodeInvokePolicy(params: {
         displayName: params.nodeSession.displayName,
         platform: params.nodeSession.platform,
         deviceFamily: params.nodeSession.deviceFamily,
+        caps: params.nodeSession.caps,
         commands: params.nodeSession.commands,
       },
       client: params.client
         ? {
             connId: params.client.connId,
-            scopes: parseScopes(params.client),
+            scopes: filterStringEntries(params.client.connect?.scopes),
           }
         : null,
       ...(risk ? { risk } : {}),
@@ -565,9 +570,10 @@ export async function applyPluginNodeInvokePolicy(params: {
         : {}),
     });
   } catch (error) {
-    // Plugin policy handlers may settle after their exact caller authority
-    // closes. Never attribute that late result to the retired run.
-    if (!nodeCommandDispatched && isCallerRuntimeAuthorityActive()) {
+    // Observer closure is not a denial. Do not attribute a late policy failure
+    // after the exact caller authority has closed.
+    const policyFailed = !(error instanceof ApprovalObserverClosedError);
+    if (policyFailed && !nodeCommandDispatched && isCallerRuntimeAuthorityActive()) {
       recordNodeDecision({
         pluginId: entry.pluginId,
         outcome: "denied",
@@ -598,13 +604,12 @@ export async function applyPluginNodeInvokePolicy(params: {
         : [],
     });
   }
-  if (result.ok) {
-    return result;
-  }
-  return {
-    ...result,
-    // Core owns dispatch and must override a plugin-supplied claim. Callers may
-    // clear speculative state only when this value is definitively false.
-    details: { ...result.details, nodeCommandDispatched },
-  };
+  return result.ok
+    ? result
+    : {
+        ...result,
+        // Core owns dispatch and must override a plugin-supplied claim. Callers may
+        // clear speculative state only when this value is definitively false.
+        details: { ...result.details, nodeCommandDispatched },
+      };
 }

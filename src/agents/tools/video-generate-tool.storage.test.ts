@@ -185,6 +185,7 @@ describe("video generation invocation QA", () => {
         expect.objectContaining({
           type: "video",
           path: savedPath,
+          name: "qa-selected-video.mp4",
           mimeType: "video/mp4",
           sizeBytes: generatedVideo.byteLength,
         }),
@@ -251,7 +252,7 @@ describe("video generation invocation QA", () => {
       await expect(fs.readFile(savedPath)).resolves.toEqual(savedVideo);
       expect(details.attachments).toMatchObject([
         { url: paths[0], name: "first.mp4" },
-        { path: savedPath },
+        { path: savedPath, name: "middle.mp4" },
         { url: paths[2], name: "last.mp4" },
       ]);
     });

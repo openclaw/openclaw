@@ -4,9 +4,10 @@ import type {
   PortalOpenResult,
   PortalSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
+import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-method-policy.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { portalHandlers } from "./portals.js";
 
@@ -192,7 +193,7 @@ describe("portal gateway methods", () => {
         } as never,
       };
     };
-    const clients = new Set([
+    const clients = new GatewayClientRegistry([
       client("pairing", "operator", ["operator.pairing"]),
       client("node", "node", ["operator.read"]),
       client("read", "operator", ["operator.read"]),

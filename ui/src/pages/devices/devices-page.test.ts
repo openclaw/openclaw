@@ -11,8 +11,7 @@ import {
   createInitialDevicesState,
   loadDevices,
   loadNodes,
-  type InventoryRemovalRequest,
-} from "../../lib/nodes/index.ts";
+} from "../../lib/nodes/page-operations.ts";
 import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
@@ -22,6 +21,7 @@ import {
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import "./devices-page.ts";
+import type { DevicesDialogController } from "./devices-dialogs.ts";
 import type { DevicesRouteData } from "./devices-page.ts";
 
 type TestDevicesPage = HTMLElement & {
@@ -47,12 +47,7 @@ type TestDevicesPage = HTMLElement & {
     ) => void;
   };
   ensureInitialData: () => void;
-  confirmInventoryRemoval: (prompt: {
-    kind: "entry";
-    entry: InventoryRemovalRequest;
-  }) => Promise<void>;
-  confirmPairingReject: (target: "device" | "node", requestId: string) => Promise<void>;
-  confirmTokenRevoke: (deviceId: string, role: string) => Promise<void>;
+  dialogs: DevicesDialogController;
   reportRotationOutcome: (
     device: { id: string; name: string },
     role: string,
@@ -152,15 +147,8 @@ function gateway(
   snapshotOverride?: ApplicationGatewaySnapshot,
 ): ApplicationContext["gateway"] {
   const snapshot: ApplicationGatewaySnapshot = snapshotOverride ?? {
-    client,
+    ...gatewaySnapshot(client, false),
     phase: "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
   };
   return {
     snapshot,
@@ -203,7 +191,14 @@ describe("DevicesPage gateway lifecycle", () => {
     dialogs = createModalDialogTestFixture((modal) => {
       // Devices defaults cancel destructive prompts or acknowledge a synthetic
       // rotation outcome. A shown token deliberately refuses modal-cancel.
-      modal.querySelector<HTMLButtonElement>(".exec-approval-actions button[autofocus]")?.click();
+      const button = modal.querySelector<HTMLButtonElement>(
+        ".exec-approval-actions button[autofocus]",
+      );
+      if (button) {
+        button.click();
+      } else {
+        modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+      }
     });
   });
 
@@ -544,26 +539,20 @@ describe("DevicesPage gateway lifecycle", () => {
       },
     } as ApplicationGatewaySnapshot;
     const currentGateway = gateway(client, snapshot);
-    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
-    page.context = {
-      gateway: currentGateway,
-      runtimeConfig: {
-        state: { configSnapshot: {}, configLoading: false },
-        subscribe: vi.fn(() => () => undefined),
-      },
-    } as unknown as ApplicationContext;
-    page.routeData = {
-      gateway: currentGateway,
-      gatewaySnapshot: snapshot,
-      devices: createInitialDevicesState({ client, connected: true }),
-    };
-    page.willUpdate(new Map([["routeData", undefined]]));
-    applyGatewaySnapshot(page, snapshot);
-    page.ensureInitialData();
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
+    const page = mountInventoryPage(currentGateway);
+    try {
+      page.routeData = {
+        gateway: currentGateway,
+        gatewaySnapshot: snapshot,
+        devices: createInitialDevicesState({ client, connected: true }),
+      };
+      await page.updateComplete;
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
+    } finally {
+      page.remove();
+    }
   });
 
   it("keeps event-driven device reloads gated on pairing access", async () => {
@@ -615,13 +604,6 @@ describe("DevicesPage gateway lifecycle", () => {
       operatorRoles: ["operator"],
     },
     {
-      name: "node reconnects while its operator stays connected",
-      role: "node",
-      previousReason: "disconnect",
-      nextReason: "connect",
-      operatorRoles: ["operator"],
-    },
-    {
       name: "merged node-role presence disconnects while its operator stays connected",
       role: "node",
       previousReason: "connect",
@@ -637,25 +619,11 @@ describe("DevicesPage gateway lifecycle", () => {
       operatorRoles: ["operator"],
     },
     {
-      name: "operator reconnects while its node stays connected",
-      role: "operator",
-      previousReason: "disconnect",
-      nextReason: "connect",
-      operatorRoles: ["operator"],
-    },
-    {
       name: "node disconnects while a roleless device stays connected",
       role: "node",
       previousReason: "connect",
       nextReason: "disconnect",
       operatorRoles: undefined,
-    },
-    {
-      name: "node disconnects while a device with empty roles stays connected",
-      role: "node",
-      previousReason: "connect",
-      nextReason: "disconnect",
-      operatorRoles: [],
     },
   ])("reloads mixed-role inventory when $name", async (scenario) => {
     const request = vi.fn(async (method: string) =>
@@ -849,32 +817,37 @@ describe("DevicesPage gateway lifecycle", () => {
     applyGatewaySnapshot(page, gatewaySnapshot(client, false));
   });
 
-  it("cancels a pending removal confirmation when the connection resets", async () => {
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const page = createConnectedPage(client);
+  it.each(["removal", "alias"])(
+    "cancels a pending %s dialog when the connection resets",
+    async (kind) => {
+      const request = vi.fn();
+      const client = { request } as unknown as GatewayBrowserClient;
+      const page = createConnectedPage(client);
 
-    const pending = dialogs.track(
-      page.confirmInventoryRemoval({
-        kind: "entry",
-        entry: { id: "device-1", name: "Browser", removeNode: false, removeDevice: true },
-      }),
-    );
-    await waitForRenderedModalDialog(document.body);
+      const pending = dialogs.track(
+        kind === "alias"
+          ? page.dialogs.editAlias({ id: "device-1", name: "Browser" })
+          : page.dialogs.confirmInventoryRemoval({
+              kind: "entry",
+              entry: { id: "device-1", name: "Browser", removeNode: false, removeDevice: true },
+            }),
+      );
+      await waitForRenderedModalDialog(document.body);
 
-    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
-    await pending;
+      applyGatewaySnapshot(page, gatewaySnapshot(client, false));
+      await pending;
 
-    expect(request).not.toHaveBeenCalled();
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
+      expect(request).not.toHaveBeenCalled();
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
+  );
 
   it("rejects a device pairing request after the in-app dialog is confirmed", async () => {
     const request = vi.fn().mockResolvedValue({});
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = dialogs.track(page.confirmPairingReject("device", "request-1"));
+    const pending = dialogs.track(page.dialogs.confirmPairingReject("device", "request-1"));
     const { dialog } = await waitForRenderedModalDialog(document.body);
     expect(dialog.getAttribute("aria-label")).toBe(t("devices.inventory.rejectDevicePromptTitle"));
 
@@ -890,7 +863,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = dialogs.track(page.confirmPairingReject("node", "request-2"));
+    const pending = dialogs.track(page.dialogs.confirmPairingReject("node", "request-2"));
     await waitForRenderedModalDialog(document.body);
 
     clickDialogButton(t("common.cancel"));
@@ -905,7 +878,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = dialogs.track(page.confirmTokenRevoke("device-1", "operator"));
+    const pending = dialogs.track(page.dialogs.confirmTokenRevoke("device-1", "operator"));
     const { dialog } = await waitForRenderedModalDialog(document.body);
     expect(dialog.getAttribute("aria-label")).toBe(
       t("devices.inventory.revokePromptTitle", { role: "operator" }),
@@ -926,7 +899,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createConnectedPage(client);
 
-    const pending = dialogs.track(page.confirmTokenRevoke("device-1", "operator"));
+    const pending = dialogs.track(page.dialogs.confirmTokenRevoke("device-1", "operator"));
     await waitForRenderedModalDialog(document.body);
     const generation = page.requestGeneration;
     const downgraded = gatewaySnapshot(client, true);

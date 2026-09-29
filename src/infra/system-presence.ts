@@ -1,11 +1,11 @@
-// Detects system command availability for setup and diagnostics.
+// Ephemeral connection presence and observed activity, shared by Gateway readers.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -14,7 +14,9 @@ import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 import { resolveDarwinProductVersion } from "./os-summary.js";
 
 export type SystemPresence = {
+  connectionId?: string;
   host?: string;
+  clientId?: string;
   ip?: string;
   version?: string;
   platform?: string;
@@ -33,22 +35,17 @@ export type SystemPresence = {
   /** Server-owned timing for the person's current continuous live interval. */
   onlineSince?: number;
   lastActivityAt?: number;
+  /** Latest accepted OpenClaw interaction on this connection only. */
+  connectionLastActivityAt?: number;
   text: string;
   /** Heartbeat freshness, independent of person activity and online duration. */
   ts: number;
 };
 
-type SystemPresenceUpdate = {
-  key: string;
-  previous?: SystemPresence;
-  next: SystemPresence;
-  changes: Partial<SystemPresence>;
-  changedKeys: (keyof SystemPresence)[];
-};
-
 type StoredPresence = {
   presence: SystemPresence;
   freshness: number;
+  pending: boolean;
 };
 
 // The gateway owns a private key; caller-supplied string identities remain peers.
@@ -75,47 +72,31 @@ function freshnessNow(): number {
   return freshnessTime;
 }
 
-function setPresence(key: string | symbol, presence: SystemPresence) {
-  entries.set(key, { presence, freshness: freshnessNow() });
-}
-
-function normalizePresenceKey(key: string | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(key);
-}
-
-function resolvePrimaryIPv4(): string | undefined {
-  return pickBestEffortPrimaryLanIPv4() ?? os.hostname();
+function setPresence(
+  key: string | symbol,
+  presence: SystemPresence,
+  pending = entries.get(key)?.pending ?? false,
+) {
+  entries.set(key, { presence, freshness: freshnessNow(), pending });
 }
 
 function initSelfPresence() {
   const host = os.hostname();
-  const ip = resolvePrimaryIPv4() ?? undefined;
+  const ip = pickBestEffortPrimaryLanIPv4() ?? os.hostname();
   const version = resolveRuntimeServiceVersion(process.env);
   const modelIdentifier = resolveMachineModelIdentifier();
-  const platform = (() => {
-    const p = os.platform();
-    const rel = os.release();
-    if (p === "darwin") {
-      return `macos ${resolveDarwinProductVersion()}`;
-    }
-    if (p === "win32") {
-      return `windows ${rel}`;
-    }
-    return `${p} ${rel}`;
-  })();
-  const deviceFamily = (() => {
-    const p = os.platform();
-    if (p === "darwin") {
-      return "Mac";
-    }
-    if (p === "win32") {
-      return "Windows";
-    }
-    if (p === "linux") {
-      return "Linux";
-    }
-    return p;
-  })();
+  const osPlatform = os.platform();
+  const release = os.release();
+  const platform =
+    osPlatform === "darwin"
+      ? `macos ${resolveDarwinProductVersion()}`
+      : `${osPlatform === "win32" ? "windows" : osPlatform} ${release}`;
+  const deviceFamilies: Partial<Record<NodeJS.Platform, string>> = {
+    darwin: "Mac",
+    win32: "Windows",
+    linux: "Linux",
+  };
+  const deviceFamily = deviceFamilies[osPlatform] ?? osPlatform;
   const text = `Gateway: ${host}${ip ? ` (${ip})` : ""} · app ${version} · mode gateway · reason self`;
   const selfEntry: SystemPresence = {
     host,
@@ -196,32 +177,21 @@ type SystemPresencePayload = {
 };
 
 function mergeStringList(...values: Array<string[] | undefined>): string[] | undefined {
-  const out = new Set<string>();
-  for (const list of values) {
-    if (!Array.isArray(list)) {
-      continue;
-    }
-    for (const item of list) {
-      const trimmed = normalizeOptionalString(item) ?? "";
-      if (trimmed) {
-        out.add(trimmed);
-      }
-    }
-  }
-  return out.size > 0 ? [...out] : undefined;
+  const merged = normalizeUniqueTrimmedStringList(
+    values.flatMap((list) => (Array.isArray(list) ? list : [])),
+  );
+  return merged.length > 0 ? merged : undefined;
 }
 
-export function updateSystemPresence(payload: SystemPresencePayload): SystemPresenceUpdate {
+export function updateSystemPresence(payload: SystemPresencePayload) {
   const parsed = parsePresence(payload.text);
   const key =
-    normalizePresenceKey(payload.deviceId) ||
-    normalizePresenceKey(payload.instanceId) ||
-    normalizePresenceKey(parsed.instanceId) ||
-    normalizePresenceKey(parsed.host) ||
+    normalizeOptionalLowercaseString(payload.deviceId) ||
+    normalizeOptionalLowercaseString(payload.instanceId) ||
+    normalizeOptionalLowercaseString(parsed.host) ||
     parsed.ip ||
     truncateUtf16Safe(parsed.text, 64) ||
     normalizeLowercaseStringOrEmpty(os.hostname());
-  const hadExisting = entries.has(key);
   const existing = entries.get(key)?.presence ?? ({} as SystemPresence);
   const merged: SystemPresence = {
     ...existing,
@@ -241,35 +211,28 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     deviceId: payload.deviceId ?? existing.deviceId,
     roles: mergeStringList(existing.roles, payload.roles),
     scopes: mergeStringList(existing.scopes, payload.scopes),
-    instanceId: payload.instanceId ?? parsed.instanceId ?? existing.instanceId,
+    instanceId: payload.instanceId ?? existing.instanceId,
     text: payload.text || parsed.text || existing.text,
     ts: Date.now(),
   };
   setPresence(key, merged);
   const trackKeys = ["host", "ip", "version", "mode", "reason"] as const;
-  type TrackKey = (typeof trackKeys)[number];
-  const changes: Partial<Pick<SystemPresence, TrackKey>> = {};
-  const changedKeys: TrackKey[] = [];
-  for (const k of trackKeys) {
-    const prev = existing[k];
-    const next = merged[k];
-    if (prev !== next) {
-      changes[k] = next;
-      changedKeys.push(k);
-    }
-  }
+  const changedKeys = trackKeys.filter((field) => existing[field] !== merged[field]);
   return {
     key,
-    previous: hadExisting ? existing : undefined,
     next: merged,
-    changes,
     changedKeys,
-  } satisfies SystemPresenceUpdate;
+  };
 }
 
-export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
-  const normalizedKey = normalizePresenceKey(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
-  const existing = entries.get(normalizedKey)?.presence ?? ({} as SystemPresence);
+export function upsertPresence(
+  key: string,
+  presence: Partial<SystemPresence>,
+  options?: { pending: boolean },
+) {
+  const normalizedKey =
+    normalizeOptionalLowercaseString(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
+  const existing: Partial<SystemPresence> = entries.get(normalizedKey)?.presence ?? {};
   const roles = mergeStringList(existing.roles, presence.roles);
   const scopes = mergeStringList(existing.scopes, presence.scopes);
   const merged: SystemPresence = {
@@ -285,12 +248,21 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
         presence.mode ?? existing.mode ?? "unknown"
       }`,
   };
-  setPresence(normalizedKey, merged);
+  setPresence(normalizedKey, merged, options?.pending);
+}
+
+/** Only the connection that staged a row may make it visible to other readers. */
+export function commitPresence(key: string, connectionId: string): void {
+  const normalizedKey = normalizeOptionalLowercaseString(key);
+  const entry = normalizedKey ? entries.get(normalizedKey) : undefined;
+  if (entry?.presence.connectionId === connectionId) {
+    entry.pending = false;
+  }
 }
 
 /** Renews an existing connection-owned presence row without recreating expired metadata. */
 export function touchPresence(key: string): boolean {
-  const normalizedKey = normalizePresenceKey(key);
+  const normalizedKey = normalizeOptionalLowercaseString(key);
   if (!normalizedKey) {
     return false;
   }
@@ -302,7 +274,7 @@ export function touchPresence(key: string): boolean {
   return true;
 }
 
-export function listSystemPresence(): SystemPresence[] {
+export function listSystemPresence(options?: { includeConnectionId?: string }): SystemPresence[] {
   touchSelfPresence();
   const now = freshnessNow();
   for (const [key, entry] of entries) {
@@ -320,5 +292,13 @@ export function listSystemPresence(): SystemPresence[] {
       entries.delete(key);
     }
   }
-  return [...entries.values()].map((entry) => entry.presence).toSorted((a, b) => b.ts - a.ts);
+  return [...entries.values()]
+    .filter(
+      (entry) =>
+        !entry.pending ||
+        (options?.includeConnectionId !== undefined &&
+          entry.presence.connectionId === options.includeConnectionId),
+    )
+    .map((entry) => entry.presence)
+    .toSorted((a, b) => b.ts - a.ts);
 }

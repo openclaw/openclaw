@@ -1,57 +1,48 @@
 // @vitest-environment node
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
+import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { createState, type TestState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import {
-  getChatSessionProjection,
-  publishChatSessionProjection,
-  reduceChatSessionProjection,
-} from "./history-merge.ts";
-import { appendChatDraftText, handleChatDraftChange } from "./input-history.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
+import { handleChatDraftChange } from "./input-history.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import type { ToolStreamEntry } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
-import { handleAgentEvent } from "./tool-stream.ts";
 
-type TestState = ChatState &
-  Parameters<typeof handleAgentEvent>[0] & {
-    requestUpdate: () => void;
+it("preserves prepared quiet activity through older pages and prefetched snapshots", async () => {
+  const message = {
+    role: "toolResult",
+    toolCallId: "wait",
+    toolName: "sessions_yield",
+    content: [{ type: "text", text: "Waiting finished" }],
+    __openclaw: { id: "wait-result", seq: 3 },
   };
-type TestSessions = NonNullable<ChatState["sessions"]> &
-  Parameters<typeof handleAgentEvent>[0]["sessions"];
-
-function createState(result: ChatHistoryResult): TestState {
-  const host = makeChatHost({
-    requestHandlers: { "chat.history": result },
-    sessionKey: "main",
+  const state = createState({
+    messages: [message],
+    activity: [{ messageId: "wait-result", items: [] }],
   });
-  const sessions: TestSessions = { refreshReplacement: vi.fn(async () => undefined) };
-  return {
-    ...host,
-    chatToolMessages: host.chatToolMessages ?? [],
-    chatStreamSegments: host.chatStreamSegments ?? [],
-    connectionEpoch: 1,
-    chatThinkingLevel: null,
-    chatVerboseLevel: null,
-    chatStreamStartedAt: null,
-    sessions,
-    toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),
-    toolStreamOrder: host.toolStreamOrder ?? [],
-    toolStreamSyncTimer: host.toolStreamSyncTimer ?? null,
-    requestUpdate: vi.fn(),
-  };
-}
+  const expected = [{ ...message, activity: [] }];
+  expect((await loadOlderChatHistoryPage(state, 1))?.messages).toEqual(expected);
+  const prefetched = await requestChatSessionSnapshot(
+    state.client!,
+    state.sessionKey,
+    state,
+    () => true,
+  );
+  expect(prefetched).toMatchObject({ kind: "snapshot", snapshot: { messages: expected } });
+  expect(message).not.toHaveProperty("activity");
+});
 
 function activeHistory(runId: string): ChatHistoryResult {
   return {
@@ -71,30 +62,6 @@ function activeHistory(runId: string): ChatHistoryResult {
   } satisfies ChatHistoryResult;
 }
 
-describe("appendChatDraftText", () => {
-  it("appends an inline command without changing an existing mention", () => {
-    const state = createState({ messages: [] }) as TestState &
-      Parameters<typeof handleChatDraftChange>[0] & {
-        handleChatDraftChange: (
-          next: string,
-          mentions?: readonly { profileId: string; start: number; end: number }[],
-        ) => void;
-      };
-    const mention = { profileId: "alex-profile", start: 7, end: 12 };
-    state.chatMessage = "Review @Alex";
-    state.chatMentions = [mention];
-    const handleDraftChange = vi.fn((next: string, mentions?: ChatState["chatMentions"]) =>
-      handleChatDraftChange(state, next, mentions),
-    );
-    state.handleChatDraftChange = handleDraftChange;
-
-    expect(appendChatDraftText(state, "/dashboard ")).toBe("Review @Alex /dashboard ");
-    expect(state.chatMessage).toBe("Review @Alex /dashboard ");
-    expect(state.chatMentions).toEqual([mention]);
-    expect(handleDraftChange).toHaveBeenCalledWith("Review @Alex /dashboard ", state.chatMentions);
-  });
-});
-
 it.each(["main", "workspace"])(
   "requests the configured default agent for global main alias %s",
   async (sessionKey) => {
@@ -104,11 +71,16 @@ it.each(["main", "workspace"])(
     state.agentsList = { defaultId: "main", mainKey: "workspace", scope: "global" };
     const request = vi.spyOn(state.client!, "request");
     await loadChatHistory(state);
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey,
-      agentId: "main",
-      limit: 800,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey,
+        agentId: "main",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   },
 );
 
@@ -133,11 +105,11 @@ describe("syncSelectedSessionMessageSubscription", () => {
     state.sessionKey = "agent:main:next";
     state.chatSessionMessageSubscriptionRequestedKey = "agent:main:previous";
     state.chatSessionMessageSubscription = { key: "agent:main:previous", agentId: null };
-    state.sessions = {
-      refreshReplacement: vi.fn(async () => undefined),
+    Object.assign(state.sessions, {
+      refreshReplacement: vi.fn(async () => null),
       subscribeMessages,
       unsubscribeMessages,
-    };
+    });
 
     const sync = syncSelectedSessionMessageSubscription(state as never);
     await Promise.resolve();
@@ -177,11 +149,11 @@ describe("syncSelectedSessionMessageSubscription", () => {
     state.chatSessionMessageSubscriptionRequestedKey = previous.key;
     state.chatSessionMessageSubscription = previous;
     state.sessionsError = null;
-    state.sessions = {
-      refreshReplacement: vi.fn(async () => undefined),
+    Object.assign(state.sessions, {
+      refreshReplacement: vi.fn(async () => null),
       subscribeMessages,
       unsubscribeMessages,
-    };
+    });
 
     await syncSelectedSessionMessageSubscription(state as never);
 
@@ -210,11 +182,11 @@ describe("syncSelectedSessionMessageSubscription", () => {
     state.chatSessionMessageSubscriptionRequestedKey = previous.key;
     state.chatSessionMessageSubscription = previous;
     state.sessionsError = null;
-    state.sessions = {
-      refreshReplacement: vi.fn(async () => undefined),
+    Object.assign(state.sessions, {
+      refreshReplacement: vi.fn(async () => null),
       subscribeMessages,
       unsubscribeMessages,
-    };
+    });
 
     await syncSelectedSessionMessageSubscription(state as never);
 
@@ -230,6 +202,10 @@ describe("syncSelectedSessionMessageSubscription", () => {
   });
 
   it("retries a stale generation's rejected subscription release", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const stale = { key: "agent:main:stale", agentId: null };
     const selected = { key: "agent:main:selected", agentId: null };
     const staleSubscription = createDeferred<typeof stale>();
@@ -247,11 +223,11 @@ describe("syncSelectedSessionMessageSubscription", () => {
     state.sessionKey = stale.key;
     state.chatSessionMessageSubscriptionRequestedKey = null;
     state.chatSessionMessageSubscription = null;
-    state.sessions = {
-      refreshReplacement: vi.fn(async () => undefined),
+    Object.assign(state.sessions, {
+      refreshReplacement: vi.fn(async () => null),
       subscribeMessages,
       unsubscribeMessages,
-    };
+    });
 
     const staleSync = syncSelectedSessionMessageSubscription(state as never);
     await Promise.resolve();
@@ -259,6 +235,7 @@ describe("syncSelectedSessionMessageSubscription", () => {
     await syncSelectedSessionMessageSubscription(state as never);
 
     staleSubscription.resolve(stale);
+    await vi.runAllTimersAsync();
     await staleSync;
 
     expect(state.chatSessionMessageSubscription).toBe(selected);
@@ -267,6 +244,8 @@ describe("syncSelectedSessionMessageSubscription", () => {
     await syncSelectedSessionMessageSubscription(state as never);
 
     expect(unsubscribeMessages).toHaveBeenNthCalledWith(2, stale);
+    expect(unsubscribeMessages).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
     expect(state.chatSessionMessageSubscription).toBe(selected);
     expect(subscribeMessages).toHaveBeenCalledTimes(2);
   });
@@ -291,7 +270,7 @@ describe("rewindChatHistory", () => {
     state.chatMessage = "@Alex current draft";
     state.chatMentions = [{ profileId: "alex-profile", start: 0, end: 5 }];
     state.chatAttachments = [{ id: "old", mimeType: "image/jpeg", dataUrl: "data:old" }];
-    state.sessions = {
+    Object.assign(state.sessions, {
       rewind: vi.fn().mockResolvedValue({
         editorText: "@Alex edit this",
         editorAttachments: [
@@ -301,8 +280,8 @@ describe("rewindChatHistory", () => {
           { mimeType: "image/png", data: "A" },
         ],
       }),
-      refreshReplacement: vi.fn(async () => undefined),
-    };
+      refreshReplacement: vi.fn(async () => null),
+    });
     cacheChatSessionSnapshot(
       state.chatMessagesBySession,
       state,
@@ -314,7 +293,11 @@ describe("rewindChatHistory", () => {
       },
     );
 
-    const result = await rewindChatHistory(state as never, "user-entry");
+    const result = await rewindChatHistory(
+      state as never,
+      "user-entry",
+      new ChatAttachmentReadLifecycle(() => {}),
+    );
 
     expect(state.sessions.rewind).toHaveBeenCalledWith(
       state.sessionKey,
@@ -360,13 +343,13 @@ describe("rewindChatHistory", () => {
     state.sessionKey = sourceSessionKey;
     state.chatMessagesBySession = new Map();
     state.handleChatDraftChange = vi.fn();
-    state.sessions = {
+    Object.assign(state.sessions, {
       rewind: vi.fn().mockImplementation(async () => {
         state.sessionKey = "agent:main:new-selection";
         return { editorText: "source draft" };
       }),
-      refreshReplacement: vi.fn(async () => undefined),
-    };
+      refreshReplacement: vi.fn(async () => null),
+    });
     cacheChatSessionSnapshot(
       state.chatMessagesBySession,
       state,
@@ -378,7 +361,11 @@ describe("rewindChatHistory", () => {
       },
     );
 
-    const result = await rewindChatHistory(state as never, "user-entry");
+    const result = await rewindChatHistory(
+      state as never,
+      "user-entry",
+      new ChatAttachmentReadLifecycle(() => {}),
+    );
 
     expect(
       readChatMessagesFromCache(state.chatMessagesBySession, state, {
@@ -390,10 +377,7 @@ describe("rewindChatHistory", () => {
   });
 
   it("reconciles committed rewind history without overwriting a replacement draft", async () => {
-    let resolveRewind!: (result: { editorText?: string }) => void;
-    const rewind = new Promise<{ editorText?: string }>((resolve) => {
-      resolveRewind = resolve;
-    });
+    const { promise: rewind, resolve: resolveRewind } = createDeferred<{ editorText?: string }>();
     const canonical = { role: "assistant", content: "canonical history after rewind" };
     const state = createState({ messages: [canonical] }) as TestState & {
       handleChatDraftChange: ReturnType<typeof vi.fn>;
@@ -403,12 +387,16 @@ describe("rewindChatHistory", () => {
     state.handleChatDraftChange = vi.fn((next: string) => {
       state.chatMessage = next;
     });
-    state.sessions = {
+    Object.assign(state.sessions, {
       rewind: vi.fn(() => rewind),
-      refreshReplacement: vi.fn(async () => undefined),
-    };
+      refreshReplacement: vi.fn(async () => null),
+    });
 
-    const pending = rewindChatHistory(state as never, "user-entry");
+    const pending = rewindChatHistory(
+      state as never,
+      "user-entry",
+      new ChatAttachmentReadLifecycle(() => {}),
+    );
     state.connected = false;
     state.connectionEpoch += 1;
     state.connected = true;
@@ -444,7 +432,7 @@ describe("switchChatHistoryBranch", () => {
     state.sessionKey = "agent:main:branches";
     state.chatMessages = [{ role: "assistant", content: "stale branch" }];
     state.chatMessagesBySession = new Map();
-    state.sessions = {
+    Object.assign(state.sessions, {
       listBranches: vi.fn().mockResolvedValue([
         {
           leafEntryId: "branch-b",
@@ -454,8 +442,8 @@ describe("switchChatHistoryBranch", () => {
         },
       ]),
       switchBranch: vi.fn().mockResolvedValue({}),
-      refreshReplacement: vi.fn(async () => undefined),
-    };
+      refreshReplacement: vi.fn(async () => null),
+    });
     cacheChatSessionSnapshot(
       state.chatMessagesBySession,
       state,
@@ -489,10 +477,10 @@ describe("switchChatHistoryBranch", () => {
     };
     state.chatBranchesSessionKey = state.sessionKey;
     state.chatBranchesConnectionEpoch = state.connectionEpoch - 1;
-    state.sessions = {
+    Object.assign(state.sessions, {
       listBranches: vi.fn().mockResolvedValue([]),
-      refreshReplacement: vi.fn(async () => undefined),
-    };
+      refreshReplacement: vi.fn(async () => null),
+    });
 
     await loadChatHistory(state);
 
@@ -504,15 +492,15 @@ describe("switchChatHistoryBranch", () => {
     const state = createState({ messages: [] }) as TestState & {
       sessions: { listBranches: ReturnType<typeof vi.fn> };
     };
-    state.sessions = {
+    Object.assign(state.sessions, {
       listBranches: vi
         .fn()
         .mockRejectedValueOnce(new Error("gateway hiccup"))
         .mockResolvedValue([
           { leafEntryId: "tip", headline: "tip", messageCount: 1, active: true },
         ]),
-      refreshReplacement: vi.fn(async () => undefined),
-    };
+      refreshReplacement: vi.fn(async () => null),
+    });
 
     await loadChatHistory(state);
     // The transient failure must not latch success state; the next load retries.
@@ -531,10 +519,10 @@ describe("switchChatHistoryBranch", () => {
     state.sessionKey = "main";
     state.chatBranchesSessionKey = "agent:main:main";
     state.chatBranchesConnectionEpoch = state.connectionEpoch;
-    state.sessions = {
+    Object.assign(state.sessions, {
       listBranches: vi.fn().mockResolvedValue([]),
-      refreshReplacement: vi.fn(async () => undefined),
-    };
+      refreshReplacement: vi.fn(async () => null),
+    });
 
     await loadChatHistory(state);
 
@@ -543,10 +531,8 @@ describe("switchChatHistoryBranch", () => {
   });
 
   it("starts a fresh snapshot and rejects in-flight history after a same-key branch switch", async () => {
-    let resolvePreviousHistory!: (result: ChatHistoryResult) => void;
-    const previousHistory = new Promise<ChatHistoryResult>((resolve) => {
-      resolvePreviousHistory = resolve;
-    });
+    const { promise: previousHistory, resolve: resolvePreviousHistory } =
+      createDeferred<ChatHistoryResult>();
     const previous = { role: "assistant", content: "private old branch" };
     const selected = { role: "assistant", content: "selected branch" };
     const state = createState({ messages: [selected] }) as TestState & {
@@ -562,11 +548,11 @@ describe("switchChatHistoryBranch", () => {
       .mockReturnValueOnce(previousHistory)
       .mockResolvedValueOnce({ messages: [selected] });
     state.client = { request } as unknown as GatewayBrowserClient;
-    state.sessions = {
+    Object.assign(state.sessions, {
       listBranches: vi.fn().mockResolvedValue([]),
       switchBranch: vi.fn().mockResolvedValue({}),
-      refreshReplacement: vi.fn(async () => undefined),
-    };
+      refreshReplacement: vi.fn(async () => null),
+    });
 
     const staleHistory = loadChatHistory(state);
     expect(request).toHaveBeenCalledOnce();
@@ -596,11 +582,11 @@ describe("switchChatHistoryBranch", () => {
       };
     };
     state.chatMessages = [{ role: "assistant", content: "stale branch after reconnect" }];
-    state.sessions = {
+    Object.assign(state.sessions, {
       listBranches: vi.fn().mockResolvedValue([]),
       switchBranch: vi.fn(() => switched),
-      refreshReplacement: vi.fn(async () => undefined),
-    };
+      refreshReplacement: vi.fn(async () => null),
+    });
 
     const pending = switchChatHistoryBranch(state as never, "stale-leaf");
     state.connected = false;
@@ -724,10 +710,7 @@ describe("canonical history snapshot projection", () => {
   });
 
   it("coalesces stale history while distinct live peer messages update the transcript", async () => {
-    let resolveHistory!: (history: ChatHistoryResult) => void;
-    const history = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: history, resolve: resolveHistory } = createDeferred<ChatHistoryResult>();
     const first = message("user", "shared prompt", {
       id: "canonical-web-same-text",
       idempotencyKey: "web-same-text-run:user",
@@ -769,33 +752,6 @@ describe("canonical history snapshot projection", () => {
 
     expect(request).toHaveBeenCalledOnce();
     expect(state.chatMessages).toEqual([first, second]);
-  });
-
-  it("preserves pending input appended while the authoritative request is in flight", async () => {
-    let resolveHistory!: (history: ChatHistoryResult) => void;
-    const history = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
-    const first = message("user", "first prompt", { id: "first-user", seq: 1 });
-    const pending = message("user", "concurrent prompt", {
-      idempotencyKey: "concurrent-run:user",
-    });
-    const state = createState({ messages: [first] });
-    state.chatMessages = [first];
-    state.client = {
-      request: vi.fn().mockReturnValue(history),
-    } as unknown as GatewayBrowserClient;
-
-    const load = loadChatHistory(state);
-    reduceChatSessionProjection(state, {
-      type: "sendPending",
-      runId: "concurrent-run",
-      message: pending,
-    });
-    resolveHistory({ messages: [first] });
-    await load;
-
-    expect(state.chatMessages).toEqual([first, pending]);
   });
 
   it("does not preserve old pending sends after the active branch changes", async () => {

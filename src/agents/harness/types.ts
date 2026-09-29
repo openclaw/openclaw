@@ -1,3 +1,5 @@
+// Harness contracts depend on the model-ref data shape, not its runtime normalization.
+import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /**
@@ -9,7 +11,6 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
-import type { ModelRef } from "../model-ref-shared.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
@@ -37,6 +38,8 @@ export type AgentHarnessSupportContext = {
     azureApiVersion?: string;
     /** Secret-free projection of request behavior a native harness must reproduce. */
     requestTransportOverrides?: ProviderRouteOverridePresence;
+    /** Authored endpoints that a native runtime must reproduce. */
+    endpointOverrides?: ProviderRouteOverridePresence;
     /** Provider-owned native-runtime compatibility for the prepared route. */
     runtimePolicy?: ProviderModelRouteRuntimePolicy;
     /** Secret-free auth source the native runtime must reproduce for this attempt. */
@@ -85,30 +88,24 @@ type AgentHarnessCanonicalAttemptResult = Omit<
   AgentHarnessDeprecatedAttemptTerminalFields;
 
 /** @deprecated Return `terminal` instead. Remove no earlier than the 2026.9 stable release. */
-type AgentHarnessLegacyAttemptResult = Omit<
-  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
-  "contextEngineTerminalAnchor" | "terminal"
-> &
-  AgentHarnessDeprecatedAttemptTerminalFields & {
-    aborted: boolean;
-    externalAbort: boolean;
-    timedOut: boolean;
-    idleTimedOut: boolean;
-    timedOutDuringCompaction: boolean;
-    timedOutDuringToolExecution?: boolean;
-    timedOutByRunBudget?: boolean;
-    promptError: unknown;
-    promptErrorSource:
-      | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
-      | null;
-  };
+type AgentHarnessLegacyAttemptResult = Omit<AgentHarnessCanonicalAttemptResult, "terminal"> &
+  Required<
+    Omit<
+      AgentHarnessDeprecatedAttemptTerminalFields,
+      "timedOutDuringToolExecution" | "timedOutByRunBudget"
+    >
+  >;
 
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "disableToolSearch"
+  | "sessionReadScopeKey"
+  | "assistantErrorTranscript"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
+  | "inputAttachmentMedia"
 >;
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
@@ -236,6 +233,7 @@ export type AgentHarnessSideQuestionParams = {
     resolvedApiKey?: string;
   };
   question: string;
+  images?: import("../../llm/types.js").ImageContent[];
   sessionEntry: import("../../config/sessions.js").SessionEntry;
   sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
   sessionKey?: string;
@@ -280,15 +278,29 @@ export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & 
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
+  /** Aggregate billed usage for the side question, including native tool-loop calls. */
+  usage?: import("../usage.js").NormalizedUsage;
 };
-export type AgentHarnessCompactParams =
+type LegacyAgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
+/** Select version 2 for required host authority; the default preserves registered legacy callbacks. */
+export type AgentHarnessCompactParams<Version extends 1 | 2 = 1> = Version extends 2
+  ? LegacyAgentHarnessCompactParams & {
+      hostCapabilities: Readonly<
+        Pick<AgentHarnessHostCapabilities, "kind" | "version" | "assertActive"> &
+          Required<Pick<AgentHarnessHostCapabilities, "retainSourceAuthority">>
+      >;
+    }
+  : LegacyAgentHarnessCompactParams;
+/** Current compaction implementation contract; registered legacy callbacks remain source-compatible. */
+export type AgentHarnessCompactParamsV2 = AgentHarnessCompactParams<2>;
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessNativeCompactionRequest = "after_context_engine" | "required_preflight";
-export type AgentHarnessNativeCompactionParams = AgentHarnessCompactParams & {
-  nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
-};
+export type AgentHarnessNativeCompactionParams<Version extends 1 | 2 = 1> =
+  AgentHarnessCompactParams<Version> & {
+    nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
+  };
 export type AgentHarnessNativeCompaction = (
   params: AgentHarnessNativeCompactionParams,
 ) => Promise<AgentHarnessCompactResult | undefined>;
@@ -333,6 +345,12 @@ export type AgentHarnessSessionForkParams = {
   };
 };
 
+/** Current fork contract for harnesses that can fence native side effects. */
+type AgentHarnessSessionForkParamsV2 = AgentHarnessSessionForkParams & {
+  /** Revalidate immediately before native side effects; this authority closes when fork settles. */
+  assertCurrent: () => void;
+};
+
 export type AgentHarnessSessionForkResult =
   | {
       status: "created";
@@ -364,8 +382,61 @@ export type DevicePlacementRequirement = {
   consumesWorkerSlot: boolean;
 };
 
-type AgentHarnessRunCapability<
+export type AgentHarnessSessionDeletionParams = {
+  /** Present only during the exact host initializer's guarded rollback. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  /** Revalidate the captured registry, harness, and operation before each side effect. */
+  assertCurrent: () => void;
+};
+
+export type AgentHarnessSessionDeletionMutation = {
+  /** Synchronously remove only the prepared owner's state at the session commit edge. */
+  commit: () => void;
+  /** Restore only that removal when the authoritative session transaction rolls back. */
+  rollback: () => void;
+};
+
+type AgentHarnessSessionContextResetParams = Omit<
+  AgentHarnessSessionDeletionParams,
+  "initialization"
+> & {
+  /** Exact recorded predecessor may still own native context after interrupted compaction. */
+  previousSessionId?: string;
+};
+
+type AgentHarnessMcpCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  /** OpenClaw-configured servers whose session policy this harness can enforce. */
+  mcpServerNames: readonly string[];
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+};
+
+export type AgentHarnessModelCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  configuredModelRefs?: readonly ModelRef[];
+};
+
+export type AgentHarnessModelCatalogResult =
+  | readonly import("../model-catalog.types.js").ModelCatalogEntry[]
+  | {
+      entries: readonly import("../model-catalog.types.js").ModelCatalogEntry[];
+      outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
+    };
+
+type AgentHarnessContract<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+  TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
 > = {
   id: string;
   label: string;
@@ -389,13 +460,19 @@ type AgentHarnessRunCapability<
    */
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
+  /** Core must reject containment this runtime cannot implement before invoking it. */
+  executionEnvironment?: "host-only";
   /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
   conversationToolPolicySupport?: "exact";
+  /** Certifies binding the actual native model through the host before every inference dispatch. */
+  nativeModelPolicySupport?: "exact";
   /**
    * Canonical OpenClaw tool names whose exact denies the harness can also enforce
    * against native equivalents. Every other deny remains fail-closed.
    */
   conversationToolPolicySafeDenyTools?: readonly string[];
+  /** OpenClaw tool capabilities an indivisible native surface requires from effective profiles. */
+  conversationToolPolicyNativeTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
   resolveSessionRuntimeOwnership?(params: {
@@ -403,6 +480,9 @@ type AgentHarnessRunCapability<
     agentId?: string;
     sessionId: string;
     sessionKey?: string;
+    storePath?: string;
+    /** Latest predecessor of this exact physical session; valid only during this invocation. */
+    readPreviousSessionId?: () => string | undefined;
     assertCurrent: () => void;
   }): AgentHarnessSessionRuntimeOwnership | undefined;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
@@ -422,51 +502,29 @@ type AgentHarnessRunCapability<
   /**
    * Runs one fresh prompt-only completion with a literal zero-tool model surface.
    * The harness must fail closed when it cannot enforce that native boundary.
+   * Agents API is the documented exception: its restricted sessions may retain
+   * service-owned helpers. Callers requiring zero tools must use another runtime.
    */
   runIsolatedCompletionV2?(
     params: AgentHarnessIsolatedCompletionParamsV2,
   ): Promise<AgentHarnessIsolatedCompletionResult>;
-};
 
-type AgentHarnessSideQuestionCapability<
-  TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
-> = {
   runSideQuestion?(params: TSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
-};
 
-type AgentHarnessClassificationCapability<
-  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
-> = {
   classify?(
     result: AgentHarnessAttemptResult,
     ctx: TAttemptParams,
   ): AgentHarnessResultClassification | undefined;
-};
 
-type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
-};
 
-export type AgentHarnessSessionDeletionParams = {
-  /** Present only during the exact host initializer's guarded rollback. */
-  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  lifecycleRevision?: string;
-  /** Revalidate the captured registry, harness, and operation before each side effect. */
-  assertCurrent: () => void;
-};
-
-export type AgentHarnessSessionDeletionMutation = {
-  /** Synchronously remove only the prepared owner's state at the session commit edge. */
-  commit: () => void;
-  /** Restore only that removal when the authoritative session transaction rolls back. */
-  rollback: () => void;
-};
-
-type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Invalidate native context only when a same-key history cut commits; preserve compaction. */
+  withSessionContextReset?<T>(
+    this: void,
+    params: AgentHarnessSessionContextResetParams,
+    run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+  ): Promise<T>;
   /** Prepare outside the session writer; release native resources after its commit completes. */
   withSessionDeletion?<T>(
     this: void,
@@ -474,30 +532,32 @@ type AgentHarnessSessionLifecycleCapability = {
     run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
   ): Promise<T>;
   dispose?(): Promise<void> | void;
-};
 
-type AgentHarnessSessionForkCapability = {
+  /**
+   * @deprecated Use sessionForkV2. This legacy fork contract remains
+   * source-compatible through 2026-10-12.
+   */
   sessionFork?: {
     upstreamKinds: readonly import("../../plugins/session-catalog.js").SessionUpstreamKind[];
     fork(params: AgentHarnessSessionForkParams): Promise<AgentHarnessSessionForkResult>;
   };
-};
+  sessionForkV2?: {
+    /** Declares fork initialization that can execute work on the Gateway host. */
+    executionEnvironment?: "host-only";
+    upstreamKinds: readonly import("../../plugins/session-catalog.js").SessionUpstreamKind[];
+    fork(params: AgentHarnessSessionForkParamsV2): Promise<AgentHarnessSessionForkResult>;
+  };
 
-type AgentHarnessRuntimeArtifactCapability = {
   /** Revalidate an artifact only at setup and persistent-operation boundaries. */
   runtimeArtifact?: {
     validate(binding: AgentHarnessRuntimeArtifactBinding): Promise<boolean>;
   };
-};
 
-type AgentHarnessAuthBindingCapability = {
   /** Recomputes the exact credential fingerprint at persistent trust boundaries. */
   authBinding?: {
     fingerprint(params: AgentHarnessAuthBindingFingerprintParams): Promise<string | undefined>;
   };
-};
 
-type AgentHarnessProviderUsageCapability = {
   /**
    * Contributes runtime-owned quota data without registering a text provider.
    * Provider usage hooks remain authoritative when both surfaces exist.
@@ -511,75 +571,36 @@ type AgentHarnessProviderUsageCapability = {
     | import("../../infra/provider-usage.types.js").ProviderUsageSnapshot
     | null
     | undefined;
-};
 
-type AgentHarnessMcpCatalogParams = {
-  config: OpenClawConfig;
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  workspaceDir: string;
-  /** OpenClaw-configured servers whose session policy this harness can enforce. */
-  mcpServerNames: readonly string[];
-  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-};
-
-type AgentHarnessMcpCatalogCapability = {
   /** Lists the MCP tools owned by this session's native runtime, if it is already bound. */
   loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
-};
 
-export type AgentHarnessModelCatalogParams = {
-  config: OpenClawConfig;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  configuredModelRefs?: readonly import("../model-ref-shared.js").ModelRef[];
-};
-
-type AgentHarnessModelCatalogCapability = {
   /** Lists account-scoped models owned by this native runtime. */
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,
-  ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
+  ): Promise<AgentHarnessModelCatalogResult>;
   /**
    * Reads current, secret-free native account evidence for this exact catalog scope/model.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
    * picker metadata only, never execution authorization or a host-route credential.
+   * When known, authMode describes this same account observation.
    */
   readModelCatalogReadiness?(
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
-  ): { accountType: string } | undefined;
+  ): { accountType: string; authMode?: string } | undefined;
 };
 
 /**
  * @deprecated Implement AgentHarnessV2. This registration contract remains
  * source-compatible for existing plugins through 2026-10-12.
  */
-export type AgentHarness = AgentHarnessRunCapability &
-  AgentHarnessSideQuestionCapability &
-  AgentHarnessClassificationCapability &
-  AgentHarnessCompactionCapability &
-  AgentHarnessRuntimeArtifactCapability &
-  AgentHarnessAuthBindingCapability &
-  AgentHarnessProviderUsageCapability &
-  AgentHarnessModelCatalogCapability &
-  AgentHarnessMcpCatalogCapability &
-  AgentHarnessSessionForkCapability &
-  AgentHarnessSessionLifecycleCapability;
+export type AgentHarness = AgentHarnessContract;
 
 /** Current harness contract for hosts that always supply versioned capabilities. */
-export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParamsV2> &
-  AgentHarnessSideQuestionCapability<AgentHarnessSideQuestionParamsV2> &
-  AgentHarnessClassificationCapability<AgentHarnessAttemptParamsV2> &
-  AgentHarnessCompactionCapability &
-  AgentHarnessRuntimeArtifactCapability &
-  AgentHarnessAuthBindingCapability &
-  AgentHarnessProviderUsageCapability &
-  AgentHarnessModelCatalogCapability &
-  AgentHarnessMcpCatalogCapability &
-  AgentHarnessSessionForkCapability &
-  AgentHarnessSessionLifecycleCapability;
+export type AgentHarnessV2 = AgentHarnessContract<
+  AgentHarnessAttemptParamsV2,
+  AgentHarnessSideQuestionParamsV2
+>;
 
 export type RegisteredAgentHarness = {
   harness: AgentHarness;

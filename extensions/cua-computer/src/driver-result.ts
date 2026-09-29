@@ -4,6 +4,7 @@ import {
   type ComputerUseV2ActionName,
 } from "openclaw/plugin-sdk/computer-use";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
 import {
@@ -121,7 +122,7 @@ export function platformActions(platform: NodeJS.Platform): ComputerUseV2ActionN
   return CUA_COMMON_ACTION_NAMES.filter(
     (action) =>
       platform === "linux" || (action !== "left_mouse_down" && action !== "left_mouse_up"),
-  ) as ComputerUseV2ActionName[];
+  );
 }
 
 function boundedItems<T>(items: T[]): { items: T[]; truncated: number } {
@@ -235,7 +236,9 @@ export async function callWindowTool(
     throw new Error("COMPUTER_STALE_OBSERVATION: computer driver generation changed during action");
   }
   adoptGeneration(state, driver.generation);
-  const refusalCode = result.errorCode ?? structuredRefusalCode(result);
+  // The SDK also puts successful diagnostic codes in errorCode.
+  const refusalCode =
+    (result.isError ? result.errorCode : undefined) ?? structuredRefusalCode(result);
   if (result.isError || refusalCode) {
     if (
       refusalCode &&
@@ -278,8 +281,8 @@ export function projectedToolDetails(result: CuaToolResult, tool: string): Recor
   }
   try {
     const value: unknown = JSON.parse(result.structuredJson);
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
+    if (isRecord(value)) {
+      return value;
     }
   } catch {}
   throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned invalid structuredContent`);
@@ -468,14 +471,8 @@ export function browserBinding(
     if (!parsed.success) {
       return [];
     }
-    return [
-      {
-        pageRef: issuePageRef(state, browserRef, parsed.data.tab_id),
-        ...(parsed.data.title !== undefined ? { title: parsed.data.title } : {}),
-        ...(parsed.data.url !== undefined ? { url: parsed.data.url } : {}),
-        ...(parsed.data.active !== undefined ? { active: parsed.data.active } : {}),
-      },
-    ];
+    const { tab_id: tabId, ...details } = parsed.data;
+    return [{ pageRef: issuePageRef(state, browserRef, tabId), ...details }];
   });
   const bounded = boundedItems(pages);
   return {
@@ -519,42 +516,27 @@ export function browserObservation(
     throw new Error("COMPUTER_DRIVER_ERROR: invalid browser snapshot result");
   }
   const observation = issueBrowserObservation(state, target.browserRef, target.pageRef);
-  const rawRefs = [
-    ...(Array.isArray(structured.refs)
-      ? structured.refs.map((value) => ({ value, kind: "action" }))
-      : []),
-    ...(Array.isArray(structured.content_refs)
-      ? structured.content_refs.map((value) => ({ value, kind: "content" }))
-      : []),
-  ];
+  const elements = [];
   const seen = new Set<string>();
-  const elements = rawRefs.flatMap(({ value, kind }) => {
-    const parsed = NativeBrowserRefSchema.safeParse(value);
-    if (!parsed.success || seen.has(parsed.data.ref)) {
-      return [];
+  for (const [kind, values] of [
+    ["action", structured.refs],
+    ["content", structured.content_refs],
+  ] as const) {
+    if (!Array.isArray(values)) {
+      continue;
     }
-    seen.add(parsed.data.ref);
-    return [
-      {
-        elementRef: issueBrowserElementRef(observation, parsed.data.ref),
-        kind,
-        ...(parsed.data.node !== undefined ? { node: parsed.data.node } : {}),
-        ...(parsed.data.role !== undefined ? { role: parsed.data.role } : {}),
-        ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
-        ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
-        ...(parsed.data.value !== undefined ? { value: parsed.data.value } : {}),
-        ...(parsed.data.states !== undefined ? { states: parsed.data.states } : {}),
-        ...(parsed.data.actions !== undefined ? { actions: parsed.data.actions } : {}),
-        ...(parsed.data.frame !== undefined ? { frame: parsed.data.frame } : {}),
-        ...(parsed.data.visibility !== undefined ? { visibility: parsed.data.visibility } : {}),
-      },
-    ];
-  });
+    for (const value of values) {
+      const parsed = NativeBrowserRefSchema.safeParse(value);
+      if (!parsed.success || seen.has(parsed.data.ref)) {
+        continue;
+      }
+      const { ref, ...details } = parsed.data;
+      seen.add(ref);
+      elements.push({ elementRef: issueBrowserElementRef(observation, ref), kind, ...details });
+    }
+  }
   const boundedElements = elements.slice(0, MAX_BROWSER_ELEMENTS);
-  const page =
-    structured.page && typeof structured.page === "object" && !Array.isArray(structured.page)
-      ? (structured.page as Record<string, unknown>)
-      : undefined;
+  const page = asOptionalRecord(structured.page);
   return {
     ok: true,
     observation: {
@@ -571,13 +553,9 @@ export function browserObservation(
         : {}),
       ...(typeof structured.snapshot_id === "string"
         ? { snapshot: { format: "dom_refs_v1" } }
-        : structured.snapshot &&
-            typeof structured.snapshot === "object" &&
-            !Array.isArray(structured.snapshot)
+        : isRecord(structured.snapshot)
           ? {
-              snapshot: projectSemanticBrowserSnapshot(
-                structured.snapshot as Record<string, unknown>,
-              ),
+              snapshot: projectSemanticBrowserSnapshot(structured.snapshot),
             }
           : {}),
       ...(typeof structured.url === "string" ? { url: structured.url } : {}),
@@ -622,15 +600,8 @@ export function browserToolEnvelope(
       }
     }
     const endpointOwnership = structured.endpoint_ownership;
-    if (
-      endpointOwnership &&
-      typeof endpointOwnership === "object" &&
-      !Array.isArray(endpointOwnership) &&
-      typeof (endpointOwnership as Record<string, unknown>).method === "string"
-    ) {
-      details.endpointOwnership = {
-        method: (endpointOwnership as Record<string, unknown>).method,
-      };
+    if (isRecord(endpointOwnership) && typeof endpointOwnership.method === "string") {
+      details.endpointOwnership = { method: endpointOwnership.method };
     }
   } else if (tool === "browser_navigate") {
     if (typeof structured.url === "string") {
@@ -665,9 +636,7 @@ function projectSemanticBrowserSnapshot(snapshot: Record<string, unknown>) {
       ? { selectedNodes: snapshot.selected_nodes }
       : {}),
     ...(typeof snapshot.total_nodes === "number" ? { totalNodes: snapshot.total_nodes } : {}),
-    ...(snapshot.omitted && typeof snapshot.omitted === "object" && !Array.isArray(snapshot.omitted)
-      ? { omitted: snapshot.omitted }
-      : {}),
+    ...(isRecord(snapshot.omitted) ? { omitted: snapshot.omitted } : {}),
     ...(typeof snapshot.continuation === "string" ? { continuation: snapshot.continuation } : {}),
   };
 }

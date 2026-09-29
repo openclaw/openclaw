@@ -8,14 +8,11 @@ import {
   shouldPersistAbortCutoff,
   type AbortCutoff,
 } from "./abort-cutoff.js";
-import {
-  abortSessionRunTargetWithOutcome,
-  formatAbortReplyText,
-  isAbortTrigger,
-  setAbortMemory,
-  stopSubagentsForRequester,
-} from "./abort.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { abortSessionRunTargetWithOutcome, stopSubagentsForRequester } from "./abort-operation.js";
+import { setAbortMemory } from "./abort-primitives.js";
+import { isAbortTrigger } from "./abort-trigger-text.js";
+import { formatAbortReplyText } from "./abort.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import {
   persistAbortTargetEntry,
   resolveCommandSessionEntryForKey,
@@ -38,30 +35,15 @@ function resolveAbortTarget(params: {
 }): AbortTarget {
   const targetSessionKey =
     normalizeOptionalString(params.ctx.CommandTargetSessionKey) || params.sessionKey;
-  const { entry, key } = resolveCommandSessionEntryForKey(params.sessionStore, targetSessionKey);
-  if (entry && key) {
-    return {
-      entry,
-      key,
-      sessionId: replyRunRegistry.resolveSessionId(key) ?? entry.sessionId,
-    };
-  }
-  if (
-    params.sessionEntry &&
-    params.sessionKey &&
-    (!targetSessionKey || targetSessionKey === params.sessionKey)
-  ) {
-    return {
-      entry: params.sessionEntry,
-      key: params.sessionKey,
-      sessionId:
-        replyRunRegistry.resolveSessionId(params.sessionKey) ?? params.sessionEntry.sessionId,
-    };
-  }
+  const resolved = resolveCommandSessionEntryForKey(params.sessionStore, targetSessionKey);
+  const entry =
+    resolved.entry ??
+    (targetSessionKey && targetSessionKey === params.sessionKey ? params.sessionEntry : undefined);
+  const key = resolved.key ?? targetSessionKey;
   return {
-    entry: undefined,
-    key: targetSessionKey,
-    sessionId: targetSessionKey ? replyRunRegistry.resolveSessionId(targetSessionKey) : undefined,
+    entry,
+    key,
+    sessionId: (key ? replyRunRegistry.resolveSessionId(key) : undefined) ?? entry?.sessionId,
   };
 }
 
@@ -110,6 +92,7 @@ async function applyAbortTarget(params: {
     return abortOutcome;
   }
 
+  await abortOutcome.retirement;
   const persisted = await persistAbortTargetEntry({
     isCurrent: params.isCurrent,
     entry: abortTarget.entry,
@@ -142,82 +125,56 @@ function buildAbortTargetApplyParams(
   };
 }
 
-export const handleStopCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  if (params.command.commandBodyNormalized !== "/stop") {
-    return null;
-  }
-  const unauthorizedStop = rejectUnauthorizedCommand(params, "/stop");
-  if (unauthorizedStop) {
-    return unauthorizedStop;
-  }
-  const abortTarget = resolveAbortTarget({
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-  });
-  let abortOutcome = { active: false, aborted: false };
-  // Capture child generations before signalling the parent; cleanup must not discover
-  // a replacement conversation's children after the original publisher finishes.
-  const { stopped, failed } = await stopSubagentsForRequester({
-    cfg: params.cfg,
-    requesterSessionKey: abortTarget.key ?? params.sessionKey,
-    beforeKill: async () => {
-      abortOutcome = await applyAbortTarget({
-        ...buildAbortTargetApplyParams(params, abortTarget),
-        clearQueues: true,
-      });
+export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: "/stop", match: (body) => (body === "/stop" ? true : null) },
+  async (params) => {
+    const abortTarget = resolveAbortTarget(params);
+    let abortOutcome = { active: false, aborted: false };
+    // Capture child generations before signalling the parent; cleanup must not discover
+    // a replacement conversation's children after the original publisher finishes.
+    const { stopped, failed } = await stopSubagentsForRequester({
+      cfg: params.cfg,
+      requesterSessionKey: abortTarget.key ?? params.sessionKey,
+      requesterAgentId: params.agentId,
+      beforeKill: async () => {
+        abortOutcome = await applyAbortTarget({
+          ...buildAbortTargetApplyParams(params, abortTarget),
+          clearQueues: true,
+        });
 
-      // Trigger internal hook for stop command
-      const hookEvent = createInternalHookEvent(
-        "command",
-        "stop",
-        abortTarget.key ?? params.sessionKey ?? "",
-        {
-          sessionEntry: abortTarget.entry,
-          sessionId: abortTarget.sessionId,
-          commandSource: params.command.surface,
-          senderId: params.command.senderId,
-        },
-      );
-      await triggerInternalHook(hookEvent);
-      return true;
-    },
-  });
+        // Trigger internal hook for stop command
+        const hookEvent = createInternalHookEvent(
+          "command",
+          "stop",
+          abortTarget.key ?? params.sessionKey ?? "",
+          {
+            sessionEntry: abortTarget.entry,
+            sessionId: abortTarget.sessionId,
+            commandSource: params.command.surface,
+            senderId: params.command.senderId,
+          },
+        );
+        await triggerInternalHook(hookEvent);
+        return true;
+      },
+    });
 
-  const rejectionReason =
-    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
-  return {
-    shouldContinue: false,
-    reply: { text: formatAbortReplyText(stopped, rejectionReason, failed) },
-  };
-};
+    const rejectionReason =
+      abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+    return commandReply(formatAbortReplyText(stopped, rejectionReason, failed));
+  },
+);
 
-export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  if (!isAbortTrigger(params.command.rawBodyNormalized)) {
-    return null;
-  }
-  const unauthorizedAbortTrigger = rejectUnauthorizedCommand(params, "abort trigger");
-  if (unauthorizedAbortTrigger) {
-    return unauthorizedAbortTrigger;
-  }
-  const abortTarget = resolveAbortTarget({
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-  });
-  const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
-  const rejectionReason =
-    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
-  return {
-    shouldContinue: false,
-    reply: { text: formatAbortReplyText(undefined, rejectionReason) },
-  };
-};
+export const handleAbortTrigger: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "abort trigger",
+    match: (_body, params) => (isAbortTrigger(params.command.rawBodyNormalized) ? true : null),
+  },
+  async (params) => {
+    const abortTarget = resolveAbortTarget(params);
+    const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+    const rejectionReason =
+      abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+    return commandReply(formatAbortReplyText(undefined, rejectionReason));
+  },
+);

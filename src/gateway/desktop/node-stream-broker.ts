@@ -1,24 +1,34 @@
-import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createWebSocketStream, WebSocket, WebSocketServer, type RawData } from "ws";
+import type { RawData } from "ws";
+import {
+  createWebSocketStream,
+  WebSocketServer as NpmWebSocketServer,
+} from "../../../packages/gateway-client/src/websocket.js";
+import { rawDataByteLength, rawDataToString } from "../../infra/ws.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
 } from "../../shared/node-desktop-stream.js";
+import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { isWorkerDesktopArdPassword } from "../../shared/worker-desktop-descriptor.js";
+import { hasExactOwnKeys } from "../../worker/protocol-record.js";
 import type { NodeRegistry } from "../node-registry.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 
+type WebSocket = import("ws").WebSocket;
+
 const DEFAULT_TICKET_TTL_MS = 60_000;
-const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
 const MAX_ATTACH_FRAME_BYTES = 64 * 1024;
 const streamLog = createSubsystemLogger("gateway/node-stream");
 
 type NodeDesktopStreamMetadata = {
   auth: "vnc-password" | "ard-account";
+  /** Managed RFB password for VncAuth or ARD; never returned to a browser. */
   vncPassword?: string;
 };
 
@@ -38,9 +48,7 @@ type TicketEntry = {
   expiresAtMs: number;
   resolve: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
   redeemed: boolean;
-  settled: boolean;
   socket?: Duplex;
   ws?: WebSocket;
   stopKeepalive?: () => void;
@@ -52,28 +60,18 @@ type TicketNodeRegistry = Pick<
   "getForPairingGeneration" | "isConnectionCurrentPairingState"
 >;
 
-function rawDataBuffer(data: RawData): Buffer {
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-  return Buffer.from(data);
-}
-
 function parseStreamMetadata(
   data: RawData,
   isBinary: boolean,
   kind: NodeStreamKind,
 ): NodeDesktopStreamMetadata | undefined {
-  const buffer = rawDataBuffer(data);
-  if (!isBinary || buffer.length === 0 || buffer.length > MAX_ATTACH_FRAME_BYTES) {
+  const length = rawDataByteLength(data);
+  if (!isBinary || length === 0 || length > MAX_ATTACH_FRAME_BYTES) {
     throw new Error(`invalid node ${kind} attach metadata`);
   }
   let value: unknown;
   try {
-    value = JSON.parse(buffer.toString("utf8"));
+    value = JSON.parse(rawDataToString(data));
   } catch {
     throw new Error(`invalid node ${kind} attach metadata`);
   }
@@ -83,29 +81,22 @@ function parseStreamMetadata(
     }
     return undefined;
   }
-  if (!isRecord(value) || (value.auth !== "vnc-password" && value.auth !== "ard-account")) {
+  if (
+    !isRecord(value) ||
+    (value.auth !== "vnc-password" && value.auth !== "ard-account") ||
+    !hasExactOwnKeys(value, ["auth"], ["vncPassword"]) ||
+    (value.vncPassword !== undefined && typeof value.vncPassword !== "string") ||
+    (value.auth === "ard-account" &&
+      value.vncPassword !== undefined &&
+      !isWorkerDesktopArdPassword(value.vncPassword))
+  ) {
     throw new Error("invalid node desktop attach metadata");
   }
-  const keys = Object.keys(value);
-  if (keys.some((key) => key !== "auth" && key !== "vncPassword")) {
-    throw new Error("invalid node desktop attach metadata");
-  }
-  if (value.vncPassword !== undefined && typeof value.vncPassword !== "string") {
-    throw new Error("invalid node desktop attach metadata");
-  }
-  if (value.auth === "ard-account" && value.vncPassword !== undefined) {
-    throw new Error("invalid node desktop attach metadata");
-  }
-  const vncPassword = typeof value.vncPassword === "string" ? value.vncPassword : undefined;
+  const { vncPassword } = value;
   if (vncPassword) {
     registerSecretValueForRedaction(vncPassword);
   }
   return { auth: value.auth, ...(vncPassword ? { vncPassword } : {}) };
-}
-
-function writeUnauthorized(socket: Duplex): void {
-  socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-  socket.destroy();
 }
 
 function readAttachedStream(
@@ -157,25 +148,32 @@ function readAttachedStream(
 export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () => number } = {}) {
   const ttlMs = deps.ttlMs ?? DEFAULT_TICKET_TTL_MS;
   const now = deps.now ?? Date.now;
-  const tickets = new Map<string, TicketEntry>();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_ATTACH_FRAME_BYTES });
+  // Redemption keeps the attachment pending through authorization and metadata;
+  // its ticket timer must still reject or cancel that in-flight handoff.
+  const pending = new Map<string, TicketEntry>();
+  const tickets = createOneTimeTicketStore<TicketEntry>({
+    ttlMs,
+    now,
+    onExpire: (entry, ticket) =>
+      rejectTicket(ticket, new Error(`node ${entry.kind} stream ticket expired`)),
+  });
+  const wss = new NpmWebSocketServer({ noServer: true, maxPayload: MAX_ATTACH_FRAME_BYTES });
 
   const remove = (ticket: string): TicketEntry | undefined => {
-    const entry = tickets.get(ticket);
+    const entry = pending.get(ticket);
     if (!entry) {
       return undefined;
     }
+    pending.delete(ticket);
     tickets.delete(ticket);
-    clearTimeout(entry.timer);
     return entry;
   };
 
   const rejectTicket = (ticket: string, error: Error): void => {
     const entry = remove(ticket);
-    if (!entry || entry.settled) {
+    if (!entry) {
       return;
     }
-    entry.settled = true;
     entry.reject(error);
     entry.stopKeepalive?.();
     entry.closeTrigger ??= "attach-rejected";
@@ -189,11 +187,10 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     metadata: NodeDesktopStreamMetadata | undefined,
   ): void => {
     const entry = remove(ticket);
-    if (!entry || entry.settled) {
+    if (!entry) {
       stream.destroy();
       return;
     }
-    entry.settled = true;
     entry.resolve(stream, metadata);
   };
 
@@ -202,8 +199,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     kind: NodeStreamKind,
     attach: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => T,
   ) {
-    const ticket = crypto.randomBytes(24).toString("hex");
-    const expiresAtMs = now() + ttlMs;
+    const nowMs = now();
     let resolve!: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => void;
     let reject!: (error: Error) => void;
     const attached = new Promise<T>((resolvePromise, rejectPromise) => {
@@ -218,20 +214,16 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       reject = rejectPromise;
     });
     void attached.catch(() => undefined);
-    const timer = setTimeout(() => {
-      rejectTicket(ticket, new Error(`node ${kind} stream ticket expired`));
-    }, ttlMs);
-    timer.unref?.();
-    tickets.set(ticket, {
+    const entry: TicketEntry = {
       kind,
       binding,
-      expiresAtMs,
+      expiresAtMs: nowMs + ttlMs,
       resolve,
       reject,
-      timer,
       redeemed: false,
-      settled: false,
-    });
+    };
+    const { token: ticket, expiresAtMs } = tickets.mint(entry, { nowMs });
+    pending.set(ticket, entry);
     return {
       ticket,
       attachPath: `${kind === "desktop" ? NODE_DESKTOP_ATTACH_PATH : NODE_PORTAL_ATTACH_PATH}?ticket=${ticket}`,
@@ -288,13 +280,9 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       return false;
     }
     const ticket = (resource.searchParams.get("ticket") ?? "").trim();
-    if (!TICKET_PATTERN.test(ticket)) {
-      writeUnauthorized(socket);
-      return true;
-    }
-    const entry = tickets.get(ticket);
+    const entry = pending.get(ticket);
     if (!entry || entry.kind !== kind || entry.redeemed || entry.expiresAtMs <= now()) {
-      writeUnauthorized(socket);
+      rejectWebSocketUpgrade(socket, { status: 401 });
       if (entry && entry.kind === kind && !entry.redeemed) {
         rejectTicket(ticket, new Error(`node ${kind} stream ticket expired`));
       }
@@ -314,20 +302,17 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     } catch {
       current = false;
     }
-    if (entry.settled) {
-      return true;
-    }
-    if (!current) {
-      socket.off("error", onSocketError);
-      socket.off("end", onSocketClose);
-      socket.off("close", onSocketClose);
-      writeUnauthorized(socket);
-      rejectTicket(ticket, new Error(`node ${kind} stream ticket binding is stale`));
+    if (pending.get(ticket) !== entry) {
       return true;
     }
     socket.off("error", onSocketError);
     socket.off("end", onSocketClose);
     socket.off("close", onSocketClose);
+    if (!current) {
+      rejectWebSocketUpgrade(socket, { status: 401 });
+      rejectTicket(ticket, new Error(`node ${kind} stream ticket binding is stale`));
+      return true;
+    }
     try {
       wss.handleUpgrade(req, socket, head, (ws) => {
         entry.socket = undefined;

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { withContainerEnvFile } from "../infra/container-env-file.js";
+import { createRedactingStreamWriter } from "../logging/redacting-stream.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -11,7 +12,6 @@ import {
   type CellContainerProfile,
   type FleetContainerRuntimeName,
 } from "./cell-profile.js";
-import { createRedactingStreamWriter } from "./containers.redaction.js";
 
 type FleetContainerCommandOptions = {
   allowFailure?: boolean;
@@ -54,6 +54,7 @@ type FleetContainerStreamExecutor = (
 
 type FleetContainerLogsOptions = {
   follow?: boolean;
+  timestamps?: boolean;
   tail?: number;
   since?: string;
   redactValues: readonly string[];
@@ -144,21 +145,6 @@ function readOptionalInspectString(value: unknown): string | undefined {
   return value;
 }
 
-function readLabels(value: unknown): Record<string, string> {
-  if (value === undefined || value === null) {
-    return {};
-  }
-  const record = requireRecord(value);
-  const labels: Record<string, string> = {};
-  for (const [key, label] of Object.entries(record)) {
-    if (typeof label !== "string") {
-      throw new InvalidInspectOutputError();
-    }
-    labels[key] = label;
-  }
-  return labels;
-}
-
 function readStringRecord(value: unknown): Record<string, string> {
   if (value === undefined || value === null) {
     return {};
@@ -238,14 +224,8 @@ function readNetworkAttachments(value: unknown): Array<{ id: string; name?: stri
 }
 
 function readEnvironment(value: unknown): Record<string, string> {
-  if (value === undefined || value === null) {
-    return {};
-  }
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
-    throw new InvalidInspectOutputError();
-  }
   const environment: Record<string, string> = {};
-  for (const assignment of value) {
+  for (const assignment of readStringArray(value)) {
     const separator = assignment.indexOf("=");
     if (separator <= 0) {
       throw new InvalidInspectOutputError();
@@ -265,7 +245,7 @@ function readPidsLimit(value: unknown): number | undefined {
   return value;
 }
 
-function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult, { kind: "ok" }> {
+function parseInspectRecord(stdout: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -275,7 +255,11 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   if (!Array.isArray(parsed) || parsed.length !== 1) {
     throw new InvalidInspectOutputError();
   }
-  const inspected = requireRecord(parsed[0]);
+  return requireRecord(parsed[0]);
+}
+
+function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult, { kind: "ok" }> {
+  const inspected = parseInspectRecord(stdout);
   const state = requireRecord(inspected.State);
   const config = requireRecord(inspected.Config);
   const hostConfig = requireRecord(inspected.HostConfig);
@@ -288,7 +272,8 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
     containerId: requireString(inspected.Id),
     state: requireString(state.Status),
     running: requireBoolean(state.Running),
-    labels: readLabels(config.Labels),
+    // Preserve ordinary-object assignment semantics for JSON "__proto__" labels.
+    labels: Object.assign({}, readStringRecord(config.Labels)),
     environment: readEnvironment(config.Env),
     imageId: requireString(inspected.Image),
     memory: String(requireNonNegativeNumber(hostConfig.Memory)),
@@ -310,37 +295,18 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
 function parseNetworkInspectOutput(
   stdout: string,
 ): Extract<FleetNetworkInspectResult, { kind: "ok" }> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new InvalidInspectOutputError();
-  }
-  if (!Array.isArray(parsed) || parsed.length !== 1) {
-    throw new InvalidInspectOutputError();
-  }
-
-  const inspected = requireRecord(parsed[0]);
+  const inspected = parseInspectRecord(stdout);
   return {
     kind: "ok",
-    labels: readLabels(inspected.Labels ?? inspected.labels),
+    labels: Object.assign({}, readStringRecord(inspected.Labels ?? inspected.labels)),
     attachedContainers: readNetworkAttachments(inspected.Containers ?? inspected.containers),
     internal: readOptionalBoolean(inspected.Internal ?? inspected.internal) ?? false,
   };
 }
 
 function parseDockerContextEndpoint(stdout: string): string {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error("docker context inspect returned an invalid response");
-  }
-  if (!Array.isArray(parsed) || parsed.length !== 1) {
-    throw new Error("docker context inspect returned an invalid response");
-  }
-  try {
-    const context = requireRecord(parsed[0]);
+    const context = parseInspectRecord(stdout);
     const endpoints = requireRecord(context.Endpoints);
     const docker = requireRecord(endpoints.docker);
     return requireString(docker.Host);
@@ -364,20 +330,10 @@ function isLocalDockerEndpoint(endpoint: string): boolean {
 }
 
 function parsePodmanServiceIsRemote(stdout: string): boolean {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error("podman info returned an invalid response");
-  }
-  try {
-    const info = requireRecord(parsed);
+    const info = requireRecord(JSON.parse(stdout));
     const host = requireRecord(info.host);
-    const serviceIsRemote = host.serviceIsRemote;
-    if (typeof serviceIsRemote !== "boolean") {
-      throw new Error();
-    }
-    return serviceIsRemote;
+    return requireBoolean(host.serviceIsRemote);
   } catch {
     throw new Error("podman info returned an invalid response");
   }
@@ -575,6 +531,9 @@ function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions
   if (options.follow) {
     args.push("--follow");
   }
+  if (options.timestamps) {
+    args.push("--timestamps");
+  }
   if (options.tail !== undefined) {
     if (!Number.isSafeInteger(options.tail) || options.tail < 1) {
       throw new Error("Fleet logs --tail must be a positive integer.");
@@ -615,6 +574,35 @@ export function createFleetContainerRuntime(
     }
   };
 
+  const inspectResource = async <T extends { kind: "ok" }>(
+    runtime: FleetContainerRuntimeName,
+    resource: "container" | "network",
+    name: string,
+    isMissing: (stderr: string) => boolean,
+    parse: (stdout: string) => T,
+  ): Promise<T | { kind: "missing" } | { kind: "unavailable"; error: string }> => {
+    const args = [resource, "inspect", name];
+    let result: FleetContainerCommandResult;
+    try {
+      result = await execute(runtime, args, { allowFailure: true });
+    } catch (error) {
+      return { kind: "unavailable", error: formatExecutorError(error, runtime, args).message };
+    }
+    if (result.code !== 0) {
+      return isMissing(result.stderr)
+        ? { kind: "missing" }
+        : {
+            kind: "unavailable",
+            error: result.stderr.trim() || `${runtime} ${resource} inspect failed`,
+          };
+    }
+    try {
+      return parse(result.stdout);
+    } catch {
+      return { kind: "unavailable", error: `${resource} inspect returned an invalid response` };
+    }
+  };
+
   return {
     async assertLocal(runtime: FleetContainerRuntimeName): Promise<void> {
       if (runtime === "podman") {
@@ -637,69 +625,31 @@ export function createFleetContainerRuntime(
       runtime: FleetContainerRuntimeName,
       containerName: string,
     ): Promise<FleetContainerInspectResult> {
-      const args = ["container", "inspect", validateContainerName(containerName)];
-      let result: FleetContainerCommandResult;
-      try {
-        result = await execute(runtime, args, { allowFailure: true });
-      } catch (error) {
-        return {
-          kind: "unavailable",
-          state: "unknown",
-          error: formatExecutorError(error, runtime, args).message,
-        };
-      }
-      if (result.code !== 0) {
-        if (isMissingContainerError(result.stderr)) {
-          return { kind: "missing", state: "missing" };
-        }
-        return {
-          kind: "unavailable",
-          state: "unknown",
-          error: result.stderr.trim() || `${runtime} container inspect failed`,
-        };
-      }
-      try {
-        return parseInspectOutput(result.stdout);
-      } catch {
-        return {
-          kind: "unavailable",
-          state: "unknown",
-          error: "container inspect returned an invalid response",
-        };
-      }
+      const result = await inspectResource(
+        runtime,
+        "container",
+        validateContainerName(containerName),
+        isMissingContainerError,
+        parseInspectOutput,
+      );
+      return result.kind === "ok"
+        ? result
+        : result.kind === "missing"
+          ? { ...result, state: "missing" }
+          : { ...result, state: "unknown" };
     },
 
     async inspectNetwork(
       runtime: FleetContainerRuntimeName,
       networkName: string,
     ): Promise<FleetNetworkInspectResult> {
-      const args = ["network", "inspect", validateNetworkName(networkName)];
-      let result: FleetContainerCommandResult;
-      try {
-        result = await execute(runtime, args, { allowFailure: true });
-      } catch (error) {
-        return {
-          kind: "unavailable",
-          error: formatExecutorError(error, runtime, args).message,
-        };
-      }
-      if (result.code !== 0) {
-        if (isMissingNetworkError(result.stderr)) {
-          return { kind: "missing" };
-        }
-        return {
-          kind: "unavailable",
-          error: result.stderr.trim() || `${runtime} network inspect failed`,
-        };
-      }
-      try {
-        return parseNetworkInspectOutput(result.stdout);
-      } catch {
-        return {
-          kind: "unavailable",
-          error: "network inspect returned an invalid response",
-        };
-      }
+      return await inspectResource(
+        runtime,
+        "network",
+        validateNetworkName(networkName),
+        isMissingNetworkError,
+        parseNetworkInspectOutput,
+      );
     },
 
     async isDockerRootless(): Promise<boolean> {
@@ -798,4 +748,3 @@ export function createFleetContainerRuntime(
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,3 +1,5 @@
+import { resolveOpenAIModelReasoningEfforts } from "@openclaw/ai/internal/openai";
+import { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 // Proxy stream wrapper applies provider-specific wrappers around base stream functions.
 import {
@@ -150,6 +152,7 @@ export function createOpenRouterSystemCacheWrapper(
       return underlying(model, context, options);
     }
 
+    const isCompletions = model.api === "openai-completions";
     const cacheRetention =
       readCacheRetention(options?.cacheRetention) ??
       readCacheRetention(extraParams?.cacheRetention);
@@ -157,9 +160,12 @@ export function createOpenRouterSystemCacheWrapper(
       underlying,
       model,
       context,
-      stripCacheRetentionOption(options),
+      isCompletions ? { ...options, cacheRetention } : stripCacheRetentionOption(options),
       (payloadObj) => {
-        applyAnthropicEphemeralCacheControlMarkers(
+        const applyMarkers = isCompletions
+          ? applyCompletionsAnthropicCacheControl
+          : applyAnthropicEphemeralCacheControlMarkers;
+        applyMarkers(
           payloadObj,
           resolveAnthropicEphemeralCacheControl(readStringValue(model.baseUrl), cacheRetention) ??
             null,
@@ -210,7 +216,12 @@ export function createOpenRouterWrapper(
         headers,
       },
       (payload) => {
-        normalizeOpenAICompatibleReasoningPayload(payload, thinkingLevel);
+        normalizeOpenAICompatibleReasoningPayload(
+          payload,
+          resolveOpenAIModelReasoningEfforts({ compat: model.compat })?.length === 0
+            ? undefined
+            : thinkingLevel,
+        );
       },
     );
   };

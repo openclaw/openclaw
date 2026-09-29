@@ -27,10 +27,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import type { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
+import {
+  acquireStandalonePluginToolRegistry,
+  type PluginToolRegistryAcquisition,
+} from "../plugins/tools.js";
 import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
-import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
+import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 function resolvePluginToolPolicy(
   config: OpenClawConfig,
@@ -76,51 +80,35 @@ function resolvePluginToolPolicy(
   };
 }
 
-export function resolvePluginToolsForMcp(params: {
+export async function acquirePluginToolsForMcp(params: {
   config: OpenClawConfig;
   agentSessionKey?: string;
   agentId?: string;
-}): AnyAgentTool[] {
+}): Promise<PluginToolRegistryAcquisition> {
   const sessionContext = resolveToolsMcpSessionContext(params);
   const context = { config: params.config, ...sessionContext };
   const { steps, ...pluginToolPolicy } = resolvePluginToolPolicy(params.config, sessionContext);
-  const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
-    context,
-    ...pluginToolPolicy,
-  });
-  const tools = resolvePluginTools({
+  const acquisition = await acquireStandalonePluginToolRegistry({
     context,
     ...pluginToolPolicy,
     suppressNameConflicts: true,
-    runtimeRegistry,
   });
-  return steps
-    ? applyToolPolicyPipeline({
-        tools,
-        toolMeta: getPluginToolMeta,
-        warn: logWarn,
-        steps,
-      })
-    : tools;
+  return {
+    ...acquisition,
+    resolveTools: () => {
+      const tools = acquisition.resolveTools();
+      return steps
+        ? applyToolPolicyPipeline({ tools, toolMeta: getPluginToolMeta, warn: logWarn, steps })
+        : tools;
+    },
+  };
 }
 
-export function createPluginToolsMcpServer(
-  params: {
-    config?: OpenClawConfig;
-    tools?: AnyAgentTool[];
-    agentSessionKey?: string;
-    agentId?: string;
-  } = {},
-): Server {
-  const cfg = params.config ?? getRuntimeConfig();
-  const tools =
-    params.tools ??
-    resolvePluginToolsForMcp({
-      config: cfg,
-      agentSessionKey: params.agentSessionKey,
-      agentId: params.agentId,
-    });
-  return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
+export function createPluginToolsMcpServer(params: {
+  tools: AnyAgentTool[];
+  sdkResourceHost?: LegacyPluginSdkResourceHost;
+}): Server {
+  return createToolsMcpServer({ name: "openclaw-plugin-tools", ...params });
 }
 
 export async function servePluginToolsMcp(): Promise<void> {
@@ -128,14 +116,16 @@ export async function servePluginToolsMcp(): Promise<void> {
   // tool discovery before the transport is connected.
   routeLogsToStderr();
 
-  const config = getRuntimeConfig();
-  const tools = resolvePluginToolsForMcp({ config, agentId: resolveToolsMcpAgentId() });
-  const server = createPluginToolsMcpServer({ config, tools });
-  if (tools.length === 0) {
-    process.stderr.write("plugin-tools-serve: no plugin tools found\n");
-  }
-
-  await connectToolsMcpServerToStdio(server);
+  await serveRegisteredToolsMcpServer({
+    acquireRegistry: () =>
+      acquirePluginToolsForMcp({ config: getRuntimeConfig(), agentId: resolveToolsMcpAgentId() }),
+    createServer: (tools, sdkResourceHost) => {
+      if (tools.length === 0) {
+        process.stderr.write("plugin-tools-serve: no plugin tools found\n");
+      }
+      return createPluginToolsMcpServer({ tools, sdkResourceHost });
+    },
+  });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

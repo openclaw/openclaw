@@ -8,7 +8,14 @@ import {
   resolveSessionStorePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import {
+  deleteSessionEntryLifecycle,
+  loadSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -18,8 +25,10 @@ import {
   setTestEnvValue,
   withEnvAsync,
 } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
-  collectWorkspaceBackupTip,
   detectStateIntegrityHealthIssues,
   noteStateIntegrity as noteStateIntegrityRaw,
   stateIntegrityIssueToHealthFinding,
@@ -37,42 +46,6 @@ import {
   withMainAgentRoster,
   writeSessionStore,
 } from "./doctor-state-integrity.test-support.js";
-
-const WORKSPACE_BACKUP_TIP =
-  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
-
-describe("workspace backup tip", () => {
-  it("recognizes direct, deeply nested, and symlinked Git workspaces without duplicate tips", async () => {
-    await withTestDir({ prefix: "openclaw-doctor-workspace-git-" }, async (tempDir) => {
-      const repoRoot = path.join(tempDir, "repo");
-      const nestedWorkspace = path.join(repoRoot, "agents", "direct");
-      const deeplyNestedWorkspace = path.join(
-        repoRoot,
-        ...Array.from({ length: 12 }, (_, index) => `workspace-level-${index}`),
-      );
-      const linkedWorkspace = path.join(tempDir, "linked-workspace");
-      const outsideWorkspace = path.parse(tempDir).root;
-      const missingWorkspace = path.join(tempDir, "missing");
-      fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
-      fs.mkdirSync(nestedWorkspace, { recursive: true });
-      fs.mkdirSync(deeplyNestedWorkspace, { recursive: true });
-      fs.symlinkSync(
-        nestedWorkspace,
-        linkedWorkspace,
-        process.platform === "win32" ? "junction" : "dir",
-      );
-
-      expect(collectWorkspaceBackupTip(repoRoot)).toBeNull();
-      expect(
-        [nestedWorkspace, deeplyNestedWorkspace, linkedWorkspace]
-          .map((workspaceDir) => collectWorkspaceBackupTip(workspaceDir))
-          .filter((tip) => tip !== null),
-      ).toEqual([]);
-      expect(collectWorkspaceBackupTip(outsideWorkspace)).toBe(WORKSPACE_BACKUP_TIP);
-      expect(collectWorkspaceBackupTip(missingWorkspace)).toBeNull();
-    });
-  });
-});
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
@@ -257,6 +230,59 @@ describe("structured state integrity findings", () => {
     );
   });
 
+  it.each([undefined, "~/custom-store/sessions.json"])(
+    "checks the source session store when process state is isolated (store=%s)",
+    (store) => {
+      const sourceHome = path.join(tempHome, "source-home");
+      const sourceState = path.join(sourceHome, ".openclaw");
+      const storeDir = store
+        ? path.join(sourceHome, "custom-store")
+        : path.join(sourceState, "agents", "main", "sessions");
+      fs.mkdirSync(sourceState, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+      const accessSync = fs.accessSync;
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+        if (target === storeDir) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        return accessSync(target, mode);
+      });
+      const readFileSync = fs.readFileSync;
+      const mountInfo = vi.spyOn(fs, "readFileSync");
+      try {
+        // Source isolation is independent of the temporary directory's backing filesystem.
+        mountInfo.mockImplementation(
+          (target, options?: fs.ReadFileSyncOptions | BufferEncoding | null) => {
+            if (typeof options === "string") {
+              if (target === "/proc/self/mountinfo" && options === "utf8") {
+                return "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw";
+              }
+              return readFileSync(target, options);
+            }
+            if (options == null) {
+              return readFileSync(target, options);
+            }
+            return readFileSync(target, options);
+          },
+        );
+        const issues = detectStateIntegrityHealthIssues(
+          withMainAgentRoster({ session: { store } }),
+          { env: { HOME: sourceHome, OPENCLAW_STATE_DIR: sourceState } },
+        );
+        expect(issues).toEqual([
+          expect.objectContaining({
+            kind: "runtime-dir-not-writable",
+            label: "Session store dir",
+            path: storeDir,
+          }),
+        ]);
+      } finally {
+        mountInfo.mockRestore();
+        accessSpy.mockRestore();
+      }
+    },
+  );
+
   it("reports an existing session directory that is not writable", () => {
     const stateDir = path.join(tempHome, ".openclaw");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
@@ -353,6 +379,21 @@ describe("doctor state integrity oauth dir checks", () => {
     };
     const confirmRuntimeRepair = await runStateIntegrity(cfg);
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(true);
+    expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+  });
+
+  it("does not require the oauth dir for a pairing channel with no registered plugin", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        icenter: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+      },
+    };
+    const confirmRuntimeRepair = await runStateIntegrity(cfg);
+    expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(false);
+    expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
   });
 
   it("prompts for oauth dir when OPENCLAW_OAUTH_DIR is explicitly configured", async () => {
@@ -363,19 +404,32 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
 
-  it("warns about orphaned on-disk agent directories missing from agents.list", async () => {
-    createAgentDir("big-brain");
-    createAgentDir("cerebro");
+  it.each([
+    {
+      name: "list",
+      roster: { list: [{ id: "main", default: true }] },
+      path: "agents.list",
+      otherPath: "agents.entries",
+      orphanIds: ["big-brain", "cerebro"],
+    },
+    {
+      name: "keyed",
+      roster: { entries: { main: { default: true } } },
+      path: "agents.entries",
+      otherPath: "agents.list",
+      orphanIds: ["orphan"],
+    },
+  ])("preserves $name roster paths in orphaned agent recovery advice", async (testCase) => {
+    for (const agentId of testCase.orphanIds) {
+      createAgentDir(agentId);
+    }
+    const text = await runStateIntegrityText({ agents: testCase.roster });
 
-    const text = await runStateIntegrityText({
-      agents: {
-        list: [{ id: "main", default: true }],
-      },
-    });
-
-    expect(text).toContain("without a matching agents.list entry");
-    expect(text).toContain("Examples: big-brain, cerebro");
+    expect(text).toContain(`without a matching ${testCase.path} entry`);
+    expect(text).toContain(`Restore the missing ${testCase.path} entries`);
+    expect(text).toContain(`Examples: ${testCase.orphanIds.join(", ")}`);
     expect(text).toContain("config-driven routing, identity, and model selection will ignore them");
+    expect(text).not.toContain(testCase.otherPath);
   });
 
   it("detects orphaned agent dirs even when the on-disk folder casing differs", async () => {
@@ -406,6 +460,20 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("Examples:");
   });
 
+  it("ignores reserved system agent dirs that can never appear in agents.list", async () => {
+    createAgentDir("openclaw");
+    createAgentDir("crestodian");
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    });
+
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples:");
+  });
+
   it("protects the shared legacy main auth-store dir for an ops-only roster", async () => {
     createAgentDir("main");
 
@@ -429,7 +497,7 @@ describe("doctor state integrity oauth dir checks", () => {
       },
     });
 
-    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("without a matching agents.entries entry");
     expect(text).toContain("Examples: main");
   });
 
@@ -477,7 +545,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const text = stateIntegrityText();
     expect(text).toContain("automatic restart recovery tombstoned");
     expect(text).toContain("agent:main:subagent:wedged-child");
-    expect(text).toContain("openclaw tasks maintenance --apply");
+    expect(text).toContain("openclaw doctor --fix");
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Clear stale aborted recovery flags")).toBe(
       true,
     );
@@ -530,6 +598,65 @@ describe("doctor state integrity oauth dir checks", () => {
 
     expect(text.includes("without a matching agents.list entry")).toBe(!configuredAgentDirExists);
     expect(text.includes("Examples: Research (id research)")).toBe(!configuredAgentDirExists);
+  });
+});
+
+describe("doctor retained session integrity", () => {
+  it("repairs canonical recovery state without editing retained rows deleted from SQLite", async () => {
+    await withOpenClawTestState({ label: "retained-session-integrity" }, async (state) => {
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
+      const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+      for (const sessionKey of ["agent:main:kept", "agent:main:deleted"]) {
+        Object.assign(store[sessionKey], {
+          abortedLastRun: true,
+          subagentRecovery: {
+            automaticAttempts: 2,
+            lastAttemptAt: 10,
+            lastRunId: `run-${sessionKey}`,
+            wedgedAt: 20,
+            wedgedReason: "recovery requires reconciliation",
+          },
+        });
+      }
+      fs.writeFileSync(storePath, JSON.stringify(store));
+      expect(
+        (await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" }))
+          .totals.importedEntries,
+      ).toBe(2);
+      const source = fs.readFileSync(storePath);
+      const receiptParams = {
+        cfg,
+        env: state.env,
+        target: { agentId: "main", storePath },
+        sqlitePath: resolveSqliteTargetFromSessionStorePath(storePath, scope).path,
+      };
+      const receipt = readDeferredPluginSessionImport(receiptParams);
+      expect(receipt).toBeDefined();
+      await deleteSessionEntryLifecycle({
+        ...scope,
+        target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
+      });
+      await recordDeferredPluginMigrations({
+        env: state.env,
+        pending: [],
+        resolvedPluginIds: ["fixture-plugin"],
+      });
+
+      await noteStateIntegrityRaw(cfg, {
+        confirmRuntimeRepair: async ({ message }) =>
+          message.startsWith("Clear stale aborted recovery flags"),
+        note: vi.fn(),
+      });
+
+      expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.abortedLastRun).toBe(
+        false,
+      );
+      expect(loadSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
+      expect(fs.readFileSync(storePath)).toEqual(source);
+      expect(readDeferredPluginSessionImport(receiptParams)).toEqual(receipt);
+    });
   });
 });
 

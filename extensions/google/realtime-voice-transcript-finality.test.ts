@@ -82,7 +82,7 @@ describe("Google Live transcript finality", () => {
         emitContent({ waitingForInput: true, turnComplete: true });
         expect(onResponseDone.mock.calls).toEqual([[{ status }], [{ status: "completed" }]]);
       } finally {
-        bridge.close();
+        await bridge.close();
       }
     },
   );
@@ -110,7 +110,7 @@ describe("Google Live transcript finality", () => {
       ["user", "Now reply with the single word crystal.", true],
       ["assistant", "Crystal.", true],
     ]);
-    bridge.close();
+    void bridge.close();
     expect(onTranscript.mock.calls.filter((call) => call[2])).toHaveLength(4);
   });
 
@@ -118,7 +118,7 @@ describe("Google Live transcript finality", () => {
     const onAudio = vi.fn();
     const onMark = vi.fn();
     const onResponseDone = vi.fn();
-    const onTranscript = vi.fn(() => bridge.close());
+    const onTranscript = vi.fn(() => void bridge.close());
     const bridge = buildGoogleRealtimeVoiceProvider().createBridge({
       providerConfig: { apiKey: "test-key" },
       onAudio,
@@ -178,7 +178,7 @@ describe("Google Live transcript finality", () => {
         [{ status: "completed" }],
       ]);
     } finally {
-      session.close();
+      await session.close();
       harness.close();
     }
   });

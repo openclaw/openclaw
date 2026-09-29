@@ -1,4 +1,3 @@
-// Google tests cover embedding batch bounded JSON response reads.
 import { createServer } from "node:http";
 import * as embeddingSdk from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,13 +38,6 @@ function fetchInputUrl(input: RequestInfo | URL): string {
     return input.href;
   }
   return input.url;
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
 }
 
 async function listenLoopbackServer(server: ReturnType<typeof createServer>): Promise<number> {
@@ -132,15 +124,15 @@ function batchStageForUrl(url: string): BatchStage {
 function defaultBatchResponse(stage: BatchStage): Response {
   switch (stage) {
     case "upload":
-      return jsonResponse({ file: { name: "files/f-ok" } });
+      return Response.json({ file: { name: "files/f-ok" } });
     case "create":
-      return jsonResponse({
+      return Response.json({
         name: "batches/b-0",
         done: false,
         metadata: { state: "BATCH_STATE_PENDING" },
       });
     case "status":
-      return jsonResponse({
+      return Response.json({
         name: "batches/b-0",
         done: true,
         metadata: { state: "BATCH_STATE_SUCCEEDED" },
@@ -221,6 +213,74 @@ function makeOversizedResponse(status = 200): {
 }
 
 describe("Google embedding-batch bounded JSON reads", () => {
+  it.each([
+    { label: "missing", valuesJson: undefined, reason: "empty" },
+    { label: "null", valuesJson: "null", reason: "empty" },
+    { label: "empty", valuesJson: "[]", reason: "empty" },
+    { label: "string", valuesJson: '"bad"', reason: "invalid" },
+    { label: "array-like", valuesJson: '{"0":1,"length":1}', reason: "invalid" },
+    { label: "null coordinate", valuesJson: "[null]", reason: "invalid" },
+    { label: "string coordinate", valuesJson: '["bad"]', reason: "invalid" },
+    { label: "mixed coordinates", valuesJson: "[1,null]", reason: "invalid" },
+    { label: "positive overflow", valuesJson: "[1,1e400]", reason: "invalid" },
+    { label: "negative overflow", valuesJson: "[1,-1e400]", reason: "invalid" },
+  ])("rejects downloaded $label vectors before normalization", async ({ valuesJson, reason }) => {
+    const fetchMock = stubBatchFetch((stage) =>
+      stage === "download"
+        ? new Response(
+            `{"key":"r0","response":{"embedding":{${valuesJson === undefined ? "" : `"values":${valuesJson}`}}}}`,
+          )
+        : undefined,
+    );
+
+    await expect(runBatch()).rejects.toThrow(`r0: ${reason} embedding`);
+    expect(fetchMock.mock.calls.map(([input]) => batchStageForUrl(fetchInputUrl(input)))).toEqual([
+      "upload",
+      "create",
+      "status",
+      "download",
+    ]);
+  });
+
+  it("keeps the first accepted id ahead of duplicate malformed coordinates", async () => {
+    // Leave another submitted id pending so the duplicate is actually parsed.
+    const requests = [
+      batchRequest("r0", "one"),
+      batchRequest("r1", "two"),
+      batchRequest("r2", "three"),
+    ];
+    stubBatchFetch((stage) =>
+      stage === "download"
+        ? new Response(
+            [
+              { key: "r0", response: { embedding: { values: [3, 4] } } },
+              { key: "r0", response: { embedding: { values: [null] } } },
+              { request_id: "r1", embedding: { values: [0, 1] } },
+            ]
+              .map((line) => JSON.stringify(line))
+              .join("\n"),
+          )
+        : undefined,
+    );
+    await expect(runBatch(requests)).rejects.toThrow("missing 1 embedding responses");
+  });
+
+  it("does not let a duplicate valid vector replace the first malformed response", async () => {
+    stubBatchFetch((stage) =>
+      stage === "download"
+        ? new Response(
+            [
+              { key: "r0", response: { embedding: { values: [1, null] } } },
+              { key: "r0", response: { embedding: { values: [1, 0] } } },
+            ]
+              .map((line) => JSON.stringify(line))
+              .join("\n"),
+          )
+        : undefined,
+    );
+    await expect(runBatch()).rejects.toThrow("r0: invalid embedding");
+  });
+
   it("rejects async batch embeddings that do not match the requested dimensions", async () => {
     stubBatchFetch((stage) => {
       if (stage !== "download") {
@@ -300,9 +360,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
   });
 
   it("marks create 404 as unavailable while preserving the structured cause", async () => {
-    const response = jsonResponse(
+    const response = Response.json(
       { error: { code: 404, message: "Input file was not found", status: "NOT_FOUND" } },
-      404,
+      { status: 404 },
     );
     stubBatchFetch((stage) => (stage === "create" ? response : undefined));
 
@@ -363,15 +423,35 @@ describe("Google embedding-batch bounded JSON reads", () => {
     );
   });
 
-  it.each([
+  it.each<{
+    basePath: string;
+    prefix: string;
+    query: string;
+    valuesJson?: string;
+    expectedError?: string;
+  }>([
     { basePath: "/v1beta", prefix: "", query: "" },
     { basePath: "/gateway/v1beta/", prefix: "/gateway", query: "?tenant=remote" },
     { basePath: "/gateway/v1beta/", prefix: "/gateway", query: "?tenant=remote&route=a/" },
     { basePath: "/gateway/v1beta", prefix: "/gateway", query: "?tenant=/openai/team/" },
     { basePath: "/gateway/v1beta/openai", prefix: "/gateway", query: "?tenant=remote" },
+    {
+      basePath: "/v1beta",
+      prefix: "",
+      query: "",
+      valuesJson: "[1,null]",
+      expectedError: "0: invalid embedding",
+    },
+    {
+      basePath: "/v1beta",
+      prefix: "",
+      query: "",
+      valuesJson: "[1,1e400]",
+      expectedError: "0: invalid embedding",
+    },
   ])(
-    "runs the public adapter over HTTP for $basePath with query $query",
-    async ({ basePath, prefix, query }) => {
+    "runs the public adapter over HTTP for $basePath with query $query and vector $valuesJson",
+    async ({ basePath, prefix, query, valuesJson, expectedError }) => {
       let createBody: unknown;
       let uploadBody = "";
       const observedUrls: string[] = [];
@@ -450,10 +530,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
             url.searchParams.get("alt") === "media"
           ) {
             response.writeHead(200, { "content-type": "application/jsonl" });
-            const line = JSON.stringify({
-              key: "0",
-              response: { embedding: { values: [1, 0, 0] } },
-            });
+            const line = `{"key":"0","response":{"embedding":{"values":${valuesJson ?? "[1,0,0]"}}}}`;
             response.write(line.slice(0, 17));
             response.end(line.slice(17));
             return;
@@ -483,7 +560,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
         await expect(adapter.provider.embed("hello", { inputType: "query" })).resolves.toEqual([
           1, 0, 0,
         ]);
-        const result = await adapter.runtime?.batchEmbed?.({
+        const result = adapter.runtime?.batchEmbed?.({
           agentId: "main",
           chunks: [{ text: "hello" }],
           wait: true,
@@ -493,7 +570,11 @@ describe("Google embedding-batch bounded JSON reads", () => {
           debug: () => {},
         });
 
-        expect(result).toEqual([[1, 0, 0]]);
+        if (expectedError) {
+          await expect(result).rejects.toThrow(expectedError);
+        } else {
+          await expect(result).resolves.toEqual([[1, 0, 0]]);
+        }
         const uploadedRequest = uploadBody.split("\r\n\r\n")[2]?.split("\r\n")[0];
         expect(JSON.parse(uploadedRequest ?? "null")).toEqual({
           key: "0",
@@ -525,7 +606,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   it("honors terminal LRO fields when metadata is stale", async () => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: { state: "BATCH_STATE_RUNNING" },
@@ -540,7 +621,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   it("keeps a terminal Operation error ahead of stale success metadata", async () => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: { state: "BATCH_STATE_SUCCEEDED" },
@@ -597,7 +678,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   ])("surfaces $state Operation failures", async ({ state, normalized }) => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: { state },
@@ -611,7 +692,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
   it("rejects conflicting output files in one Operation", async () => {
     stubBatchFetch((stage) =>
       stage === "create"
-        ? jsonResponse({
+        ? Response.json({
             name: "batches/b-0",
             done: true,
             metadata: {

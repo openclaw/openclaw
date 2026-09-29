@@ -13,6 +13,10 @@ import {
   sidebarSessionOrder,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { watchNavigationFollowIntent } from "./chat-navigation-follow.test-support.ts";
+import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -87,10 +91,13 @@ suite.define(() => {
           ),
         )
         .toEqual([true, true]);
+      // Loading is published before foreground subscription admission and RPC dispatch.
+      await gateway.waitForRequest("chat.startup");
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
       await gateway.resolveDeferred("chat.startup");
       await expect.poll(() => page.getByText("Shared cold startup proof.").count()).toBe(2);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -174,9 +181,11 @@ suite.define(() => {
         page.locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
         );
+      const finishFirstVisit = await watchNavigationFollowIntent(page, sessionB);
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
+      await finishFirstVisit(false);
       expect(await gateway.getRequests("agent.identity.get")).toHaveLength(
         initialIdentityRequestCount,
       );
@@ -187,6 +196,7 @@ suite.define(() => {
       expect(firstVisitDistance).toBeLessThanOrEqual(8);
 
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+      const finishReadingReturn = await watchNavigationFollowIntent(page, sessionA);
       await sessionLink(sessionA).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
       await waitForChatScrollIdle(page);
@@ -207,8 +217,10 @@ suite.define(() => {
         JSON.stringify({ restoredAnchor, storedAnchor }),
       ).toBeLessThanOrEqual(2);
       expect(restored.distanceFromBottom).toBeGreaterThan(8);
+      await finishReadingReturn(true);
 
       const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
+      const finishEndReturn = await watchNavigationFollowIntent(page, sessionB);
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
@@ -220,6 +232,7 @@ suite.define(() => {
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
       });
       expect(endAnchoredDistance).toBeLessThanOrEqual(8);
+      await finishEndReturn(false);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -254,6 +267,13 @@ suite.define(() => {
       const splitEntry = page.getByRole("button", { name: "Open split view" });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
       await expect.poll(() => page.locator(".chat-pane__header").count()).toBe(1);
+      const taskHeader = page.locator(".chat-pane__header");
+      const regularHeaderPadding = await taskHeader.evaluate(
+        (header) => getComputedStyle(header).paddingLeft,
+      );
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("Keep this draft while docking beside native controls");
+      const originalComposer = await composer.elementHandle();
       await page.evaluate(() => {
         document.documentElement.classList.add("openclaw-native-macos");
         document.querySelector(".shell")?.classList.add("shell--nav-collapsed");
@@ -265,6 +285,31 @@ suite.define(() => {
             .evaluate((header) => getComputedStyle(header).paddingLeft),
         )
         .toBe("90px");
+      await openChatSidePanelType(page, "Files");
+      await dockChatSidePanel(page, "left");
+      const sideHeader = page.locator('[data-region-header="side"]');
+      const filesTab = sideHeader.getByRole("tab", { name: "Files", exact: true });
+      await filesTab.waitFor();
+      await expect
+        .poll(() => taskHeader.evaluate((header) => getComputedStyle(header).paddingLeft))
+        .toBe(regularHeaderPadding);
+      await expect
+        .poll(() => filesTab.evaluate((tab) => tab.getBoundingClientRect().left))
+        .toBeGreaterThanOrEqual(90);
+      const taskHeaderBox = await taskHeader.boundingBox();
+      const sideHeaderBox = await sideHeader.boundingBox();
+      expect(taskHeaderBox?.y).toBeCloseTo(sideHeaderBox!.y, 0);
+      expect(taskHeaderBox!.x).toBeGreaterThan(sideHeaderBox!.x);
+      expect(
+        await composer.evaluate((element, original) => element === original, originalComposer),
+      ).toBe(true);
+      expect(await composer.inputValue()).toBe(
+        "Keep this draft while docking beside native controls",
+      );
+      await originalComposer?.dispose();
+      await sideHeader.getByRole("button", { name: "Close Files", exact: true }).click();
+      await filesTab.waitFor({ state: "detached" });
+      await composer.fill("");
       await page.evaluate(() => {
         document.documentElement.classList.remove("openclaw-native-macos");
         document.querySelector(".shell")?.classList.remove("shell--nav-collapsed");
@@ -369,17 +414,27 @@ suite.define(() => {
       await expect.poll(() => actionRows.first().isVisible()).toBe(false);
       await expect.poll(() => actionRows.last().isVisible()).toBe(true);
       const targetHeader = headers.first();
-      await expect
-        .poll(() =>
-          targetHeader.evaluate((header) => {
-            const owner = header.closest("openclaw-chat-pane");
-            return (
-              header.parentElement?.classList.contains("chat-pane-layout") === true &&
-              owner?.classList.contains("chat-split-view__pane") === true
-            );
-          }),
-        )
-        .toBe(true);
+      const headerGeometry = await headers.evaluateAll((nodes) =>
+        nodes.map((header) => {
+          const owner = header.closest("openclaw-chat-pane");
+          const main = owner?.querySelector('[data-region="main"]:not([hidden])');
+          if (!main) {
+            throw new Error("Each task toolbar must have visible main content");
+          }
+          const toolbar = header.getBoundingClientRect();
+          const content = main.getBoundingClientRect();
+          return {
+            height: toolbar.height,
+            left: Math.abs(toolbar.left - content.left),
+            right: Math.abs(toolbar.right - content.right),
+            gap: Math.abs(toolbar.bottom - content.top),
+          };
+        }),
+      );
+      for (const geometry of headerGeometry) {
+        expect(geometry.height).toBeGreaterThan(0);
+        expect(Math.max(geometry.left, geometry.right, geometry.gap)).toBeLessThanOrEqual(1);
+      }
 
       const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
       await dataTransfer.evaluate(
@@ -438,11 +493,7 @@ suite.define(() => {
   });
 
   it("opens current context and latest-run usage from the composer ring", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -533,11 +584,7 @@ suite.define(() => {
   });
 
   it("routes page typing to the active composer without stealing text input focus", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -580,11 +627,7 @@ suite.define(() => {
   });
 
   it("keeps stale context visible as approximate without warning", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -629,11 +672,7 @@ suite.define(() => {
   });
 
   it("keeps chat usable while sessions are still loading", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.list"],
@@ -663,8 +702,8 @@ suite.define(() => {
       await composer.fill("");
 
       // The background hydrate must not take the shared sessions loading
-      // flag, which would disable New session for the whole request.
-      const newThread = page.getByRole("link", { name: "New session" }).first();
+      // flag, which would disable New conversation for the whole request.
+      const newThread = page.getByRole("link", { name: "New conversation" }).first();
       expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");
@@ -675,11 +714,7 @@ suite.define(() => {
   });
 
   it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const createdSessionKeys = Array.from(
       { length: 11 },
@@ -752,27 +787,25 @@ suite.define(() => {
 
       const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSort.click();
-      await page.getByRole("menuitemradio", { name: "Last updated" }).click();
+      await chooseSidebarMenuOption(page, "Sort by", "Last updated");
+      await closeSidebarMenu(page);
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
       await filterAndSort.click();
-      await page.getByRole("menuitemradio", { name: "Created" }).click();
+      await chooseSidebarMenuOption(page, "Sort by", "Created");
+      await closeSidebarMenu(page);
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await filterAndSort.click();
       await page.getByRole("main").click();
-      await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
+      await expect.poll(() => page.locator(".sidebar-session-sort-menu").count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("releases a retained queued send after the canonical session list records idle", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
     const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
@@ -905,11 +938,7 @@ suite.define(() => {
   });
 
   it("keeps derived sidebar titles and accessible state after session patch refreshes", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const initialKey = "agent:main:session-a";
     const key = "agent:main:session-b";

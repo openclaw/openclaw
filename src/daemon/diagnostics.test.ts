@@ -30,7 +30,7 @@ function makeTempStateDir(): string {
 }
 
 describe("readLastGatewayErrorLine", () => {
-  it("ignores stale launchd stderr when stderr is suppressed", async () => {
+  it("reads the launchd supervisor log instead of a state-dir stderr file on darwin", async () => {
     const stateDir = makeTempStateDir();
     const homeDir = makeTempStateDir();
     const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };

@@ -1,7 +1,5 @@
-// Memory Wiki plugin module implements markdown behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { fromMarkdown } from "mdast-util-from-markdown";
 import {
   asFiniteNumber,
   asNullableRecord,
@@ -11,13 +9,20 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
+import { extractWikiLinks } from "./markdown-links.js";
 
-const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
-export const WIKI_RELATED_START_MARKER = "<!-- openclaw:wiki:related:start -->";
-export const WIKI_RELATED_END_MARKER = "<!-- openclaw:wiki:related:end -->";
+export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
+
+export const WIKI_PAGE_GROUPS = [
+  { kind: "source", dir: "sources", heading: "Sources" },
+  { kind: "entity", dir: "entities", heading: "Entities" },
+  { kind: "concept", dir: "concepts", heading: "Concepts" },
+  { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
+  { kind: "report", dir: "reports", heading: "Reports" },
+] as const;
 export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
 
-export type WikiPageKind = (typeof WIKI_PAGE_KINDS)[number];
+export type WikiPageKind = (typeof WIKI_PAGE_GROUPS)[number]["kind"];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
 type ParsedWikiMarkdown = {
@@ -119,17 +124,11 @@ export type WikiPageSummary = {
 };
 
 type WikiPageSummaryScanResult =
-  | { status: "valid"; page: WikiPageSummary }
+  | { status: "valid"; page: WikiPageSummary; parsed: ParsedWikiMarkdown }
   | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
   | { status: "ignored" };
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
-const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(([^)]+)\)/g;
-const RELATED_BLOCK_PATTERN = new RegExp(
-  `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
-  "g",
-);
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
 const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
@@ -188,10 +187,7 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const frontmatter = match[1];
-  if (frontmatter === undefined) {
-    return { hasFrontmatter: false, frontmatter: {}, body: content };
-  }
+  const frontmatter = match[1]!;
   const parsed = asNullableRecord(YAML.parse(frontmatter) as unknown);
   if (!parsed) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots
@@ -218,8 +214,18 @@ function extractTitleFromMarkdown(body: string): string | undefined {
   return normalizeOptionalString(match?.[1]);
 }
 
-export function normalizeSourceIds(value: unknown): string[] {
-  return normalizeSingleOrTrimmedStringList(value);
+function normalizeOptionalStringFields<K extends string>(
+  record: Record<string, unknown>,
+  keys: readonly K[],
+): Partial<Record<K, string>> {
+  const fields: Partial<Record<K, string>> = {};
+  for (const key of keys) {
+    const value = normalizeOptionalString(record[key]);
+    if (value) {
+      fields[key] = value;
+    }
+  }
+  return fields;
 }
 
 function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
@@ -227,39 +233,15 @@ function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
   if (!record) {
     return null;
   }
-  const kind = normalizeOptionalString(record.kind);
-  const sourceId = normalizeOptionalString(record.sourceId);
-  const evidencePath = normalizeOptionalString(record.path);
-  const lines = normalizeOptionalString(record.lines);
-  const note = normalizeOptionalString(record.note);
-  const updatedAt = normalizeOptionalString(record.updatedAt);
-  const privacyTier = normalizeOptionalString(record.privacyTier);
   const weight = asFiniteNumber(record.weight);
   const confidence = asFiniteNumber(record.confidence);
-  if (
-    !kind &&
-    !sourceId &&
-    !evidencePath &&
-    !lines &&
-    !note &&
-    weight === undefined &&
-    confidence === undefined &&
-    !privacyTier &&
-    !updatedAt
-  ) {
-    return null;
-  }
-  return {
-    ...(kind ? { kind } : {}),
-    ...(sourceId ? { sourceId } : {}),
-    ...(evidencePath ? { path: evidencePath } : {}),
-    ...(lines ? { lines } : {}),
+  const evidence: WikiClaimEvidence = {
+    ...normalizeOptionalStringFields(record, ["kind", "sourceId", "path", "lines"]),
     ...(weight !== undefined ? { weight } : {}),
     ...(confidence !== undefined ? { confidence } : {}),
-    ...(privacyTier ? { privacyTier } : {}),
-    ...(note ? { note } : {}),
-    ...(updatedAt ? { updatedAt } : {}),
+    ...normalizeOptionalStringFields(record, ["privacyTier", "note", "updatedAt"]),
   };
+  return Object.keys(evidence).length > 0 ? evidence : null;
 }
 
 export function normalizeWikiClaims(value: unknown): WikiClaim[] {
@@ -282,16 +264,14 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
         })
       : [];
     const confidence = asFiniteNumber(record.confidence);
-    const status = normalizeOptionalString(record.status);
-    const updatedAt = normalizeOptionalString(record.updatedAt);
     return [
       {
-        ...(normalizeOptionalString(record.id) ? { id: normalizeOptionalString(record.id) } : {}),
+        ...normalizeOptionalStringFields(record, ["id"]),
         text,
-        ...(status ? { status } : {}),
+        ...normalizeOptionalStringFields(record, ["status"]),
         ...(confidence !== undefined ? { confidence } : {}),
         evidence,
-        ...(updatedAt ? { updatedAt } : {}),
+        ...normalizeOptionalStringFields(record, ["updatedAt"]),
       },
     ];
   });
@@ -302,38 +282,23 @@ function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
   if (!record) {
     return undefined;
   }
-  const canonicalId = normalizeOptionalString(record.canonicalId);
-  const timezone = normalizeOptionalString(record.timezone);
   const confidence = asFiniteNumber(record.confidence);
-  const privacyTier = normalizeOptionalString(record.privacyTier);
-  const lastRefreshedAt = normalizeOptionalString(record.lastRefreshedAt);
   const card: WikiPersonCard = {
-    ...(canonicalId ? { canonicalId } : {}),
+    ...normalizeOptionalStringFields(record, ["canonicalId"]),
     handles: normalizeSingleOrTrimmedStringList(record.handles),
     socials: normalizeSingleOrTrimmedStringList(record.socials),
     emails: normalizeSingleOrTrimmedStringList(record.emails ?? record.email),
-    ...(timezone ? { timezone } : {}),
-    ...(normalizeOptionalString(record.lane) ? { lane: normalizeOptionalString(record.lane) } : {}),
+    ...normalizeOptionalStringFields(record, ["timezone", "lane"]),
     askFor: normalizeSingleOrTrimmedStringList(record.askFor),
     avoidAskingFor: normalizeSingleOrTrimmedStringList(record.avoidAskingFor),
     bestUsedFor: normalizeSingleOrTrimmedStringList(record.bestUsedFor),
     notEnoughFor: normalizeSingleOrTrimmedStringList(record.notEnoughFor),
     ...(confidence !== undefined ? { confidence } : {}),
-    ...(privacyTier ? { privacyTier } : {}),
-    ...(lastRefreshedAt ? { lastRefreshedAt } : {}),
+    ...normalizeOptionalStringFields(record, ["privacyTier", "lastRefreshedAt"]),
   };
-  const hasAnyValue =
-    Boolean(
-      card.canonicalId || card.timezone || card.lane || card.privacyTier || card.lastRefreshedAt,
-    ) ||
-    typeof card.confidence === "number" ||
-    card.handles.length > 0 ||
-    card.socials.length > 0 ||
-    card.emails.length > 0 ||
-    card.askFor.length > 0 ||
-    card.avoidAskingFor.length > 0 ||
-    card.bestUsedFor.length > 0 ||
-    card.notEnoughFor.length > 0;
+  const hasAnyValue = Object.values(card).some((field) =>
+    Array.isArray(field) ? field.length > 0 : field !== undefined,
+  );
   return hasAnyValue ? card : undefined;
 }
 
@@ -349,95 +314,18 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
     const weight = asFiniteNumber(record.weight);
     const confidence = asFiniteNumber(record.confidence);
     const relationship: WikiRelationship = {
-      ...(normalizeOptionalString(record.targetId)
-        ? { targetId: normalizeOptionalString(record.targetId) }
-        : {}),
-      ...(normalizeOptionalString(record.targetPath)
-        ? { targetPath: normalizeOptionalString(record.targetPath) }
-        : {}),
-      ...(normalizeOptionalString(record.targetTitle)
-        ? { targetTitle: normalizeOptionalString(record.targetTitle) }
-        : {}),
-      ...(normalizeOptionalString(record.kind)
-        ? { kind: normalizeOptionalString(record.kind) }
-        : {}),
+      ...normalizeOptionalStringFields(record, ["targetId", "targetPath", "targetTitle", "kind"]),
       ...(weight !== undefined ? { weight } : {}),
       ...(confidence !== undefined ? { confidence } : {}),
-      ...(normalizeOptionalString(record.evidenceKind)
-        ? { evidenceKind: normalizeOptionalString(record.evidenceKind) }
-        : {}),
-      ...(normalizeOptionalString(record.privacyTier)
-        ? { privacyTier: normalizeOptionalString(record.privacyTier) }
-        : {}),
-      ...(normalizeOptionalString(record.note)
-        ? { note: normalizeOptionalString(record.note) }
-        : {}),
-      ...(normalizeOptionalString(record.updatedAt)
-        ? { updatedAt: normalizeOptionalString(record.updatedAt) }
-        : {}),
+      ...normalizeOptionalStringFields(record, [
+        "evidenceKind",
+        "privacyTier",
+        "note",
+        "updatedAt",
+      ]),
     };
-    const hasAnyValue = Object.keys(relationship).length > 0;
-    return hasAnyValue ? [relationship] : [];
+    return Object.keys(relationship).length > 0 ? [relationship] : [];
   });
-}
-
-function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string): string {
-  return path.posix.normalize(path.posix.join(path.posix.dirname(sourceRelativePath), target));
-}
-
-type MarkdownAstNode = {
-  type?: string;
-  position?: {
-    start?: { offset?: number };
-    end?: { offset?: number };
-  };
-  children?: MarkdownAstNode[];
-};
-
-function maskMarkdownCode(markdown: string): string {
-  const masked = markdown.split("");
-  const visit = (node: MarkdownAstNode): void => {
-    if (node.type === "code" || node.type === "inlineCode") {
-      const start = node.position?.start?.offset;
-      const end = node.position?.end?.offset;
-      if (start !== undefined && end !== undefined) {
-        for (let index = start; index < end; index++) {
-          if (masked[index] !== "\n" && masked[index] !== "\r") {
-            masked[index] = " ";
-          }
-        }
-      }
-      return;
-    }
-    for (const child of node.children ?? []) {
-      visit(child);
-    }
-  };
-  visit(fromMarkdown(markdown) as MarkdownAstNode);
-  return masked.join("");
-}
-
-function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
-  const searchable = maskMarkdownCode(withoutRelatedBlock);
-  const links: string[] = [];
-  for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
-    const target = match[1]?.trim();
-    if (target) {
-      links.push(target);
-    }
-  }
-  for (const match of searchable.matchAll(MARKDOWN_LINK_PATTERN)) {
-    const rawTarget = match[1]?.trim();
-    if (!rawTarget || rawTarget.startsWith("#") || /^[a-z]+:/i.test(rawTarget)) {
-      continue;
-    }
-    const target = rawTarget.split("#")[0]?.split("?")[0]?.replace(/\\/g, "/").trim();
-    if (target) {
-      links.push(normalizeMarkdownLinkTarget(sourceRelativePath, target));
-    }
-  }
-  return links;
 }
 
 function normalizeMarkdownLines(markdown: string): string[] {
@@ -544,52 +432,39 @@ export function preserveHumanNotesBlock(rendered: string, existing: string): str
   );
 }
 
-function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
-  const lines = normalizeMarkdownLines(markdown);
-  const normalized = lines.join("\n");
-  if (
-    hasGeneratedWrapperLines(lines, [
-      /^# Memory Bridge(?:\s*\(|:)/u,
-      /^## Bridge Source\s*$/u,
-      /^## Content\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "bridge";
-  }
-  if (
-    hasGeneratedWrapperLines(lines, [
-      /^# Unsafe Local Import:/u,
-      /^## Unsafe Local Source\s*$/u,
-      /^## Content\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "unsafe-local";
-  }
-  if (
-    hasGeneratedWrapperLines(lines, [
-      /^#\s+\S/u,
-      /^## Source\s*$/u,
-      /^- Type: `local-file`\s*$/u,
-      /^## Content\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "local-file";
-  }
-  if (
-    hasGeneratedWrapperLines(lines, [
+const GENERATED_SOURCE_WRAPPERS: ReadonlyArray<{
+  kind: GeneratedSourceBody;
+  patterns: RegExp[];
+}> = [
+  {
+    kind: "bridge",
+    patterns: [/^# Memory Bridge(?:\s*\(|:)/u, /^## Bridge Source\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "unsafe-local",
+    patterns: [/^# Unsafe Local Import:/u, /^## Unsafe Local Source\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "local-file",
+    patterns: [/^#\s+\S/u, /^## Source\s*$/u, /^- Type: `local-file`\s*$/u, /^## Content\s*$/u],
+  },
+  {
+    kind: "chatgpt-export",
+    patterns: [
       /^# ChatGPT Export:/u,
       /^## Source\s*$/u,
       /^- Conversation id: `[^`]+`\s*$/u,
       /^## Active Branch Transcript\s*$/u,
-    ]) &&
-    hasHumanNotesBlock(normalized)
-  ) {
-    return "chatgpt-export";
-  }
-  return undefined;
+    ],
+  },
+];
+
+function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
+  const lines = normalizeMarkdownLines(markdown);
+  return hasHumanNotesBlock(lines.join("\n"))
+    ? GENERATED_SOURCE_WRAPPERS.find(({ patterns }) => hasGeneratedWrapperLines(lines, patterns))
+        ?.kind
+    : undefined;
 }
 
 function detectUnmanagedRawSourceBody(markdown: string): boolean {
@@ -642,28 +517,15 @@ export function renderMarkdownFence(content: string, infoString = "text"): strin
 
 function inferWikiPageKind(relativePath: string): WikiPageKind | null {
   const normalized = relativePath.split(path.sep).join("/");
-  if (normalized.startsWith("entities/")) {
-    return "entity";
-  }
-  if (normalized.startsWith("concepts/")) {
-    return "concept";
-  }
-  if (normalized.startsWith("sources/")) {
-    return "source";
-  }
-  if (normalized.startsWith("syntheses/")) {
-    return "synthesis";
-  }
-  if (normalized.startsWith("reports/")) {
-    return "report";
-  }
-  return null;
+  return WIKI_PAGE_GROUPS.find((group) => normalized.startsWith(`${group.dir}/`))?.kind ?? null;
 }
 
 export function scanWikiPageSummary(params: {
   absolutePath: string;
   relativePath: string;
   raw: string;
+  /** Query readers do not need the compiler/lint link graph. */
+  includeLinks?: boolean;
 }): WikiPageSummaryScanResult {
   const kind = inferWikiPageKind(params.relativePath);
   if (!kind) {
@@ -699,6 +561,7 @@ export function scanWikiPageSummary(params: {
 
   return {
     status: "valid",
+    parsed,
     page: {
       absolutePath: params.absolutePath,
       relativePath: params.relativePath.split(path.sep).join("/"),
@@ -710,8 +573,11 @@ export function scanWikiPageSummary(params: {
       entityType: normalizeOptionalString(parsed.frontmatter.entityType),
       canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
       aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
-      sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
-      linkTargets: extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
+      sourceIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.sourceIds),
+      linkTargets:
+        params.includeLinks === false
+          ? []
+          : extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
       claims: normalizeWikiClaims(parsed.frontmatter.claims),
       contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
       questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),

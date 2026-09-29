@@ -22,7 +22,7 @@ WhatsApp and Matrix are unimplemented.
 - QA Lab (`extensions/qa-lab/src/live-transports/*`): live transport harness, driver/SUT bots, report/evidence writers.
 - Crabbox (`openclaw/crabbox`): warmed Linux machines, leases, VNC, `crabbox media preview`.
 - GitHub Actions (`.github/workflows/mantis-*.yml`): remote entrypoints, artifact retention.
-- ClawSweeper: parses maintainer PR commands, dispatches workflows, posts the final PR comment.
+- ClawSweeper: independently reviews proof and owns review/readiness policy. Mantis workflow dispatch and evidence publication are separate from ordinary review publication; a Mantis result does not itself grant readiness or merge permission.
 
 ## CLI commands
 
@@ -90,16 +90,29 @@ labels (`extensions/qa-lab/src/mantis/run.runtime.ts`):
 (default `convex`), `--credential-role` (default `ci`), `--provider-mode`
 (default `live-frontier`), `--fast` (default on), `--skip-install`, `--skip-build`.
 
-The runner creates detached `git worktree` checkouts for baseline and
-candidate under `<output-dir>/worktrees/`, runs `pnpm install`/`pnpm build` in
-each (unless skipped), then runs
+The runner treats `--output-dir` as a stable container. It must name a relative
+child directory inside the repository; the repository root (`.`), absolute
+paths, and paths that escape the repository are rejected. Detached `git
+worktree` checkouts live under `<output-dir>.worktrees/`. Each checkout has a
+unique `<lane>-<run-id>` name, so an interrupted run cannot collide with a
+later baseline or candidate. The runner runs `pnpm install`/`pnpm build` in
+each checkout (unless skipped), then runs
 `pnpm openclaw qa discord --scenario <id> --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --allow-failures`
 against each worktree. Each lane writes `discord-qa-reaction-timelines.json`
-plus a `<scenario-id>-timeline.html`/`.png` pair; the runner copies this
-evidence back under `baseline/`/`candidate/`, writes `comparison.json`,
-`mantis-report.md`, and `mantis-evidence.json` in the output directory, and
-exits nonzero if the comparison did not pass (baseline `fail` and candidate
-`pass`).
+plus a `<scenario-id>-timeline.html`/`.png` pair. Before asking Git to remove
+the checkout, the runner copies the lane evidence into a private staging
+directory under `<output-dir>`.
+
+After both lanes and their cleanup finish, the runner adds `comparison.json`,
+`mantis-report.md`, and `mantis-evidence.json` to the staged set, then replaces
+the five stable entries together with rollback on publication failure. A failed
+attempt preserves the preceding complete evidence set and writes `error.txt`;
+a successful attempt removes an older `error.txt`. Existing automation
+continues reading the stable paths directly. Use a distinct output directory
+for each concurrently running command; publication to one shared output
+directory is not serialized. Existing unrelated top-level files are preserved.
+The command exits nonzero if the comparison did not pass (baseline `fail` and
+candidate `pass`).
 
 The second Discord scenario (`discord-thread-reply-filepath-attachment`) posts
 a parent message with the driver bot, creates a real thread, calls the SUT's
@@ -200,20 +213,32 @@ in.
 
 ## Evidence manifest
 
-Every scenario that publishes to a PR writes `mantis-evidence.json` next to
-its report:
+The publisher requires schema version 2 of `mantis-evidence.json` next to
+the report. Each included lane must declare `expectationMet`; the publisher
+downgrades a claimed pass when a lane's expectation was not met. For example:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "discord-status-reactions",
   "title": "Mantis Discord Status Reactions QA",
   "summary": "Human-readable top summary for the PR comment.",
   "scenario": "discord-status-reactions-tool-only",
   "comparison": {
-    "baseline": { "sha": "...", "status": "fail", "expected": "queued-only" },
-    "candidate": { "sha": "...", "status": "pass", "expected": "queued -> thinking -> done" },
-    "pass": true
+    "baseline": {
+      "sha": "<baseline-sha>",
+      "status": "fail",
+      "expected": "queued-only",
+      "expectationMet": true
+    },
+    "candidate": {
+      "sha": "<candidate-sha>",
+      "status": "pass",
+      "expected": "queued -> thinking -> done",
+      "expectationMet": true
+    },
+    "pass": true,
+    "outcome": "pass"
   },
   "artifacts": [
     {
@@ -229,6 +254,18 @@ its report:
 }
 ```
 
+This manifest is a presentation contract, not an authenticated proof receipt.
+It does not independently establish repository/PR ownership, current-head
+freshness, execution authority, or the truth of an assertion. A video, process
+exit code, or declared expectation alone is not sufficient behavioral proof.
+Review the underlying observations and execution provenance before relying on
+the result. Infrastructure failures and missing observations are inconclusive,
+not evidence that the baseline reproduced the bug.
+
+The local `qa mantis run` producer still emits schema version 1, which the
+publisher rejects. Do not relabel that output as version 2 without deriving
+its lane expectations from observations; the workflow producers emit version 2.
+
 Artifact `path` is relative to the manifest's directory; `targetPath` is
 relative to the configured R2/S3 artifact prefix. `scripts/mantis/publish-pr-evidence.mjs`
 rejects path traversal and skips entries with `"required": false` when the
@@ -239,16 +276,45 @@ Artifact kinds: `timeline` (deterministic before/after screenshot),
 GIF from the recording), `motionClip` (motion-trimmed MP4), `fullVideo` (full
 recording), `metadata` (JSON/log sidecar), `report` (Markdown report).
 
-A run's on-disk artifact layout:
+For `qa mantis run`, the stable output container has this layout:
 
 ```text
 .artifacts/qa-e2e/mantis/<run-id>/
+  error.txt # failures only
   mantis-report.md
   mantis-evidence.json
   baseline/
   candidate/
   comparison.json
+.artifacts/qa-e2e/mantis/<run-id>.worktrees/
+  baseline-<pid>-<uuid>/
+  candidate-<pid>-<uuid>/
 ```
+
+The worktree root is normally empty after a completed run. Lane directories
+appear while active or when cleanup deliberately preserves one for diagnosis.
+On interruption, command settlement and artifact staging consume the same
+cleanup budget as Git removal. If that budget expires, or command descendants
+cannot be confirmed stopped, Mantis retains the worktree for inspection.
+The default local command runner requires Linux or macOS process-tree ownership.
+It refuses Windows stages before spawning a command because descendant
+extinction cannot currently be verified there; any prepared directory is retained.
+If `git worktree add` fails before registration, Mantis can leave its empty,
+uniquely named prepared directory instead of deleting through a pathname that
+could have been replaced.
+
+Each failed attempt writes `<output-dir>/error.txt`. The thrown error, or the
+concise stderr diagnostic for an expected CLI interrupt, reports that exact
+path. Mantis does not recursively delete a worktree after Git no longer owns
+its registration: if cleanup fails, inspect the retained unique directory
+under `<output-dir>.worktrees/` together with the reported `error.txt`, then
+remove it through Git after resolving the failure. If an owned path disappears
+while its Git registration remains, cleanup fails closed instead of recreating
+the path. At startup, Mantis also checks the exact historical
+`<output-dir>/worktrees/baseline` and `<output-dir>/worktrees/candidate` paths
+and removes them through Git when they are still registered and present. Other
+registered or unregistered entries in that legacy directory are left
+untouched.
 
 Screenshots are evidence, not secrets, but still need redaction discipline:
 private channel names, usernames, or message content may appear. Set
@@ -288,13 +354,122 @@ validates that the resolved SHA is either an
 ancestor of `origin/main`, a release tag (`v*`), or the head of an open PR
 before running with secret-bearing credentials.
 
-The scenario workflows remain available through manual Actions dispatch.
+The legacy scenario workflows above remain available through manual Actions dispatch.
 
-ClawSweeper can also dispatch a scenario directly:
+Do not rely on the former `@clawsweeper mantis ...` example as a dedicated
+dispatch command. ClawSweeper's current command parser routes an unrecognized
+mention to general assistance, not a typed Mantis dispatch.
+
+The separate request-bound integration in
+[ClawSweeper #1425](https://github.com/openclaw/clawsweeper/pull/1425) and
+[OpenClaw #138953](https://github.com/openclaw/openclaw/pull/138953) lets the
+reviewer select relevant proof before completing its original review. It does
+not restore automatic post-review recording or require every check on every PR.
+Hosted execution requires the trusted producer workflows on `main` and the
+matching ClawSweeper Worker/runtime deployment; merging documentation does not
+activate it. The existing Convex credential service is still required, but its
+APIs are reused without a Convex schema change or deployment.
+
+Once that integration is deployed, a human maintainer can request a review with
+proof available, without supplying a SHA:
 
 ```text
-@clawsweeper mantis discord discord-status-reactions-tool-only
+@clawsweeper proof
+@clawsweeper proof web-ui-chat-proof
+@clawsweeper proof telegram-bot-e2e-proof
+@clawsweeper proof web-ui-chat-proof,telegram-bot-e2e-proof
 ```
+
+The bare command lets the reviewer select useful checks; explicit selections
+request each named check. The review resolves the current PR head. Control UI
+supports the fixed chat smoke against a mocked Gateway; Telegram supports a
+bounded, data-only Test Server plan. The legacy Crabline recipe is not a third
+inline tool. Missing, late, or incomplete observations remain inconclusive.
+The reviewer assesses results in the same review; successful execution alone
+does not clear proof, other readiness blockers, or merge requirements.
+
+Selected checks share a 20-minute proof ceiling, further bounded by the original
+review's remaining time minus its final-decision reserve. With the default
+20-minute review timeout and 90-second reserve, that is at most 18m30s if invoked
+immediately, less after analysis. This is a ceiling, not a fixed wait or a fresh
+budget per check. A consumer timeout does not itself cancel a dispatched producer;
+producer cleanup and credential/lease limits remain separate.
+
+### Telegram proof is a separate QA entrypoint
+
+Telegram is not an option in `mantis-scenario.yml` or `qa mantis run`.
+`pnpm openclaw qa telegram` uses the QA Lab Telegram adapter and the repository
+skill at `.agents/skills/telegram-e2e-userbot/SKILL.md`. The skill also supports
+focused real-user recordings through its own runner.
+
+The skill uses TDLib against Telegram's Test Server, with an exclusively leased
+Convex QA credential, a fresh Gateway, and an independent user observer.
+Prerequisites include a dependency-ready exact-ref runtime, the pinned TDLib
+setup, authenticated broker access, and distinct unused Gateway/provider ports.
+Its doctor acquires a lease and contacts Telegram: it is a live operation, not
+an offline readiness check. Do not run it without authorization for test-account
+activity.
+
+The recorder can observe messages, edits, deletions, reactions, and typing.
+Judge events after the recorded stimulus from the selected SUT, correlate
+message IDs and expected provider requests, and verify cleanup. The QA adapter's
+current driver exposes a narrower message/edit stream; choose the entrypoint
+whose observations actually cover the claim. A generic successful reply does
+not prove formatting, reaction, lifecycle, or threading behavior.
+
+Read the skill and its feature verification map before a Telegram exercise.
+The credential lease is not a scenario sandbox: custom command actions can use
+the leased test identity. Keep credential handling and execution in an explicitly
+authorized, isolated worker, never an ordinary read-only review.
+
+### Selected proof inside a ClawSweeper review
+
+The request-bound proof integration lets ClawSweeper choose a relevant check
+before finishing its current review. It does not run every check on every PR.
+The exact PR head is resolved by the review, not typed by the maintainer.
+`@clawsweeper proof` requests one review with proof available as a manual override;
+the result is evaluated in that review rather than generating a second review.
+
+The automatic surfaces are:
+
+- Telegram Test Server: a bounded, data-only plan of tester messages and button
+  clicks, deterministic model replies, streaming/native-command settings, and
+  the behavior the reviewer needs to observe. This can cover more than a generic
+  greeting, including selected formatting or command behavior.
+- Control UI: the existing fixed chat smoke recipe against a mocked Gateway.
+  This is not an arbitrary browser-task runner or proof of all UI behavior.
+
+The separate fixed Crabline recipe remains a producer entrypoint; it is not a
+third automatic tool or a mandatory three-check batch.
+
+A trusted external controller owns the Telegram userbot and real bot token.
+The candidate receives a disposable token alias and a restricted DM API proxy,
+not the QA lease, Telegram session, GitHub token, or deployment credentials.
+The candidate runs in a disposable Crabbox local-container on an internal
+network without a Docker socket. Deployment requires a Linux/Podman environment
+where this isolated Crabbox SSH lifecycle has been verified; a generic Docker
+smoke run does not establish that compatibility.
+
+The controller reuses the existing Convex acquire, heartbeat, payload, and
+release APIs. No Convex schema update, quarantine endpoint, or broker deployment
+is required. Review ownership and one-run authorization are checked by the
+ClawSweeper service using the trusted workflow's GitHub Actions OIDC identity.
+Expired or revoked authority stops privileged sends and proxy forwarding.
+A recorder parent-death guard stops the recorder if its controller exits.
+These safeguards do not claim that native TDLib background traffic is zero.
+
+The Telegram artifact contains the bounded complete timeline, provider requests,
+formatting entities, and button labels with known private values redacted.
+Oversized or incomplete observations fail closed. Its assertion outcome stays
+`inconclusive`: the original reviewer must assess the observations against the
+claim. A green process exit, canned reply, or video does not automatically clear
+proof or other readiness blockers. Bot registration/webhook operations are
+simulated; live production Telegram, groups, media, and unrestricted agent
+commands are outside this bounded plan.
+Transport profile display names are synthetic, while routing IDs and the selected
+bot username are retained where required. Message text is not rewritten by this
+projection. Tests of real profile names or username-based tester routing are
+outside this proof surface.
 
 ## Machines and secrets
 
@@ -307,7 +482,7 @@ slow or unavailable, add it behind the same Crabbox interface rather than
 hardcoding a fallback.
 
 VM baseline: Linux with a desktop-capable Chrome/Chromium, CDP access, VNC/
-noVNC, Node 22.22.3+, 24.15+, or 25.9+ and pnpm, an OpenClaw checkout, and
+noVNC, Node 24.16+ or 26.1+ and pnpm, an OpenClaw checkout, and
 outbound access to the target transport, GitHub, model providers, and the
 credential broker.
 
@@ -376,6 +551,4 @@ thread/reply relations, restart resume); neither is implemented yet.
 - Which Discord bot should be the driver vs. the SUT when the existing Mantis
   bot is reused?
 - How long should GitHub retain Mantis artifacts for PRs?
-- When should ClawSweeper automatically recommend a Mantis scenario instead of
-  waiting for a maintainer command?
 - Should screenshots be redacted or cropped before upload for public PRs?

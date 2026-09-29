@@ -1,4 +1,5 @@
 // Memory Wiki tests cover index plugin behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
@@ -6,13 +7,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
 import {
-  createMemoryWikiCompiledCachePublicationId,
   loadMemoryWikiCompiledCache,
   resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./src/compiled-cache.js";
 import { resolveMemoryWikiConfig } from "./src/config.js";
+import { deferred } from "./src/deferred.test-helpers.js";
 import {
   appendMemoryWikiLog,
   loadMemoryWikiValidatedVaultIdentity,
@@ -67,14 +68,6 @@ function emptyCompiledSnapshot(): MemoryWikiCompiledCacheSnapshot {
       },
     },
   };
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 describe("memory-wiki plugin", () => {
@@ -271,7 +264,7 @@ describe("memory-wiki plugin", () => {
     const validationEntered = deferred();
     const releaseValidation = deferred();
     const commitPublication = vi.fn();
-    const publicationId = createMemoryWikiCompiledCachePublicationId();
+    const publicationId = randomUUID();
     const publication = writeMemoryWikiCompiledCache(
       config,
       snapshot,
@@ -343,7 +336,7 @@ describe("memory-wiki plugin", () => {
           config,
           snapshot,
           resolveMemoryWikiCompiledCacheGeneration(snapshot),
-          createMemoryWikiCompiledCachePublicationId(),
+          randomUUID(),
           null,
           async () => {},
           async () => {},
@@ -366,8 +359,8 @@ describe("memory-wiki plugin", () => {
     await service?.start?.();
 
     const snapshot = emptyCompiledSnapshot();
-    const publicationId = createMemoryWikiCompiledCachePublicationId();
-    const reservationId = createMemoryWikiCompiledCachePublicationId();
+    const publicationId = randomUUID();
+    const reservationId = randomUUID();
     const parentPublicationId = (await loadMemoryWikiVaultIdentity(rootDir))
       .compiledCachePublicationId;
     await appendMemoryWikiLog(rootDir, {

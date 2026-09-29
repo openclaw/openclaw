@@ -1,13 +1,16 @@
-// Runner entry guard tests cover malformed decision data formatting without
-// depending on provider execution.
-import { afterEach, describe, expect, it } from "vitest";
+// Runner entry tests cover decision formatting and SecretRef isolation at provider execution.
+import { ok } from "@openclaw/normalization-core/result";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import {
   runtimeMediaModelSecretOwnerId,
   runtimeMediaRequestSecretOwnerId,
 } from "../secrets/runtime-media-secret-owner.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { buildModelDecision, formatDecisionSummary, runProviderEntry } from "./runner.entries.js";
-import type { MediaUnderstandingDecision } from "./types.js";
+import { withAudioFixture } from "./runner.test-utils.js";
+import type { MediaUnderstandingDecision, MediaUnderstandingProvider } from "./types.js";
 
 afterEach(() => {
   setActiveDegradedSecretOwners([]);
@@ -134,13 +137,78 @@ describe("media-understanding missing provider errors", () => {
 });
 
 describe("media-understanding SecretRef owner isolation", () => {
+  it.each([
+    { sharedHeader: "X.Trace", headerName: undefined },
+    { sharedHeader: "X.Trace", headerName: "X.Trace" },
+    { sharedHeader: "X.Trace", headerName: "x.trace" },
+    { sharedHeader: "constructor", headerName: undefined },
+    { sharedHeader: "constructor", headerName: "constructor" },
+  ])(
+    "isolates the unavailable shared $sharedHeader header with model override $headerName",
+    async ({ sharedHeader, headerName }) => {
+      const ownerId = runtimeMediaRequestSecretOwnerId("audio");
+      setActiveDegradedSecretOwners([
+        {
+          ownerKind: "capability",
+          ownerId,
+          state: "unavailable",
+          paths: [appendConfigPathSegment("tools.media.audio.request.headers", sharedHeader)],
+          refKeys: ["env:default:MISSING_MEDIA_HEADER"],
+          reason: "secret reference was not found",
+        },
+      ]);
+      await withAudioFixture("openclaw-media-header-owner", async ({ ctx, cache }) => {
+        const transcribeAudioWithContext = vi.fn<
+          NonNullable<MediaUnderstandingProvider["transcribeAudioWithContext"]>
+        >(async (request) => {
+          const headers = resolveProviderRequestHeaders({
+            provider: "fixture",
+            request: request.request,
+          });
+          expect(headers).toEqual(
+            headerName && sharedHeader !== "constructor"
+              ? { [headerName]: "healthy-header" }
+              : undefined,
+          );
+          return ok({ text: "transcribed" });
+        });
+        const result = runProviderEntry({
+          capability: "audio",
+          entry: {
+            provider: "fixture",
+            model: "audio-fixture",
+            request: headerName ? { headers: { [headerName]: "healthy-header" } } : undefined,
+          },
+          cfg: {},
+          config: { request: { headers: {} } },
+          ctx,
+          attachmentIndex: 0,
+          cache,
+          providerRegistry: new Map([
+            ["fixture", { id: "fixture", capabilities: ["audio"], transcribeAudioWithContext }],
+          ]),
+        });
+        if (headerName) {
+          await expect(result).resolves.toMatchObject({ ok: true, value: { text: "transcribed" } });
+          expect(transcribeAudioWithContext).toHaveBeenCalledOnce();
+          expect(transcribeAudioWithContext.mock.calls[0]?.[0].request?.headers).toEqual({
+            [headerName]: "healthy-header",
+          });
+        } else {
+          await expect(result).rejects.toMatchObject({
+            code: "SECRET_SURFACE_UNAVAILABLE",
+            ownerId,
+          });
+          expect(transcribeAudioWithContext).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
+
   it("rejects only the configured media model whose owner is unavailable", async () => {
     const entry = { provider: "openai", capabilities: ["audio" as const] };
     const cfg = { tools: { media: { models: [entry], audio: {} } } };
-    const ownerId = runtimeMediaModelSecretOwnerId({
-      source: "shared",
-      index: 0,
-    });
+    const ownerId = runtimeMediaModelSecretOwnerId(0);
     setActiveDegradedSecretOwners([
       {
         ownerKind: "capability",

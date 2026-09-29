@@ -1,15 +1,18 @@
 import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
+import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
 
 const MOBILE_COMPOSER_OVERLAY_QUERY =
   "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
 
 const pointerOpenedDropdowns = new WeakSet<HTMLElement>();
+const composerPickerDismissals = new WeakMap<
+  Document,
+  { owners: Set<symbol>; dispose: () => void }
+>();
 const POINTER_RESTORED_FOCUS_ATTRIBUTE = "data-chat-pointer-restored-focus";
 const POINTER_OPENED_PICKER_ATTRIBUTE = "data-chat-pointer-opened-picker";
 const CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT = "openclaw-composer-dismiss-invocations";
-
-let composerPickerDismissalInstalled = false;
 
 function composerPickerIsOpen(picker: HTMLElement): boolean {
   if (picker instanceof HTMLDetailsElement) {
@@ -18,7 +21,7 @@ function composerPickerIsOpen(picker: HTMLElement): boolean {
   return ("open" in picker && picker.open === true) || picker.hasAttribute("open");
 }
 
-function openChatComposerPickers(root: ParentNode = document): HTMLElement[] {
+function openChatComposerPickers(root: ParentNode): HTMLElement[] {
   return Array.from(
     root.querySelectorAll<HTMLElement>(
       ".agent-chat__input details, .agent-chat__input wa-dropdown",
@@ -45,67 +48,103 @@ function pickerTrigger(picker: HTMLElement): HTMLElement | null {
     : picker.querySelector<HTMLElement>("[slot=trigger]");
 }
 
-function dismissChatComposerPickersOutside(event: PointerEvent): void {
-  const path = event.composedPath();
-  for (const picker of openChatComposerPickers()) {
-    if (!path.includes(picker)) {
-      closeComposerPicker(picker);
-    }
-  }
-  for (const menu of document.querySelectorAll<HTMLElement>(
-    ".agent-chat__input > :is(.slash-menu, .skill-menu)",
-  )) {
-    if (!path.includes(menu)) {
-      menu
-        .closest(".agent-chat__input")
-        ?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
-    }
-  }
+function clearPointerFocus(this: HTMLElement): void {
+  // Blur and keyboard takeover complete the same pointer-focus lifetime.
+  this.removeEventListener("blur", clearPointerFocus);
+  this.removeEventListener("keydown", clearPointerFocus);
+  this.removeAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE);
 }
 
-function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
-  if (
-    event.defaultPrevented ||
-    consumeTooltipEscape(event, document) ||
-    event.key !== "Escape" ||
-    document.querySelector(".shell-nav[aria-modal='true']")
-  ) {
-    return;
-  }
-  const pickers = openChatComposerPickers();
-  const invocationComposer = document
-    .querySelector<HTMLElement>(".agent-chat__input > :is(.slash-menu, .skill-menu)")
-    ?.closest<HTMLElement>(".agent-chat__input");
-  if (pickers.length === 0 && !invocationComposer) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  // A nested menu restores focus inside its still-open parent picker.
-  const deepestPickers = pickers.filter(
-    (picker) => !pickers.some((other) => other !== picker && picker.contains(other)),
-  );
-  const lastPicker = deepestPickers.at(-1);
-  deepestPickers.forEach(closeComposerPicker);
-  invocationComposer?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
-  invocationComposer
-    ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
-    ?.focus({ preventScroll: true });
-  if (lastPicker) {
-    pickerTrigger(lastPicker)?.focus({ preventScroll: true });
-  }
+// Split panes and Home can overlap New Session. Keep one document listener set
+// until the last mounted composer releases it.
+export function installChatComposerPickerDismissal(ownerDocument: Document): () => void {
+  const dismissal = composerPickerDismissals.get(ownerDocument) ?? {
+    owners: new Set<symbol>(),
+    dispose: connectChatComposerPickerDismissal(ownerDocument),
+  };
+  composerPickerDismissals.set(ownerDocument, dismissal);
+  const owner = Symbol("composer picker");
+  dismissal.owners.add(owner);
+  return () => {
+    if (!dismissal.owners.delete(owner) || dismissal.owners.size > 0) {
+      return;
+    }
+    composerPickerDismissals.delete(ownerDocument);
+    dismissal.dispose();
+  };
 }
 
-export function ensureChatComposerPickerDismissal(): void {
-  if (composerPickerDismissalInstalled || typeof document === "undefined") {
-    return;
+function connectChatComposerPickerDismissal(ownerDocument: Document): () => void {
+  const controller = new AbortController();
+  const options = { capture: true, signal: controller.signal };
+
+  function dismissChatComposerPickersOutside(event: PointerEvent): void {
+    const path = event.composedPath();
+    for (const picker of openChatComposerPickers(ownerDocument)) {
+      if (!path.includes(picker)) {
+        closeComposerPicker(picker);
+      }
+    }
+    for (const menu of ownerDocument.querySelectorAll<HTMLElement>(
+      ".agent-chat__input > :is(.slash-menu, .skill-menu, .emoji-menu-popup)",
+    )) {
+      if (!path.includes(menu)) {
+        menu
+          .closest(".agent-chat__input")
+          ?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
+      }
+    }
   }
-  composerPickerDismissalInstalled = true;
-  document.addEventListener("pointerdown", dismissChatComposerPickersOutside, true);
+
+  function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
+    if (
+      event.isComposing ||
+      event.keyCode === 229 ||
+      event.defaultPrevented ||
+      consumeTooltipEscape(event, ownerDocument) ||
+      event.key !== "Escape" ||
+      ownerDocument.querySelector(".shell-nav[aria-modal='true']")
+    ) {
+      return;
+    }
+    if (clearChatModelSearchOnEscape(event)) {
+      return;
+    }
+    const pickers = openChatComposerPickers(ownerDocument);
+    const invocationComposer = ownerDocument
+      .querySelector<HTMLElement>(
+        ".agent-chat__input > :is(.slash-menu, .skill-menu, .emoji-menu-popup)",
+      )
+      ?.closest<HTMLElement>(".agent-chat__input");
+    if (pickers.length === 0 && !invocationComposer) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    // A nested menu restores focus inside its still-open parent picker.
+    const deepestPickers = pickers.filter(
+      (picker) => !pickers.some((other) => other !== picker && picker.contains(other)),
+    );
+    const lastPicker = deepestPickers.at(-1);
+    deepestPickers.forEach(closeComposerPicker);
+    invocationComposer?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
+    invocationComposer
+      ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+      ?.focus({ preventScroll: true });
+    if (lastPicker) {
+      pickerTrigger(lastPicker)?.focus({ preventScroll: true });
+    }
+  }
+
+  ownerDocument.addEventListener("pointerdown", dismissChatComposerPickersOutside, options);
   // Window capture observes the open picker before component Escape handlers
   // mutate details.open and erase the return-focus owner.
-  window.addEventListener("keydown", dismissChatComposerPickersOnEscape, true);
-  document.addEventListener(
+  ownerDocument.defaultView?.addEventListener(
+    "keydown",
+    dismissChatComposerPickersOnEscape,
+    options,
+  );
+  ownerDocument.addEventListener(
     "keydown",
     (event) => {
       const dropdown = event
@@ -119,8 +158,10 @@ export function ensureChatComposerPickerDismissal(): void {
         dropdown.removeAttribute(POINTER_OPENED_PICKER_ATTRIBUTE);
       }
     },
-    true,
+    options,
   );
+
+  return () => controller.abort();
 }
 
 function closeOtherChatComposerPickers(source: HTMLElement): void {
@@ -138,7 +179,6 @@ function closeOtherChatComposerPickers(source: HTMLElement): void {
 export function handleChatComposerDetailsToggle(event: Event): void {
   const details = event.currentTarget;
   if (details instanceof HTMLDetailsElement && details.open) {
-    ensureChatComposerPickerDismissal();
     closeOtherChatComposerPickers(details);
   }
 }
@@ -149,7 +189,6 @@ export function handleChatComposerDropdownShow(event: Event): void {
     if (!pointerOpenedDropdowns.has(dropdown)) {
       dropdown.removeAttribute(POINTER_OPENED_PICKER_ATTRIBUTE);
     }
-    ensureChatComposerPickerDismissal();
     closeOtherChatComposerPickers(dropdown);
   }
 }
@@ -182,7 +221,6 @@ export function restorePointerOpenedChatComposerTrigger(event: Event): void {
       return;
     }
     trigger.setAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE, "");
-    const clearPointerFocus = () => trigger.removeAttribute(POINTER_RESTORED_FOCUS_ATTRIBUTE);
     trigger.addEventListener("blur", clearPointerFocus, { once: true });
     trigger.addEventListener("keydown", clearPointerFocus, { once: true });
     trigger.focus({ preventScroll: true });

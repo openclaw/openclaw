@@ -11,12 +11,38 @@ import {
   expectConfigOption,
   expectSessionUpdate,
 } from "./translator.bridge-test-helpers.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
 }));
+
+function createSessionConfigListResult(key: string, thinkingLevel: string) {
+  return {
+    ts: Date.now(),
+    path: "/tmp/sessions.json",
+    count: 1,
+    defaults: {
+      modelProvider: null,
+      model: null,
+      contextTokens: null,
+    },
+    sessions: [
+      {
+        key,
+        kind: "direct",
+        updatedAt: Date.now(),
+        thinkingLevel,
+        modelProvider: "openai",
+        model: "gpt-5.4",
+      },
+    ],
+  };
+}
 
 describe("acp setSessionMode bridge behavior", () => {
   it("surfaces gateway mode patch failures instead of succeeding silently", async () => {
@@ -27,7 +53,7 @@ describe("acp setSessionMode bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -44,30 +70,11 @@ describe("acp setSessionMode bridge behavior", () => {
     const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "mode-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "high",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-            },
-          ],
-        };
+        return createSessionConfigListResult("mode-session", "high");
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -98,30 +105,11 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "config-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-            },
-          ],
-        };
+        return createSessionConfigListResult("config-session", "minimal");
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -177,7 +165,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -232,7 +220,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -256,32 +244,13 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     const connection = createAcpConnection();
     const requestMock = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "timeout-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-            },
-          ],
-        };
+        return createSessionConfigListResult("timeout-session", "minimal");
       }
       expect(method).not.toBe("sessions.patch");
       return { ok: true };
     });
     const request = requestMock as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -300,30 +269,11 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     const connection = createAcpConnection();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "bool-config-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-            },
-          ],
-        };
+        return createSessionConfigListResult("bool-config-session", "minimal");
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -376,7 +326,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -425,7 +375,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 

@@ -65,7 +65,6 @@ describe("status-all report tables", () => {
     });
 
     expect(section).toEqual({
-      kind: "table",
       title: "Channel detail",
       columns: [
         { key: "Channel", header: "Channel", flex: false, minWidth: 10 },
@@ -74,6 +73,34 @@ describe("status-all report tables", () => {
       ],
       rows: [{ Channel: "quietchat", Status: "warn(WARN)", Notes: "setup" }],
     });
+  });
+
+  it("shows a refused agent and repair guidance without claiming its session count is known", () => {
+    const [row] = buildStatusAgentTableRows({
+      agentStatus: {
+        agents: [
+          {
+            id: "cleaner",
+            status: "degraded",
+            sessionsCount: 0,
+            sessionsPath: "/synthetic/cleaner.sqlite",
+            admissionRefusal: {
+              reason: "Database belongs to main.",
+              repairHint: "Quarantine the cleaner copy and restart.",
+            },
+          },
+        ],
+      },
+      ok: (value) => value,
+      warn: (value) => value,
+    });
+    expect(row).toMatchObject({
+      Agent: "cleaner (degraded)",
+      Sessions: "unavailable",
+      Active: "refused",
+    });
+    expect(row?.Store).toContain("Database belongs to main.");
+    expect(row?.Store).toContain("Quarantine the cleaner copy and restart.");
   });
 
   it("exports stable shared columns", () => {

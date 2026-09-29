@@ -483,16 +483,8 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(page).toContain('"type":"memory.recall.recorded"');
   });
 
-  it.each([
-    {
-      name: "prunes stale bridge pages when the source artifact disappears",
-      humanNotes: null,
-    },
-    {
-      name: "salvages bridge page Notes when the source artifact disappears",
-      humanNotes: "Durable bridge annotation",
-    },
-  ])("$name", async ({ humanNotes }) => {
+  it("salvages bridge page Notes when the source artifact disappears", async () => {
+    const humanNotes = "Durable bridge annotation";
     const workspaceDir = await createBridgeWorkspace("prune-workspace");
     const { rootDir: vaultDir, config } = await createVault({
       rootDir: nextCaseRoot("prune-vault"),
@@ -530,16 +522,14 @@ describe("syncMemoryWikiBridgeSources", () => {
     const firstPageAbsPath = path.join(vaultDir, firstPagePath);
     const firstPage = await fs.readFile(firstPageAbsPath, "utf8");
     expect(firstPage).toContain("# Durable Memory");
-    if (humanNotes) {
-      await fs.writeFile(
-        firstPageAbsPath,
-        firstPage.replace(
-          "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-          `<!-- openclaw:human:start -->\n${humanNotes}\n<!-- openclaw:human:end -->`,
-        ),
-        "utf8",
-      );
-    }
+    await fs.writeFile(
+      firstPageAbsPath,
+      firstPage.replace(
+        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        `<!-- openclaw:human:start -->\n${humanNotes}\n<!-- openclaw:human:end -->`,
+      ),
+      "utf8",
+    );
 
     await fs.rm(path.join(workspaceDir, "MEMORY.md"));
     registerBridgeArtifacts([]);
@@ -549,13 +539,59 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(second.removedCount).toBe(1);
     await expect(fs.stat(firstPageAbsPath)).rejects.toHaveProperty("code", "ENOENT");
     const salvageDir = path.join(vaultDir, ".salvage");
-    if (humanNotes) {
-      await expect(
-        fs.readFile(path.join(salvageDir, `${firstPagePath.replace(/\//g, "_")}.notes.md`), "utf8"),
-      ).resolves.toContain(humanNotes);
-    } else {
-      await expect(fs.access(salvageDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.readFile(path.join(salvageDir, `${firstPagePath.replace(/\//g, "_")}.notes.md`), "utf8"),
+    ).resolves.toContain(humanNotes);
+  });
+
+  it("keeps stale pages when the memory capability closes during a source read", async () => {
+    const workspaceDir = await createBridgeWorkspace("closing-capability-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("closing-capability-vault"),
+      config: { vaultMode: "bridge", bridge: { enabled: true, indexMemoryRoot: true } },
+    });
+    const artifacts: MemoryPluginPublicArtifact[] = ["previous.md", "current.md"].map(
+      (relativePath) => ({
+        kind: "memory-root",
+        workspaceDir,
+        relativePath,
+        absolutePath: path.join(workspaceDir, relativePath),
+        agentIds: ["main"],
+        contentType: "markdown",
+      }),
+    );
+    for (const artifact of artifacts) {
+      await fs.writeFile(artifact.absolutePath, `# ${artifact.relativePath}\n`, "utf8");
     }
+    registerBridgeArtifacts(artifacts.slice(0, 1));
+    const appConfig: OpenClawConfig = {};
+    const first = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const previousPage = path.join(vaultDir, first.pagePaths[0] ?? "");
+    const previousContent = await fs.readFile(previousPage, "utf8");
+
+    registerBridgeArtifacts(artifacts.slice(1));
+    const readFile = fs.readFile.bind(fs);
+    const readSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(
+        async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+          const content = await readFile(...args);
+          if (args[0] === artifacts[1]?.absolutePath) {
+            clearMemoryPluginState();
+          }
+          return content;
+        },
+      );
+    const second = await syncMemoryWikiBridgeSources({ config, appConfig });
+    readSpy.mockRestore();
+
+    expect(second).toMatchObject({ importedCount: 1, removedCount: 0 });
+    await expect(fs.readFile(previousPage, "utf8")).resolves.toBe(previousContent);
+
+    registerBridgeArtifacts(artifacts.slice(1));
+    const third = await syncMemoryWikiBridgeSources({ config, appConfig });
+    expect(third).toMatchObject({ skippedCount: 1, removedCount: 1 });
+    await expect(fs.access(previousPage)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("refuses to overwrite bridge source pages through vault symlinks", async () => {

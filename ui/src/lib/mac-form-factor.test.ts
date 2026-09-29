@@ -1,6 +1,10 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { macFamilyLabel, resolveMacFormFactor } from "./mac-form-factor.ts";
+import {
+  macFamilyLabel,
+  resolveMacFormFactor,
+  resolveMacFormFactorFromName,
+} from "./mac-form-factor.ts";
 
 describe("Mac model identity", () => {
   it.each([
@@ -24,5 +28,26 @@ describe("Mac model identity", () => {
   ])("identifies %s without guessing unknown models", (model, formFactor, label) => {
     expect(resolveMacFormFactor(model)).toBe(formFactor);
     expect(macFamilyLabel(model)).toBe(label);
+  });
+});
+
+describe("Mac display-name hints", () => {
+  it.each([
+    ["Work MacBook Pro", "laptop"],
+    ["work_MACBOOK_AIR", "laptop"],
+    ["Personal MacBook", "laptop"],
+    ["Office Mac mini", "mini"],
+    ["office-mac-mini", "mini"],
+    ["Build Mac Studio", "studio"],
+    ["  BUILD_MAC_STUDIO  ", "studio"],
+    ["studio", undefined],
+    ["mini runner", undefined],
+    ["MacBookish workstation", undefined],
+    ["Mac minibus", undefined],
+    ["Development workstation", undefined],
+    ["", undefined],
+    [undefined, undefined],
+  ])("recognizes only explicit Mac model names in %s", (name, formFactor) => {
+    expect(resolveMacFormFactorFromName(name)).toBe(formFactor);
   });
 });

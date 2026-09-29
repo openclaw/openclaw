@@ -1,7 +1,7 @@
-// Xai plugin module implements x search shared behavior.
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
+  resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
@@ -14,14 +14,6 @@ import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-searc
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
 const XAI_X_SEARCH_MAX_CONTENT_CHARS = 20_000;
-
-type XaiXSearchConfig = {
-  apiKey?: unknown;
-  baseUrl?: unknown;
-  model?: unknown;
-  inlineCitations?: unknown;
-  maxTurns?: unknown;
-};
 
 export type XaiXSearchOptions = {
   query: string;
@@ -40,10 +32,6 @@ type XaiXSearchResult = {
   truncated?: true;
 };
 
-function resolveXaiXSearchConfig(config?: Record<string, unknown>): XaiXSearchConfig {
-  return coerceXaiToolConfig(config) as XaiXSearchConfig;
-}
-
 export function resolveXaiXSearchModel(config?: Record<string, unknown>): string {
   return resolveNormalizedXaiToolModel({
     config,
@@ -52,11 +40,11 @@ export function resolveXaiXSearchModel(config?: Record<string, unknown>): string
 }
 
 export function resolveXaiXSearchEndpoint(config?: Record<string, unknown>): string {
-  return resolveXaiResponsesEndpoint(resolveXaiXSearchConfig(config).baseUrl);
+  return resolveXaiResponsesEndpoint(coerceXaiToolConfig(config).baseUrl);
 }
 
 export function resolveXaiXSearchInlineCitations(config?: Record<string, unknown>): boolean {
-  return resolveXaiXSearchConfig(config).inlineCitations === true;
+  return coerceXaiToolConfig(config).inlineCitations === true;
 }
 
 export function resolveXaiXSearchMaxTurns(config?: Record<string, unknown>): number | undefined {
@@ -116,7 +104,7 @@ export async function requestXaiXSearch(params: {
       ...params,
       inputText: params.options.query,
       tools: [buildXSearchTool(params.options)],
-      reasoningEffort: params.model === XAI_DEFAULT_X_SEARCH_MODEL ? "none" : undefined,
+      reasoningEffort: resolveXaiToolDefaultReasoningEffort(params.model, "none"),
       errorLabel: "xAI X search failed",
     },
     (data) =>

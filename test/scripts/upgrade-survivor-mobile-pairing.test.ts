@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   chmodSync,
@@ -34,7 +34,6 @@ import {
   parseQrBootstrapJson,
   persistHelloCredential,
   validatePairingAudit,
-  verifyDeviceAuthPayloadSignature,
 } from "../../scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts";
 
 const CLIENT_PATH = "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts";
@@ -73,18 +72,38 @@ function bootstrapHello(nodeToken: string, operatorToken: string) {
 }
 
 describe("upgrade survivor mobile pairing client", () => {
-  it("closes the WebSocket when the connect response times out", async () => {
+  it.each([
+    {
+      failure: "the connect response times out",
+      stage: "response",
+      error: "Gateway response timed out",
+    },
+    {
+      failure: "WebSocket opening fails",
+      stage: "open",
+      error: "Gateway WebSocket open failed",
+    },
+    {
+      failure: "sending the connect request fails",
+      stage: "send",
+      error: "fixture send failed",
+    },
+  ])("closes the WebSocket and releases waiters when $failure", async ({ stage, error }) => {
     vi.useFakeTimers();
-    class SilentResponseSocket extends EventEmitter {
+    class FailureSocket extends EventEmitter {
       static CLOSED = 3;
-      static instances: SilentResponseSocket[] = [];
+      static instances: FailureSocket[] = [];
       readyState = 0;
       closeCalls = 0;
 
       constructor(_url: string) {
         super();
-        SilentResponseSocket.instances.push(this);
+        FailureSocket.instances.push(this);
         queueMicrotask(() => {
+          if (stage === "open") {
+            this.emit("error", new Error("connect ECONNREFUSED"));
+            return;
+          }
           this.readyState = 1;
           this.emit("open");
           this.emit(
@@ -98,31 +117,37 @@ describe("upgrade survivor mobile pairing client", () => {
         });
       }
 
-      send(_value: string): void {}
+      send(_value: string): void {
+        if (stage === "send") {
+          throw new Error("fixture send failed");
+        }
+      }
 
       close(): void {
         this.closeCalls += 1;
-        this.readyState = SilentResponseSocket.CLOSED;
+        this.readyState = FailureSocket.CLOSED;
         this.emit("close", 1000);
       }
     }
 
     const connectAttempt = expect(
       attemptConnect({
-        WebSocket: SilentResponseSocket,
+        WebSocket: FailureSocket,
         url: "ws://127.0.0.1:18789",
         client: MOBILE_PAIRING_CLIENT,
         mode: "node",
         role: "node",
         scopes: [],
       }),
-    ).rejects.toThrow("Gateway response timed out");
-    await vi.advanceTimersByTimeAsync(15_000);
+    ).rejects.toThrow(error);
+    await vi.advanceTimersByTimeAsync(stage === "response" ? 15_000 : 0);
     await connectAttempt;
 
-    expect(SilentResponseSocket.instances).toHaveLength(1);
-    expect(SilentResponseSocket.instances[0]?.closeCalls).toBe(1);
-    expect(SilentResponseSocket.instances[0]?.readyState).toBe(SilentResponseSocket.CLOSED);
+    expect(FailureSocket.instances).toHaveLength(1);
+    expect(FailureSocket.instances[0]?.closeCalls).toBe(1);
+    expect(FailureSocket.instances[0]?.readyState).toBe(FailureSocket.CLOSED);
+    expect(FailureSocket.instances[0]?.listenerCount("message")).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("requires the Gateway health RPC to report ok", () => {
@@ -247,11 +272,12 @@ describe("upgrade survivor mobile pairing client", () => {
     expect(nodeParams.auth).not.toHaveProperty("deviceToken");
     expect(operatorParams.auth).not.toHaveProperty("deviceToken");
     expect(
-      verifyDeviceAuthPayloadSignature({
-        publicKeyPem: identity.publicKeyPem,
-        payload,
-        signature: nodeParams.device.signature,
-      }),
+      verify(
+        null,
+        Buffer.from(payload),
+        createPublicKey(identity.publicKeyPem),
+        Buffer.from(nodeParams.device.signature, "base64url"),
+      ),
     ).toBe(true);
   });
 
@@ -711,57 +737,6 @@ done
     );
   });
 
-  it.each(["watchos-direct-node", "mobile-pairing-reconnect"])(
-    "skips generic plugin fixture phases for the %s companion survivor",
-    (scenario) => {
-      const source = readFileSync(RUNNER_PATH, "utf8");
-      const helpers = source.slice(
-        source.indexOf("companion_survivor_scenario()"),
-        source.indexOf("\npackage_root()"),
-      );
-      const result = execFileSync(
-        "bash",
-        [
-          "-c",
-          `set -eu
-SCENARIO="$1"
-${helpers}
-phase() { printf '%s\\n' "$1"; }
-run_plugin_fixture_phase fixture-phase true
-`,
-          "companion-plugin-phase",
-          scenario,
-        ],
-        { encoding: "utf8" },
-      );
-
-      expect(result).toBe("");
-    },
-  );
-
-  it("keeps generic plugin fixtures in non-companion upgrade survivor scenarios", () => {
-    const source = readFileSync(RUNNER_PATH, "utf8");
-    const helpers = source.slice(
-      source.indexOf("companion_survivor_scenario()"),
-      source.indexOf("\npackage_root()"),
-    );
-    const result = execFileSync(
-      "bash",
-      [
-        "-c",
-        `set -eu
-SCENARIO=base
-${helpers}
-phase() { printf '%s\\n' "$1"; }
-run_plugin_fixture_phase fixture-phase true
-`,
-      ],
-      { encoding: "utf8" },
-    );
-
-    expect(result).toBe("fixture-phase\n");
-  });
-
   it("routes every generic plugin fixture phase through the companion guard", () => {
     const source = readFileSync(RUNNER_PATH, "utf8");
     const orchestration = source.slice(source.indexOf("phase storage-preflight"));
@@ -779,63 +754,113 @@ run_plugin_fixture_phase fixture-phase true
       "fixture-plugin-consent",
     ];
 
-    expect(orchestration).toContain(
-      [
-        "if companion_survivor_scenario; then",
-        "  unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL",
-        "else",
-        "  phase configure-clawhub-fixture configure_clawhub_fixture",
-        "fi",
-      ].join("\n"),
-    );
     for (const phase of guardedPhases) {
       expect(orchestration).toContain(`run_plugin_fixture_phase ${phase} `);
       expect(orchestration).not.toMatch(new RegExp(`^phase ${phase} `, "mu"));
     }
-    expect(orchestration).toContain(
-      [
-        "run_plugin_fixture_phase fixture-plugin-consent repair_fixture_plugin_consent",
-        "if companion_survivor_scenario; then",
-        "  repair_update_restart_auth",
-        "fi",
-      ].join("\n"),
+    const helpers = source.slice(
+      source.indexOf("companion_survivor_scenario()"),
+      source.indexOf("\npackage_root()"),
     );
+    const fixtureSetup = orchestration.slice(
+      orchestration.indexOf("if companion_survivor_scenario"),
+      orchestration.indexOf("\nphase prepare-update-restart-probe"),
+    );
+    const recoveryStart = orchestration.indexOf(
+      "\n",
+      orchestration.indexOf("phase assert-survival assert_survival"),
+    );
+    const fixtureRecovery = orchestration.slice(
+      recoveryStart,
+      orchestration.indexOf('if [ "$SCENARIO" = "recovery-cleanup" ]; then', recoveryStart),
+    );
+    for (const scenario of ["watchos-direct-node", "mobile-pairing-reconnect", "base"]) {
+      const result = execFileSync(
+        "bash",
+        [
+          "-c",
+          `set -eu
+SCENARIO="$1"
+OPENCLAW_CLAWHUB_URL=synthetic
+CLAWHUB_URL=synthetic
+${helpers}
+phase() { printf '%s\\n' "$1"; }
+repair_update_restart_auth() { printf 'recovery-update-restart\\n'; }
+${fixtureSetup}
+${fixtureRecovery}
+printf 'clawhub=%s/%s\\n' "\${OPENCLAW_CLAWHUB_URL-}" "\${CLAWHUB_URL-}"
+`,
+          "survivor-companion-routing",
+          scenario,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.trim().split("\n"), scenario).toEqual(
+        scenario === "base"
+          ? ["configure-clawhub-fixture", "fixture-plugin-consent", "clawhub=synthetic/synthetic"]
+          : ["recovery-update-restart", "clawhub=/"],
+      );
+    }
     expect(orchestration).toContain("phase bootstrap-mobile-pairing bootstrap_mobile_pairing");
     expect(orchestration).toContain("phase mobile-pairing-candidate-first");
     expect(orchestration).toContain("phase mobile-pairing-candidate-restart");
     expect(orchestration).toContain("phase mobile-pairing-final");
   });
 
-  it("preserves update auto-auth recovery for companion survivors", () => {
-    const source = readFileSync(RUNNER_PATH, "utf8");
-    const helper = source.slice(
-      source.indexOf("repair_update_restart_auth()"),
-      source.indexOf("\nrepair_fixture_plugin_consent()"),
-    );
-    const result = execFileSync(
-      "bash",
-      [
-        "-c",
-        `set -eu
+  it.each(["watchos-direct-node", "mobile-pairing-reconnect"])(
+    "preserves update auto-auth recovery for the %s companion survivor",
+    (scenario) => {
+      const source = readFileSync(RUNNER_PATH, "utf8");
+      const helper = source.slice(
+        source.indexOf("repair_update_restart_auth()"),
+        source.indexOf("\nrepair_fixture_plugin_consent()"),
+      );
+      const result = execFileSync(
+        "bash",
+        [
+          "-c",
+          `set -eu
+SCENARIO="$1"
 UPDATE_RESTART_MODE=auto-auth
 COMMAND_TIMEOUT=1
 ARTIFACT_ROOT=/tmp
 update_repair_required=0
 ${helper}
-phase() { printf '%s\\n' "$1"; }
+phase() { printf '%s\\n' "$1"; shift; "$@"; }
+stop_update_restart_probe_gateway() { :; }
+prepare_restart_inference() { :; }
+prepare_restart_fixture() {
+  restart_fixture_package=/tmp/future-package.tgz
+  restart_fixture_version=2100.1.0
+}
+install_update_restart_systemctl_shim() { :; }
+run_update_restart_probe_gateway() { :; }
+check_gateway_status() { :; }
+update_candidate() {
+  [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$2" = file:/tmp/future-package.tgz ] && [ "$3" = 2100.1.0 ]
+}
+assert_managed_membership_warning() { :; }
 assert_survival() { :; }
 repair_update_restart_auth
 `,
-      ],
-      { encoding: "utf8" },
-    );
+          "companion-auto-auth-recovery",
+          scenario,
+        ],
+        { encoding: "utf8" },
+      );
 
-    expect(result.trim().split("\n")).toEqual([
-      "prepare-recovery-service",
-      "prepared-gateway-auth",
-      "recovery-update-restart",
-    ]);
-  });
+      expect(result.trim().split("\n")).toEqual([
+        "stop-recovery-service",
+        "prepare-restart-inference",
+        "prepare-restart-fixture",
+        "prepare-restart-manager",
+        "prepare-recovery-service",
+        "prepared-gateway-auth",
+        "recovery-update-restart",
+        "recovery-membership-warning",
+      ]);
+    },
+  );
 
   it("selects package replacement by the immutable 8.1 source SHA, not its version alone", () => {
     const source = readFileSync(RUNNER_PATH, "utf8");

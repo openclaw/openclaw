@@ -501,6 +501,70 @@ struct GatewayChannelConnectTests {
         await channel.shutdown()
     }
 
+    enum ConnectEntryPoint: CaseIterable, Sendable {
+        case connect, request, send
+    }
+
+    @Test(arguments: ConnectEntryPoint.allCases)
+    func `connect entry points preserve handshake error context`(entryPoint: ConnectEntryPoint) async throws {
+        let underlying = URLError(.cannotConnectToHost)
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { _, _ in throw underlying })
+        })
+        let url = try #require(URL(string: "wss://gateway.example.invalid"))
+        let channel = GatewayChannelActor(
+            url: url, token: nil, session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        var caught: (any Error)?
+        do {
+            switch entryPoint {
+            case .connect:
+                try await channel.connect()
+            case .request:
+                _ = try await channel.request(method: "health", params: nil)
+            case .send:
+                try await channel.send(method: "health", params: nil)
+            }
+        } catch {
+            caught = error
+        }
+        await channel.shutdown()
+
+        let error = try #require(caught) as NSError
+        #expect(error.domain == NSURLErrorDomain)
+        #expect(error.code == underlying.errorCode)
+        #expect(error
+            .localizedDescription == "connect to gateway @ \(url.absoluteString): \(underlying.localizedDescription)")
+    }
+
+    @Test func `missing challenge reaches the typed timeout mapper`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(receiveHook: { _, _ in
+                try await Task.sleep(for: .seconds(60))
+                return .data(GatewayWebSocketTestSupport.connectChallengeData())
+            })
+        })
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "wss://gateway.example.ts.net")),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        try await self.withChannel(channel) { channel in
+            do {
+                try await channel.connect()
+                Issue.record("missing challenge unexpectedly connected")
+            } catch {
+                let nsError = error as NSError
+                #expect(nsError.domain == URLError.errorDomain)
+                #expect(nsError.code == URLError.timedOut.rawValue)
+                let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+                #expect(problem.kind == .timeout)
+                #expect(problem.retryable)
+                #expect(!problem.pauseReconnect)
+            }
+        }
+    }
+
     @Test func `default operator connect scopes preserve pairing and admin`() async throws {
         try await self.withTemporaryStateDir {
             let capture = ScopeCapture()

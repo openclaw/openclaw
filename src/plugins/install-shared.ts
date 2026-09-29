@@ -10,7 +10,7 @@ import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -51,31 +51,6 @@ export function formatUnresolvedOpenClawPeerLinkError(packageName: string): stri
 
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
-function validateOpenClawPackageCompatibility(params: {
-  pluginId: string;
-  currentHostVersion: string;
-  packageMetadata?: OpenClawPackageManifest;
-}): PluginInstallFailureResult | null {
-  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
-  if (!pluginApiRangeCheck.ok) {
-    return {
-      ok: false,
-      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
-    };
-  }
-  const pluginApiRange = pluginApiRangeCheck.range;
-  if (pluginApiRange && !satisfiesPluginApiRange(params.currentHostVersion, pluginApiRange)) {
-    return {
-      ok: false,
-      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${params.currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
-    };
-  }
-
-  return null;
-}
-
 export function validateOpenClawPackageInstallCompatibility(params: {
   runtime: PluginCompatibilityRuntime;
   pluginId: string;
@@ -108,11 +83,23 @@ export function validateOpenClawPackageInstallCompatibility(params: {
     };
   }
 
-  return validateOpenClawPackageCompatibility({
-    pluginId: params.pluginId,
-    currentHostVersion,
-    packageMetadata: params.packageMetadata,
-  });
+  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
+  if (!pluginApiRangeCheck.ok) {
+    return {
+      ok: false,
+      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
+    };
+  }
+  const pluginApiRange = pluginApiRangeCheck.range;
+  if (pluginApiRange && !satisfiesPluginApiRange(currentHostVersion, pluginApiRange)) {
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+    };
+  }
+  return null;
 }
 
 export async function readOptionalPackageManifest(params: {
@@ -243,10 +230,9 @@ export function sourceFamilyForInstallPolicyKind(
       return "git";
     case "plugin-npm":
       return "npm";
-    case undefined:
+    default:
       return fallback;
   }
-  return fallback;
 }
 
 export function sourceFamilyForInstallPolicySource(
@@ -255,23 +241,13 @@ export function sourceFamilyForInstallPolicySource(
 ): PluginSecuritySourceFamily {
   switch (source?.kind) {
     case "archive":
-      return "archive";
     case "file":
-      return "file";
     case "git":
-      return "git";
     case "npm":
-      return "npm";
-    case "bundled":
-    case "clawhub":
-    case "local-path":
-    case "managed":
-    case "upload":
-    case "workspace":
-    case undefined:
+      return source.kind;
+    default:
       return fallback;
   }
-  return fallback;
 }
 
 export type PreparedInstallTarget = {
@@ -371,6 +347,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   extensionsDir?: string;
   logger: PluginInstallLogger;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   mode: "install" | "update";
   dryRun: boolean;
   copyErrorPrefix: string;
@@ -395,7 +372,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
       nameEncoder: params.nameEncoder,
     });
     if (!targetDirResult.ok) {
-      return { ok: false, error: targetDirResult.error };
+      return targetDirResult;
     }
     targetDir = targetDirResult.targetDir;
   }
@@ -425,9 +402,11 @@ export async function installPluginDirectoryIntoExtensions(params: {
     targetDir,
     mode: params.mode,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
@@ -453,9 +432,10 @@ export async function installPluginDirectoryIntoExtensions(params: {
       return { ok: true as const };
     },
   };
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
   const installRes = await runtime.installPackageDir(
-    isPluginInstallCommitDeferred(params)
-      ? requestDeferredPackageDirInstall(packageInstallParams)
+    transactionRequest
+      ? requestDeferredPackageDirInstall(packageInstallParams, transactionRequest.assertOwned)
       : packageInstallParams,
   );
   if (!installRes.ok) {
@@ -465,16 +445,14 @@ export async function installPluginDirectoryIntoExtensions(params: {
     return installRes;
   }
 
-  const result = {
-    ...buildDirectoryInstallResult({
-      pluginId: params.pluginId,
-      targetDir,
-      manifestName: params.manifestName,
-      version: params.version,
-      extensions: params.extensions,
-      setup: params.setup,
-    }),
-  };
+  const result = buildDirectoryInstallResult({
+    pluginId: params.pluginId,
+    targetDir,
+    manifestName: params.manifestName,
+    version: params.version,
+    extensions: params.extensions,
+    setup: params.setup,
+  });
   const transaction = resolvePackageDirInstallTransaction(installRes);
   return transaction ? attachPluginInstallTransaction(result, transaction) : result;
 }

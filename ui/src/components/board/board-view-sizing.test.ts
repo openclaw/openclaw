@@ -66,7 +66,9 @@ describe("board widget sizing", () => {
     const expected = exactBoardWidgetHeightPx(widget, 300, boardChromeRowPx());
     const section = () => cell?.querySelector<HTMLElement>(".board-widget");
     await vi.waitFor(() => {
-      expect(section()?.getAttribute("style")).toContain(`height: ${expected}px`);
+      expect(section()?.getAttribute("style")).toContain(
+        `height: calc(${expected}px - var(--board-widget-height-trim, 0px))`,
+      );
       expect(section()?.getAttribute("style")).toContain("align-self: start");
     });
     // Gestures manipulate the quantized cell, so the card fills it again.
@@ -90,7 +92,9 @@ describe("board widget sizing", () => {
 
     await vi.waitFor(() => {
       const section = cell?.querySelector<HTMLElement>(".board-widget");
-      expect(section?.getAttribute("style")).toContain("height: 10026px");
+      expect(section?.getAttribute("style")).toContain(
+        "height: calc(10026px - var(--board-widget-height-trim, 0px))",
+      );
       expect(section?.getAttribute("style")).toContain("span 148");
     });
   });

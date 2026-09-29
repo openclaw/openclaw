@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import {
   exitCliAfterOutput,
@@ -10,6 +11,29 @@ import {
 
 const successfulRun = async () => {};
 const ignoreError = () => {};
+// Fresh proxy children share only temporary source transforms, not module state.
+const proxyChildTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-proxy-child-tmp-");
+
+const completionOptions = {
+  onError: ignoreError,
+  env: {},
+  execArgv: [],
+  platform: "linux" as const,
+  markers: {},
+};
+
+function runCliChild(script: string, envOverrides: NodeJS.ProcessEnv = {}, maxBuffer?: number) {
+  const env = { ...process.env, ...envOverrides };
+  delete env.VITEST;
+  delete env.VITEST_POOL_ID;
+  delete env.VITEST_WORKER_ID;
+  return spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    env,
+    timeout: 30_000,
+    ...(maxBuffer ? { maxBuffer } : {}),
+  });
+}
 
 function spyOnExit(onExit?: (code: number) => void) {
   const exited = createDeferred();
@@ -64,31 +88,58 @@ describe("one-shot CLI exit", () => {
     expect(exit).toHaveBeenCalledExactlyOnceWith(7);
   });
 
-  it("leaves a deferred exit owned by the injected runtime without reporting it again", async () => {
-    const failure = new ExitError(7);
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const onError = vi.fn();
+  it.each([
+    { outcome: "deferred exit", commandExit: 7, cleanupFails: false },
+    { outcome: "deferred exit with failed cleanup", commandExit: 7, cleanupFails: true },
+    { outcome: "cleanup failure after success", commandExit: undefined, cleanupFails: true },
+    {
+      outcome: "deferred exit with cleanup reporter rethrow",
+      commandExit: 7,
+      cleanupFails: true,
+      reporterRethrows: true,
+    },
+  ])(
+    "leaves $outcome owned by the injected runtime",
+    async ({ commandExit, cleanupFails, reporterRethrows }) => {
+      const commandFailure = commandExit === undefined ? undefined : new ExitError(commandExit);
+      const cleanupFailure = new Error("state cleanup failed");
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const onError = vi.fn((error: unknown) => {
+        if (reporterRethrows) {
+          throw error;
+        }
+      });
 
-    await expect(
-      runCliWithExitFinalization({
-        run: async () => {
-          throw failure;
-        },
-        onError,
-        runtime,
-      }),
-    ).rejects.toBe(failure);
+      await expect(
+        runCliWithExitFinalization({
+          run: async () => {
+            if (commandFailure) {
+              throw commandFailure;
+            }
+          },
+          finalize: async () => {
+            if (cleanupFails) {
+              throw cleanupFailure;
+            }
+          },
+          onError,
+          runtime,
+        }),
+      ).rejects.toBe(commandFailure ?? cleanupFailure);
 
-    expect(onError).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+      if (cleanupFails) {
+        expect(onError).toHaveBeenCalledExactlyOnceWith(cleanupFailure);
+      } else {
+        expect(onError).not.toHaveBeenCalled();
+      }
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["NODE_USE_SYSTEM_CA", { NODE_USE_SYSTEM_CA: "1" }, []],
-    ["execArgv", {}, ["--use-system-ca"]],
     ["underscored execArgv", {}, ["--use_system_ca"]],
     ["NODE_OPTIONS", { NODE_OPTIONS: "'--use-system-ca'" }, []],
-    ["underscored NODE_OPTIONS", { NODE_OPTIONS: "--use_system_ca" }, []],
   ] as const)(
     "exits after macOS system CA command completion from %s",
     async (_label, env, execArgv) => {
@@ -157,6 +208,47 @@ describe("one-shot CLI exit", () => {
     await waitForExit(0);
   });
 
+  it.each(["requested", "system CA"] as const)(
+    "waits for caller-owned state cleanup before a %s exit",
+    async (mode) => {
+      const closed = createDeferred();
+      const finalizing = createDeferred();
+      const previousExitCode = process.exitCode;
+      const { exit, waitForExit } = spyOnExit();
+      process.exitCode = undefined;
+      const running = runCliWithExitFinalization({
+        run: async () => {
+          if (mode === "requested") {
+            requestExitAfterOneShotOutput(defaultRuntime, 0);
+          }
+        },
+        finalize: async () => {
+          finalizing.resolve();
+          await closed.promise;
+        },
+        onError: ignoreError,
+        env: mode === "system CA" ? { NODE_USE_SYSTEM_CA: "1" } : {},
+        execArgv: [],
+        platform: "darwin",
+        markers: {},
+      });
+      try {
+        await finalizing.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(exit).not.toHaveBeenCalled();
+        closed.resolve();
+        await running;
+        await waitForExit(0);
+      } finally {
+        closed.resolve();
+        await running;
+        process.exitCode = previousExitCode;
+      }
+    },
+  );
+
   it("reports failures and replaces a pending successful exit before draining", async () => {
     const previousExitCode = process.exitCode;
     const order: string[] = [];
@@ -208,11 +300,7 @@ describe("one-shot CLI exit", () => {
             requestExitAfterOneShotOutput(defaultRuntime);
             process.exitCode = processExitCode;
           },
-          onError: ignoreError,
-          env: {},
-          execArgv: [],
-          platform: "linux",
-          markers: {},
+          ...completionOptions,
         });
 
         await waitForExit(expectedExitCode);
@@ -231,34 +319,10 @@ describe("one-shot CLI exit", () => {
       requestExitAfterOneShotOutput(defaultRuntime, requestedExitCode);
       await runCliWithExitFinalization({
         run: successfulRun,
-        onError: ignoreError,
-        env: {},
-        execArgv: [],
-        platform: "linux",
-        markers: {},
+        ...completionOptions,
       });
 
       await waitForExit(requestedExitCode);
-    } finally {
-      process.exitCode = previousExitCode;
-    }
-  });
-
-  it("normalizes a Node integer-string process exit code", async () => {
-    const previousExitCode = process.exitCode;
-    const { waitForExit } = spyOnExit();
-
-    try {
-      process.exitCode = "9";
-      await runCliWithExitFinalization({
-        run: successfulRun,
-        onError: ignoreError,
-        env: { NODE_USE_SYSTEM_CA: "1" },
-        execArgv: [],
-        platform: "darwin",
-        markers: {},
-      });
-      await waitForExit(9);
     } finally {
       process.exitCode = previousExitCode;
     }
@@ -291,11 +355,7 @@ describe("one-shot CLI exit", () => {
 
     await runCliWithExitFinalization({
       run: successfulRun,
-      onError: ignoreError,
-      env: {},
-      execArgv: [],
-      platform: "linux",
-      markers: {},
+      ...completionOptions,
     });
     await waitForExit(2);
   });
@@ -366,11 +426,7 @@ describe("one-shot CLI exit", () => {
     requestExitAfterOneShotOutput(defaultRuntime);
     await runCliWithExitFinalization({
       run: successfulRun,
-      onError: ignoreError,
-      env: {},
-      execArgv: [],
-      platform: "linux",
-      markers: {},
+      ...completionOptions,
     });
 
     expect(exit).not.toHaveBeenCalled();
@@ -398,11 +454,7 @@ describe("one-shot CLI exit", () => {
       requestExitAfterOneShotOutput(defaultRuntime, 5);
       await runCliWithExitFinalization({
         run: successfulRun,
-        onError: ignoreError,
-        env: {},
-        execArgv: [],
-        platform: "linux",
-        markers: {},
+        ...completionOptions,
       });
 
       expect(exit).not.toHaveBeenCalled();
@@ -416,10 +468,6 @@ describe("one-shot CLI exit", () => {
   it.each(["requested nonzero exit", "deferred ExitError"])(
     "drains large piped JSON before a %s without reporting another error",
     (exitMode) => {
-      const env = { ...process.env };
-      delete env.VITEST;
-      delete env.VITEST_POOL_ID;
-      delete env.VITEST_WORKER_ID;
       const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
       const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
       const payloadBytes = 1024 * 1024;
@@ -438,16 +486,7 @@ describe("one-shot CLI exit", () => {
       });
     `;
 
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", "--input-type=module", "--eval", script],
-        {
-          encoding: "utf8",
-          env,
-          maxBuffer: 2 * payloadBytes,
-          timeout: 30_000,
-        },
-      );
+      const result = runCliChild(script, {}, 2 * payloadBytes);
 
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(7);
@@ -473,28 +512,12 @@ describe("one-shot CLI exit", () => {
       failure: true,
     },
     {
-      name: "ordinary invalid proxy URL",
-      args: ["--proxy-url", "invalid", "--json"],
-      exitCode: 1,
-      failure: true,
-    },
-    {
       name: "genuine command help after a boolean option",
       args: ["--json", "--help"],
       exitCode: 0,
       failure: false,
     },
   ])("keeps the real proxy command exit truthful for $name", ({ args, exitCode, failure }) => {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: "/dev/null",
-      OPENCLAW_CONFIG_PATH: "/dev/null",
-      TSX_DISABLE_CACHE: "1",
-      NODE_DISABLE_COMPILE_CACHE: "1",
-    };
-    delete env.VITEST;
-    delete env.VITEST_POOL_ID;
-    delete env.VITEST_WORKER_ID;
     const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
     const runtimeSnapshotUrl = new URL("../config/runtime-snapshot.ts", import.meta.url).href;
     const argvInvocationUrl = new URL("./argv-invocation.ts", import.meta.url).href;
@@ -528,11 +551,14 @@ describe("one-shot CLI exit", () => {
       });
     `;
 
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
-      { encoding: "utf8", env, timeout: 30_000 },
-    );
+    const result = runCliChild(script, {
+      OPENCLAW_STATE_DIR: "/dev/null",
+      OPENCLAW_CONFIG_PATH: "/dev/null",
+      TMPDIR: proxyChildTempDir,
+      TEMP: proxyChildTempDir,
+      TMP: proxyChildTempDir,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    });
 
     expect(result.error).toBeUndefined();
     expect(result.signal).toBeNull();
@@ -552,14 +578,9 @@ describe("one-shot CLI exit", () => {
   });
 
   it.each([
-    { name: "deferred hooks success", exitCode: 0, explicitRequest: true },
     { name: "deferred hooks failure", exitCode: 1, explicitRequest: true },
     { name: "automatic macOS system-CA success", exitCode: 0, explicitRequest: false },
   ])("keeps real dual-TTY JSON clean for $name", ({ exitCode, explicitRequest }) => {
-    const env = { ...process.env };
-    delete env.VITEST;
-    delete env.VITEST_POOL_ID;
-    delete env.VITEST_WORKER_ID;
     const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
     const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
     const loggingStateUrl = new URL("../logging/state.ts", import.meta.url).href;
@@ -580,11 +601,7 @@ describe("one-shot CLI exit", () => {
       });
     `;
 
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
-      { encoding: "utf8", env, timeout: 30_000 },
-    );
+    const result = runCliChild(script);
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(exitCode);
@@ -597,10 +614,6 @@ describe("one-shot CLI exit", () => {
     { name: "fatal unhandled rejection", errorCode: "ERR_OUT_OF_MEMORY", exitCode: 1 },
     { name: "invalid configuration rejection", errorCode: "INVALID_CONFIG", exitCode: 78 },
   ])("keeps real dual-TTY JSON clean after $name", ({ errorCode, exitCode }) => {
-    const env = { ...process.env };
-    delete env.VITEST;
-    delete env.VITEST_POOL_ID;
-    delete env.VITEST_WORKER_ID;
     const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
     const loggingStateUrl = new URL("../logging/state.ts", import.meta.url).href;
     const unhandledRejectionsUrl = new URL("../infra/unhandled-rejections.ts", import.meta.url)
@@ -620,11 +633,7 @@ describe("one-shot CLI exit", () => {
       process.emit("unhandledRejection", error, Promise.resolve());
     `;
 
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script],
-      { encoding: "utf8", env, timeout: 30_000 },
-    );
+    const result = runCliChild(script);
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(exitCode);

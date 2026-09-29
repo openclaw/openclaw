@@ -1,6 +1,11 @@
 // Coalesces buffered block-streaming payloads into sendable reply parts.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
@@ -26,6 +31,8 @@ export function createBlockReplyCoalescer(params: {
   const flushOnEnqueue = config.flushOnEnqueue === true;
 
   let bufferText = "";
+  let bufferSourceText: string | undefined;
+  let bufferSourceRange: readonly [start: number, end: number] | undefined;
   let bufferedPayload: ReplyPayload | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
 
@@ -39,6 +46,8 @@ export function createBlockReplyCoalescer(params: {
 
   const resetBuffer = () => {
     bufferText = "";
+    bufferSourceText = undefined;
+    bufferSourceRange = undefined;
     bufferedPayload = undefined;
   };
 
@@ -65,10 +74,13 @@ export function createBlockReplyCoalescer(params: {
       scheduleIdleFlush();
       return;
     }
-    const payload = copyReplyPayloadMetadata(bufferedPayload, {
-      ...bufferedPayload,
-      text: bufferText,
-    });
+    const payload = setReplyPayloadMetadata(
+      copyReplyPayloadMetadata(bufferedPayload, {
+        ...bufferedPayload,
+        text: bufferText,
+      }),
+      { blockSourceText: bufferSourceText, blockSourceRange: bufferSourceRange },
+    );
     resetBuffer();
     await onFlush(payload);
   };
@@ -90,6 +102,16 @@ export function createBlockReplyCoalescer(params: {
   /** Merges buffered text into a media payload without changing media metadata. */
   const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
     const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
+    const sourceText = text ? getReplyPayloadMetadata(payload)?.blockSourceText : undefined;
+    const sourceRange = text ? getReplyPayloadMetadata(payload)?.blockSourceRange : undefined;
+    const mergedSourceText =
+      bufferSourceText !== undefined || sourceText !== undefined
+        ? (bufferSourceText ?? bufferText) + (sourceText ?? text)
+        : undefined;
+    const mergedSourceRange =
+      bufferSourceRange && sourceRange
+        ? ([bufferSourceRange[0], sourceRange[1]] as const)
+        : (bufferSourceRange ?? sourceRange);
     const mergedPayload: ReplyPayload = {
       ...bufferedPayload,
       ...payload,
@@ -103,7 +125,10 @@ export function createBlockReplyCoalescer(params: {
       mergedPayload,
     );
     resetBuffer();
-    return copyReplyPayloadMetadata(payload, metadataMergedPayload);
+    return setReplyPayloadMetadata(copyReplyPayloadMetadata(payload, metadataMergedPayload), {
+      blockSourceText: mergedSourceText,
+      blockSourceRange: mergedSourceRange,
+    });
   };
 
   const enqueue = (payload: ReplyPayload) => {
@@ -113,6 +138,8 @@ export function createBlockReplyCoalescer(params: {
     const reply = resolveSendableOutboundReplyParts(payload);
     const hasMedia = reply.hasMedia;
     const text = reply.text;
+    const sourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
+    const sourceRange = getReplyPayloadMetadata(payload)?.blockSourceRange;
     const hasText = reply.hasText;
     if (hasMedia) {
       if (canMergeBufferedTextWithMedia(payload)) {
@@ -135,6 +162,8 @@ export function createBlockReplyCoalescer(params: {
       }
       bufferedPayload = payload;
       bufferText = text;
+      bufferSourceText = sourceText;
+      bufferSourceRange = sourceRange;
       void flush({ force: true });
       return;
     }
@@ -176,6 +205,8 @@ export function createBlockReplyCoalescer(params: {
           return;
         }
         bufferText = text;
+        bufferSourceText = sourceText;
+        bufferSourceRange = sourceRange;
         scheduleIdleFlush();
         return;
       }
@@ -183,6 +214,15 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
 
+    // Keep source coverage separate from inserted transport joiners.
+    bufferSourceText =
+      bufferSourceText !== undefined || sourceText !== undefined
+        ? (bufferSourceText ?? bufferText) + (sourceText ?? text)
+        : undefined;
+    bufferSourceRange =
+      bufferSourceRange && sourceRange
+        ? [bufferSourceRange[0], sourceRange[1]]
+        : (bufferSourceRange ?? sourceRange);
     bufferText = nextText;
     if (bufferText.length >= maxChars) {
       void flush({ force: true });

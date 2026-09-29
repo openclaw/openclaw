@@ -1,0 +1,108 @@
+/* @vitest-environment jsdom */
+
+import { expect, it, vi } from "vitest";
+import { createQuestionPromptState } from "../../app/question-prompt.ts";
+import { createChatQuestionActions } from "./chat-question-actions.ts";
+import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
+
+it.each(["session", "connection", "pane"] as const)(
+  "does not admit a retained question submission after its %s changes",
+  async (changed) => {
+    const send = vi.fn(async () => true);
+    const state = {
+      sessionKey: "agent:main:one",
+      connectionEpoch: 1,
+      handleSendChat: send,
+      lastError: null,
+      chatQueue: [],
+    };
+    let current = true;
+    const actions = createChatQuestionActions({
+      state,
+      questionState: createQuestionPromptState(() => {}),
+      canSend: true,
+      isCurrent: () => current,
+    });
+    if (changed === "session") {
+      state.sessionKey = "agent:main:two";
+    } else if (changed === "connection") {
+      state.connectionEpoch += 1;
+    } else {
+      current = false;
+    }
+    expect(await actions.onAsyncQuestionSubmit?.("> Which audience?\n\nEveryone")).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["session", "connection", "agent", "drafts"] as const)(
+  "does not route a retained question card through the latest callback after %s rollover",
+  async (changed) => {
+    const originalSend = vi.fn(async () => true);
+    const nextSend = vi.fn(async () => true);
+    const requestUpdate = vi.fn();
+    const state: Parameters<typeof createAsyncQuestionPresentation>[0] = {
+      asyncQuestionDrafts: new Map(),
+      asyncQuestionRevision: 0,
+      transcriptRenderContext: { onAsyncQuestionSubmit: originalSend },
+    };
+    const props = {
+      sessionKey: "global",
+      currentAgentId: "main",
+      connectionEpoch: 1,
+      onAsyncQuestionSubmit: originalSend,
+      onRequestUpdate: requestUpdate,
+    };
+    const retained = createAsyncQuestionPresentation(state, props);
+    if (changed === "session") {
+      props.sessionKey = "agent:main:two";
+    } else if (changed === "connection") {
+      props.connectionEpoch += 1;
+    } else if (changed === "agent") {
+      props.currentAgentId = "other";
+    } else {
+      state.asyncQuestionDrafts = new Map();
+    }
+    state.transcriptRenderContext.onAsyncQuestionSubmit = nextSend;
+    const current = createAsyncQuestionPresentation(state, props);
+    retained.onChange();
+    expect(requestUpdate).not.toHaveBeenCalled();
+    current.onChange();
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(await retained.submit?.("> Which audience?\n\nEveryone")).toBe(false);
+    expect(originalSend).not.toHaveBeenCalled();
+    expect(nextSend).not.toHaveBeenCalled();
+    expect(await current.submit?.("> Which audience?\n\nEngineers")).toBe(true);
+    expect(nextSend).toHaveBeenCalledExactlyOnceWith(
+      "> Which audience?\n\nEngineers",
+      undefined,
+      undefined,
+    );
+  },
+);
+
+it("keeps an already admitted answer with the outbox instead of submitting a duplicate", async () => {
+  const send = vi.fn(async () => true);
+  const actions = createChatQuestionActions({
+    state: {
+      sessionKey: "agent:main:main",
+      connectionEpoch: 1,
+      handleSendChat: send,
+      lastError: null,
+      chatQueue: [
+        {
+          id: "pending-answer",
+          asyncQuestionItemId: "audience",
+          text: "Original answer",
+          createdAt: 1,
+          sendState: "failed",
+        },
+      ],
+    },
+    questionState: createQuestionPromptState(() => {}),
+    canSend: true,
+    isCurrent: () => true,
+  });
+  expect(await actions.onAsyncQuestionSubmit?.("Changed draft", "audience")).toBe(true);
+  expect(send).not.toHaveBeenCalled();
+});

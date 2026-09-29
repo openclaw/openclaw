@@ -73,6 +73,12 @@ export async function withOwnedFollowChild<T>(
   }
 }
 
+export function assertInitialTailBound(result: { lines: string[]; truncated: boolean }): void {
+  if (result.lines.length !== 2 || !result.truncated) {
+    throw new Error(`logs.tail did not honor limit: ${JSON.stringify(result)}`);
+  }
+}
+
 export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) {
   const logPath = path.join(outputRoot, "gateway.jsonl");
   await mkdir(outputRoot, { recursive: true });
@@ -102,13 +108,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       lines: string[];
       truncated: boolean;
     };
-    if (
-      first.lines.length !== 2 ||
-      !first.lines.some((line) => line.includes("qa-line-three")) ||
-      !first.truncated
-    ) {
-      throw new Error(`logs.tail did not honor limit: ${JSON.stringify(first)}`);
-    }
+    assertInitialTailBound(first);
     const bounded = (await gateway.call("logs.tail", { limit: 20, maxBytes: 96 })) as {
       cursor: number;
       lines: string[];

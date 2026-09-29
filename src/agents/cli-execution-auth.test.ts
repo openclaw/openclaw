@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 
@@ -7,12 +8,15 @@ const mocks = vi.hoisted(() => ({
   profiles: {} as Record<string, AuthProfileCredential>,
 }));
 
-vi.mock("./auth-profiles/store.js", () => ({
+vi.mock("./auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: mocks.profiles }),
 }));
 
 vi.mock("./auth-profiles/order.js", () => ({
-  resolveAuthProfileOrder: () => mocks.order,
+  resolveAuthProfileOrderWithMetadata: () => ({
+    profileIds: mocks.order,
+    hasExplicitOrder: false,
+  }),
 }));
 
 import { resolveCliExecutionAuthProfileId } from "./cli-execution-auth.js";
@@ -152,11 +156,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
       provider: "anthropic",
       token: "test-personal-anthropic-token",
     };
-    mocks.profiles["claude-cli:ambient"] = {
-      type: "api_key",
-      provider: "claude-cli",
-      key: "test-ambient-key",
-    };
+    mocks.profiles["claude-cli:ambient"] = createApiKeyCredential("claude-cli", "test-ambient-key");
     mocks.order.push("claude-cli:ambient");
 
     expect(
@@ -184,11 +184,10 @@ describe("resolveCliExecutionAuthProfileId", () => {
         selection === "auto"
           ? { authProfileId: "anthropic:default", authProfileIdSource: selection }
           : undefined;
-      mocks.profiles["anthropic:default"] = {
-        type: "api_key",
-        provider: "anthropic",
-        key: "test-anthropic-key",
-      };
+      mocks.profiles["anthropic:default"] = createApiKeyCredential(
+        "anthropic",
+        "test-anthropic-key",
+      );
       mocks.order.push("anthropic:default");
 
       expect(
@@ -201,11 +200,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
         }),
       ).toBeUndefined();
 
-      mocks.profiles["claude-cli:work"] = {
-        type: "api_key",
-        provider: "claude-cli",
-        key: "test-claude-key",
-      };
+      mocks.profiles["claude-cli:work"] = createApiKeyCredential("claude-cli", "test-claude-key");
       mocks.order.push("claude-cli:work");
 
       expect(
@@ -223,11 +218,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
   it.each(["claude-cli", "google-gemini-cli"])(
     "rejects an explicitly selected profile from another provider for %s",
     (cliExecutionProvider) => {
-      mocks.profiles["openai:work"] = {
-        type: "api_key",
-        provider: "openai",
-        key: "test-openai-key",
-      };
+      mocks.profiles["openai:work"] = createApiKeyCredential("openai", "test-openai-key");
 
       expect(() =>
         resolveCliExecutionAuthProfileId({
@@ -260,11 +251,7 @@ describe("resolveCliExecutionAuthProfileId", () => {
   });
 
   it("bridges only a stored canonical Google API key to Gemini CLI", () => {
-    mocks.profiles["google:work"] = {
-      type: "api_key",
-      provider: "google",
-      key: "test-google-key",
-    };
+    mocks.profiles["google:work"] = createApiKeyCredential("google", "test-google-key");
 
     expect(
       resolveCliExecutionAuthProfileId({
@@ -301,11 +288,10 @@ describe("resolveCliExecutionAuthProfileId", () => {
   });
 
   it("requires a Gemini-native selected profile to be owned by Gemini CLI", () => {
-    mocks.profiles["google-gemini-cli:work"] = {
-      type: "api_key",
-      provider: "openai",
-      key: "test-wrong-provider-key",
-    };
+    mocks.profiles["google-gemini-cli:work"] = createApiKeyCredential(
+      "openai",
+      "test-wrong-provider-key",
+    );
     const resolve = () =>
       resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "google-gemini-cli",

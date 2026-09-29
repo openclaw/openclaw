@@ -1,4 +1,4 @@
-// Microsoft Foundry plugin module implements runtime behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   ProviderPreparedRuntimeAuth,
   ProviderPrepareRuntimeAuthContext,
@@ -19,14 +19,24 @@ import {
   TOKEN_REFRESH_MARGIN_MS,
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
-  getFoundryTokenCacheKey,
   isFoundryProviderApi,
   resolveConfiguredModelNameHint,
-} from "./shared-runtime.js";
+} from "./shared.js";
+
+function getFoundryTokenCacheKey(params?: {
+  scope?: string;
+  subscriptionId?: string;
+  tenantId?: string;
+}): string {
+  return `${params?.scope ?? ""}:${params?.subscriptionId ?? ""}:${params?.tenantId ?? ""}`;
+}
 
 const cachedTokens = new Map<string, CachedTokenEntry>();
 const refreshPromises = new Map<string, Promise<{ apiKey: string; expiresAt: number }>>();
 const FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS = 55 * 60 * 1000;
+// Bound settled credential material across profile generations. In-flight
+// refresh ownership remains separate so admission never evicts active work.
+const FOUNDRY_TOKEN_CACHE_MAX_ENTRIES = 128;
 
 async function refreshEntraToken(params?: {
   scope?: string;
@@ -40,10 +50,16 @@ async function refreshEntraToken(params?: {
     asDateTimestampMs(rawExpiry) ??
     resolveExpiresAtMsFromDurationMs(FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS, { nowMs: now }) ??
     now;
+  for (const [cacheKey, cachedToken] of cachedTokens) {
+    if (cachedToken.expiresAt <= now) {
+      cachedTokens.delete(cacheKey);
+    }
+  }
   cachedTokens.set(getFoundryTokenCacheKey(params), {
     token: result.accessToken,
     expiresAt,
   });
+  pruneMapToMaxSize(cachedTokens, FOUNDRY_TOKEN_CACHE_MAX_ENTRIES);
   return { apiKey: result.accessToken, expiresAt };
 }
 
@@ -107,6 +123,9 @@ export async function prepareFoundryRuntimeAuth(
     const refreshAfterMs =
       resolveExpiresAtMsFromDurationMs(TOKEN_REFRESH_MARGIN_MS, { nowMs: now }) ?? now;
     if (cachedToken && hasValidClock && cachedToken.expiresAt > refreshAfterMs) {
+      // Map insertion order is the eviction order; touch valid hits to retain active accounts.
+      cachedTokens.delete(cacheKey);
+      cachedTokens.set(cacheKey, cachedToken);
       return {
         apiKey: cachedToken.token,
         expiresAt: cachedToken.expiresAt,
@@ -116,6 +135,7 @@ export async function prepareFoundryRuntimeAuth(
         },
       };
     }
+    cachedTokens.delete(cacheKey);
     let refreshPromise = refreshPromises.get(cacheKey);
     if (!refreshPromise) {
       refreshPromise = refreshEntraToken({

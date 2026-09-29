@@ -22,6 +22,7 @@ import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "./lib/package-lifecycle-marker.mjs";
+import { cleanPackedOpenClawTarballs } from "./lib/packed-openclaw-tarballs.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
@@ -80,6 +81,7 @@ type PackageOptions = RunOptions & {
   allowUnreleasedChangelog?: unknown;
   extractAiRuntime?: (tarballPath: string, destination: string) => Promise<unknown>;
   normalizeTarballModes?: (tarballPath: string) => Promise<unknown>;
+  onCleanupFailure?: (error: unknown) => void;
   outputName?: string;
   packJsonPath?: string;
   pnpmPack?: boolean;
@@ -542,30 +544,6 @@ async function writePackJson(
   await fs.writeFile(target, `${JSON.stringify(entries, null, 2)}\n`);
 }
 
-async function cleanPackedOpenClawTarballs(outputDir: string) {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(outputDir);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      entries = [];
-    } else {
-      throw error;
-    }
-  }
-  await Promise.all(
-    entries
-      .filter((entry) => {
-        try {
-          return resolvePackedOpenClawFileName(entry) === entry;
-        } catch {
-          return false;
-        }
-      })
-      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
-  );
-}
-
 function isPackedAiRuntimeTarball(filename: string) {
   return /^openclaw-ai-[A-Za-z0-9._-]+\.tgz$/u.test(filename);
 }
@@ -693,6 +671,7 @@ export async function prepareBundledAiRuntimePackage(
     originalAiRuntimeMoved = false;
     packedAiTarballs = [];
     if (cleanupError) {
+      packageOptions.onCleanupFailure?.(cleanupError);
       throw toErrorObject(cleanupError, "Package cleanup failed.");
     }
   };
@@ -726,6 +705,7 @@ export async function prepareBundledAiRuntimePackage(
     try {
       await restoreManifest(aiRuntimeSourceDir);
     } catch (restoreError) {
+      packageOptions.onCleanupFailure?.(restoreError);
       throw packError ? packagePreparationRestoreError(packError, restoreError) : restoreError;
     }
     if (packError) {
@@ -792,13 +772,9 @@ export async function prepareBundledAiRuntimePackage(
 }
 
 async function normalizeOpenClawTarballModes(tarballPath: string) {
-  // npm/pnpm pack copy on-disk modes into the tarball (node-tar's portable
-  // mode-fix never adds read bits), so a restrictive-umask build host ships
-  // owner-only 0600/0700 entries that leave a root-installed CLI unreadable
-  // for non-root users under system tar and mode-preserving installers.
-  // Rewrite every entry to 0644/0755 the way a umask-022 host would have
-  // packed it, keeping executable bits. Stays on the system tar contract like
-  // the bundled AI runtime extraction above.
+  // npm can retain restrictive source read bits. Normalize those for non-root
+  // installers while preserving the archive's executable intent. pnpm derives
+  // that intent from bin and publishConfig.executableFiles, not source modes.
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
   try {
     await runPackageTar("extract", tarballPath, stageDir);
@@ -966,6 +942,8 @@ export async function packOpenClawPackageForDocker(
   try {
     let cleanupBundledAiRuntime = async () => {};
     let cleanupBundledPlugins = async () => {};
+    const cleanupFailures = new Set<unknown>();
+    const onCleanupFailure = (error: unknown) => void cleanupFailures.add(error);
     try {
       await cleanPackedOpenClawTarballs(outputPath);
       if (packageOptions.bundlePlugins?.length) {
@@ -973,6 +951,7 @@ export async function packOpenClawPackageForDocker(
         cleanupBundledPlugins = await preparePackageBundledPlugins(
           sourcePath,
           packageOptions.bundlePlugins,
+          onCleanupFailure,
         );
       }
       cleanupBundledAiRuntime = await prepareBundledAiRuntime(
@@ -982,6 +961,7 @@ export async function packOpenClawPackageForDocker(
         {
           prepareManifest,
           restoreManifest,
+          onCleanupFailure,
         },
       );
       // AI staging materializes the bundled tree; pack must not inherit the
@@ -1002,21 +982,34 @@ export async function packOpenClawPackageForDocker(
           DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
         ),
       });
+    } catch (error) {
+      packageError = error;
+      throw error;
     } finally {
-      try {
-        await cleanupBundledAiRuntime();
-      } finally {
+      // Restore shared manifests in reverse preparation order. A helper can
+      // fail restoring during preparation, before its cleanup handle returns.
+      for (const cleanup of [cleanupBundledAiRuntime, cleanupBundledPlugins]) {
         try {
-          await cleanupBundledPlugins();
-        } finally {
-          await restorePackageSourceArtifacts(
-            sourcePath,
-            restoreDocsMap,
-            restoreManifest,
-            restoreChangelog,
-          );
+          await cleanup();
+        } catch (error) {
+          onCleanupFailure(error);
         }
       }
+      await restorePackageSourceArtifacts(
+        sourcePath,
+        async (cwd) => {
+          if (cleanupFailures.size) {
+            throw new AggregateError(
+              new Set([...(packageError === undefined ? [] : [packageError]), ...cleanupFailures]),
+              "Package source cleanup failed; packaging receipt retained.",
+              { cause: packageError },
+            );
+          }
+          await restoreDocsMap(cwd);
+        },
+        restoreManifest,
+        restoreChangelog,
+      );
     }
     // Scan the emptied pnpm destination instead of trusting its absolute-path output.
     let tarball = await newestOpenClawTarball(

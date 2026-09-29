@@ -46,6 +46,37 @@ For device-authenticated Node connections, supply `deviceIdentity` (or
 storage through `GatewayClientHostDeps`; the package does not load OpenClaw's
 local identity or credentials automatically.
 
+Token storage callbacks may return their existing synchronous result or a
+`Promise`. The client waits for token loading before sending `connect`, and for
+issued-token persistence before calling `onHelloOk`. An accepted hello creates a
+persistence obligation that survives disconnect or stop; bootstrap credentials
+retire after that persistence succeeds. Readiness still belongs to the current
+connection. `stop()` requests shutdown synchronously; `stopAndWait()` also waits
+for accepted token operations to settle, even when transport closure times out.
+A reconnect waits for earlier token operations before reading the token again.
+
+Accepted asynchronous persistence failures reach `onConnectError` even after the
+connection retires. If that callback is absent or throws, `stopAndWait()` rejects
+with the first undelivered persistence error after draining accepted work. A later
+connection can still load credentials; a reported failure does not poison its
+storage queue. Synchronous callback exceptions retain their existing connect-error
+behavior.
+
+Hosts should honor the optional `expectedToken` storage condition. A string
+compares the existing row before writing or clearing; `null` on a store means
+insert only when no row exists. Omission preserves unconditional storage behavior.
+This prevents an older receipt or cleanup from replacing another client's newer
+token. Close cleanup waits for pending persistence and, if its result is uncertain,
+conditionally clears only the sampled and received tokens. Cleanup before any token
+observation retains its existing unconditional behavior. An observed empty cache
+does not permit unconditional cleanup.
+
+When storage callbacks receive `signal` or `assertCurrent`, check them immediately
+before admission and before committing a write. These callbacks stay local to the
+host; do not send them to a worker. Loads use the current connection lifetime;
+cleanup uses the client lifetime. Accepted hello persistence is independent of
+transport lifetime and retains the host's normal storage admission checks.
+
 ## Entry points
 
 - `@openclaw/gateway-client` exports the Node `GatewayClient`, device-auth
@@ -125,12 +156,30 @@ The shared protocol client still owns frame parsing, request correlation,
 challenge ordering, timeout cleanup, sequence-gap detection, and reconnect
 scheduling.
 
+Both the Node and browser entries export `isGatewayProtocolResponseError(error)`.
+It recognizes correlated Gateway response errors; constructed errors and local
+transport timeouts return `false`. Both entries use the same implementation.
+
 ## Defaults and reconnect behavior
 
 The Node client starts with a 30 second request timeout, a 15 second
-connect-challenge timeout, and exponential reconnect delays from 1 second to 30
-seconds with a multiplier of 2. Server-provided startup retry hints may override
-the next delay.
+connect-challenge timeout, and exponential reconnect backoff from 1 second to 30
+seconds with a multiplier of 2. Reconnects use randomized delays: the first waits
+1–1.2 seconds, and sustained failures spread retries across 25–30 seconds.
+Retryable server hints remain minimum waits and can extend beyond the normal cap,
+with up to 20% additional spread. Adapter-owned startup retry hints retain their
+exact next delay without advancing normal backoff.
+
+Browser adapters can observe the shared client's `onReconnectScheduled(delayMs,
+signal)` callback to display the actual retry wait, including jitter and timer
+bounds. The signal aborts when the wait is canceled or superseded; adapters should
+clear their countdown when creating the next socket.
+
+A sequence gap calls `onGap` and retires the socket unless the callback already
+replaced it. A gap-revealing `chat` final, aborted, or error event is delivered
+first so its authoritative outcome can settle the run. Other gapped frames and
+subsequent frames from that socket are not delivered. Reconnect restores a fresh live-text baseline; applications should
+also refresh durable state and restore their session subscriptions.
 
 The canonical defaults table and the server policy fields that can replace
 pre-handshake values are documented in the
@@ -139,6 +188,67 @@ pre-handshake values are documented in the
 Use the `./timeouts` entry point when a host must align readiness or watchdog
 budgets with these defaults. Use the `./readiness` entry point when startup must
 wait for an event-loop probe before opening the socket.
+
+## Streaming chat
+
+Event callbacks receive the wire payload unchanged. A `chat` delta's optional
+`message` is an authoritative snapshot that already includes `deltaText`.
+Without `message`, append `deltaText` to the run's existing text. `replace: true`
+replaces the text, including an empty replacement. The first frame received for
+a run and frames that change canvas or media content supply a snapshot.
+
+Both public entries export `mergeChatStreamMessage(previousMessage, payload)`
+for clients that own their run state. The helper preserves nontext content and
+message metadata and never appends a snapshot's delta twice. An append without
+a baseline returns `undefined`; recover the connection instead of displaying
+an incomplete answer. `reduceSessionProjectionRunEvent` uses the same merge
+operation for clients using the shared session projection.
+
+The high-level `@openclaw/sdk` retains reconstructed chat and assistant-item text
+in its normalized run-event replay, so late readers can recover the text after the initial wire
+snapshot is evicted. Its `rawEvents()` and each normalized event's `raw` field
+still expose the original wire event, including omitted `message` fields.
+Normalized assistant events retain cumulative `data.text` for their current item;
+`data.delta` keeps its wire meaning, and the raw event can omit `data.text`.
+Active chat baselines remain protected while their connection is current. The
+SDK's concrete Gateway transport reconciles outstanding owned or observed runs
+after reconnect through `agent.wait`. Active chat runs can recover display text
+from an exact `chat.history.inFlightRun` match; newer live text always wins over
+an older history response. Assistant-item text re-baselines on its next wire
+snapshot because history contains display text, not raw assistant-item text.
+
+SDK and ACP recovery share `recoverTerminalReply`: it collects all assistant
+items for the run in transcript order, preserves live item boundaries, and reads
+full messages when history truncated them. Recovered text preserves leading
+indentation and trailing whitespace. It scans at most ten 200-record pages;
+an incomplete scan reports unavailable instead of presenting a partial reply. The
+bounded `terminalReply.text` summary is never used as complete output. Local
+normalized recovery events have no `raw` field. Their `data.recovery.status`
+reports `rebaselined`, `recovered`, or `unavailable`; unavailable full text omits
+`outputText`. A bare wait timeout is not a run terminal. Terminal observations
+have finite retention, and sessionless or unavailable transcript occurrences
+cannot be reconstructed; unknown outcomes remain unsettled with a recovery
+notice. Automatic recovery stops after four consecutive unavailable observations
+(initial probe plus three waits), releases retention protection, and stays stopped
+across reconnects. Confirmed activity resets that budget; late terminal frames can
+still settle the run. Queued replies use exponential backoff with the Gateway
+client's positive 20% jitter and a 25–30 second cap. ACP reports unavailable full
+text explicitly instead of settling with a partial answer. Closing the client or
+returning a run iterator cancels its recovery work.
+
+Reconnect retires old text baselines. Ending the transport event stream also
+releases outstanding-run protection, retaining only bounded replay. Custom
+`OpenClawTransport` implementations must deliver terminal outcomes or end a
+retired event stream; the generic transport interface does not expose reconnect
+notifications and does not receive this automatic reconciliation.
+Confirmed session unsubscribe also releases that session's baseline protection;
+it also releases unobserved runs accepted before their first output. The
+acknowledgment cannot retire a newer acceptance or subscription's snapshot. The concrete
+Gateway transport preserves acknowledgment and event order. Custom transports
+must preserve that ordering or end their retired event stream.
+For raw `global` or `unknown` session keys, pass `agentId` when unsubscribing
+to identify an agent-owned baseline. An unscoped acknowledgment cannot retire
+a baseline with a known agent owner.
 
 ## Bundled internals
 

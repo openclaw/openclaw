@@ -1,13 +1,8 @@
-// Anthropic Vertex tests cover api plugin behavior.
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
-function createStreamDeps(): {
-  deps: AnthropicVertexStreamDeps;
-  streamAnthropicMock: ReturnType<typeof vi.fn>;
-  anthropicVertexCtorMock: ReturnType<typeof vi.fn>;
-} {
+function createStreamDeps() {
   const streamAnthropicMock = vi.fn(
     (..._args: Parameters<AnthropicVertexStreamDeps["streamAnthropic"]>) =>
       createAssistantMessageEventStream(),
@@ -48,33 +43,30 @@ describe("Anthropic Vertex API stream factories", () => {
       await import("./api.js"));
   });
 
-  it("reuses the runtime stream factory across direct stream calls", async () => {
+  it.each([
+    {
+      name: "direct",
+      create: (deps: AnthropicVertexStreamDeps) =>
+        createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps),
+    },
+    {
+      name: "model-derived",
+      create: (deps: AnthropicVertexStreamDeps) =>
+        createAnthropicVertexStreamFnForModel(
+          makeModel(),
+          {
+            ANTHROPIC_VERTEX_PROJECT_ID: "vertex-project",
+            GOOGLE_CLOUD_LOCATION: "us-east5",
+          },
+          deps,
+        ),
+    },
+  ])("reuses the runtime stream factory across $name calls", async ({ create }) => {
     const { deps, streamAnthropicMock, anthropicVertexCtorMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const streamFn = create(deps);
     const model = makeModel();
-
     await streamFn(model, { messages: [] }, {});
     await streamFn(model, { messages: [] }, {});
-
-    expect(anthropicVertexCtorMock).toHaveBeenCalledTimes(1);
-    expect(streamAnthropicMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("reuses the runtime stream factory across model-derived stream calls", async () => {
-    const { deps, streamAnthropicMock, anthropicVertexCtorMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFnForModel(
-      makeModel(),
-      {
-        ANTHROPIC_VERTEX_PROJECT_ID: "vertex-project",
-        GOOGLE_CLOUD_LOCATION: "us-east5",
-      } as NodeJS.ProcessEnv,
-      deps,
-    );
-    const model = makeModel();
-
-    await streamFn(model, { messages: [] }, {});
-    await streamFn(model, { messages: [] }, {});
-
     expect(anthropicVertexCtorMock).toHaveBeenCalledTimes(1);
     expect(streamAnthropicMock).toHaveBeenCalledTimes(2);
   });

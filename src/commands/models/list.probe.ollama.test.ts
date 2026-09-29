@@ -1,17 +1,17 @@
-// Ollama probe planning tests cover keyless runtime auth and provider-scoped catalog reads.
+// Ollama probe planning tests cover keyless runtime auth and published catalog reads.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
 
-const loadPreparedModelCatalog = vi.fn(
+const readPreparedModelCatalog = vi.fn(
   async (): Promise<Array<Pick<ModelCatalogEntry, "provider" | "id" | "status">>> => [
     { provider: "ollama", id: "llama3.2:latest" },
     { provider: "ollama", id: "gemma4:latest" },
   ],
 );
 
-vi.mock("../../agents/prepared-model-catalog.js", () => ({ loadPreparedModelCatalog }));
+vi.mock("../../agents/prepared-model-catalog.js", () => ({ readPreparedModelCatalog }));
 vi.mock("../../agents/auth-profiles.js", () => ({
   externalCliDiscoveryScoped: () => undefined,
   ensureAuthProfileStore: () => ({ version: 1, profiles: {}, order: {} }),
@@ -73,7 +73,7 @@ const options = {
 };
 
 describe("Ollama probe targets", () => {
-  beforeEach(() => loadPreparedModelCatalog.mockClear());
+  beforeEach(() => readPreparedModelCatalog.mockClear());
 
   it("builds a runtime-auth target for a configured keyless local provider", async () => {
     const cfg = {
@@ -96,10 +96,9 @@ describe("Ollama probe targets", () => {
     });
 
     expect(plan.results).toEqual([]);
-    expect(loadPreparedModelCatalog).toHaveBeenCalledWith(
+    expect(readPreparedModelCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
         readOnly: true,
-        providerDiscoveryProviderIds: ["ollama"],
       }),
     );
     expect(plan.targets).toEqual([
@@ -148,7 +147,7 @@ describe("Ollama probe targets", () => {
   });
 
   it("builds an automatic Ollama probe with the first non-retired catalog model", async () => {
-    loadPreparedModelCatalog.mockResolvedValueOnce([
+    readPreparedModelCatalog.mockResolvedValueOnce([
       { provider: "ollama", id: "kimi-k2.5", status: "deprecated" },
       { provider: "ollama", id: "kimi-k2.6" },
     ]);

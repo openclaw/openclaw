@@ -3,8 +3,8 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
-import type { RealtimeTalkStatus } from "../realtime-talk.ts";
+import { RealtimeTalkLevelSignal } from "../talk/level.ts";
+import type { RealtimeTalkStatus } from "../talk/session.ts";
 
 const BAR_GAINS = [0.38, 0.62, 0.84, 1, 0.84, 0.62, 0.38];
 const MICROPHONE_ACTIVITY_TAG = "openclaw-microphone-activity";
@@ -145,6 +145,7 @@ type ChatVoiceStatusProps = {
   status?: RealtimeTalkStatus;
   detail?: string | null;
   onDismissError?: () => void;
+  onUseSystemDefaultMicrophone?: () => Promise<void>;
 };
 
 export function renderChatVoiceStatus(
@@ -169,7 +170,20 @@ export function renderChatVoiceStatus(
         <span class="agent-chat__composer-error-icon" aria-hidden="true"
           >${icons.alertTriangle}</span
         >
-        <span class="agent-chat__talk-status-text">${props.detail}</span>
+        <div class="callout__content">
+          <div class="agent-chat__talk-status-text">${props.detail}</div>
+          ${
+            props.onUseSystemDefaultMicrophone
+              ? html`<button
+                  class="btn btn--sm"
+                  type="button"
+                  @click=${props.onUseSystemDefaultMicrophone}
+                >
+                  ${t("chat.composer.useSystemDefaultMicrophoneForCall")}
+                </button>`
+              : nothing
+          }
+        </div>
         ${
           props.onDismissError
             ? html`

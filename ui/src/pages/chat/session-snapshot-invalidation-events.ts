@@ -1,11 +1,19 @@
-type SnapshotInvalidation = { sessionKey: string } | { sessionKey?: undefined };
+export type SessionSnapshotInvalidationReason = "cache-eviction";
+
+type SnapshotInvalidation =
+  | { sessionKey: string; reason?: SessionSnapshotInvalidationReason }
+  | { sessionKey?: undefined; reason?: undefined };
 
 type SnapshotInvalidationListener = (invalidation: SnapshotInvalidation) => void | Promise<void>;
 
 const SNAPSHOT_INVALIDATION_STORAGE_KEY = "openclaw.control.chatSnapshots.invalidate.v1";
 const invalidationListeners = new Set<SnapshotInvalidationListener>();
+export let snapshotStoreGeneration = 0;
 
 function notifySnapshotInvalidation(invalidation: SnapshotInvalidation): Promise<void> {
+  if (!invalidation.sessionKey) {
+    snapshotStoreGeneration += 1;
+  }
   return Promise.all(
     [...invalidationListeners].map((listener) => Promise.resolve(listener(invalidation))),
   ).then(() => undefined);
@@ -28,7 +36,12 @@ function parseSnapshotInvalidation(value: string): SnapshotInvalidation {
       typeof parsed.sessionKey === "string" &&
       parsed.sessionKey
     ) {
-      return { sessionKey: parsed.sessionKey };
+      return {
+        sessionKey: parsed.sessionKey,
+        ...("reason" in parsed && parsed.reason === "cache-eviction"
+          ? { reason: "cache-eviction" as const }
+          : {}),
+      };
     }
   } catch {}
   // Counter values from older tabs carried no scope, so they still retire every snapshot.

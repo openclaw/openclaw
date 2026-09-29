@@ -1,14 +1,10 @@
-// Nextcloud Talk plugin module implements bot preflight behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
-import {
-  readNextcloudTalkErrorBody,
-  releaseNextcloudTalkGuardedResponse,
-} from "./guarded-response.js";
+import { readNextcloudTalkErrorBody } from "./guarded-response.js";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "./send.runtime.js";
 
 const BOT_FEATURE_RESPONSE = 2;
@@ -50,13 +46,6 @@ function normalizeUrlForMatch(value: string | undefined): string {
   } catch {
     return value.trim().replace(/\/$/, "");
   }
-}
-
-function coerceFeatureMask(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
-    return value;
-  }
-  return parseStrictNonNegativeInteger(value);
 }
 
 function formatMissingResponseFeatureMessage(bot: NextcloudTalkBotAdminEntry, features?: number) {
@@ -151,7 +140,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
         };
       }
 
-      const features = coerceFeatureMask(bot.features);
+      const features = parseStrictNonNegativeInteger(bot.features);
       if (features == null || (features & BOT_FEATURE_RESPONSE) !== BOT_FEATURE_RESPONSE) {
         return {
           ok: false,
@@ -172,7 +161,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
         message: `Nextcloud Talk bot "${bot.name ?? bot.id ?? "matching bot"}" has the response feature.`,
       };
     } finally {
-      await releaseNextcloudTalkGuardedResponse({ response, release });
+      await release();
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : formatErrorMessage(error);

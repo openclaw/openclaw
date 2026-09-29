@@ -29,9 +29,10 @@ export async function resolveBuzzRecoverySince(params: {
 }): Promise<Map<string, number>> {
   const { store, channelIds, nowSeconds, lookbackSeconds } = params;
   const configuredKeys = new Set(channelIds.map(roomCursorKey));
+  const activations = new Map((await store.entries()).map(({ key, value }) => [key, value]));
 
   // Reclaim removed rooms before reject-new capacity can strand their replacements.
-  for (const { key } of await store.entries()) {
+  for (const key of activations.keys()) {
     if (key.startsWith("room:") && !configuredKeys.has(key)) {
       await store.delete(key);
     }
@@ -41,9 +42,10 @@ export async function resolveBuzzRecoverySince(params: {
   const retentionFloor = nowSeconds - lookbackSeconds;
   for (const channelId of channelIds) {
     const key = roomCursorKey(channelId);
-    const activation = await store.lookup(key);
+    const activation = activations.get(key);
     if (activation === undefined) {
       await store.register(key, { seconds: nowSeconds });
+      activations.set(key, { seconds: nowSeconds });
       sinceByRoom.set(channelId, nowSeconds);
       continue;
     }

@@ -1,6 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
-import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
+import {
+  PluginRuntimeApplicationError,
+  type PluginLifecycleRuntimeApply,
+} from "../plugins/lifecycle.js";
+import type { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
 import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflight.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
@@ -14,6 +18,7 @@ import {
   type MaintainedClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { ClawPackageRemovalPhaseResult } from "./package-remove-contract.js";
 import {
   readClawPackageRefs,
   readClawInstallRecords,
@@ -42,12 +47,10 @@ export type ClawPackageRemovalDecision = {
   skillPlan?: ClawHubSkillUninstallPlan;
 };
 
-export type ClawPackageRemovalResult = {
-  kind: PersistedClawPackageRef["kind"];
-  ref: string;
-  version: string;
-  action: "uninstalled" | "retained" | "error";
-  reason?: string;
+export type ClawPackageRemovalResult = ClawPackageRemovalPhaseResult["packages"][number];
+
+type ClawPackageRemovalOutcome = ClawPackageRemovalPhaseResult & {
+  runtimeFailure?: PluginRuntimeApplicationError;
 };
 
 export type PackageRemovalDeps = {
@@ -57,7 +60,7 @@ export type PackageRemovalDeps = {
   resolvePlugin?: typeof resolveInstalledClawHubPlugin;
   planSkill?: typeof planClawHubSkillUninstall;
   uninstallSkill?: typeof applyClawHubSkillUninstall;
-  uninstallPlugin?: typeof runPluginUninstallCommand;
+  uninstallPlugin?: typeof uninstallPluginWithPolicy;
   acquirePackageLease?: typeof acquireClawPackageLifecycleLease;
 };
 
@@ -120,16 +123,6 @@ function otherClawAgentIds(params: {
     .toSorted();
 }
 
-function hasAnotherClawOwner(params: {
-  packageRef: PersistedClawPackageRef;
-  workspace: string;
-  refs: PersistedClawPackageRef[];
-  installs: PersistedClawInstall[];
-  statuses?: ReadonlySet<PersistedClawPackageRef["status"]>;
-}): boolean {
-  return otherClawAgentIds(params).length > 0;
-}
-
 function ownerInstallIsNewer(
   installedAt: string | number | undefined,
   packageRef: PersistedClawPackageRef,
@@ -149,21 +142,26 @@ function pluginIntegrityMatches(actual: string | undefined, expected: string): b
     : actual === expected;
 }
 
-export async function inspectClawPackage(
-  install: PersistedClawInstall,
+type ClawInstalledPackage =
+  | {
+      state: "present";
+      ownerIsNewer: boolean;
+      pluginId?: string;
+      skillPlan?: ClawHubSkillUninstallPlan;
+    }
+  | { state: Exclude<ClawPackageState, "present" | "incomplete">; message: string };
+
+async function inspectInstalledPackage(
+  install: Pick<PersistedClawInstall, "workspace">,
   packageRef: PersistedClawPackageRef,
-  deps: PackageRemovalDeps = {},
-): Promise<ClawPackageInspection> {
-  if (packageRef.status !== "complete") {
-    return { ...packageRef, state: "incomplete", message: "Package installation is incomplete." };
-  }
+  deps: PackageRemovalDeps,
+): Promise<ClawInstalledPackage> {
   if (packageRef.kind === "plugin") {
     const resolution = await (deps.resolvePlugin ?? resolveInstalledClawHubPlugin)({
       clawhubPackage: packageRef.ref,
     });
     if (resolution.status !== "found") {
       return {
-        ...packageRef,
         state: resolution.status,
         message:
           resolution.status === "ambiguous"
@@ -175,26 +173,16 @@ export async function inspectClawPackage(
       resolution.installedVersion !== packageRef.version ||
       !pluginIntegrityMatches(resolution.record.integrity, packageRef.integrity)
     ) {
-      return {
-        ...packageRef,
-        state: "modified",
-        message: "Installed plugin version changed after the Claw was added.",
-      };
+      return { state: "modified", message: "Installed plugin changed after the Claw was added." };
     }
     return {
-      ...packageRef,
-      independentOwner:
-        packageRef.independentOwner ||
-        ownerInstallIsNewer(resolution.record.installedAt, packageRef),
       state: "present",
+      ownerIsNewer: ownerInstallIsNewer(resolution.record.installedAt, packageRef),
+      pluginId: resolution.pluginId,
     };
   }
   if (!install.workspace) {
-    return {
-      ...packageRef,
-      state: "ambiguous",
-      message: "Skill workspace provenance is missing.",
-    };
+    return { state: "ambiguous", message: "Skill workspace provenance is missing." };
   }
   const skill = await (deps.planSkill ?? planClawHubSkillUninstall)({
     workspaceDir: install.workspace,
@@ -203,16 +191,40 @@ export async function inspectClawPackage(
   });
   return skill.ok
     ? {
+        state: "present",
+        ownerIsNewer: ownerInstallIsNewer(skill.plan.installedAt, packageRef),
+        skillPlan: skill.plan,
+      }
+    : { state: skill.code, message: skill.error };
+}
+
+export async function inspectClawPackage(
+  install: Pick<PersistedClawInstall, "workspace">,
+  packageRef: PersistedClawPackageRef,
+  deps: PackageRemovalDeps = {},
+): Promise<ClawPackageInspection> {
+  if (packageRef.status !== "complete") {
+    return { ...packageRef, state: "incomplete", message: "Package installation is incomplete." };
+  }
+  const inspected = await inspectInstalledPackage(install, packageRef, deps);
+  return inspected.state === "present"
+    ? {
         ...packageRef,
-        independentOwner:
-          packageRef.independentOwner || ownerInstallIsNewer(skill.plan.installedAt, packageRef),
+        independentOwner: packageRef.independentOwner || inspected.ownerIsNewer,
         state: "present",
       }
-    : { ...packageRef, state: skill.code, message: skill.error };
+    : {
+        ...packageRef,
+        state: inspected.state,
+        message:
+          packageRef.kind === "plugin" && inspected.state === "modified"
+            ? "Installed plugin version changed after the Claw was added."
+            : inspected.message,
+      };
 }
 
 export async function planClawPackageRemovals(
-  install: PersistedClawInstall,
+  install: Pick<PersistedClawInstall, "workspace">,
   packages: PersistedClawPackageRef[],
   options: OpenClawStateDatabaseOptions & {
     deps?: PackageRemovalDeps;
@@ -292,47 +304,12 @@ export async function planClawPackageRemovals(
       continue;
     }
 
-    let pluginId: string | undefined;
-    let ownerIsNewer: boolean;
-    let skillPlan: ClawHubSkillUninstallPlan | undefined;
-    if (packageRef.kind === "plugin") {
-      const resolution = await (deps.resolvePlugin ?? resolveInstalledClawHubPlugin)({
-        clawhubPackage: packageRef.ref,
-      });
-      if (resolution.status !== "found") {
-        retain(
-          resolution.status === "ambiguous"
-            ? "Installed plugin identity is ambiguous."
-            : "Installed plugin is missing.",
-        );
-        continue;
-      }
-      if (
-        resolution.installedVersion !== packageRef.version ||
-        !pluginIntegrityMatches(resolution.record.integrity, packageRef.integrity)
-      ) {
-        retain("Installed plugin changed after the Claw was added.");
-        continue;
-      }
-      pluginId = resolution.pluginId;
-      ownerIsNewer = ownerInstallIsNewer(resolution.record.installedAt, packageRef);
-    } else {
-      if (!install.workspace) {
-        retain("Skill workspace provenance is missing.");
-        continue;
-      }
-      const skill = await (deps.planSkill ?? planClawHubSkillUninstall)({
-        workspaceDir: install.workspace,
-        slug: packageRef.ref,
-        expectedVersion: packageRef.version,
-      });
-      if (!skill.ok) {
-        retain(skill.error);
-        continue;
-      }
-      skillPlan = skill.plan;
-      ownerIsNewer = ownerInstallIsNewer(skill.plan.installedAt, packageRef);
+    const inspected = await inspectInstalledPackage(install, packageRef, deps);
+    if (inspected.state !== "present") {
+      retain(inspected.message);
+      continue;
     }
+    const { pluginId, skillPlan, ownerIsNewer } = inspected;
 
     const independentlyOwned = packageRef.independentOwner || ownerIsNewer;
     const hasConflicts =
@@ -377,13 +354,15 @@ export async function planClawPackageRemovals(
 }
 
 type ApplyClawPackageRemovalOptions = OpenClawStateDatabaseOptions & {
+  applyRuntime?: PluginLifecycleRuntimeApply;
   deps?: PackageRemovalDeps;
+  assertCurrent?: () => void;
 };
 
 export async function applyClawPackageRemovals(
   decisions: ClawPackageRemovalDecision[],
   options: ApplyClawPackageRemovalOptions = {},
-): Promise<ClawPackageRemovalResult[]> {
+): Promise<ClawPackageRemovalOutcome> {
   if (!decisions.some((decision) => decision.packageRef.kind === "plugin")) {
     return await applyClawPackageRemovalsUnlocked(decisions, options);
   }
@@ -400,19 +379,41 @@ export async function applyClawPackageRemovals(
 async function applyClawPackageRemovalsUnlocked(
   decisions: ClawPackageRemovalDecision[],
   options: ApplyClawPackageRemovalOptions,
-): Promise<ClawPackageRemovalResult[]> {
+): Promise<ClawPackageRemovalOutcome> {
   const deps = options.deps ?? {};
+  const claimPackageRef = (
+    ref: PersistedClawPackageRef,
+    status: PersistedClawPackageRef["status"],
+  ) => {
+    options.assertCurrent?.();
+    return (deps.claimPackageRef ?? updateClawPackageRefStatus)(ref, status, options);
+  };
   const results: ClawPackageRemovalResult[] = [];
+  const warnings = new Set<string>();
+  let runtimeFailure: PluginRuntimeApplicationError | undefined;
   for (const decision of decisions) {
     const base = {
       kind: decision.packageRef.kind,
       ref: decision.packageRef.ref,
       version: decision.packageRef.version,
     };
+    if (runtimeFailure) {
+      results.push({
+        ...base,
+        action: "retained",
+        reason: "Package cleanup stopped after a Gateway runtime replacement failed.",
+      });
+      continue;
+    }
     let packageLease: MaintainedClawPackageLifecycleLease | null = null;
     let claimed = false;
     let externalMutationStarted = false;
+    const assertCurrent = () => {
+      options.assertCurrent?.();
+      packageLease?.assertCurrent();
+    };
     try {
+      assertCurrent();
       const leaseArtifact =
         decision.packageRef.kind === "skill"
           ? {
@@ -456,7 +457,7 @@ async function applyClawPackageRemovalsUnlocked(
           );
         }
         if (currentRef.status === "complete") {
-          (deps.claimPackageRef ?? updateClawPackageRefStatus)(currentRef, "pending", options);
+          claimPackageRef(currentRef, "pending");
           claimed = true;
         }
         if (decision.reason === "Another Claw still references this package.") {
@@ -466,13 +467,13 @@ async function applyClawPackageRemovalsUnlocked(
               ? []
               : (deps.readInstallRecords ?? readClawInstallRecords)(options);
           if (
-            !hasAnotherClawOwner({
+            otherClawAgentIds({
               packageRef: decision.packageRef,
               workspace: decision.workspace,
               refs: postClaimRefs,
               installs: postClaimInstalls,
               statuses: new Set(["complete"]),
-            })
+            }).length === 0
           ) {
             throw new Error(
               `Package ${decision.packageRef.ref}@${decision.packageRef.version} no longer has another surviving Claw owner.`,
@@ -482,13 +483,14 @@ async function applyClawPackageRemovalsUnlocked(
         results.push({ ...base, action: "retained", reason: decision.reason });
         continue;
       }
-      const sharedPackage = hasAnotherClawOwner({
-        packageRef: decision.packageRef,
-        workspace: decision.workspace,
-        refs: currentRefs,
-        installs: currentInstalls,
-        statuses: new Set(["complete"]),
-      });
+      const sharedPackage =
+        otherClawAgentIds({
+          packageRef: decision.packageRef,
+          workspace: decision.workspace,
+          refs: currentRefs,
+          installs: currentInstalls,
+          statuses: new Set(["complete"]),
+        }).length > 0;
       if (
         !currentRef ||
         currentRef.status !== "complete" ||
@@ -499,7 +501,7 @@ async function applyClawPackageRemovalsUnlocked(
           `Package ${decision.packageRef.ref}@${decision.packageRef.version} ownership changed after removal planning.`,
         );
       }
-      (deps.claimPackageRef ?? updateClawPackageRefStatus)(currentRef, "pending", options);
+      claimPackageRef(currentRef, "pending");
       claimed = true;
       const postClaimRefs = (deps.readPackageRefs ?? readClawPackageRefs)(options);
       const postClaimInstalls =
@@ -511,13 +513,14 @@ async function applyClawPackageRemovalsUnlocked(
           candidate.agentId === decision.packageRef.agentId &&
           sameVersionedArtifact(candidate, decision.packageRef),
       );
-      const postClaimShared = hasAnotherClawOwner({
-        packageRef: decision.packageRef,
-        workspace: decision.workspace,
-        refs: postClaimRefs,
-        installs: postClaimInstalls,
-        statuses: new Set(["complete"]),
-      });
+      const postClaimShared =
+        otherClawAgentIds({
+          packageRef: decision.packageRef,
+          workspace: decision.workspace,
+          refs: postClaimRefs,
+          installs: postClaimInstalls,
+          statuses: new Set(["complete"]),
+        }).length > 0;
       if (
         !postClaimRef ||
         postClaimRef.status !== "pending" ||
@@ -549,39 +552,60 @@ async function applyClawPackageRemovalsUnlocked(
             `Plugin ${decision.packageRef.ref}@${decision.packageRef.version} changed after removal planning.`,
           );
         }
+        assertCurrent();
+        const uninstallPlugin =
+          deps.uninstallPlugin ??
+          (await import("../plugins/management-uninstall.js")).uninstallPluginWithPolicy;
+        assertCurrent();
         externalMutationStarted = true;
-        await (deps.uninstallPlugin ?? runPluginUninstallCommand)(decision.pluginId, {
-          force: true,
+        const removed = await uninstallPlugin({
+          pluginId: decision.pluginId,
+          caller: "cli",
           invalidateRuntimeCache: false,
           clawManaged: true,
+          applyRuntime: options.applyRuntime,
+          beforePersistentApply: assertCurrent,
+          onWarning: (warning) => {
+            warnings.add(warning);
+          },
         });
+        if (!removed.ok) {
+          throw new Error(removed.error);
+        }
+        for (const warning of removed.value.warnings) {
+          warnings.add(warning);
+        }
       } else {
         if (!decision.skillPlan) {
           throw new Error("Skill removal plan is missing canonical uninstall state.");
         }
+        assertCurrent();
         externalMutationStarted = true;
+        const cleanupOwner = packageLease;
         const removed = await (deps.uninstallSkill ?? applyClawHubSkillUninstall)(
           decision.skillPlan,
+          {
+            beforePersistentApply: assertCurrent,
+            beforeRollback: () => cleanupOwner.assertCurrent(),
+          },
         );
         if (!removed.ok) {
           throw new Error(removed.error);
         }
       }
-      packageLease.assertCurrent();
-      (deps.claimPackageRef ?? updateClawPackageRefStatus)(
-        decision.packageRef,
-        "complete",
-        options,
-      );
+      assertCurrent();
+      claimPackageRef(decision.packageRef, "complete");
       results.push({ ...base, action: "uninstalled" });
     } catch (error) {
+      // Runtime replacement failure ends this phase, but earlier effects and
+      // emitted warnings must survive alongside its exact publication facts.
+      if (error instanceof PluginRuntimeApplicationError) {
+        runtimeFailure = error;
+      }
       if (claimed) {
         try {
-          (deps.claimPackageRef ?? updateClawPackageRefStatus)(
-            decision.packageRef,
-            externalMutationStarted ? "failed" : "complete",
-            options,
-          );
+          assertCurrent();
+          claimPackageRef(decision.packageRef, externalMutationStarted ? "failed" : "complete");
         } catch {
           // Preserve the original cleanup failure as the actionable result.
         }
@@ -599,5 +623,9 @@ async function applyClawPackageRemovalsUnlocked(
       }
     }
   }
-  return results;
+  return {
+    packages: results,
+    ...(warnings.size ? { warnings: [...warnings] } : {}),
+    ...(runtimeFailure ? { runtimeFailure } : {}),
+  };
 }

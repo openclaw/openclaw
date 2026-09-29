@@ -7,7 +7,9 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
 import selectorParser, { type ClassName, type Selector } from "postcss-selector-parser";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -43,13 +45,6 @@ const EXTERNAL_CLASS_FAMILIES: ExternalClassFamily[] = [
   {
     matches: (className) => className.startsWith("ProseMirror"),
     producer: "ProseMirror editor DOM",
-  },
-  // markdown-it-task-lists emits these two classes from parsed markdown.
-  {
-    matches: (className) =>
-      className === "task-list-item" || className === "task-list-item-checkbox",
-    producer:
-      "markdown-it-task-lists via ui/src/components/markdown-parser.ts (the contains-task-list class is removed there)",
   },
 ];
 
@@ -88,12 +83,9 @@ function groupBy<T, K>(values: Iterable<T>, keyFor: (value: T) => K): Map<K, T[]
   const groups = new Map<K, T[]>();
   for (const value of values) {
     const key = keyFor(value);
-    const group = groups.get(key);
-    if (group) {
-      group.push(value);
-    } else {
-      groups.set(key, [value]);
-    }
+    const group = groups.get(key) ?? [];
+    group.push(value);
+    groups.set(key, group);
   }
   return groups;
 }
@@ -152,24 +144,16 @@ function classMapPropertyName(node: ts.ObjectLiteralElementLike): string | null 
   if (!ts.isPropertyAssignment(node) && !ts.isShorthandPropertyAssignment(node)) {
     return null;
   }
-  const name = node.name;
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
+  return getPropertyNameText(node.name);
 }
 
 /** Collect literal class tokens and dynamic class stems from TypeScript source. */
-export function collectControlUiClassReferences(
-  source: string,
-  fileName = "source.ts",
-): SourceReferences {
+export function collectControlUiClassReferences(sourceFile: ts.SourceFile): SourceReferences {
   const literalClasses = new Set<string>();
   const stems = new Set<string>();
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
 
   function visit(node: ts.Node): void {
-    if (ts.isStringLiteralLike(node)) {
+    if (ts.isStringLiteralLikeNode(node)) {
       addLiteralClassTokens(node.text, literalClasses);
     } else if (ts.isTemplateExpression(node)) {
       addLiteralClassTokens(node.head.text, literalClasses);
@@ -211,7 +195,7 @@ export function collectControlUiClassReferences(
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -219,8 +203,10 @@ export function collectControlUiClassReferences(
 }
 
 function declarationName(node: ts.FunctionLikeDeclaration): string | null {
-  if (node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))) {
-    return node.name.text;
+  const name =
+    ts.isArrowFunction(node) || ts.isConstructorDeclaration(node) ? undefined : node.name;
+  if (name && (ts.isIdentifier(name) || ts.isStringLiteral(name))) {
+    return name.text;
   }
   if (
     (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
@@ -230,18 +216,6 @@ function declarationName(node: ts.FunctionLikeDeclaration): string | null {
     return node.parent.name.text;
   }
   return null;
-}
-
-function isFunctionLikeDeclaration(node: ts.Node): node is ts.FunctionLikeDeclaration {
-  return (
-    ts.isFunctionDeclaration(node) ||
-    ts.isMethodDeclaration(node) ||
-    ts.isGetAccessorDeclaration(node) ||
-    ts.isSetAccessorDeclaration(node) ||
-    ts.isConstructorDeclaration(node) ||
-    ts.isFunctionExpression(node) ||
-    ts.isArrowFunction(node)
-  );
 }
 
 function callName(node: ts.CallExpression): string | null {
@@ -280,14 +254,10 @@ function classBuilderSuffix(
   };
 }
 
-function collectDynamicClassBuilderData(
-  source: string,
-  fileName: string,
-): {
+function collectDynamicClassBuilderData(sourceFile: ts.SourceFile): {
   builders: DynamicClassBuilder[];
   calls: DynamicClassBuilderCall[];
 } {
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
   const builders: DynamicClassBuilder[] = [];
   const calls: DynamicClassBuilderCall[] = [];
 
@@ -302,7 +272,7 @@ function collectDynamicClassBuilderData(
       }
     }
 
-    if (isFunctionLikeDeclaration(node) && node.body) {
+    if (ts.isFunctionLikeDeclaration(node) && node.body) {
       const name = declarationName(node);
       if (name) {
         const builderName: string = name;
@@ -334,13 +304,13 @@ function collectDynamicClassBuilderData(
               precedingText = span.literal.text;
             }
           }
-          ts.forEachChild(bodyNode, visitBody);
+          bodyNode.forEachChild(visitBody);
         }
         visitBody(node.body);
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -382,29 +352,36 @@ function collectSourceReferenceFiles(): {
   production: SourceReferences;
   tests: SourceReferenceFile[];
 } {
-  const sourceFiles = walkFiles(UI_SOURCE_ROOT, (fileName) => fileName.endsWith(".ts"));
+  const sourceFiles = walkFiles(UI_SOURCE_ROOT, (fileName) => fileName.endsWith(".ts")).map(
+    (fileName) => ({ fileName, text: fs.readFileSync(fileName, "utf8") }),
+  );
   const productionFiles: SourceReferenceFile[] = [];
   const testFiles: SourceReferenceFile[] = [];
   const builders: DynamicClassBuilder[] = [];
   const calls: DynamicClassBuilderCall[] = [];
-  for (const filePath of sourceFiles) {
-    const source = fs.readFileSync(filePath, "utf8");
-    const entry = {
-      file: relativeToRepo(filePath),
-      ...collectControlUiClassReferences(source, filePath),
-    };
-    const isTestSupport =
-      filePath.endsWith(".test.ts") ||
-      filePath.endsWith(".test-support.ts") ||
-      filePath.split(path.sep).includes("test-helpers");
-    if (isTestSupport) {
-      testFiles.push(entry);
-    } else {
-      productionFiles.push(entry);
-      const builderData = collectDynamicClassBuilderData(source, filePath);
-      builders.push(...builderData.builders);
-      calls.push(...builderData.calls);
+  const parser = createNativeTypeScriptParser({ cwd: REPO_ROOT });
+  try {
+    for (const sourceFile of parser.parseSourceFiles(sourceFiles)) {
+      const filePath = sourceFile.fileName;
+      const entry = {
+        file: relativeToRepo(filePath),
+        ...collectControlUiClassReferences(sourceFile),
+      };
+      const isTestSupport =
+        filePath.endsWith(".test.ts") ||
+        filePath.endsWith(".test-support.ts") ||
+        filePath.split(path.sep).includes("test-helpers");
+      if (isTestSupport) {
+        testFiles.push(entry);
+      } else {
+        productionFiles.push(entry);
+        const builderData = collectDynamicClassBuilderData(sourceFile);
+        builders.push(...builderData.builders);
+        calls.push(...builderData.calls);
+      }
     }
+  } finally {
+    parser.close();
   }
 
   const indexHtml = fs.readFileSync(path.join(UI_ROOT, "index.html"), "utf8");

@@ -1,7 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import { repairLegacySubagentRetainedResults } from "./openclaw-state-db-legacy-backfills.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -93,28 +94,28 @@ function rebuildJsonCanonicalTable(db: DatabaseSync, tableName: string): void {
   if (tableExists(db, migrationTable)) {
     throw new Error(`OpenClaw v13 migration table already exists: ${migrationTable}`);
   }
-  const startMarker = `CREATE TABLE IF NOT EXISTS ${tableName} (`;
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(startMarker);
-  const endMarker = "\n) STRICT;";
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error(`Canonical ${tableName} schema block is missing`);
-  }
-  const migrationSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length).replace(
-    startMarker,
-    `CREATE TABLE ${migrationTable} (`,
-  );
+  const migrationSchema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, tableName, {
+    errorMessage: `Canonical ${tableName} schema block is missing`,
+  }).replace(`CREATE TABLE IF NOT EXISTS ${tableName} (`, `CREATE TABLE ${migrationTable} (`);
   db.exec(migrationSchema);
   const columns = db
     .prepare(`PRAGMA table_xinfo(${migrationTable})`)
     .all()
     .flatMap((column) =>
-      column.hidden === 0 && typeof column.name === "string"
-        ? [quoteSqliteIdentifier(column.name)]
-        : [],
-    )
-    .join(", ");
-  db.exec(`INSERT INTO ${migrationTable} (${columns}) SELECT ${columns} FROM ${tableName};`);
+      column.hidden === 0 && typeof column.name === "string" ? [column.name] : [],
+    );
+  const projection = columns.map((columnName) => {
+    const additive = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.some(
+      (column) => column.tableName === tableName && column.columnName === columnName,
+    );
+    // Released tables lack later additive facts; retain unknown provenance as NULL.
+    return additive && !tableHasColumn(db, tableName, columnName)
+      ? "NULL"
+      : quoteSqliteIdentifier(columnName);
+  });
+  db.exec(
+    `INSERT INTO ${migrationTable} (${columns.map(quoteSqliteIdentifier).join(", ")}) SELECT ${projection.join(", ")} FROM ${tableName};`,
+  );
   db.exec(`DROP TABLE ${tableName};`);
   db.exec(`ALTER TABLE ${migrationTable} RENAME TO ${tableName};`);
 }
@@ -159,13 +160,16 @@ export function migrateJsonCanonicalWideRowsV13(
     // Attestation-only workspaces borrow their path from an alias when one
     // exists; the legacy attestation table never stored a path, so orphans
     // keep a NULL path and heal it when the workspace next appears.
+    const workspacePath = tableExists(db, "workspace_path_aliases")
+      ? `(SELECT alias.workspace_path FROM workspace_path_aliases alias
+           WHERE alias.workspace_key = a.workspace_key LIMIT 1)`
+      : "NULL";
     db.exec(`
       INSERT INTO workspace_setup_state (
         workspace_key, workspace_path, attested_at_ms, attestation_updated_at_ms
       )
       SELECT a.workspace_key,
-             (SELECT alias.workspace_path FROM workspace_path_aliases alias
-               WHERE alias.workspace_key = a.workspace_key LIMIT 1),
+             ${workspacePath},
              a.attested_at_ms,
              a.updated_at_ms
         FROM workspace_attestations a

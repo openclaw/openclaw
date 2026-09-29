@@ -1,54 +1,44 @@
-// OpenAI Responses provider adapts OpenAI response streams to the agent runtime.
-import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
-import { resolveOpenAIClientBaseUrl } from "../transports/openai-transport-shared.js";
-import type {
-  Context,
-  Model,
-  OpenAIResponsesCompat,
-  SimpleStreamOptions,
-  StreamFunction,
-} from "../types.js";
+import { resolveProviderSimpleCompletionHeaders } from "../transports/provider-transport-turn-state.js";
+import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import { resolveCacheRetention } from "./cache-retention.js";
-import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import {
   clampOpenAIPromptCacheKey,
-  resolveOpenAIResponsesCacheParams,
+  resolveOpenAIPromptCacheParams,
 } from "./openai-prompt-cache.js";
-import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
+import { createOpenAIProviderClient } from "./openai-provider-client.js";
+import {
+  resolveOpenAISimpleReasoningEffort,
+  type OpenAIRequestReasoningEffort,
+} from "./openai-request-reasoning.js";
 import {
   applyCommonResponsesParams,
   applyResponsesServiceTierPricing,
   convertResponsesMessages,
   createResponsesAssistantOutput,
-  resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 
-type ResolvedOpenAIResponsesCompat = Required<
-  Pick<OpenAIResponsesCompat, "sendSessionIdHeader" | "supportsLongCacheRetention">
->;
-
-function getCompat(model: Model<"openai-responses">): ResolvedOpenAIResponsesCompat {
+function getCompat(model: Model<"openai-responses">) {
   return {
+    ...resolveOpenAICompletionsCompat(model),
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
-    supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
   };
 }
 
-// OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
-  reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -59,9 +49,6 @@ type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
   replayResponsesItemIds?: boolean;
 };
 
-/**
- * Generate function for OpenAI Responses API
- */
 export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
   model: Model<"openai-responses">,
   context: Context,
@@ -70,7 +57,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
   const stream = new AssistantMessageEventStream();
   const output = createResponsesAssistantOutput(model);
 
-  // Start async processing
   void runResponsesStreamLifecycle({
     stream,
     model,
@@ -80,7 +66,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-      return createClient(model, context, apiKey, options?.headers, cacheSessionId);
+      return createClient(
+        model,
+        context,
+        apiKey,
+        resolveProviderSimpleCompletionHeaders(model, options),
+        cacheSessionId,
+      );
     },
     buildParams: (_requestModel, replayMode) => buildParams(model, context, options, replayMode),
     processStreamOptions: {
@@ -97,10 +89,7 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   "openai-responses",
   SimpleStreamOptions
 > = (model: Model<"openai-responses">, context: Context, options?: SimpleStreamOptions) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);
   const replayOptions = options as OpenAIResponsesReplayOptions | undefined;
@@ -108,7 +97,7 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   return streamOpenAIResponses(model, context, {
     ...base,
     authProfileId: replayOptions?.authProfileId,
-    reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
+    reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
     replayResponsesItemIds: replayOptions?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);
 };
@@ -142,32 +131,7 @@ function createClient(
     headers["x-client-request-id"] = sessionId;
   }
 
-  // Merge options headers last so they can override defaults
-  if (optionsHeaders) {
-    Object.assign(headers, optionsHeaders);
-  }
-
-  const defaultHeaders =
-    model.provider === "cloudflare-ai-gateway"
-      ? {
-          ...headers,
-          Authorization: headers.Authorization ?? null,
-          "cf-aig-authorization": `Bearer ${apiKey}`,
-        }
-      : headers;
-
-  const baseUrl = isCloudflareProvider(model.provider)
-    ? resolveCloudflareBaseUrl(model)
-    : model.baseUrl;
-  return new OpenAI({
-    apiKey,
-    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
-    dangerouslyAllowBrowser: true,
-    defaultHeaders,
-    maxRetries: 0,
-    // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
-    fetch: getAiTransportHost().buildModelFetch(model),
-  });
+  return createOpenAIProviderClient(model, apiKey, headers, optionsHeaders);
 }
 
 function buildParams(
@@ -190,20 +154,12 @@ function buildParams(
     input: messages,
     stream: true,
     prompt_cache_key:
-      cacheRetention === "none"
+      cacheRetention === "none" || !compat.supportsPromptCacheKey
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-    ...resolveOpenAIResponsesCacheParams(model, cacheRetention, compat.supportsLongCacheRetention),
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
     store: false,
   };
-
-  if (options?.maxTokens) {
-    params.max_output_tokens = options?.maxTokens;
-  }
-
-  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
-    params.temperature = options?.temperature;
-  }
 
   if (options?.serviceTier !== undefined) {
     params.service_tier = options.serviceTier;

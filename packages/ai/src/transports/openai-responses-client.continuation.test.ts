@@ -1,7 +1,10 @@
+import path from "node:path";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { Agent } from "../../../agent-core/src/agent.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
@@ -40,14 +43,38 @@ vi.mock("openai", () => {
       this.baseURL = options.baseURL ?? "https://api.openai.com/v1";
       sseState.clientHeaders.push(options.defaultHeaders ?? {});
     }
+
+    withOptions(options: { apiKey?: string }) {
+      return new MockOpenAI({ apiKey: options.apiKey ?? this.apiKey, baseURL: this.baseURL });
+    }
   }
 
   return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
-  ResponsesWS: function UnexpectedResponsesWS() {
-    throw new Error("SSE continuation tests must not construct a WebSocket");
+  ResponsesWS: class MockResponsesWS {
+    socket = { readyState: 1 };
+    private outcome?: Error | SdkResponse;
+    send(request: Record<string, unknown>) {
+      sseState.requests.push(request);
+      this.outcome = sseState.outcomes.shift();
+    }
+    close() {
+      this.socket.readyState = 3;
+    }
+    on() {
+      return this;
+    }
+    async *stream() {
+      yield { type: "open" };
+      if (!this.outcome || this.outcome instanceof Error) {
+        throw this.outcome ?? new Error("Unexpected WebSocket request");
+      }
+      for await (const message of this.outcome.data) {
+        yield { type: "message", message };
+      }
+    }
   },
 }));
 
@@ -56,6 +83,7 @@ import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const model = {
   id: "gpt-5.6-luna",
   name: "GPT-5.6 Luna",
@@ -111,7 +139,6 @@ function completedEvent(responseId: string, content: string) {
         },
       ],
       role: "assistant",
-      phase: "final_answer",
     },
   ];
   return {
@@ -138,13 +165,32 @@ function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
   };
 }
 
+// A custom/proxy OpenAI-Responses-compatible endpoint (e.g. a self-hosted
+// OmniRoute deployment) carries no native-host trust signal on its own --
+// the operator's explicit per-model opt-in is the *only* path to eligibility.
+const customEndpointModel = {
+  ...model,
+  provider: "omniroute",
+  baseUrl: "https://omniroute.example.com/v1",
+  compat: { supportsResponsesContinuation: true },
+} satisfies Model<"openai-responses">;
+
+const unoptedCustomEndpointModel = {
+  ...model,
+  provider: "omniroute",
+  baseUrl: "https://omniroute.example.com/v1",
+} satisfies Model<"openai-responses">;
+
 async function run(
   context: Context,
   options: {
     sessionId?: string;
+    cacheRetention?: "none" | "short";
     onPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
     signal?: AbortSignal;
     reasoningEffort?: "low" | "medium" | "high";
+    transport?: "sse" | "websocket-cached";
+    authProfileId?: string;
     asyncToolExecution?: boolean;
     openclawCodeModeToolSurface?: boolean;
   },
@@ -153,7 +199,9 @@ async function run(
   const stream = await createOpenAIResponsesTransportStreamFn()(requestModel, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
-    transport: "sse",
+    cacheRetention: options.cacheRetention,
+    transport: options.transport ?? "sse",
+    authProfileId: options.authProfileId,
     reasoningEffort: options.reasoningEffort ?? "low",
     asyncToolExecution: options.asyncToolExecution,
     openclawCodeModeToolSurface: options.openclawCodeModeToolSurface,
@@ -188,6 +236,7 @@ describe("native OpenAI Responses SSE continuation", () => {
               openclaw_turn_attempt: "1",
               openclaw_transport: context.transport,
             },
+            websocket: { headers: { "x-openclaw-session-id": context.sessionId ?? "" } },
           };
         },
       },
@@ -197,36 +246,149 @@ describe("native OpenAI Responses SSE continuation", () => {
   afterEach(() => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+    vi.useRealTimers();
   });
 
-  it("continues stateful literal SSE turns with only appended input", async () => {
+  it.each([undefined, "short", "none"] as const)(
+    "continues stateful SSE turns with %s retention and matching affinity",
+    async (cacheRetention) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+      );
+      const firstUser = userMessage("first question", 1);
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+      const requestModel =
+        cacheRetention === undefined ? model : { ...model, compat: { sendSessionIdHeader: true } };
+      const first = await run(
+        { messages: [firstUser], tools: [] },
+        { onPayload, cacheRetention },
+        requestModel,
+      );
+      const second = await run(
+        { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+        { onPayload, cacheRetention },
+        requestModel,
+      );
+
+      expect(second.stopReason).toBe("stop");
+      expect(sseState.clientHeaders).toMatchObject([
+        { "x-openclaw-turn-id": "turn-1" },
+        { "x-openclaw-turn-id": "turn-2" },
+      ]);
+      expect(sseState.clientHeaders.map((headers) => headers.session_id)).toEqual(
+        cacheRetention === "short" ? ["session-1", "session-1"] : [undefined, undefined],
+      );
+      expect(sseState.requests[1]).toMatchObject({
+        previous_response_id: "resp_1",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "second question" }],
+          },
+        ],
+      });
+    },
+  );
+
+  it.each([undefined, "session-raw"])(
+    "preserves native raw no-store requests with session %s",
+    async (sessionId) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+      );
+      const transport = createOpenAIResponsesTransportStreamFn();
+      const options = { apiKey: "test-key", transport: "sse" as const, sessionId };
+      const firstUser = userMessage("first question", 1);
+      const first = await (await transport(model, { messages: [firstUser] }, options)).result();
+      const second = await (
+        await transport(
+          model,
+          {
+            messages: [firstUser, first, userMessage("second question", 2)],
+          },
+          options,
+        )
+      ).result();
+
+      expect(first.stopReason).toBe("stop");
+      expect(second.stopReason).toBe("stop");
+      expect(sseState.requests).toHaveLength(2);
+      for (const request of sseState.requests) {
+        expect(request.store).toBe(false);
+        expect(request).not.toHaveProperty("previous_response_id");
+      }
+      expect(sseState.requests[1]?.input).toHaveLength(3);
+    },
+  );
+
+  it("engages for a custom/proxy endpoint once the operator opts a model in explicitly", async () => {
     sseState.outcomes.push(
       sdkCompletion("resp_1", "first answer"),
       sdkCompletion("resp_2", "second answer"),
     );
     const firstUser = userMessage("first question", 1);
     const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
-    const second = await run(
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload },
+      customEndpointModel,
+    );
+    await run(
       { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
       { onPayload },
+      customEndpointModel,
     );
 
-    expect(second.stopReason).toBe("stop");
-    expect(sseState.clientHeaders).toMatchObject([
-      { "x-openclaw-turn-id": "turn-1" },
-      { "x-openclaw-turn-id": "turn-2" },
-    ]);
-    expect(sseState.requests[1]).toMatchObject({
-      previous_response_id: "resp_1",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "second question" }],
-        },
-      ],
-    });
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("engages for a custom/proxy endpoint purely from the real store policy, with no onPayload store override", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const identity = (payload: Record<string, unknown>) => payload;
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload: identity },
+      customEndpointModel,
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload: identity },
+      customEndpointModel,
+    );
+
+    expect(sseState.requests[0]).toMatchObject({ store: true });
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("never engages for a custom endpoint without the explicit opt-in, even with store:true forced (the host carries no trust signal on its own)", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload },
+      unoptedCustomEndpointModel,
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload },
+      unoptedCustomEndpointModel,
+    );
+
+    expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
+    expect(sseState.requests[1]?.input).toHaveLength(3);
   });
 
   it("keeps final store:false turns stateless and sends full history", async () => {
@@ -246,47 +408,236 @@ describe("native OpenAI Responses SSE continuation", () => {
     expect(sseState.requests[1]?.input).toHaveLength(3);
   });
 
-  it("preserves Astra effort updates on the wire across unstored SSE turns", async () => {
+  it.each([
+    { transport: "sse", reset: "warm" },
+    { transport: "sse", reset: "cleanup" },
+    { transport: "sse", reset: "expiry" },
+    { transport: "websocket-cached", reset: "cleanup" },
+    { transport: "websocket-cached", reset: "expiry" },
+  ] as const)(
+    "preserves effort controls through $transport $reset and transcript reload",
+    async ({ transport, reset }) => {
+      vi.useFakeTimers();
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+        sdkCompletion("resp_3", "third answer"),
+      );
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
+      const options = { onPayload, transport };
+      const messages: Context["messages"] = [userMessage("first question", 1)];
+      const first = await run({ messages }, options, astra);
+      messages.push(first, userMessage("second question", 2));
+      const second = await run({ messages }, { ...options, reasoningEffort: "high" }, astra);
+      messages.push(second, userMessage("third question", 3));
+      if (reset === "cleanup") {
+        cleanupSessionResources();
+      } else if (reset === "expiry") {
+        vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+      }
+      const serialized = JSON.stringify(messages);
+      const third = await run(
+        { messages: JSON.parse(serialized) },
+        { ...options, reasoningEffort: "medium" },
+        astra,
+      );
+      expect([first.stopReason, second.stopReason, third.stopReason]).toEqual([
+        "stop",
+        "stop",
+        "stop",
+      ]);
+      const configuration = { type: "configuration_update", reasoning: { effort: "high" } };
+      const input = sseState.requests[2]?.input;
+      expect(sseState.requests[1]).toMatchObject({ reasoning: { effort: "low" } });
+      expect(sseState.requests[1]?.input).toContainEqual(configuration);
+      expect(sseState.requests[2]).toMatchObject({
+        reasoning: { effort: "low", summary: "auto" },
+        input: [
+          { role: "user", content: [{ text: "first question" }] },
+          { role: "assistant", content: [{ text: "first answer" }] },
+          configuration,
+          { role: "user", content: [{ text: "second question" }] },
+          { role: "assistant", content: [{ text: "second answer" }] },
+          { type: "configuration_update", reasoning: { effort: "medium" } },
+          { role: "user", content: [{ text: "third question" }] },
+        ],
+      });
+      expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+      if (transport === "websocket-cached") {
+        expect(sseState.requests[1]).toHaveProperty("previous_response_id", "resp_1");
+        expect(sseState.requests[2]).toHaveProperty("type", "response.create");
+      }
+      if (transport === "sse" && Array.isArray(input)) {
+        expect(input.slice(0, 4)).toEqual(sseState.requests[1]?.input);
+      }
+    },
+  );
+
+  it.each(["current", "legacy without reasoning", "legacy without replay", "model", "session"])(
+    "round-trips %s reasoning state through the SQLite session transcript",
+    async (variant) => {
+      const { SessionManager } = await import("../../../../src/agents/sessions/session-manager.js");
+      const { upsertSessionEntryCore } =
+        await import("../../../../src/config/sessions/session-accessor.js");
+      configureAiTransportHost({
+        ...initialHost,
+        plugin: { ...initialHost.plugin, resolveTransportTurnState: () => undefined },
+      });
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+        sdkCompletion("resp_warm", "third answer"),
+        sdkCompletion("resp_reloaded", "third answer"),
+      );
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
+      const messages: Context["messages"] = [userMessage("first question", 1)];
+      messages.push(
+        await run({ messages }, { onPayload }, astra),
+        userMessage("second question", 2),
+      );
+      messages.push(
+        await run({ messages }, { onPayload, reasoningEffort: "high" }, astra),
+        userMessage("third question", 3),
+      );
+      expect(sseState.requests[1]?.input).toContainEqual({
+        type: "configuration_update",
+        reasoning: { effort: "high" },
+      });
+      if (variant.startsWith("legacy")) {
+        for (const message of messages) {
+          if ("openclawResponsesInputReplay" in message) {
+            if (variant === "legacy without replay") {
+              delete message.openclawResponsesInputReplay;
+            } else if (isRecord(message.openclawResponsesInputReplay)) {
+              delete message.openclawResponsesInputReplay.reasoning;
+            }
+          }
+        }
+      }
+      const requestModel = variant === "model" ? model : astra;
+      const options = {
+        onPayload,
+        reasoningEffort: "medium" as const,
+        sessionId: variant === "session" ? "session-2" : "session-1",
+      };
+      // Legacy transcripts have no durable controls; compare their existing cold-request behavior.
+      if (variant !== "current") {
+        cleanupSessionResources();
+      }
+      expect((await run({ messages }, options, requestModel)).stopReason).toBe("stop");
+      const expectedRequest = sseState.requests.at(-1);
+      expect(expectedRequest).toMatchObject({
+        reasoning: { effort: variant === "current" ? "low" : "medium" },
+      });
+      if (variant === "current") {
+        expect(expectedRequest?.input).toEqual([
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({ role: "assistant" }),
+          { type: "configuration_update", reasoning: { effort: "high" } },
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({ role: "assistant" }),
+          { type: "configuration_update", reasoning: { effort: "medium" } },
+          expect.objectContaining({ role: "user" }),
+        ]);
+      } else {
+        expect(expectedRequest?.input).not.toContainEqual(
+          expect.objectContaining({ type: "configuration_update" }),
+        );
+      }
+
+      const dir = tempDirs.make("openclaw-responses-transcript-");
+      const scope = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:responses-reasoning",
+        storePath: path.join(dir, "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const manager = SessionManager.open(scope, dir);
+      for (const message of messages) {
+        // This append traverses the production transcript redactor and SQLite store.
+        manager.appendMessage(message);
+      }
+      cleanupSessionResources();
+      const reloaded = SessionManager.open(scope, dir).buildSessionContext().messages;
+      expect(reloaded).toEqual(messages);
+      const requestMessages = reloaded.map((message) => {
+        if (message.role !== "user" && message.role !== "assistant") {
+          throw new Error(`Unexpected persisted message role: ${message.role}`);
+        }
+        return message;
+      });
+      expect((await run({ messages: requestMessages }, options, requestModel)).stopReason).toBe(
+        "stop",
+      );
+      expect(sseState.requests.at(-1)).toEqual(expectedRequest);
+      expect(sseState.requests.at(-1)).not.toHaveProperty("previous_response_id");
+    },
+  );
+
+  it.each([
+    "model",
+    "mode",
+    "multi-agent",
+    "truncation",
+    "server compaction",
+    "compacted history",
+    "edited history",
+    "route",
+    "session",
+    "auth",
+    "request settings",
+  ])("resets durable effort controls after %s changes", async (change) => {
     sseState.outcomes.push(
       sdkCompletion("resp_1", "first answer"),
       sdkCompletion("resp_2", "second answer"),
       sdkCompletion("resp_3", "third answer"),
     );
     const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
-    const messages: Context["messages"] = [userMessage("first question", 1)];
+    let messages: Context["messages"] = [userMessage("first question", 1)];
     const first = await run({ messages }, { onPayload }, astra);
     messages.push(first, userMessage("second question", 2));
     const second = await run({ messages }, { onPayload, reasoningEffort: "high" }, astra);
     messages.push(second, userMessage("third question", 3));
-    const third = await run({ messages }, { onPayload, reasoningEffort: "high" }, astra);
-
-    expect([first.stopReason, second.stopReason, third.stopReason]).toEqual([
-      "stop",
-      "stop",
-      "stop",
-    ]);
-    const configuration = { type: "configuration_update", reasoning: { effort: "high" } };
-    expect(sseState.requests).toEqual([
-      expect.objectContaining({ store: false, reasoning: { effort: "low", summary: "auto" } }),
-      expect.objectContaining({
-        store: false,
-        reasoning: { effort: "low", summary: "auto" },
-        input: [expect.anything(), expect.anything(), configuration, expect.anything()],
-      }),
-      expect.objectContaining({
-        store: false,
-        reasoning: { effort: "low", summary: "auto" },
-        input: [
-          expect.anything(),
-          expect.anything(),
-          configuration,
-          expect.anything(),
-          expect.anything(),
-          expect.anything(),
-        ],
-      }),
-    ]);
-    expect(sseState.requests.every((request) => !request.previous_response_id)).toBe(true);
+    expect(sseState.requests[1]?.input).toContainEqual({
+      type: "configuration_update",
+      reasoning: { effort: "high" },
+    });
+    cleanupSessionResources();
+    if (change === "compacted history") {
+      messages = [userMessage("compacted summary", 0), ...messages.slice(3)];
+    } else if (change === "edited history") {
+      messages[0] = userMessage("edited question", 1);
+    }
+    const serialized = JSON.stringify(messages);
+    const third = await run(
+      { messages: JSON.parse(serialized) },
+      {
+        reasoningEffort: "medium",
+        sessionId: change === "session" ? "session-2" : undefined,
+        authProfileId: change === "auth" ? "profile-2" : undefined,
+        onPayload: (payload) => ({
+          ...onPayload(payload),
+          ...(change === "mode" ? { reasoning: { effort: "medium", mode: "pro" } } : {}),
+          ...(change === "multi-agent" ? { multi_agent: { enabled: true } } : {}),
+          ...(change === "truncation" ? { truncation: "auto" } : {}),
+          ...(change === "server compaction"
+            ? { context_management: [{ type: "compaction", compact_threshold: 1000 }] }
+            : {}),
+          ...(change === "request settings" ? { max_output_tokens: 512 } : {}),
+        }),
+      },
+      change === "model"
+        ? model
+        : change === "route"
+          ? { ...astra, baseUrl: "https://example.test/v1" }
+          : astra,
+    );
+    expect(third.stopReason).toBe("stop");
+    expect(sseState.requests[2]).toMatchObject({ reasoning: { effort: "medium" } });
+    expect(sseState.requests[2]?.input).not.toContainEqual(
+      expect.objectContaining({ type: "configuration_update" }),
+    );
   });
 
   it("executes an Astra tool before SSE completes and returns its result once", async () => {
@@ -453,39 +804,51 @@ describe("native OpenAI Responses SSE continuation", () => {
     expect(JSON.stringify(sseState.requests[1]?.input)).not.toContain('"compaction"');
   });
 
-  it("recovers a rejected continuation with full history and advances the baseline", async () => {
-    sseState.outcomes.push(
-      sdkCompletion("resp_1", "first answer"),
-      Object.assign(new Error("previous response not found"), {
-        code: "previous_response_not_found",
-        status: 400,
-      }),
-      sdkCompletion("resp_2", "second answer"),
-      sdkCompletion("resp_3", "third answer"),
-    );
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const firstUser = userMessage("first question", 1);
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
-    const secondContext = {
-      messages: [firstUser, first, userMessage("second question", 2)],
-      tools: [],
-    };
-    const second = await run(secondContext, { onPayload });
-    await run(
-      {
-        messages: [...secondContext.messages, second, userMessage("third question", 3)],
+  it.each<{ rejection: string; error: { code: string; param?: string; status: number } }>([
+    {
+      rejection: "previous response not found",
+      error: { code: "previous_response_not_found", status: 400 },
+    },
+    {
+      rejection:
+        "Previous response cannot be used for this organization due to Zero Data Retention.",
+      error: { code: "unsupported_parameter", param: "previous_response_id", status: 400 },
+    },
+  ])(
+    "recovers a continuation rejected with $error.code using full history",
+    async ({ rejection, error }) => {
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        Object.assign(new Error(`400 ${rejection}`), error),
+        sdkCompletion("resp_2", "second answer"),
+        sdkCompletion("resp_3", "third answer"),
+      );
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+      const firstUser = userMessage("first question", 1);
+      const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
+      const secondContext = {
+        messages: [firstUser, first, userMessage("second question", 2)],
         tools: [],
-      },
-      { onPayload },
-    );
+      };
+      const second = await run(secondContext, { onPayload });
+      expect(second.stopReason).toBe("stop");
+      await run(
+        {
+          messages: [...secondContext.messages, second, userMessage("third question", 3)],
+          tools: [],
+        },
+        { onPayload },
+      );
 
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(sseState.requests[1]?.input).toHaveLength(1);
-    expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
-    expect(sseState.requests[2]?.input).toHaveLength(3);
-    expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
-    expect(sseState.requests[3]?.input).toHaveLength(1);
-  });
+      expect(sseState.requests).toHaveLength(4);
+      expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+      expect(sseState.requests[1]?.input).toHaveLength(1);
+      expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+      expect(sseState.requests[2]?.input).toHaveLength(3);
+      expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
+      expect(sseState.requests[3]?.input).toHaveLength(1);
+    },
+  );
 
   it("records the effective full-history compaction recovery request", async () => {
     sseState.outcomes.push(

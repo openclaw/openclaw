@@ -8,6 +8,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type {
   ModelDefinitionConfig,
@@ -55,10 +56,6 @@ export function resolveMantleSonnet5Cost(nowMs: number = Date.now()) {
     : SONNET_5_PROMOTIONAL_COST;
 }
 
-// ---------------------------------------------------------------------------
-// Mantle region & endpoint helpers
-// ---------------------------------------------------------------------------
-
 const MANTLE_SUPPORTED_REGIONS = [
   "us-east-1",
   "us-east-2",
@@ -82,10 +79,6 @@ function isSupportedRegion(region: string): boolean {
   return (MANTLE_SUPPORTED_REGIONS as readonly string[]).includes(region);
 }
 
-// ---------------------------------------------------------------------------
-// Bearer token resolution
-// ---------------------------------------------------------------------------
-
 type MantleBearerTokenProvider = () => Promise<string>;
 type MantleBearerTokenProviderFactory = (opts?: {
   region?: string;
@@ -107,11 +100,7 @@ async function loadMantleBearerTokenProviderFactory(): Promise<MantleBearerToken
  * to generate one from IAM credentials via `@aws/bedrock-token-generator`.
  */
 export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const explicitToken = env.AWS_BEARER_TOKEN_BEDROCK?.trim();
-  if (explicitToken) {
-    return explicitToken;
-  }
-  return undefined;
+  return env.AWS_BEARER_TOKEN_BEDROCK?.trim() || undefined;
 }
 
 /** Token cache for IAM-derived bearer tokens, keyed by region. */
@@ -242,10 +231,6 @@ export async function resolveMantleRuntimeBearerToken(params: {
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-// ---------------------------------------------------------------------------
-// OpenAI-format model list response
-// ---------------------------------------------------------------------------
-
 interface OpenAIModelEntry {
   id: string;
   object?: string;
@@ -254,13 +239,9 @@ interface OpenAIModelEntry {
 }
 
 interface OpenAIModelsResponse {
-  data?: OpenAIModelEntry[];
+  data: OpenAIModelEntry[];
   object?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Reasoning heuristic
-// ---------------------------------------------------------------------------
 
 /** Model ID substrings that indicate reasoning/thinking support. */
 const REASONING_PATTERNS = [
@@ -286,17 +267,14 @@ async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIM
         `Mantle model discovery response stalled: no data received for ${chunkTimeoutMs}ms`,
       ),
   });
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return {};
+  if (!body || typeof body !== "object" || !("data" in body) || !Array.isArray(body.data)) {
+    throw new Error("Mantle model discovery response must contain a data array");
   }
   return body as OpenAIModelsResponse;
 }
 
-// ---------------------------------------------------------------------------
-// Discovery cache
-// ---------------------------------------------------------------------------
-
 interface MantleCacheEntry {
+  bearerToken: string;
   models: ModelDefinitionConfig[];
   fetchedAt: number;
 }
@@ -307,10 +285,6 @@ type MantleDiscoveryConfig = {
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
 
-// ---------------------------------------------------------------------------
-// Model discovery
-// ---------------------------------------------------------------------------
-
 /**
  * Discover available models from the Mantle `/v1/models` endpoint.
  *
@@ -319,23 +293,27 @@ const discoveryCache = new Map<string, MantleCacheEntry>();
  * { "data": [{ "id": "anthropic.claude-sonnet-4-6", "object": "model", "owned_by": "anthropic" }] }
  * ```
  *
- * Results are cached per region for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
- * Returns an empty array if the request fails (no permission, network error, etc.).
+ * Results are cached per region and bearer credential for `DEFAULT_REFRESH_INTERVAL_SECONDS`.
+ * Public calls retain advisory results; strict catalog calls propagate acquisition failures.
  */
-/** Discover Mantle models for one region/config. */
 export async function discoverMantleModels(params: {
   region: string;
   bearerToken: string;
+  discoveryMode?: "strict";
   fetchFn?: typeof fetch;
   now?: () => number;
 }): Promise<ModelDefinitionConfig[]> {
   const { region, bearerToken, fetchFn = fetch, now = Date.now } = params;
 
-  // Check cache
-  const cacheKey = region;
-  const cached = discoveryCache.get(cacheKey);
-  if (cached && now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000) {
+  const cached = discoveryCache.get(region);
+  if (
+    cached?.bearerToken === bearerToken &&
+    now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000
+  ) {
     return cached.models;
+  }
+  if (cached?.bearerToken !== bearerToken) {
+    discoveryCache.delete(region);
   }
 
   const endpoint = `${mantleEndpoint(region)}/v1/models`;
@@ -352,42 +330,32 @@ export async function discoverMantleModels(params: {
 
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      log.debug?.("Mantle model discovery failed", {
-        status: response.status,
-        statusText: response.statusText,
-      });
-      return cached?.models ?? [];
+      throw new LiveModelCatalogHttpError("amazon-bedrock-mantle", response.status);
     }
 
     const body = await readMantleModelDiscoveryJson(response);
-    const rawModels = body.data ?? [];
-
-    const models = rawModels
-      .filter((m) => m.id?.trim())
-      .map((m) => ({
-        id: m.id,
-        name: m.id, // Mantle doesn't return display names
-        reasoning: inferReasoningSupport(m.id),
+    const models = body.data
+      .filter((model) => model.id?.trim())
+      .map((model) => ({
+        id: model.id,
+        name: model.id,
+        reasoning: inferReasoningSupport(model.id),
         input: ["text" as const],
         cost: DEFAULT_COST,
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         maxTokens: DEFAULT_MAX_TOKENS,
       }))
-      .toSorted((a, b) => a.id.localeCompare(b.id));
+      .toSorted((left, right) => left.id.localeCompare(right.id));
 
-    discoveryCache.set(cacheKey, { models, fetchedAt: now() });
+    discoveryCache.set(region, { bearerToken, models, fetchedAt: now() });
     return models;
   } catch (error) {
-    log.debug?.("Mantle model discovery error", {
-      error: formatErrorMessage(error),
-    });
-    return cached?.models ?? [];
+    if (params.discoveryMode === "strict") {
+      throw error;
+    }
+    return cached?.bearerToken === bearerToken ? cached.models : [];
   }
 }
-
-// ---------------------------------------------------------------------------
-// Implicit provider resolution
-// ---------------------------------------------------------------------------
 
 /**
  * Resolve an implicit Bedrock Mantle provider if authentication is available.
@@ -398,9 +366,10 @@ export async function discoverMantleModels(params: {
  * - Region from AWS_REGION / AWS_DEFAULT_REGION / default us-east-1
  * - Models discovered from `/v1/models`
  */
-/** Resolve implicit Mantle provider config from env, IAM token support, and discovery. */
+/** Public resolution keeps advisory null results; strict catalog callers retain acquired empties. */
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
+  discoveryMode?: "strict";
   pluginConfig?: { discovery?: MantleDiscoveryConfig };
   fetchFn?: typeof fetch;
   tokenProviderFactory?: MantleBearerTokenProviderFactory;
@@ -417,7 +386,6 @@ export async function resolveImplicitMantleProvider(params: {
     return null;
   }
 
-  // Try explicit token first, then generate from IAM credentials
   const bearerToken =
     explicitBearerToken ??
     (await generateBearerTokenFromIam({
@@ -432,10 +400,10 @@ export async function resolveImplicitMantleProvider(params: {
   const models = await discoverMantleModels({
     region,
     bearerToken,
+    discoveryMode: params.discoveryMode,
     fetchFn: params.fetchFn,
   });
-
-  if (models.length === 0) {
+  if (models.length === 0 && params.discoveryMode !== "strict") {
     return null;
   }
 
@@ -527,7 +495,7 @@ export async function resolveImplicitMantleProvider(params: {
     api: "openai-completions",
     auth: "api-key",
     apiKey: explicitBearerToken ? "env:AWS_BEARER_TOKEN_BEDROCK" : MANTLE_IAM_TOKEN_MARKER,
-    models: allModels,
+    models: models.length === 0 ? [] : allModels,
   };
 }
 

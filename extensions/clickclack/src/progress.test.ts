@@ -58,7 +58,7 @@ describe("ClickClack native agent progress", () => {
     });
   });
 
-  it("correlates lane-prefixed item ids with their bare tool-call ids", async () => {
+  it("retains canonical item identity through completion", async () => {
     const publishEphemeral = vi.fn().mockResolvedValue(undefined);
     const publisher = createClickClackAgentProgressPublisher({
       client: { publishEphemeral },
@@ -74,6 +74,7 @@ describe("ClickClack native agent progress", () => {
       progressText: "Reading",
     });
     publisher.onItemEvent({
+      itemId: "tool:read-1",
       toolCallId: "read-1",
       kind: "tool",
       name: "read",
@@ -86,7 +87,7 @@ describe("ClickClack native agent progress", () => {
     expect(publishEphemeral).toHaveBeenCalledTimes(3);
     expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
       op: "finalize",
-      line: { id: "item:read-1", text: "📖 Read: Done", status: "completed" },
+      line: { id: "item:tool:read-1", text: "📖 Read: Done", status: "completed" },
     });
   });
 

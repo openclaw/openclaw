@@ -1,34 +1,11 @@
-/** Diagnostic helpers for embedded-agent compaction. */
-import type { ApiRegistry } from "@openclaw/ai";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
-import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
-import { registerProviderStreamForModel } from "../provider-stream.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { estimateTokens } from "../sessions/index.js";
 import type { CompactionMessageMetrics } from "./compact.types.js";
 
-export const hasRealConversationContent = isRealConversationMessage;
-
 export function createDirectCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
-}
-
-export function resolveCompactionProviderStream(params: {
-  effectiveModel: ProviderRuntimeModel;
-  config?: OpenClawConfig;
-  agentDir: string;
-  effectiveWorkspace: string;
-  apiRegistry: ApiRegistry;
-}) {
-  return registerProviderStreamForModel({
-    model: params.effectiveModel,
-    cfg: params.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.effectiveWorkspace,
-    apiRegistry: params.apiRegistry,
-  });
 }
 
 export function normalizeObservedTokenCount(value: unknown): number | undefined {
@@ -94,6 +71,6 @@ export function summarizeCompactionMessages(messages: AgentMessage[]): Compactio
 
 export function containsRealConversationMessages(messages: AgentMessage[]): boolean {
   return messages.some((message, index, allMessages) =>
-    hasRealConversationContent(message, allMessages, index),
+    isRealConversationMessage(message, allMessages, index),
   );
 }

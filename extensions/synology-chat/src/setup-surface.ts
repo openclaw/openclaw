@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Synology Chat plugin module implements setup surface behavior.
 import {
   createAllowFromSection,
   createSetupTranslator,
@@ -9,6 +8,7 @@ import {
   formatDocsLink,
   mergeAllowFromEntries,
   normalizeAccountId,
+  patchScopedAccountConfig,
   setSetupChannelEnabled,
   splitSetupEntries,
   type ChannelSetupAdapter,
@@ -71,47 +71,19 @@ function patchSynologyChatAccountConfig(params: {
   clearFields?: string[];
   enabled?: boolean;
 }): OpenClawConfig {
-  const channelConfig = getChannelConfig(params.cfg);
-  if (params.accountId === DEFAULT_ACCOUNT_ID) {
-    const nextChannelConfig = { ...channelConfig } as Record<string, unknown>;
-    for (const field of params.clearFields ?? []) {
-      delete nextChannelConfig[field];
-    }
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        [channel]: {
-          ...nextChannelConfig,
-          ...(params.enabled ? { enabled: true } : {}),
-          ...params.patch,
-        },
-      },
-    };
-  }
-
-  const nextAccounts = { ...channelConfig.accounts } as Record<string, Record<string, unknown>>;
-  const nextAccountConfig = { ...nextAccounts[params.accountId] };
-  for (const field of params.clearFields ?? []) {
-    delete nextAccountConfig[field];
-  }
-  nextAccounts[params.accountId] = {
-    ...nextAccountConfig,
-    ...(params.enabled ? { enabled: true } : {}),
-    ...params.patch,
-  };
-
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [channel]: {
-        ...channelConfig,
-        ...(params.enabled ? { enabled: true } : {}),
-        accounts: nextAccounts,
-      },
+  return patchScopedAccountConfig({
+    cfg: params.cfg,
+    channelKey: channel,
+    accountId: params.accountId,
+    patch: params.patch,
+    accountPatch: {
+      ...(params.enabled ? { enabled: true } : {}),
+      ...params.patch,
     },
-  };
+    clearFields: params.clearFields,
+    ensureChannelEnabled: Boolean(params.enabled),
+    ensureAccountEnabled: false,
+  });
 }
 
 function isSynologyChatConfigured(cfg: OpenClawConfig, accountId: string): boolean {

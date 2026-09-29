@@ -1,4 +1,4 @@
-// Coordinates browser process cleanup for CLI-managed runtime sessions.
+import type { SessionEntryCurrentPreparation } from "./config/sessions/session-entry-current.types.js";
 import type { OpenClawConfig } from "./config/types.openclaw.js";
 import { runBestEffortCleanup } from "./infra/non-fatal-cleanup.js";
 import { closeTrackedBrowserTabsForSessions } from "./plugin-sdk/browser-maintenance.js";
@@ -18,13 +18,17 @@ function isBrowserCleanupDisabled(cfg: OpenClawConfig | undefined): boolean {
   return cfg?.browser?.enabled === false || cfg?.plugins?.entries?.browser?.enabled === false;
 }
 
-export async function cleanupBrowserSessionsForLifecycleEnd(params: {
-  cfg?: OpenClawConfig;
-  sessionKeys: string[];
-  onWarn?: (message: string) => void;
-  onError?: (error: unknown) => void;
-}): Promise<void> {
-  if (isBrowserCleanupDisabled(params.cfg)) {
+export async function cleanupBrowserSessionsForLifecycleEnd(
+  params: SessionEntryCurrentPreparation & {
+    cfg?: OpenClawConfig;
+    sessionKeys: string[];
+    isCurrent?: () => boolean;
+    onWarn?: (message: string) => void;
+    onError?: (error: unknown) => void;
+  },
+): Promise<void> {
+  const { cfg, onError, ...cleanupParams } = params;
+  if (isBrowserCleanupDisabled(cfg)) {
     return;
   }
   const sessionKeys = normalizeSessionKeys(params.sessionKeys);
@@ -34,10 +38,10 @@ export async function cleanupBrowserSessionsForLifecycleEnd(params: {
   await runBestEffortCleanup({
     cleanup: async () => {
       await closeTrackedBrowserTabsForSessions({
+        ...cleanupParams,
         sessionKeys,
-        onWarn: params.onWarn,
       });
     },
-    onError: params.onError,
+    onError,
   });
 }

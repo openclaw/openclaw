@@ -1,38 +1,16 @@
-/**
- * Resolves retry, fallback, and terminal failover decisions for a run.
- */
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { isCliTerminalStopCode } from "../../failover-error.js";
 
-/** Failover action selected for one embedded run failure decision point. */
-type ContinueNormalDecision = { action: "continue_normal" };
 type ProfileDecision = {
   action: "rotate_profile" | "surface_error";
   reason: FailoverReason | null;
 };
 type ModelFallbackDecision = { action: "fallback_model"; reason: FailoverReason };
-type ErrorPayloadDecision = { action: "return_error_payload" };
-type RunFailoverDecision =
-  | ContinueNormalDecision
-  | ProfileDecision
-  | ModelFallbackDecision
-  | ErrorPayloadDecision;
-
-export type RetryLimitFailoverDecision = Extract<
-  RunFailoverDecision,
-  { action: "fallback_model" | "return_error_payload" }
->;
-
-type PromptFailoverDecision = Extract<
-  RunFailoverDecision,
-  { action: "rotate_profile" | "fallback_model" | "surface_error" }
->;
-
-export type AssistantFailoverDecision = Extract<
-  RunFailoverDecision,
-  { action: "continue_normal" | "rotate_profile" | "fallback_model" | "surface_error" }
->;
+export type RetryLimitFailoverDecision = ModelFallbackDecision | { action: "return_error_payload" };
+type PromptFailoverDecision = ProfileDecision | ModelFallbackDecision;
+export type AssistantFailoverDecision = PromptFailoverDecision | { action: "continue_normal" };
+type RunFailoverDecision = RetryLimitFailoverDecision | AssistantFailoverDecision;
 
 type RetryLimitDecisionParams = {
   stage: "retry_limit";
@@ -43,7 +21,6 @@ type RetryLimitDecisionParams = {
 type PromptDecisionParams = {
   stage: "prompt";
   allowFormatRetry?: boolean;
-  aborted: boolean;
   externalAbort: boolean;
   fallbackConfigured: boolean;
   failoverCode?: string;
@@ -72,12 +49,6 @@ type RunFailoverDecisionParams =
   | PromptDecisionParams
   | AssistantDecisionParams;
 
-function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
-  return Boolean(
-    reason && reason !== "timeout" && reason !== "format" && reason !== "session_expired",
-  );
-}
-
 function isTerminalFormatFailure(params: {
   allowFormatRetry?: boolean;
   failoverFailure: boolean;
@@ -89,9 +60,6 @@ function isTerminalFormatFailure(params: {
 }
 
 function shouldRotatePrompt(params: PromptDecisionParams): boolean {
-  if (params.timedOutByRunBudget) {
-    return false;
-  }
   return (
     params.failoverFailure &&
     params.failoverReason !== "timeout" &&
@@ -115,9 +83,6 @@ function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): 
 }
 
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
-  if (isTerminalFormatFailure(params)) {
-    return false;
-  }
   if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
     return false;
   }
@@ -133,14 +98,6 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
       params.terminal.source !== "observation" &&
       params.terminal.aborted === true);
   return (!aborted && params.failoverFailure) || timeoutFailure;
-}
-
-function assistantFallbackReason(params: AssistantDecisionParams): FailoverReason {
-  const failoverReason = params.failoverReason;
-  if (params.failoverFailure && failoverReason && failoverReason !== "timeout") {
-    return failoverReason;
-  }
-  return isAssistantTimeoutFailure(params) ? "timeout" : (failoverReason ?? "unknown");
 }
 
 /** Preserves an existing retry reason unless the current attempt produced a stronger signal. */
@@ -166,38 +123,34 @@ export function resolveRunFailoverDecision(
  */
 export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): RunFailoverDecision {
   if (params.stage === "retry_limit") {
-    if (params.fallbackConfigured && shouldEscalateRetryLimit(params.failoverReason)) {
-      const fallbackReason = params.failoverReason ?? "unknown";
+    const reason = params.failoverReason;
+    if (
+      params.fallbackConfigured &&
+      reason &&
+      reason !== "timeout" &&
+      reason !== "format" &&
+      reason !== "session_expired"
+    ) {
       return {
         action: "fallback_model",
-        reason: fallbackReason,
+        reason,
       };
     }
     return {
       action: "return_error_payload",
     };
   }
+  const surfaceError = { action: "surface_error" as const, reason: params.failoverReason };
 
   if (params.stage === "prompt") {
-    if (isCliTerminalStopCode(params.failoverCode)) {
-      // Plugin-harness errors can propagate arbitrary string codes through failover-error normalization;
-      // normal CLI paths are protected in model-fallback-runner instead.
-      return {
-        action: "surface_error",
-        reason: params.failoverReason,
-      };
-    }
-    if (params.externalAbort) {
-      return {
-        action: "surface_error",
-        reason: params.failoverReason,
-      };
-    }
-    if (params.timedOutByRunBudget) {
-      return {
-        action: "surface_error",
-        reason: params.failoverReason,
-      };
+    // Plugin harnesses can forward CLI terminal codes through failover normalization;
+    // normal CLI paths enforce the same stop in model-fallback-runner.
+    if (
+      isCliTerminalStopCode(params.failoverCode) ||
+      params.externalAbort ||
+      params.timedOutByRunBudget
+    ) {
+      return surfaceError;
     }
     if (params.harnessOwnsTransport && params.failoverReason === "timeout") {
       // Plugin harness lifecycle timeouts must stay inside the harness boundary;
@@ -208,10 +161,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
           reason: "timeout",
         };
       }
-      return {
-        action: "surface_error",
-        reason: params.failoverReason,
-      };
+      return surfaceError;
     }
     if (!params.profileRotated && shouldRotatePrompt(params)) {
       return {
@@ -225,27 +175,16 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
         reason: params.failoverReason ?? "unknown",
       };
     }
-    return {
-      action: "surface_error",
-      reason: params.failoverReason,
-    };
+    return surfaceError;
   }
 
   if (
     params.signalOwnedInterruption ||
     ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
-      params.terminal.source === "external")
+      params.terminal.source === "external") ||
+    isTerminalFormatFailure(params)
   ) {
-    return {
-      action: "surface_error",
-      reason: params.failoverReason,
-    };
-  }
-  if (isTerminalFormatFailure(params)) {
-    return {
-      action: "surface_error",
-      reason: params.failoverReason,
-    };
+    return surfaceError;
   }
   if (params.failoverFailure && params.failoverReason === "tls_certificate") {
     return params.fallbackConfigured
@@ -253,10 +192,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
           action: "fallback_model",
           reason: "tls_certificate",
         }
-      : {
-          action: "surface_error",
-          reason: "tls_certificate",
-        };
+      : surfaceError;
   }
   const assistantShouldRotate = shouldRotateAssistant(params);
   if (!params.profileRotated && assistantShouldRotate) {
@@ -268,7 +204,10 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   if (assistantShouldRotate && params.fallbackConfigured) {
     return {
       action: "fallback_model",
-      reason: assistantFallbackReason(params),
+      reason:
+        !isConcreteNonTimeoutAssistantFailure(params) && isAssistantTimeoutFailure(params)
+          ? "timeout"
+          : (params.failoverReason ?? "unknown"),
     };
   }
   if (!assistantShouldRotate) {
@@ -276,8 +215,5 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       action: "continue_normal",
     };
   }
-  return {
-    action: "surface_error",
-    reason: params.failoverReason,
-  };
+  return surfaceError;
 }

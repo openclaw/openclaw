@@ -60,22 +60,23 @@ export function resolveImageGenerationOverrides(params: {
   });
   const ignoredOverrides: ImageGenerationIgnoredOverride[] = sanitized.ignoredOverrides;
   let { quality, outputFormat, background } = params;
+  const output = params.provider.capabilities.output;
+  const qualities =
+    (params.model ? output?.qualitiesByModel?.[params.model] : undefined) ?? output?.qualities;
+  const formats =
+    (params.model ? output?.formatsByModel?.[params.model] : undefined) ?? output?.formats;
+  const backgrounds =
+    (params.model ? output?.backgroundsByModel?.[params.model] : undefined) ?? output?.backgrounds;
 
-  if (quality && !(params.provider.capabilities.output?.qualities ?? []).includes(quality)) {
+  if (quality && !(qualities ?? []).includes(quality)) {
     ignoredOverrides.push({ key: "quality", value: quality });
     quality = undefined;
   }
-  if (
-    outputFormat &&
-    !(params.provider.capabilities.output?.formats ?? []).includes(outputFormat)
-  ) {
+  if (outputFormat && !(formats ?? []).includes(outputFormat)) {
     ignoredOverrides.push({ key: "outputFormat", value: outputFormat });
     outputFormat = undefined;
   }
-  if (
-    background &&
-    !(params.provider.capabilities.output?.backgrounds ?? []).includes(background)
-  ) {
+  if (background && !(backgrounds ?? []).includes(background)) {
     ignoredOverrides.push({ key: "background", value: background });
     background = undefined;
   }

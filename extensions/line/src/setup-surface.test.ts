@@ -128,6 +128,7 @@ describe("linePlugin status.probeAccount", () => {
     expect(fetchMock.mock.calls.map(([url]) => resolveRequestUrl(url))).toEqual([
       "https://api.line.me/v2/bot/info",
       "https://api.line.me/v2/bot/message/quota",
+      "https://api.line.me/v2/bot/channel/webhook/endpoint",
     ]);
   });
 });
@@ -138,11 +139,6 @@ function createRuntime() {
     async (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => {
       providerStarted.resolve();
       await waitForAbortSignal(opts.abortSignal);
-      return {
-        account: { accountId: "default" },
-        handleWebhook: async () => {},
-        stop: async () => {},
-      };
     },
   );
 

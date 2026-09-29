@@ -16,6 +16,7 @@ import { loadSessionEntry, resolveSessionEntryFromStore } from "./session-access
 import {
   SessionEntryLifecycleUpsertConflictError,
   type SessionEntryLifecycleUpsert,
+  type SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -27,7 +28,6 @@ import type {
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type {
@@ -66,35 +66,6 @@ function assertSessionInitializationAgentScope(agentId: string, sessionKey: stri
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../../gateway/session-archive.runtime.js"),
 );
-
-/**
- * Persists runner reset metadata after the caller appends the in-log boundary.
- */
-export async function persistSessionResetLifecycle(params: {
-  agentId?: string;
-  cleanupPreviousTranscript?: boolean;
-  nextEntry: SessionEntry;
-  nextSessionFile: string;
-  previousEntry: SessionEntry;
-  previousSessionId?: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<{ replayedMessages: number }> {
-  await applySessionEntryLifecycleMutation({
-    agentId: params.agentId,
-    activeSessionKey: params.sessionKey,
-    storePath: params.storePath,
-    upserts: [
-      {
-        sessionKey: params.sessionKey,
-        entry: params.nextEntry,
-        resetBoundary: { context: "preserve-tail", reason: "reset" },
-      },
-    ],
-    skipMaintenance: true,
-  });
-  return { replayedMessages: 0 };
-}
 
 type ReplySessionInitializationSelection = {
   agentId: string;
@@ -187,7 +158,7 @@ export async function commitReplySessionInitialization(params: {
   ) => Promise<SessionEntry> | SessionEntry;
   /** Authoritative contextual route facts observed by the admitted inbound turn. */
   routeContext?: ConversationRouteContext | null;
-  resetBoundary?: SessionResetBoundaryRequest;
+  resetBoundary?: SessionResetBoundaryWrite;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;

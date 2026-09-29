@@ -7,7 +7,10 @@
  * re-wrapped here unconditionally, so no provider-controlled metadata can
  * spoof the trust marker and transport-specific extras never reach the model.
  */
-import { asFiniteNumber as readFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber as readFiniteNumber,
+  parseDateStringTimestampMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
@@ -116,7 +119,7 @@ const WEB_SEARCH_CITATION_MAX_SCAN = 1_000;
 
 type WebSearchOutputBudget = { remaining: number; truncated: boolean };
 
-function unwrapEnvelopes(value: string): string {
+export function unwrapWebSearchOutputText(value: string): string {
   return value.replace(ENVELOPE_OPEN_RE, "").replace(ENVELOPE_END_RE, "").trim();
 }
 
@@ -140,7 +143,7 @@ function toHttpUrl(value: string): string | undefined {
 const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
 function wrapProse(value: string, budget?: WebSearchOutputBudget): string {
-  let inner = unwrapEnvelopes(value);
+  let inner = unwrapWebSearchOutputText(value);
   if (budget) {
     const bounded = truncateSanitizedExternalContent(inner, budget.remaining);
     budget.truncated ||= bounded.truncated;
@@ -182,38 +185,28 @@ function normalizeCitations(
       budget.truncated = true;
       break;
     }
-    if (typeof entry === "string") {
-      const url = toHttpUrl(entry);
-      if (url && consumeUrlBudget(url, budget)) {
-        citations.push({ url });
-      }
+    const source = typeof entry === "string" ? { url: entry } : entry;
+    if (!isRecord(source) || typeof source.url !== "string") {
       continue;
     }
-    const url = isRecord(entry) && typeof entry.url === "string" ? toHttpUrl(entry.url) : undefined;
-    if (!isRecord(entry) || !url || !consumeUrlBudget(url, budget)) {
+    const url = toHttpUrl(source.url);
+    if (!url || !consumeUrlBudget(url, budget)) {
       continue;
     }
     const citation: Static<typeof WebSearchCitationSchema> = { url };
-    if (typeof entry.title === "string") {
-      citation.title = entry.title;
+    if (typeof source.title === "string") {
+      citation.title = source.title;
     }
     citations.push(citation);
   }
   return citations;
 }
 
-// Provider output is untrusted third-party data (bundled or, worse, external
-// plugin code). Snapshot it into plain JSON before reading any field so exotic
-// values a real HTTP payload never has — bigint, circular refs, throwing
-// getters, Proxy traps — cannot crash the agent turn or vary between reads. A
-// payload that will not serialize degrades to a safe provider error rather than
-// throwing out of the boundary.
+// Snapshot provider data before reading it so getters/proxies cannot vary between
+// reads. Non-JSON values degrade to a provider error at this boundary.
 function snapshotProviderResult(result: Record<string, unknown>): Record<string, unknown> | null {
   try {
-    // Serialize-then-parse, not structuredClone: we specifically want non-JSON
-    // values (bigint, circular refs, functions, symbols) to flatten or throw
-    // here rather than survive and break a later serialization. structuredClone
-    // preserves them, so it would only move the crash downstream.
+    // structuredClone preserves non-JSON values that could break later serialization.
     const serialized = JSON.stringify(result ?? {});
     const cloned: unknown = JSON.parse(serialized);
     return isRecord(cloned) ? cloned : {};
@@ -222,7 +215,6 @@ function snapshotProviderResult(result: Record<string, unknown>): Record<string,
   }
 }
 
-/** Normalizes every bundled or external provider payload at the core tool boundary. */
 export function normalizeWebSearchOutput(params: {
   result: Record<string, unknown>;
   provider: string;
@@ -252,16 +244,14 @@ export function normalizeWebSearchOutput(params: {
   // success payloads, so treating it as failure first prevents an error plus
   // empty results from masquerading as a successful search.
   if (Object.hasOwn(result, "error")) {
-    // Error branches carry no externalContent marker, so nothing provider-
-    // controlled may pass unwrapped: the structured code is a core literal,
-    // the raw provider code and message travel inside the envelope, and docs
-    // must canonicalize as http(s).
-    // Non-string error payloads (numbers, objects) keep their diagnostics by
-    // serializing into the wrapped message instead of collapsing to a bare code.
-    const rawError =
+    // Error branches carry no trust marker: wrap the provider code and message,
+    // preserve non-string diagnostics as JSON, and allow only http(s) docs links.
+    const rawError = truncateUtf16Safe(
       typeof result.error === "string"
-        ? truncateUtf16Safe(result.error, 2_000)
-        : truncateUtf16Safe(JSON.stringify(result.error) ?? "provider_error", 2_000);
+        ? result.error
+        : (JSON.stringify(result.error) ?? "provider_error"),
+      2_000,
+    );
     const rawMessage = typeof result.message === "string" ? result.message : rawError;
     const docs = typeof result.docs === "string" ? toHttpUrl(result.docs) : undefined;
     return {
@@ -278,9 +268,7 @@ export function normalizeWebSearchOutput(params: {
 
   // A results branch requires conforming rows; anything else is preserved as
   // raw so nonstandard external payloads are never silently gutted.
-  // Array.from densifies holes into undefined so sparse arrays cannot slip
-  // past row conformance and serialize as null rows.
-  const rows = Array.isArray(result.results) ? Array.from(result.results) : undefined;
+  const rows = Array.isArray(result.results) ? result.results : undefined;
   const conformingRows = rows?.every(
     (entry): entry is Record<string, unknown> =>
       isRecord(entry) &&
@@ -304,10 +292,14 @@ export function normalizeWebSearchOutput(params: {
             : Array.isArray(row.snippets)
               ? row.snippets.find((value): value is string => typeof value === "string")
               : undefined;
-      const published =
-        typeof row.published === "string" && PUBLISHED_RE.test(row.published)
-          ? row.published
-          : undefined;
+      let published: string | undefined;
+      if (typeof row.published === "string" && PUBLISHED_RE.test(row.published)) {
+        const calendarDate = row.published.slice(0, 10);
+        const timestamp = parseDateStringTimestampMs(calendarDate);
+        if (timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate)) {
+          published = row.published;
+        }
+      }
       const normalizedRow: Static<typeof WebSearchResultSchema> = {
         title: wrapProse(row.title as string, budget),
         url,

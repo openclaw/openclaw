@@ -1,10 +1,10 @@
 // Verifies provider auth environment trust decisions.
 import { describe, expect, it, vi } from "vitest";
 
-const getProviderEnvVars = vi.hoisted(() => vi.fn(() => ["WHISPERX_API_KEY"]));
+const getProviderEnvVarsCore = vi.hoisted(() => vi.fn(() => ["WHISPERX_API_KEY"]));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  getProviderEnvVars,
+  getProviderEnvVarsCore,
   resolveProviderAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {},
@@ -22,7 +22,7 @@ describe("provider auth env trust", () => {
       config,
     });
 
-    expect(getProviderEnvVars).toHaveBeenCalledWith("whisperx", {
+    expect(getProviderEnvVarsCore).toHaveBeenCalledWith("whisperx", {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
@@ -85,7 +85,7 @@ describe("provider auth env trust", () => {
       env: { WHISPERX_API_KEY: "test-secret" },
     });
 
-    expect(getProviderEnvVars).toHaveBeenCalledWith("whisperx", {
+    expect(getProviderEnvVarsCore).toHaveBeenCalledWith("whisperx", {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
@@ -111,7 +111,7 @@ describe("provider auth env trust", () => {
       env: { WHISPERX_API_KEY: "test-secret" },
     });
 
-    expect(getProviderEnvVars).toHaveBeenCalledWith("whisperx", {
+    expect(getProviderEnvVarsCore).toHaveBeenCalledWith("whisperx", {
       config,
       includeUntrustedWorkspacePlugins: false,
     });

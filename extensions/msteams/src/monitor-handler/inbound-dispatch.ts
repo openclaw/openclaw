@@ -1,4 +1,4 @@
-// Msteams plugin module dispatches prepared inbound turns and owns reply lifecycle handling.
+import { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 import {
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
@@ -12,7 +12,7 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
-import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
+import { resolveMSTeamsReplyPolicy } from "../policy.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { recordMSTeamsSentMessage } from "../sent-message-cache.js";
@@ -98,7 +98,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   });
   let combinedBody = body;
   const isRoomish = !isDirectMessage;
-  const historyKey = isRoomish ? conversationId : undefined;
+  const historyKey = isRoomish ? facts.historyKey : undefined;
   if (isRoomish && historyKey) {
     const channelHistory = createChannelHistoryWindow({ historyMap: conversationHistories });
     combinedBody = channelHistory.buildPendingContext({
@@ -131,7 +131,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
           groupPolicy,
           allowFrom: effectiveGroupAllowFrom,
           isSenderAllowed: (allowFrom) =>
-            resolveMSTeamsAllowlistMatch({
+            resolveAllowlistMatchSimple({
               allowFrom,
               senderId: quoteSenderId ?? "",
               senderName: quoteSenderName,
@@ -139,9 +139,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
             }).allowed,
         })
       : true;
-  const bodyForAgent = threadContext
-    ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${agentBody}`
-    : agentBody;
   // Teams channel actions need both the AAD group and Graph channel ids.
   const nativeChannelId =
     isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
@@ -164,6 +161,19 @@ export async function dispatchMSTeamsInboundTurn(params: {
     channel: "msteams",
     contextVisibility: contextVisibilityMode,
     supplemental: {
+      // The capped Graph thread slice supplements the pending channel backlog;
+      // it cannot claim to replace that history or become sender command text.
+      channelStructuredContext: threadContext.length
+        ? [
+            {
+              label: "Thread history",
+              source: "msteams",
+              type: "chat_window",
+              sessionTranscriptMode: "preserve",
+              payload: { order: "chronological", messages: threadContext },
+            },
+          ]
+        : undefined,
       quote: quoteInfo
         ? {
             id: quoteInfo.id ?? activity.replyToId ?? undefined,
@@ -208,7 +218,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
     },
     message: {
       body: combinedBody,
-      bodyForAgent,
+      bodyForAgent: agentBody,
       inboundHistory,
       rawBody,
       commandBody,
@@ -279,7 +289,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
           id: activity.id ?? `${teamsFrom}:${Date.now()}`,
           timestamp: timestamp?.getTime(),
           rawText: rawBody,
-          textForAgent: bodyForAgent,
+          textForAgent: agentBody,
           textForCommands: commandBody,
           raw: activity,
         }),

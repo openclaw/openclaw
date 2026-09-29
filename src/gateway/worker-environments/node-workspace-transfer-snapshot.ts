@@ -1,11 +1,9 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "../../infra/fs-safe.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import {
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
+import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { probeWorkspaceGitMode } from "./workspace-sync-helpers.js";
 import {
   createWorkspaceGitTransferList,
@@ -19,6 +17,8 @@ export type NodeWorkspaceTransferSnapshot = {
   manifestRef: string;
   rawManifest: string;
   root: string;
+  /** Sparse checkpoint payloads contain only these paths from the complete manifest. */
+  blobPaths?: ReadonlySet<string>;
 };
 
 export async function prepareNodeWorkspaceTransferSnapshot(params: {
@@ -55,7 +55,7 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
       signal: params.signal ?? AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
       timeoutMs: TRANSFER_TIMEOUT_MS,
     });
-    const transferable = await readWorkspaceTransferPaths(transferList);
+    const transferable = await readWorkspaceTransferPaths(transferList, params.signal);
     const manifestPaths = new Set(transferable);
     for (const relative of transferable) {
       const segments = relative.split("/");
@@ -65,10 +65,22 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     }
     includePaths = manifestPaths;
   }
-  const actual = await readActualWorkspaceManifest({ root, baseCommit, includePaths });
+  const actual = await captureWorkspaceSnapshot({
+    root,
+    baseCommit,
+    includePaths,
+    signal: params.signal,
+  });
   return {
     ...actual,
-    rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
     root,
   };
+}
+
+export function nodeWorkspaceTransferEntryPath(root: string, relative: string): string {
+  const candidate = path.join(root, ...relative.split("/"));
+  if (candidate !== root && !isPathInside(root, candidate)) {
+    throw new Error("Workspace transfer entry escaped its staging root");
+  }
+  return candidate;
 }

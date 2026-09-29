@@ -8,11 +8,9 @@ import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listOpenClawRegisteredAgentDatabases } from "../src/state/openclaw-agent-db-registry-listing.js";
+import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../src/state/openclaw-state-db-contract.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../src/state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { captureFullEnv, setTestEnvValue, withPathResolutionEnv } from "../src/test-utils/env.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
@@ -37,7 +35,7 @@ function installOwnedEnv() {
 
 beforeEach(() => {
   const snapshot = captureFullEnv();
-  cleanups.push(snapshot.restore);
+  cleanups.push(() => snapshot.restore());
   sandbox = makeTempDir(tempDirs, "openclaw-test-state-lifetime-");
   vi.spyOn(os, "tmpdir").mockReturnValue(sandbox);
   setTestEnvValue("VITEST_WORKER_ID", "7");

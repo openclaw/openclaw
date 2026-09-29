@@ -211,17 +211,6 @@ describe("Slack permanent rejections over real Web API transport", () => {
             }),
           });
           expect(loopback.requests).toHaveLength(CLASSIFIED_CODES.length);
-
-          console.log(
-            `[slack permanent-rejection proof] ${JSON.stringify({
-              queueTerminal: "failed",
-              restartReplayCount: 0,
-              providerStatus: 200,
-              classifiedCodes: CLASSIFIED_CODES,
-              classification: "typed non-retryable",
-              transport: "@slack/web-api HTTP to 127.0.0.1:<redacted>",
-            })}`,
-          );
         } finally {
           closeOpenClawAgentDatabasesForTest();
           closeOpenClawStateDatabaseForTest();

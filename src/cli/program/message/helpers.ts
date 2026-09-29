@@ -9,7 +9,9 @@ import {
   type ChannelMessageActionName,
 } from "../../../channels/plugins/types.public.js";
 import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
-import { messageCommand } from "../../../commands/message.js";
+import { parseAccountSelector } from "../../../commands/channels/account-selector.js";
+import { parseChannelSelector } from "../../../commands/channels/channel-selector.js";
+import type { messageCommand } from "../../../commands/message.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -21,8 +23,6 @@ import {
   resolveConfiguredChannelPluginIds,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../../plugins/channel-plugin-ids.js";
-import { createHookRunner } from "../../../plugins/hooks.js";
-import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -31,19 +31,12 @@ import {
   awaitWithinDeadline,
 } from "../../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
-import { createDefaultDeps } from "../../deps.js";
+import { measureCliCommandStartup } from "../../command-startup-timing.js";
 import { requestExitAfterOneShotOutput } from "../../one-shot-exit.js";
 
-/** Shared helpers used by every message subcommand registration. */
-export type MessageCliHelpers = {
-  withMessageBase: (command: Command) => Command;
-  withMessageTarget: (command: Command) => Command;
-  withRequiredMessageTarget: (command: Command) => Command;
-  runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
-};
+export type MessageCliHelpers = ReturnType<typeof createMessageCliHelpers>;
 
 const GATEWAY_STOP_TIMEOUT_MS = 2500;
-const ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD = new Set(["broadcast"]);
 const CHANNEL_MESSAGE_ACTION_NAME_SET = new Set<string>(CHANNEL_MESSAGE_ACTION_NAMES);
 const STRICT_POSITIVE_INTEGER_OPTIONS = new Map([
   ["pollDurationHours", "--poll-duration-hours"],
@@ -86,6 +79,7 @@ function validateMessageNumericOptions(opts: Record<string, unknown>): void {
 }
 
 async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
+  const { createHookRunner } = await import("../../../plugins/hooks.js");
   const runner = createHookRunner(registry, { logger: createSubsystemLogger("plugins") });
   const result = await awaitWithinDeadline(
     () =>
@@ -136,7 +130,7 @@ function resolveMessagePluginPreloadPlan(
   // dry-runs, broadcasts, and local actions need registry metadata before building payloads.
   if (
     opts.dryRun === true ||
-    ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD.has(action) ||
+    action === "broadcast" ||
     !isGatewayOwnedMessageAction(action, scopedChannel)
   ) {
     return { preload: true, ...(scopedChannel ? { channelId: scopedChannel } : {}) };
@@ -145,22 +139,21 @@ function resolveMessagePluginPreloadPlan(
 }
 
 /** Create shared option decorators and the common message action runner. */
-export function createMessageCliHelpers(messageChannelOptions: string): MessageCliHelpers {
+export function createMessageCliHelpers(messageChannelOptions: string) {
   return {
-    withMessageBase: (command) =>
-      command
-        .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
-        .option("--account <id>", "Channel account id (accountId)")
+    withMessageBase: (command: Command, target?: "required") => {
+      if (target === "required") {
+        command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
+      }
+      return command
+        .option("--channel <channel>", `Channel: ${messageChannelOptions}`, parseChannelSelector)
+        .option("--account <id>", "Channel account id (accountId)", parseAccountSelector)
         .option("--json", "Output result as JSON", false)
         .option("--dry-run", "Print payload and skip sending", false)
-        .option("--verbose", "Verbose logging", false),
+        .option("--verbose", "Verbose logging", false);
+    },
 
-    withMessageTarget: (command) =>
-      command.option("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION),
-    withRequiredMessageTarget: (command) =>
-      command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION),
-
-    runMessageAction: async (action, opts) => {
+    runMessageAction: async (action: string, opts: Record<string, unknown>) => {
       setVerbose(Boolean(opts.verbose));
       let failed = false;
       let result: Awaited<ReturnType<typeof messageCommand>> | undefined;
@@ -174,6 +167,16 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
               throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
             }
             const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
+            await measureCliCommandStartup("config-ready", async () => {
+              const { ensureConfigReady } = await import("../config-guard.js");
+              await ensureConfigReady({
+                runtime: defaultRuntime,
+                commandPath: ["message", action],
+                suppressDoctorStdout: opts.json === true,
+                validateConfigOnly: !preloadPlan.preload,
+                measure: (stage, run) => measureCliCommandStartup(stage, run),
+              });
+            });
             if (preloadPlan.preload) {
               const config = getRuntimeConfig();
               const pluginIds = preloadPlan.channelId
@@ -189,6 +192,7 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
                     env: process.env,
                   });
               const activatedConfig = withActivatedPluginIds({ config, pluginIds }) ?? config;
+              const { loadPluginRegistryHandle } = await import("../../../plugins/loader.js");
               pluginRegistry = loadPluginRegistryHandle({
                 config: activatedConfig,
                 activationSourceConfig: activatedConfig,
@@ -196,6 +200,10 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
                 throwOnLoadError: true,
               });
             }
+            const [{ messageCommand }, { createDefaultDeps }] = await Promise.all([
+              import("../../../commands/message.js"),
+              import("../../deps.js"),
+            ]);
             const deps = createDefaultDeps();
             const run = () =>
               messageCommand(

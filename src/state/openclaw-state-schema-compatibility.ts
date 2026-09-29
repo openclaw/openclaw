@@ -3,13 +3,16 @@ import {
   type SqliteSchemaCompatibility,
   type SqliteSchemaIssue,
 } from "../infra/sqlite-schema-contract.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
+  ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS,
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
 import {
   FIRST_USE_STATE_INDEXES,
+  DOCTOR_OWNED_STATE_TABLES,
   FIRST_USE_STATE_TABLES,
   LAZY_ADDITIVE_STATE_INDEXES,
   LAZY_ADDITIVE_STATE_TABLES,
@@ -28,11 +31,14 @@ const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS = CLAW_FIRST_USE_ADDITIVE_STATE_COLU
 const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
 );
-const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
-  CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>([
+  ...CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
     ({ columnName, tableName }) => `${tableName}.${columnName}`,
   ),
-);
+  ...Object.values(ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS)
+    .flat()
+    .map(([tableName, definition]) => `${tableName}.${definition.split(" ", 1)[0]}`),
+]);
 const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",
@@ -40,6 +46,8 @@ const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
 const CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET = new Set<string>(CLAW_STARTUP_ADDITIVE_STATE_TABLES);
 const CLAW_READONLY_OPTIONAL_STATE_INDEXES = [
   "idx_operator_approvals_source_run_resolved",
+  "idx_task_runs_requester_session_key",
+  "idx_worker_session_placements_environment",
 ] as const;
 let openClawStateCanonicalNamedIndexSet: ReadonlySet<string> | undefined;
 
@@ -50,25 +58,34 @@ function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
   return openClawStateCanonicalNamedIndexSet;
 }
 
+const runtimeSchemaCache = new Map<string, string>();
+
 /** Project canonical SQL to the tables the shared runtime may create during this open. */
 export function getOpenClawStateRuntimeSchema(options: {
   includeVersionLazyAdditiveTables: boolean;
+  includeAgentDeletionJournal?: boolean;
 }): string {
+  const { includeVersionLazyAdditiveTables, includeAgentDeletionJournal = true } = options;
+  const key = `${includeVersionLazyAdditiveTables}:${includeAgentDeletionJournal}`;
+  const cached = runtimeSchemaCache.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
-  const omittedTables = options.includeVersionLazyAdditiveTables
-    ? FIRST_USE_STATE_TABLES
-    : LAZY_ADDITIVE_STATE_TABLES;
-  const omittedIndexes = options.includeVersionLazyAdditiveTables
+  const omittedTables = [
+    ...(includeVersionLazyAdditiveTables ? FIRST_USE_STATE_TABLES : LAZY_ADDITIVE_STATE_TABLES),
+    ...(includeAgentDeletionJournal ? [] : DOCTOR_OWNED_STATE_TABLES),
+  ];
+  const omittedIndexes = includeVersionLazyAdditiveTables
     ? FIRST_USE_STATE_INDEXES
     : LAZY_ADDITIVE_STATE_INDEXES;
   for (const tableName of omittedTables) {
-    const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS ${tableName} (`);
-    const endMarker = "\n) STRICT;";
-    const end = start >= 0 ? schema.indexOf(endMarker, start) : -1;
-    if (start < 0 || end < 0) {
-      throw new Error(`lazy additive state schema block is missing for ${tableName}`);
-    }
-    schema = `${schema.slice(0, start)}${schema.slice(end + endMarker.length)}`;
+    schema = schema.replace(
+      extractSqliteTableSchema(schema, tableName, {
+        errorMessage: `lazy additive state schema block is missing for ${tableName}`,
+      }),
+      "",
+    );
   }
   for (const indexName of omittedIndexes) {
     const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
@@ -80,11 +97,13 @@ export function getOpenClawStateRuntimeSchema(options: {
     }
     schema = `${schema.slice(0, start)}${schema.slice(end + 1)}`;
   }
+  runtimeSchemaCache.set(key, schema);
   return schema;
 }
 
 export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   allowCompatibleAdditiveColumns: true,
+  allowedMissingTables: DOCTOR_OWNED_STATE_TABLES,
   allowedMissingColumns: CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
@@ -111,7 +130,11 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
 
 export const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-  allowedMissingTables: [...LAZY_ADDITIVE_STATE_TABLES, ...CLAW_STARTUP_ADDITIVE_STATE_TABLES],
+  allowedMissingTables: [
+    ...LAZY_ADDITIVE_STATE_TABLES,
+    ...CLAW_STARTUP_ADDITIVE_STATE_TABLES,
+    ...DOCTOR_OWNED_STATE_TABLES,
+  ],
   allowedMissingIndexes: CLAW_READONLY_OPTIONAL_STATE_INDEXES,
   allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
 };

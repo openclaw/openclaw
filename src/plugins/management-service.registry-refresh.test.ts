@@ -6,16 +6,20 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
-const mocks = vi.hoisted(() => ({
-  clawhubInstall: vi.fn(),
-  gatewayMetadata: vi.fn(),
-  metadata: vi.fn(),
-  officialCatalog: vi.fn(),
-  persistInstall: vi.fn(),
-  readConfig: vi.fn(),
-  refreshRegistry: vi.fn(),
-  replaceConfig: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  // Earlier shared-worker files can cache the real config-wide metadata reader.
+  vi.resetModules();
+  return {
+    clawhubInstall: vi.fn(),
+    gatewayMetadata: vi.fn(),
+    metadata: vi.fn(),
+    officialCatalog: vi.fn(),
+    persistInstall: vi.fn(),
+    readConfig: vi.fn(),
+    refreshRegistry: vi.fn(),
+    replaceConfig: vi.fn(),
+  };
+});
 
 vi.mock("./current-plugin-metadata-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./current-plugin-metadata-state.js")>()),
@@ -28,9 +32,12 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./install-persistence.js")>()),
+vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: (params: unknown) => mocks.persistInstall(params),
+}));
+
+vi.mock("./install-config-mutation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
   resolveInstallConfigMutationPreflights: () => ({
     hookMutation: { mode: "allowed" },
     pluginMutation: { mode: "allowed" },
@@ -67,14 +74,10 @@ vi.mock("./slot-selection.js", () => ({
   applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
 }));
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  installManagedPlugin,
-  installManagedPluginSource,
-  inspectManagedPlugin,
-  listManagedPlugins,
-  setManagedPluginEnabled,
-} = await import("./management-service.js");
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
+const { installManagedPlugin, setManagedPluginEnabled } = await import("./management-mutations.js");
+const { installManagedPluginSource } = await import("./management-install.js");
+const { inspectManagedPlugin, listManagedPlugins } = await import("./management-service.js");
 
 const installSnapshot = {
   config: {},
@@ -182,7 +185,7 @@ describe("plugin management registry refresh", () => {
   });
 
   beforeEach(() => {
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     vi.resetAllMocks();
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
   });

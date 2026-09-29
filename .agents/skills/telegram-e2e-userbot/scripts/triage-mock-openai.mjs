@@ -13,116 +13,172 @@ function writeJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-function writeEvents(response, events) {
+function startEvents(response) {
   response.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-store",
     connection: "keep-alive",
   });
+}
+
+function completionChunk(id, delta, finishReason = null) {
+  return {
+    id,
+    object: "chat.completion.chunk",
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  };
+}
+
+function writeEvents(response, events) {
+  startEvents(response);
   for (const event of events) response.write(`data: ${JSON.stringify(event)}\n\n`);
   response.end("data: [DONE]\n\n");
 }
 
 function writeInterleavedMonologue(response) {
+  const id = "chatcmpl_interleaved_monologue";
   writeEvents(response, [
-    {
-      id: "chatcmpl_interleaved_monologue",
-      object: "chat.completion.chunk",
-      choices: [
-        {
-          index: 0,
-          delta: {
-            role: "assistant",
-            reasoning_details: [
-              { type: "response.output_text", text: "PRIVATE_MONOLOGUE" },
-              { type: "reasoning.text", text: "HIDDEN_REASONING" },
-              { type: "response.text", text: "PUBLIC_FINAL" },
-            ],
-          },
-          finish_reason: null,
-        },
+    completionChunk(id, {
+      role: "assistant",
+      reasoning_details: [
+        { type: "response.output_text", text: "PRIVATE_MONOLOGUE" },
+        { type: "reasoning.text", text: "HIDDEN_REASONING" },
+        { type: "response.text", text: "PUBLIC_FINAL" },
       ],
-    },
-    {
-      id: "chatcmpl_interleaved_monologue",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-    },
+    }),
+    completionChunk(id, {}, "stop"),
   ]);
 }
 
 function writeIncompleteToolUse(response) {
+  const id = "chatcmpl_incomplete_tool_use";
   writeEvents(response, [
-    {
-      id: "chatcmpl_incomplete_tool_use",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
-    },
-    {
-      id: "chatcmpl_incomplete_tool_use",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
-    },
+    completionChunk(id, { role: "assistant" }),
+    completionChunk(id, {}, "tool_calls"),
   ]);
 }
 
-async function writeStreamingThrottle(response) {
-  const itemId = "msg_streaming_throttle_107179";
-  const finalText = "STREAM_FINAL_107179";
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  const previewEvents = [
+async function writePreviewToolBoundary(response, body) {
+  const toolResults = (body.messages ?? []).filter((message) => message.role === "tool").length;
+  if (scenario === "preview-tool-error" && toolResults > 0) {
+    writeJson(response, 400, {
+      error: { type: "invalid_request_error", message: "PREVIEW_PROVIDER_FAILURE_25592" },
+    });
+    return;
+  }
+  if (body.stream !== true || !body.tools?.some((tool) => tool.function?.name === "exec")) {
+    writeJson(response, 400, { error: { message: "Preview fixture requires streaming and exec" } });
+    return;
+  }
+  startEvents(response);
+  const writeChunk = (delta, finishReason = null) =>
+    response.write(
+      `data: ${JSON.stringify(completionChunk(`chatcmpl_preview_${toolResults}`, delta, finishReason))}\n\n`,
+    );
+  writeChunk({ role: "assistant" });
+  if (toolResults === 0) {
+    writeChunk({ content: "PREVIEW_PREAMBLE_25592: I will inspect the workspace." });
+    // Let the unphased preview become visible before the provider reveals a tool call.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+  }
+  if (toolResults < 2) {
+    writeChunk({
+      tool_calls: [
+        {
+          index: 0,
+          id: `call_preview_${toolResults}`,
+          type: "function",
+          function: {
+            name: "exec",
+            arguments: JSON.stringify({ command: `printf preview-step-${toolResults}` }),
+          },
+        },
+      ],
+    });
+    writeChunk({}, "tool_calls");
+  } else {
+    writeChunk({ content: "PREVIEW_FINAL_25592" });
+    writeChunk({}, "stop");
+  }
+  response.end("data: [DONE]\n\n");
+}
+
+function messageStartEvents(item, deltas = [item.content[0].text]) {
+  return [
     {
       type: "response.output_item.added",
       output_index: 0,
-      item: {
-        type: "message",
-        id: itemId,
-        role: "assistant",
-        phase: "final_answer",
-        status: "in_progress",
-        content: [],
-      },
+      item: { ...item, status: "in_progress", content: [] },
     },
-    ...["QA streaming ", "preview in ", "progress"].map((delta) => ({
+    ...deltas.map((delta) => ({
       type: "response.output_text.delta",
-      item_id: itemId,
+      item_id: item.id,
       output_index: 0,
       content_index: 0,
       delta,
     })),
   ];
-  for (const event of previewEvents) response.write(`data: ${JSON.stringify(event)}\n\n`);
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
+}
+
+function messageDoneEvents(item) {
+  return [
+    {
+      type: "response.output_text.done",
+      item_id: item.id,
+      output_index: 0,
+      content_index: 0,
+      text: item.content[0].text,
+    },
+    { type: "response.output_item.done", output_index: 0, item },
+  ];
+}
+
+function functionCallEvents(item, outputIndex = 0) {
+  return [
+    {
+      type: "response.output_item.added",
+      output_index: outputIndex,
+      item: { ...item, arguments: "" },
+    },
+    {
+      type: "response.function_call_arguments.delta",
+      item_id: item.id,
+      output_index: outputIndex,
+      delta: item.arguments,
+    },
+    { type: "response.output_item.done", output_index: outputIndex, item },
+  ];
+}
+
+function completedEvent(id, output) {
+  return {
+    type: "response.completed",
+    response: {
+      id,
+      status: "completed",
+      output,
+      usage: { input_tokens: 32, output_tokens: 8, total_tokens: 40 },
+    },
+  };
+}
+
+async function writeStreamingThrottle(response) {
   const item = {
     type: "message",
-    id: itemId,
+    id: "msg_streaming_throttle_107179",
     role: "assistant",
     phase: "final_answer",
     status: "completed",
-    content: [{ type: "output_text", text: finalText, annotations: [] }],
+    content: [{ type: "output_text", text: "STREAM_FINAL_107179", annotations: [] }],
   };
+  startEvents(response);
+  for (const event of messageStartEvents(item, ["QA streaming ", "preview in ", "progress"])) {
+    response.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1_500));
   for (const event of [
-    {
-      type: "response.output_text.done",
-      item_id: itemId,
-      output_index: 0,
-      content_index: 0,
-      text: finalText,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_streaming_throttle_107179",
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 32, output_tokens: 8, total_tokens: 40 },
-      },
-    },
+    ...messageDoneEvents(item),
+    completedEvent("resp_streaming_throttle_107179", [item]),
   ]) {
     response.write(`data: ${JSON.stringify(event)}\n\n`);
   }
@@ -138,67 +194,27 @@ function responseEvents(text) {
     content: [{ type: "output_text", text, annotations: [] }],
   };
   return [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
-      delta: text,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
-      text,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_telegram_triage_fixture",
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 32, output_tokens: 8, total_tokens: 40 },
-      },
-    },
+    ...messageStartEvents(item),
+    ...messageDoneEvents(item),
+    completedEvent("resp_telegram_triage_fixture", [item]),
   ];
+}
+
+function functionCallResponse(name, argumentsText, suffix) {
+  const item = {
+    type: "function_call",
+    id: `fc_${name}_${suffix}`,
+    call_id: `call_${name}_${suffix}`,
+    name,
+    arguments: argumentsText,
+  };
+  return [...functionCallEvents(item), completedEvent(`resp_${name}_${suffix}`, [item])];
 }
 
 function toolCallEvents(sequence) {
   const args = JSON.stringify({ args: { id: "session_status", args: {} } });
   const suffix = createHash("sha256").update(`${sequence}:${args}`).digest("hex").slice(0, 10);
-  const item = {
-    type: "function_call",
-    id: `fc_tool_call_${suffix}`,
-    call_id: `call_tool_call_${suffix}`,
-    name: "tool_call",
-    arguments: args,
-  };
-  return [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      item_id: item.id,
-      output_index: 0,
-      delta: args,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_tool_call_${suffix}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 32, output_tokens: 8, total_tokens: 40 },
-      },
-    },
-  ];
+  return functionCallResponse("tool_call", args, suffix);
 }
 
 function namedToolCallEvents(name, args, sequence) {
@@ -207,32 +223,7 @@ function namedToolCallEvents(name, args, sequence) {
     .update(`${name}:${sequence}:${argumentsText}`)
     .digest("hex")
     .slice(0, 10);
-  const item = {
-    type: "function_call",
-    id: `fc_${name}_${suffix}`,
-    call_id: `call_${name}_${suffix}`,
-    name,
-    arguments: argumentsText,
-  };
-  return [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      item_id: item.id,
-      output_index: 0,
-      delta: argumentsText,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${name}_${suffix}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 32, output_tokens: 8, total_tokens: 40 },
-      },
-    },
-  ];
+  return functionCallResponse(name, argumentsText, suffix);
 }
 
 function hasTool(body, name) {
@@ -247,56 +238,18 @@ function draftThenExecEvents() {
     status: "completed",
     content: [{ type: "output_text", text: "GOOD_DRAFT_115041", annotations: [] }],
   };
-  const argumentsText = JSON.stringify({ command: "printf tool-ok" });
   const call = {
     type: "function_call",
     id: "fc_exec_115041",
     call_id: "call_exec_115041",
     name: "exec",
-    arguments: argumentsText,
+    arguments: JSON.stringify({ command: "printf tool-ok" }),
   };
   return [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      delta: "GOOD_DRAFT_115041",
-    },
-    {
-      type: "response.output_text.done",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      text: "GOOD_DRAFT_115041",
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.output_item.added",
-      output_index: 1,
-      item: { ...call, arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.delta",
-      item_id: call.id,
-      output_index: 1,
-      delta: argumentsText,
-    },
-    { type: "response.output_item.done", output_index: 1, item: call },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_good_draft_115041",
-        status: "completed",
-        output: [message, call],
-        usage: { input_tokens: 32, output_tokens: 8, total_tokens: 40 },
-      },
-    },
+    ...messageStartEvents(message),
+    ...messageDoneEvents(message),
+    ...functionCallEvents(call, 1),
+    completedEvent("resp_good_draft_115041", [message, call]),
   ];
 }
 
@@ -332,6 +285,14 @@ const server = http.createServer((request, response) => {
     for await (const chunk of request) bodyText += chunk;
     if (requestLog) fs.appendFileSync(requestLog, `${bodyText}\n`);
     const body = bodyText ? JSON.parse(bodyText) : {};
+    if (
+      (scenario === "preview-tool-boundaries" || scenario === "preview-tool-error") &&
+      request.method === "POST" &&
+      url.pathname === "/v1/chat/completions"
+    ) {
+      await writePreviewToolBoundary(response, body);
+      return;
+    }
     if (
       scenario === "interleaved-monologue" &&
       request.method === "POST" &&
@@ -492,4 +453,6 @@ const server = http.createServer((request, response) => {
   });
 });
 
-server.listen(port, "127.0.0.1", () => console.log(`mock-openai listening on ${port}`));
+server.listen(port, "127.0.0.1", () => {
+  console.log(`mock-openai listening on ${server.address().port}`);
+});

@@ -46,10 +46,9 @@ export function resolveStreamStopReason(input: {
 
 /** Supervise line-producing cron sources through one serialized owner per job. */
 export function createCronStreamWatchers(
-  params: Omit<CronStreamOwnerParams, "minIntervalMs" | "nowMs"> & {
+  params: Omit<CronStreamOwnerParams, "minIntervalMs"> & {
     /** Test seams; production uses the built-in cadence and retry schedules. */
     minIntervalMs?: number;
-    nowMs?: () => number;
   },
 ): CronStreamWatchers {
   const owners = new Map<string, CronStreamJobOwner>();
@@ -83,6 +82,7 @@ export function createCronStreamWatchers(
   };
 
   const ownerParams: CronStreamOwnerParams = {
+    scheduler: params.scheduler,
     getProcessSupervisor: params.getProcessSupervisor,
     minIntervalMs: params.minIntervalMs ?? resolveCronTriggerMinIntervalMs(),
     retryBackoffMs: params.retryBackoffMs,
@@ -92,7 +92,6 @@ export function createCronStreamWatchers(
     recordFailure: params.recordFailure,
     fireBatch: params.fireBatch,
     logger: params.logger,
-    nowMs: params.nowMs ?? Date.now,
   };
 
   const retainCounterSeed = (owner: CronStreamJobOwner): void => {

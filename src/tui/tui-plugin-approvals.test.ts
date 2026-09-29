@@ -52,6 +52,7 @@ function createHarness() {
       focus: vi.fn(),
       unfocus: vi.fn(),
       isFocused: vi.fn(() => true),
+      getBounds: () => undefined,
     } satisfies OverlayHandle;
     overlayHandles.push(handle);
     return handle;

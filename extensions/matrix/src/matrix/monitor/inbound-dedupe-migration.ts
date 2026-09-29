@@ -11,7 +11,6 @@
 // The PluginDoctorStateMigration itself lives in doctor-contract-api.ts, which
 // also owns the legacy-file archival write.
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -20,7 +19,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeMatrixStorageMetadata } from "../client/storage.js";
+import { normalizeMatrixStorageMetadata } from "../client/storage-metadata.js";
+import { walkMatrixStateFiles } from "../state-layout-walk.js";
 
 const LEGACY_SQLITE_NAMESPACE = "inbound-dedupe";
 const LEGACY_MARKERS_NAMESPACE = "inbound-dedupe-migrations";
@@ -122,40 +122,29 @@ export async function reserveMatrixInboundDedupeMigrationCompletion(
 export async function collectMatrixInboundDedupeSources(
   stateDir: string,
 ): Promise<MatrixInboundDedupeSourceCensus> {
-  const matrixRoot = path.join(stateDir, "matrix");
+  const matrixRoot = path.resolve(stateDir, "matrix");
   const sqliteRoots = new Set<string>();
   const jsonRoots = new Set<string>();
-  const warnings: string[] = [];
-  async function visit(dir: string, allowMissing = false): Promise<void> {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch (err) {
-      if (allowMissing && (err as NodeJS.ErrnoException).code === "ENOENT") {
-        return;
-      }
-      warnings.push(`Failed scanning Matrix inbound dedupe sources under ${dir}: ${String(err)}`);
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isFile()) {
-        // Legacy per-root dedupe rows live in `<storageRoot>/state/openclaw.sqlite`.
-        if (entry.name === "openclaw.sqlite" && path.basename(dir) === "state") {
-          sqliteRoots.add(path.dirname(dir));
-        } else if (entry.name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME) {
-          jsonRoots.add(dir);
-        }
-        continue;
-      }
-      if (entry.isDirectory()) {
-        await visit(entryPath);
-      }
+  const { entries, failedDirs } = await walkMatrixStateFiles(
+    stateDir,
+    (name, depth) =>
+      ((depth === 0 || depth === 2 || depth === 4) &&
+        name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME) ||
+      (depth === 5 && name === "openclaw.sqlite"),
+    [0, 2, 4],
+  );
+  for (const entry of entries) {
+    if (entry.name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME) {
+      jsonRoots.add(path.dirname(entry.path));
+    } else {
+      sqliteRoots.add(path.dirname(path.dirname(entry.path)));
     }
   }
-  await visit(matrixRoot, true);
-  const matrixRootResolved = path.resolve(matrixRoot);
-  const isAccountRoot = (root: string) => path.resolve(root) !== matrixRootResolved;
+  const warnings = failedDirs.map(
+    ({ path: directory, error }) =>
+      `Failed scanning Matrix inbound dedupe sources under ${directory}: ${String(error)}`,
+  );
+  const isAccountRoot = (root: string) => root !== matrixRoot;
   const roots = {
     sqliteRoots: [...sqliteRoots].filter(isAccountRoot).toSorted(),
     jsonRoots: [...jsonRoots].filter(isAccountRoot).toSorted(),
@@ -238,9 +227,7 @@ function parseLegacySqliteRow(row: {
 export async function readLegacyInboundDedupeSqliteSource(
   storageRootDir: string,
 ): Promise<{ markers: LegacyInboundDedupeMarker[]; legacyRowCount: number }> {
-  // sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
-  // enumeration does not cold-load it with this closure.
-  const { openNodeSqliteDatabase } = await import("openclaw/plugin-sdk/sqlite-runtime");
+  const { openNodeSqliteDatabase } = await import("openclaw/plugin-sdk/sqlite-worker-runtime");
   const databasePath = path.join(storageRootDir, STATE_DATABASE_RELATIVE_PATH);
   const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
   try {
@@ -275,7 +262,7 @@ export async function readLegacyInboundDedupeSqliteSource(
 /** Deletes only the two retired Matrix namespaces after a successful import. */
 export async function retireLegacyInboundDedupeSqliteRows(storageRootDir: string): Promise<void> {
   const { openNodeSqliteDatabase, runSqliteImmediateTransactionSync } =
-    await import("openclaw/plugin-sdk/sqlite-runtime");
+    await import("openclaw/plugin-sdk/sqlite-worker-runtime");
   const databasePath = path.join(storageRootDir, STATE_DATABASE_RELATIVE_PATH);
   const db = openNodeSqliteDatabase(databasePath);
   try {

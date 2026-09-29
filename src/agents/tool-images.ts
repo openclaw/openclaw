@@ -29,6 +29,10 @@ type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
+type ToolImageSanitizationOptions = ImageSanitizationLimits & {
+  verifyDecodability?: boolean;
+};
+
 // Anthropic Messages API rejects oversized images; sanitize here so replayed
 // tool outputs do not break later turns or silent channel replies.
 const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
@@ -116,20 +120,19 @@ function fileNameFromPathLike(pathLike: string): string | undefined {
   try {
     const url = new URL(value);
     const candidate = url.pathname.split("/").findLast(Boolean);
-    return candidate && candidate.length > 0 ? candidate : undefined;
+    return candidate;
   } catch {
     // Not a URL; continue with path-like parsing.
   }
 
   const normalized = value.replaceAll("\\", "/");
   const candidate = normalized.split("/").findLast(Boolean);
-  return candidate && candidate.length > 0 ? candidate : undefined;
+  return candidate;
 }
 
 function inferImageFileName(params: {
   block: ImageContentBlock;
   label?: string;
-  mediaPathHint?: string;
 }): string | undefined {
   const explicitKeys = ["fileName", "filename", "path", "url"] as const;
   for (const key of explicitKeys) {
@@ -148,13 +151,6 @@ function inferImageFileName(params: {
     return name.trim();
   }
 
-  if (params.mediaPathHint) {
-    const candidate = fileNameFromPathLike(params.mediaPathHint);
-    if (candidate) {
-      return candidate;
-    }
-  }
-
   if (typeof params.label === "string" && params.label.startsWith("read:")) {
     const candidate = fileNameFromPathLike(params.label.slice("read:".length));
     if (candidate) {
@@ -165,6 +161,17 @@ function inferImageFileName(params: {
   return undefined;
 }
 
+async function verifyImageDecodability(buffer: Buffer): Promise<void> {
+  try {
+    // Rastermill probes only headers; discard a tiny encode to verify full decodability.
+    await resizeToJpeg({ buffer, maxSide: 1, quality: 1, withoutEnlargement: true });
+  } catch (err) {
+    if (!isImageProcessorUnavailableError(err)) {
+      throw err;
+    }
+  }
+}
+
 async function resizeImageBase64IfNeeded(params: {
   base64: string;
   mimeType: string;
@@ -172,6 +179,7 @@ async function resizeImageBase64IfNeeded(params: {
   maxBytes: number;
   label?: string;
   fileName?: string;
+  verifyDecodability?: boolean;
 }): Promise<{
   base64: string;
   mimeType: string;
@@ -180,17 +188,7 @@ async function resizeImageBase64IfNeeded(params: {
   height?: number;
 }> {
   const buf = Buffer.from(params.base64, "base64");
-  const headerMeta = readImageMetadataFromHeader(buf);
-  if (imageWithinLimits(buf, headerMeta, params.maxDimensionPx, params.maxBytes)) {
-    return {
-      base64: params.base64,
-      mimeType: params.mimeType,
-      resized: false,
-      width: headerMeta.width,
-      height: headerMeta.height,
-    };
-  }
-  const meta = headerMeta ?? (await getImageMetadata(buf));
+  const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
   const width = meta?.width;
   const height = meta?.height;
   const overBytes = buf.byteLength > params.maxBytes;
@@ -198,6 +196,9 @@ async function resizeImageBase64IfNeeded(params: {
   const overDimensions =
     hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
   if (imageWithinLimits(buf, meta, params.maxDimensionPx, params.maxBytes)) {
+    if (params.verifyDecodability) {
+      await verifyImageDecodability(buf);
+    }
     return {
       base64: params.base64,
       mimeType: params.mimeType,
@@ -211,7 +212,7 @@ async function resizeImageBase64IfNeeded(params: {
   const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
   const sideGrid = buildImageResizeSideGrid(params.maxDimensionPx, sideStart);
 
-  let smallest: { buffer: Buffer; size: number } | null = null;
+  let smallestSize: number | undefined;
   let processorUnavailableError: unknown;
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
@@ -230,8 +231,8 @@ async function resizeImageBase64IfNeeded(params: {
         }
         throw err;
       }
-      if (!smallest || out.byteLength < smallest.size) {
-        smallest = { buffer: out, size: out.byteLength };
+      if (smallestSize === undefined || out.byteLength < smallestSize) {
+        smallestSize = out.byteLength;
       }
       if (out.byteLength <= params.maxBytes) {
         const sourcePixels =
@@ -283,12 +284,12 @@ async function resizeImageBase64IfNeeded(params: {
     throw toErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
-  const best = smallest?.buffer ?? buf;
+  const bestSize = smallestSize ?? buf.byteLength;
   const sourcePixels =
     typeof width === "number" && typeof height === "number" ? `${width}x${height}px` : "unknown";
   const sourceWithFile = params.fileName ? `${params.fileName} ${sourcePixels}` : sourcePixels;
   log.warn(
-    `Image resize failed to fit limits: ${sourceWithFile} best=${formatBytesShort(best.byteLength)} limit=${formatBytesShort(params.maxBytes)}`,
+    `Image resize failed to fit limits: ${sourceWithFile} best=${formatBytesShort(bestSize)} limit=${formatBytesShort(params.maxBytes)}`,
     {
       label: params.label,
       fileName: params.fileName,
@@ -298,20 +299,20 @@ async function resizeImageBase64IfNeeded(params: {
       sourceBytes: buf.byteLength,
       maxDimensionPx: params.maxDimensionPx,
       maxBytes: params.maxBytes,
-      smallestCandidateBytes: best.byteLength,
+      smallestCandidateBytes: bestSize,
       triggerOverBytes: overBytes,
       triggerOverDimensions: overDimensions,
     },
   );
   throw new Error(
-    `Image could not be reduced below ${formatBytesShort(params.maxBytes)} (got ${formatBytesShort(best.byteLength)})`,
+    `Image could not be reduced below ${formatBytesShort(params.maxBytes)} (got ${formatBytesShort(bestSize)})`,
   );
 }
 
 export async function sanitizeContentBlocksImages(
   blocks: ToolContentBlock[],
   label: string,
-  opts: ImageSanitizationLimits = {},
+  opts: ToolImageSanitizationOptions = {},
 ): Promise<ToolContentBlock[]> {
   const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, MAX_IMAGE_DIMENSION_PX, {
     min: 1,
@@ -372,6 +373,7 @@ export async function sanitizeContentBlocksImages(
         maxBytes,
         label,
         fileName,
+        verifyDecodability: opts.verifyDecodability,
       });
       out.push({
         ...block,

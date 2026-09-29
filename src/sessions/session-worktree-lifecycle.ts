@@ -103,11 +103,12 @@ export async function synchronizeSessionWorktreeArchive(params: {
   entry: SessionEntry;
   scope: SessionAccessScope;
   commitGuard?: () => void;
-}): Promise<void> {
+  assertRestoreAllowed?: () => void;
+}): Promise<() => void> {
   const { entry, scope } = params;
   const id = entry.worktree?.id;
   if (!id) {
-    return;
+    return () => params.commitGuard?.();
   }
   const assertCurrent = () => {
     params.commitGuard?.();
@@ -155,6 +156,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
       );
     }
     if (record.removedAt !== undefined) {
+      params.assertRestoreAllowed?.();
       try {
         await serviceFor(scope.env).restore({ id, commitGuard: assertCurrent });
       } catch (error) {
@@ -189,6 +191,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
     }
   }
   assertCurrent();
+  return assertCurrent;
 }
 
 /** Maintenance commits archive metadata first; its released writer lane must never retain Git work. */

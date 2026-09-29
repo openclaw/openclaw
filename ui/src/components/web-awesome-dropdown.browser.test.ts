@@ -1,5 +1,9 @@
 import type { WaSelectEvent } from "@awesome.me/webawesome/dist/events/select.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  acquireNativeOverlayOcclusion,
+  subscribeNativeOverlayOcclusion,
+} from "../lib/native-overlay-occlusion.ts";
 import { duringElementAnimation } from "../test-helpers/web-awesome-animation.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "@awesome.me/webawesome/dist/components/popover/popover.js";
@@ -72,17 +76,171 @@ async function reopen(f: Fixture) {
 }
 
 async function closed(f: Fixture) {
-  await expect.poll(() => f.popup.active).toBe(false);
+  // A canceled opening starts with an inactive popup before its close settles.
+  await expect
+    .poll(() => f.events.filter((event) => event.type === "wa-after-hide"))
+    .toEqual([{ type: "wa-after-hide", open: false, connected: true }]);
+  expect(f.popup.active).toBe(false);
   expect(f.dropdown.open).toBe(false);
   expect(f.menu.getAnimations()).toHaveLength(0);
-  expect(f.events.filter((event) => event.type === "wa-after-hide")).toEqual([
-    { type: "wa-after-hide", open: false, connected: true },
-  ]);
 }
 
-afterEach(() => document.body.replaceChildren());
+function observeNativeOcclusion(
+  native = true,
+  getBounds = () => new DOMRect(0, 0, innerWidth, innerHeight),
+) {
+  vi.stubGlobal(
+    "webkit",
+    native ? { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } } : undefined,
+  );
+  const states: boolean[] = [];
+  onTestFinished(subscribeNativeOverlayOcclusion((occluded) => states.push(occluded), getBounds));
+  return states;
+}
+
+afterEach(async () => {
+  document.body.replaceChildren();
+  // Let removal observers retire native leases before restoring the host bridge.
+  await Promise.resolve();
+  vi.unstubAllGlobals();
+});
 
 describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
+  it("ignores a distant menu but follows its submenu through overlap and closing", async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(1280, 800);
+    let bounds = new DOMRect(900, 100, 300, 500);
+    const states = observeNativeOcclusion(true, () => bounds);
+    const f = await fixture();
+    await open(f);
+    expect(states).toEqual([false]);
+    await f.parent.openSubmenu();
+    const submenu = f.parent.shadowRoot!.querySelector<HTMLElement>('[part="submenu"]')!;
+    const rect = submenu.getBoundingClientRect();
+    // The native pane touches only the submenu, beyond the main menu's edge.
+    bounds = new DOMRect(rect.right - 10, rect.top, 100, rect.height);
+    expect(bounds.left).toBeGreaterThan(f.menu.getBoundingClientRect().right);
+    await expect.poll(() => states).toEqual([false, true]);
+    await duringElementAnimation(
+      submenu,
+      "hide",
+      () => {
+        f.parent.submenuOpen = false;
+      },
+      async () => {
+        await frame();
+        expect(states).toEqual([false, true]);
+      },
+    );
+    await expect.poll(() => states).toEqual([false, true, false]);
+    f.dropdown.open = false;
+    await closed(f);
+  });
+
+  it("occludes native browser views from trigger opening through the complete hide animation", async () => {
+    const { page } = await import("vitest/browser");
+    const states = observeNativeOcclusion();
+    const f = await fixture();
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+    expect(states).toEqual([false, true]);
+    await duringElementAnimation(
+      f.menu,
+      "hide",
+      () => page.elementLocator(f.trigger).click(),
+      () => {
+        expect(count(f, "wa-after-hide")).toBe(0);
+        expect(states).toEqual([false, true]);
+      },
+    );
+    await closed(f);
+    expect(states).toEqual([false, true, false]);
+  });
+
+  it("respects canceled show and hide events without releasing native occlusion on a fast reopen", async () => {
+    const { page } = await import("vitest/browser");
+    const states = observeNativeOcclusion();
+    const f = await fixture();
+    // Cancel after the shared document listener has seen the opening event.
+    document.addEventListener("wa-show", (event) => event.preventDefault(), { once: true });
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => count(f, "wa-show")).toBe(1);
+    await closed(f);
+    expect(states).toEqual([false]);
+    // The canceled opening has its own settled close, separate from the reopen below.
+    f.events.length = 0;
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+    expect(states).toEqual([false, true]);
+    document.addEventListener("wa-hide", (event) => event.preventDefault(), { once: true });
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => f.dropdown.open).toBe(true);
+    await frame();
+    expect(states).toEqual([false, true]);
+    await duringAnimation(f, "hide", () => {
+      f.dropdown.open = true;
+    });
+    await expect.poll(() => count(f, "wa-after-show")).toBe(2);
+    expect(count(f, "wa-after-hide")).toBe(0);
+    expect(states).toEqual([false, true]);
+    f.dropdown.open = false;
+    await closed(f);
+    expect(states).toEqual([false, true, false]);
+  });
+
+  it("keeps the native browser occluded when another overlay outlives the dropdown", async () => {
+    const states = observeNativeOcclusion();
+    const f = await fixture();
+    await open(f);
+    expect(states).toEqual([false, true]);
+    const releaseModal = acquireNativeOverlayOcclusion();
+    onTestFinished(releaseModal);
+    f.dropdown.open = false;
+    await closed(f);
+    expect(states).toEqual([false, true]);
+    releaseModal();
+    expect(states).toEqual([false, true, false]);
+  });
+
+  it("releases and reacquires native occlusion when containing shadow hosts are removed and reconnected", async () => {
+    const states = observeNativeOcclusion();
+    const f = await fixture();
+    const outer = document.createElement("div");
+    const root = outer.attachShadow({ mode: "open" });
+    const inner = document.createElement("div");
+    inner.attachShadow({ mode: "open" }).append(f.host);
+    root.append(inner);
+    document.body.append(outer);
+    await open(f);
+    expect(states).toEqual([false, true]);
+    // Removing inside a shadow root is invisible to a document-only observer.
+    inner.remove();
+    await expect.poll(() => states).toEqual([false, true, false]);
+    root.append(inner);
+    await expect.poll(() => count(f, "wa-after-show")).toBe(2);
+    expect(states).toEqual([false, true, false, true]);
+    // Removing the outer host leaves both inner shadow trees intact.
+    outer.remove();
+    await expect.poll(() => states).toEqual([false, true, false, true, false]);
+    document.body.append(outer);
+    await expect.poll(() => count(f, "wa-after-show")).toBe(3);
+    expect(states).toEqual([false, true, false, true, false, true]);
+    f.dropdown.open = false;
+    await closed(f);
+    expect(states).toEqual([false, true, false, true, false, true, false]);
+  });
+
+  it("keeps ordinary web dropdowns functional without a native browser bridge", async () => {
+    const { page } = await import("vitest/browser");
+    const states = observeNativeOcclusion(false);
+    const f = await fixture();
+    await page.elementLocator(f.trigger).click();
+    await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+    await page.elementLocator(f.outside).click();
+    await closed(f);
+    expect(states).toEqual([false]);
+  });
+
   it.each(["Escape", "pointer", "Tab"] as const)(
     "reacquires %s dismissal after an observed hide/reopen",
     async (dismissal) => {
@@ -160,27 +318,102 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     },
   );
 
+  it.each(["item", "submenu", "outside"] as const)(
+    "preserves newer %s focus across root opening completion",
+    async (target) => {
+      const { userEvent } = await import("vitest/browser");
+      const f = await fixture();
+      await duringAnimation(f, "show", async () => {
+        expect(document.activeElement).toBe(f.item);
+        await userEvent.keyboard("{ArrowDown}");
+        expect(document.activeElement).toBe(f.parent);
+        if (target === "submenu") {
+          await userEvent.keyboard("{ArrowRight}");
+          await expect.poll(() => document.activeElement).toBe(f.nested);
+        } else if (target === "outside") {
+          f.outside.focus();
+        }
+      });
+      await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+      expect(document.activeElement).toBe(
+        target === "submenu" ? f.nested : target === "outside" ? f.outside : f.parent,
+      );
+      expect(f.parent.active).toBe(true);
+      await userEvent.keyboard("{Escape}");
+      await closed(f);
+    },
+  );
+
+  it.each(["close", "disconnect", "reconnect"] as const)(
+    "retires initial focus reentrancy on %s before starting an animation",
+    async (action) => {
+      const { userEvent } = await import("vitest/browser");
+      const f = await fixture();
+      f.item.addEventListener(
+        "focus",
+        () => {
+          if (action === "close") {
+            f.dropdown.open = false;
+          } else {
+            f.dropdown.remove();
+          }
+          f.outside.focus();
+          if (action === "reconnect") {
+            f.host.prepend(f.dropdown);
+          }
+        },
+        { once: true },
+      );
+      f.dropdown.open = true;
+      if (action === "close") {
+        await closed(f);
+        expect(count(f, "wa-after-show")).toBe(0);
+      } else if (action === "disconnect") {
+        await expect.poll(() => f.dropdown.isConnected).toBe(false);
+        expect(f.menu.getAnimations()).toHaveLength(0);
+        expect(count(f, "wa-after-show")).toBe(0);
+        await userEvent.keyboard("{ArrowDown}");
+        expect(document.activeElement).toBe(f.outside);
+        f.host.prepend(f.dropdown);
+        await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+      } else {
+        await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+      }
+      if (action !== "close") {
+        expect(document.activeElement).toBe(f.item);
+        await userEvent.keyboard("{Escape}");
+        await closed(f);
+      }
+    },
+  );
+
   it("settles a pending show canceled after its first animation sample", async () => {
     const f = await fixture();
     let starts = 0;
     let observed: { pending: boolean; starts: number } | undefined;
     f.menu.addEventListener("animationstart", () => starts++);
-    const observer = new MutationObserver(() => {
+    const animationName = f.menu.style.animationName;
+    const getAnimations = f.menu.getAnimations.bind(f.menu);
+    // Create the real CSS animation at its first sample so it cannot start in an earlier frame.
+    f.menu.style.animationName = "none";
+    const sample = vi.spyOn(f.menu, "getAnimations").mockImplementation((options) => {
       if (!f.menu.classList.contains("show")) {
-        return;
+        return getAnimations(options);
       }
-      observer.disconnect();
-      // Queue behind the helper's first frame, before the pending CSS animation starts.
-      requestAnimationFrame(() => {
+      sample.mockRestore();
+      f.menu.style.animationName = animationName;
+      const animations = getAnimations(options);
+      // The owner captures native finished promises before this cancellation microtask.
+      queueMicrotask(() => {
         observed = {
-          pending: f.menu.getAnimations().some((animation) => animation.pending),
+          pending: animations.some((animation) => animation.pending),
           starts,
         };
         f.dropdown.open = false;
         f.outside.focus();
       });
+      return animations;
     });
-    observer.observe(f.menu, { attributes: true, attributeFilter: ["class"] });
     try {
       f.dropdown.open = true;
       await expect.poll(() => observed).toEqual({ pending: true, starts: 0 });
@@ -189,7 +422,8 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       expect(document.activeElement).toBe(f.outside);
       await open(f);
     } finally {
-      observer.disconnect();
+      sample.mockRestore();
+      f.menu.style.animationName = animationName;
     }
   });
 
@@ -260,7 +494,8 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
   it("keeps a reopened submenu visible after its interrupted hide finishes", async () => {
     const f = await fixture();
     await open(f);
-    f.parent.submenuOpen = true;
+    // Focus precedes the opening animation; settle it before pausing the hide.
+    await f.parent.openSubmenu();
     await expect.poll(() => document.activeElement).toBe(f.nested);
     const submenu = f.parent.submenuElement;
     await duringElementAnimation(
@@ -298,6 +533,128 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     await frame();
     expect(document.activeElement).toBe(f.outside);
   });
+
+  it("preserves a row focused as the popup becomes usable", async () => {
+    const f = await fixture();
+    const shown = new Promise<void>((resolve) => {
+      f.dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+    });
+    f.dropdown.open = true;
+    await f.dropdown.updateComplete;
+    await f.popup.updateComplete;
+    f.parent.focus();
+    expect(document.activeElement).toBe(f.parent);
+
+    await shown;
+    expect(document.activeElement).toBe(f.parent);
+  });
+
+  it.each(["search editor", "submenu row"] as const)(
+    "preserves %s focus while the root dropdown finishes opening",
+    async (target) => {
+      const f = await fixture();
+      const search = document.createElement("input");
+      search.type = "search";
+      search.slot = "submenu";
+      f.parent.prepend(search);
+      const focused = target === "search editor" ? search : f.nested;
+      const shown = new Promise<void>((resolve) => {
+        f.dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+      });
+
+      await duringAnimation(f, "show", async () => {
+        await f.parent.openSubmenu();
+        focused.focus();
+        expect(document.activeElement).toBe(focused);
+      });
+
+      await shown;
+      expect(document.activeElement).toBe(focused);
+    },
+  );
+
+  it("preserves keyboard selection made during the dropdown opening animation", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const f = await fixture();
+    const photo = document.createElement("wa-dropdown-item");
+    photo.value = "photo";
+    photo.textContent = "Photo";
+    f.item.after(photo);
+    await photo.updateComplete;
+    const selected: Element[] = [];
+    f.dropdown.addEventListener("wa-select", (event: WaSelectEvent) =>
+      selected.push(event.detail.item),
+    );
+    const afterShow = new Promise<void>((resolve) => {
+      f.dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+    });
+    f.trigger.focus();
+    await duringElementAnimation(
+      f.menu,
+      "show",
+      () => userEvent.keyboard("{Enter}"),
+      async () => {
+        await userEvent.keyboard("{ArrowDown}");
+        expect(document.activeElement).toBe(photo);
+      },
+    );
+    await afterShow;
+    expect.soft(document.activeElement).toBe(photo);
+    await userEvent.keyboard("{Enter}");
+    expect(selected).toEqual([photo]);
+  });
+
+  it("preserves item focus while a rapid reopen joins pending hide cleanup", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const f = await fixture();
+    const photo = document.createElement("wa-dropdown-item");
+    photo.value = "photo";
+    photo.textContent = "Photo";
+    f.item.after(photo);
+    await photo.updateComplete;
+    await open(f);
+    const selected: Element[] = [];
+    f.dropdown.addEventListener("wa-select", (event: WaSelectEvent) =>
+      selected.push(event.detail.item),
+    );
+    let focusDuringReopen: Element | null = null;
+    const afterShow = new Promise<void>((resolve) => {
+      f.dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+    });
+    await duringAnimation(f, "hide", () => {
+      f.dropdown.addEventListener(
+        "wa-show",
+        () => {
+          // The accepted reopen restores menu interaction before old animation cleanup settles.
+          queueMicrotask(() => {
+            photo.focus();
+            focusDuringReopen = document.activeElement;
+          });
+        },
+        { once: true },
+      );
+      f.dropdown.open = true;
+    });
+    await afterShow;
+    expect(focusDuringReopen).toBe(photo);
+    expect.soft(document.activeElement).toBe(photo);
+    await userEvent.keyboard("{Enter}");
+    expect(selected).toEqual([photo]);
+  });
+
+  it.each(["item", "input"] as const)(
+    "keeps autofocus on an owned %s inside grouped menu content",
+    async (kind) => {
+      const f = await fixture();
+      const group = document.createElement("div");
+      const target = document.createElement(kind === "item" ? "wa-dropdown-item" : "input");
+      target.autofocus = true;
+      group.append(target);
+      f.dropdown.append(group);
+      await open(f);
+      expect(document.activeElement).toBe(target);
+    },
+  );
 
   it("settles a never-connected submenu close as a public no-op", async () => {
     const item = document.createElement("wa-dropdown-item");
@@ -471,10 +828,11 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     },
   );
 
-  it("registers an initially open dropdown after client upgrade", async () => {
+  it("focuses and registers an initially open dropdown after client upgrade", async () => {
     const { userEvent } = await import("vitest/browser");
     const f = await fixture(true);
     await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+    expect(document.activeElement).toBe(f.item);
     await userEvent.keyboard("{Escape}");
     await closed(f);
     expect(document.activeElement).toBe(f.trigger);

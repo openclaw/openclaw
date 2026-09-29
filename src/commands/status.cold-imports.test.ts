@@ -20,7 +20,12 @@ describe("status cold imports", () => {
     }));
 
     const { resolveStatusRuntimeSnapshot } = await import("./status-runtime-shared.js");
-    const params = { config: {}, sourceConfig: {}, gatewayReachable: false };
+    const params = {
+      config: {},
+      sourceConfig: {},
+      gatewayReachable: false,
+      gatewayProbeDeadlineMs: performance.now() + 60_000,
+    };
     const snapshot = await resolveStatusRuntimeSnapshot(params);
 
     expect(snapshot).toEqual({
@@ -43,7 +48,7 @@ describe("status cold imports", () => {
     await expect(resolveStatusRuntimeSnapshot(params)).resolves.toEqual(snapshot);
   });
 
-  it("keeps broad plugin status code behind the detailed status boundary", async () => {
+  it("keeps broad plugin status code out of default status imports", async () => {
     vi.doMock("../plugins/status.js", () => {
       throw new Error("default status must not import broad plugin diagnostics");
     });

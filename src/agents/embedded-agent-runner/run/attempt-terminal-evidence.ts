@@ -1,5 +1,4 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-/** Records attempt replay safety and terminal side-effect evidence. */
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -46,11 +45,8 @@ export function isCurrentAttemptReplaySafe(
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
-  const hadUnsafeTools = params.toolMetas.some((entry) => entry.replaySafe !== true);
-  const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
-    hadUnsafeTools ||
-    hadAsyncStartedTool ||
+    params.toolMetas.some((entry) => entry.replaySafe !== true || entry.asyncStarted === true) ||
     hasMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0;
@@ -89,12 +85,8 @@ type TerminalAttemptState = Pick<
   };
 
 export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean {
-  return Boolean(attempt.lastToolError || hasNonToolTerminalState(attempt));
-}
-
-/** Projects terminal evidence whose ownership does not depend on a tool failure. */
-export function hasNonToolTerminalState(attempt: TerminalAttemptState): boolean {
   return Boolean(
+    attempt.lastToolError ||
     attempt.clientToolCalls ||
     attempt.yieldDetected ||
     attempt.didSendDeterministicApprovalPrompt ||
@@ -105,12 +97,7 @@ export function hasNonToolTerminalState(attempt: TerminalAttemptState): boolean 
     attempt.hasToolMediaBlockReply ||
     attempt.didDeliverSourceReplyViaMessageTool ||
     attempt.messagingToolSourceReplyPayloads?.length ||
-    hasMessagingToolDeliveryEvidence({
-      didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-      messagingToolSentTexts: attempt.messagingToolSentTexts ?? [],
-      messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls ?? [],
-      messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
-    }) ||
+    hasMessagingToolDeliveryEvidence(attempt) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     hasAsyncActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0,

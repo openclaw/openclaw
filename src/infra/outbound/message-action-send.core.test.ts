@@ -461,7 +461,7 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       kind: "send",
-      sendResult: { via: "direct", result: { messageId: "reef-message-1" } },
+      sendResult: { via: "gateway", result: { messageId: "reef-message-1" } },
     });
   });
 

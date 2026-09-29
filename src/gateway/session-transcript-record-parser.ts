@@ -1,10 +1,10 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
-  readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
 
 export type TranscriptRecord = {
@@ -59,7 +59,7 @@ function extractJsonStringFieldWindow(
     }
     try {
       const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return readNonBlankStringPreservingWhitespace(decoded);
+      return readNonBlankString(decoded);
     } catch {
       return undefined;
     }
@@ -74,6 +74,7 @@ function extractJsonStringFieldSuffix(source: string, field: string): string | u
 
 function recoverOversizedMultimodalTranscriptRecord(
   line: string,
+  byteLength: number,
 ): Record<string, unknown> | undefined {
   const markerPrefix = "__openclaw_omitted_image_";
   if (line.includes(markerPrefix)) {
@@ -140,7 +141,7 @@ function recoverOversizedMultimodalTranscriptRecord(
     ): Record<string, unknown> | undefined => {
       const bytes = selected.reduce(
         (remaining, payload) => remaining - (payload.end - payload.start - payload.marker.length),
-        Buffer.byteLength(line, "utf8"),
+        byteLength,
       );
       if (selected.length === 0 || bytes > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
         return undefined;
@@ -235,17 +236,20 @@ function recoverOversizedMultimodalTranscriptRecord(
 }
 
 export function parseTranscriptRecord(line: string): TranscriptRecord | null {
-  const oversized = isOversizedTranscriptLine(line);
-  const recoveredRecord = oversized ? recoverOversizedMultimodalTranscriptRecord(line) : undefined;
+  const byteLength = Buffer.byteLength(line, "utf8");
+  const oversized = byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
+  const recoveredRecord = oversized
+    ? recoverOversizedMultimodalTranscriptRecord(line, byteLength)
+    : undefined;
   if (!oversized || recoveredRecord) {
     try {
       const record = recoveredRecord ?? (JSON.parse(line) as unknown);
       if (!isRecord(record)) {
         return null;
       }
-      const id = readNonBlankStringPreservingWhitespace(record.id);
+      const id = readNonBlankString(record.id);
       return {
-        byteLength: Buffer.byteLength(line, "utf8"),
+        byteLength,
         ...(id ? { id } : {}),
         ...(recoveredRecord ? { recoveredImageData: true as const } : {}),
         record,
@@ -280,7 +284,7 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
     },
   };
   return {
-    byteLength: Buffer.byteLength(line, "utf8"),
+    byteLength,
     ...(id ? { id } : {}),
     record,
   };

@@ -52,12 +52,13 @@ export default defineSingleProviderPluginEntry({
       noteTitle: "Venice AI",
     },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildStaticVeniceProvider,
       liveModelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
     },
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
-    wrapStreamFn: (ctx) => createVeniceStreamWrapper(ctx.streamFn, ctx.thinkingLevel),
+    wrapStreamFn: (ctx) => createVeniceStreamWrapper(ctx.streamFn),
     resolveUsageAuth: async (ctx) => {
       const apiKey = ctx.resolveApiKeyFromConfigAndStore({
         envDirect: [ctx.env.VENICE_API_KEY],

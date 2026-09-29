@@ -1,4 +1,3 @@
-// Memory Host SDK module implements multimodal behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Multimodal memory settings and file classification helpers.
@@ -106,12 +105,9 @@ export function classifyMemoryMultimodalPath(
     return null;
   }
   const lower = normalizeLowercaseStringOrEmpty(filePath);
-  for (const modality of settings.modalities) {
-    for (const extension of getMemoryMultimodalExtensions(modality)) {
-      if (lower.endsWith(extension)) {
-        return modality;
-      }
-    }
-  }
-  return null;
+  return (
+    settings.modalities.find((modality) =>
+      getMemoryMultimodalExtensions(modality).some((extension) => lower.endsWith(extension)),
+    ) ?? null
+  );
 }

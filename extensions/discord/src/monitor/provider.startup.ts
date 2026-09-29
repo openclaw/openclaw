@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -11,16 +10,14 @@ import {
   type BaseMessageInteractiveComponent,
   type DiscordCommand,
   type Modal,
-  type Plugin,
+  type RegisteredPlugin,
 } from "../internal/discord.js";
-import type { GatewayPlugin } from "../internal/gateway.js";
 import { VoicePlugin } from "../internal/voice.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import type { DiscordDmPolicy } from "./dm-command-auth.js";
-import type { MutableDiscordGateway } from "./gateway-handle.js";
 import {
   createDiscordGatewayPlugin,
   waitForDiscordGatewayPluginRegistration,
@@ -37,9 +34,11 @@ import {
   DiscordReactionListener,
   DiscordReactionRemoveListener,
   DiscordThreadDeleteListener,
+  DiscordThreadReadyListener,
   DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
 type DiscordAutoPresenceController = ReturnType<typeof createDiscordAutoPresenceController>;
@@ -54,11 +53,10 @@ type CreateClientFn = (
 ) => Client;
 type DiscordEventQueueOptions = NonNullable<ConstructorParameters<typeof Client>[0]["eventQueue"]>;
 
-function registerLatePlugin(client: Client, plugin: Plugin) {
+function registerLatePlugin(client: Client, plugin: RegisteredPlugin) {
   void plugin.registerClient?.(client);
-  void plugin.registerRoutes?.(client);
   if (!client.plugins.some((entry) => entry.id === plugin.id)) {
-    client.plugins.push({ id: plugin.id, plugin });
+    client.plugins.push(plugin);
   }
 }
 
@@ -74,17 +72,12 @@ function createDiscordStatusReadyListener(params: {
         return;
       }
 
-      const gateway = client.getPlugin<GatewayPlugin>("gateway");
+      const gateway = client.getPlugin("gateway");
       if (!gateway) {
         return;
       }
 
-      const presence = resolveDiscordPresenceUpdate(params.discordConfig);
-      if (!presence) {
-        return;
-      }
-
-      gateway.updatePresence(presence);
+      gateway.updatePresence(resolveDiscordPresenceUpdate(params.discordConfig));
     }
   })();
 }
@@ -108,19 +101,13 @@ export async function createDiscordMonitorClient(params: {
   isDisallowedIntentsError: (err: unknown) => boolean;
 }) {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
-  const clientPlugins: Plugin[] = [
+  const constructorPlugins: RegisteredPlugin[] = [
     params.createGatewayPlugin({
       discordConfig: params.discordConfig,
       runtime: params.runtime,
     }),
   ];
-  if (params.voiceEnabled) {
-    clientPlugins.push(new VoicePlugin());
-  }
-  const voicePlugin = clientPlugins.find((plugin) => plugin.id === "voice");
-  const constructorPlugins = voicePlugin
-    ? clientPlugins.filter((plugin) => plugin !== voicePlugin)
-    : clientPlugins;
+  const voicePlugin = params.voiceEnabled ? new VoicePlugin() : undefined;
 
   const eventQueueOpts = {
     listenerTimeout: 120_000,
@@ -132,16 +119,11 @@ export async function createDiscordMonitorClient(params: {
   });
   const client = params.createClient(
     {
-      baseUrl: "http://localhost",
-      deploySecret: "a",
       clientId: params.applicationId,
-      publicKey: "a",
       token: params.token,
-      autoDeploy: false,
       commandDeployHashStore: params.commandDeployHashStore,
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
-        runtimeProfile: "persistent",
         maxQueueSize: 1000,
         ...(params.restFetch ? { fetch: params.restFetch } : {}),
       },
@@ -158,7 +140,7 @@ export async function createDiscordMonitorClient(params: {
   if (voicePlugin) {
     registerLatePlugin(client, voicePlugin);
   }
-  const gateway = client.getPlugin<GatewayPlugin>("gateway") as MutableDiscordGateway | undefined;
+  const gateway = client.getPlugin("gateway");
   await waitForDiscordGatewayPluginRegistration(gateway);
   const gatewaySupervisor = params.createGatewaySupervisor({
     gateway,
@@ -210,14 +192,9 @@ export async function fetchDiscordBotIdentity(params: {
     throw new Error("Failed to resolve Discord bot identity", { cause: err });
   }
 
-  const botUserRecord = botUser as
-    | { id?: unknown; username?: unknown; globalName?: unknown }
-    | null
-    | undefined;
-  const botUserId = normalizeOptionalString(botUserRecord?.id);
+  const botUserId = normalizeOptionalString(botUser?.id);
   const botUserName =
-    normalizeOptionalString(botUserRecord?.username) ??
-    normalizeOptionalString(botUserRecord?.globalName);
+    normalizeOptionalString(botUser?.username) ?? normalizeOptionalString(botUser?.globalName);
   if (!botUserId) {
     const details = 'fetchUser("@me") returned no usable id';
     params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${details}`));
@@ -233,6 +210,7 @@ export async function fetchDiscordBotIdentity(params: {
 }
 
 export function registerDiscordMonitorListeners(params: {
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   client: Pick<Client, "listeners">;
   accountId: string;
@@ -258,55 +236,57 @@ export function registerDiscordMonitorListeners(params: {
     params.client.listeners,
     new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
   );
-  registerDiscordListener(
-    params.client.listeners,
-    new DiscordGuildJoinIntroductionListener({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      botUserId: params.botUserId,
-      groupPolicy: params.groupPolicy,
-      guildEntries: params.guildEntries,
-      logger: params.logger,
-    }),
-  );
+  const guildJoinListener = new DiscordGuildJoinIntroductionListener({
+    readPolicy: params.readPolicy,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    botUserId: params.botUserId,
+    groupPolicy: params.groupPolicy,
+    guildEntries: params.guildEntries,
+    logger: params.logger,
+  });
+  registerDiscordListener(params.client.listeners, guildJoinListener);
 
-  if (shouldRegisterDiscordReactionListeners(params)) {
-    const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {
-      cfg: params.cfg,
-      accountId: params.accountId,
-      runtime: params.runtime,
-      botUserId: params.botUserId,
-      dmEnabled: params.dmEnabled,
-      groupDmEnabled: params.groupDmEnabled,
-      groupDmChannels: params.groupDmChannels ?? [],
-      dmPolicy: params.dmPolicy,
-      allowFrom: params.allowFrom ?? [],
-      groupPolicy: params.groupPolicy,
-      allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
-      guildEntries: params.guildEntries,
-      logger: params.logger,
-      onEvent: params.trackInboundEvent,
-    };
-    registerDiscordListener(
-      params.client.listeners,
-      new DiscordReactionListener(reactionListenerOptions),
-    );
-    registerDiscordListener(
-      params.client.listeners,
-      new DiscordReactionRemoveListener(reactionListenerOptions),
-    );
-  }
+  const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {
+    readPolicy: params.readPolicy,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    runtime: params.runtime,
+    botUserId: params.botUserId,
+    dmEnabled: params.dmEnabled,
+    groupDmEnabled: params.groupDmEnabled,
+    groupDmChannels: params.groupDmChannels ?? [],
+    dmPolicy: params.dmPolicy,
+    allowFrom: params.allowFrom ?? [],
+    groupPolicy: params.groupPolicy,
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+    guildEntries: params.guildEntries,
+    logger: params.logger,
+    onEvent: params.trackInboundEvent,
+  };
   registerDiscordListener(
     params.client.listeners,
-    new DiscordThreadUpdateListener(params.cfg, params.logger),
+    new DiscordReactionListener(reactionListenerOptions),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordReactionRemoveListener(reactionListenerOptions),
+  );
+  const threadUpdateListener = new DiscordThreadUpdateListener(params.cfg, params.logger);
+  registerDiscordListener(params.client.listeners, threadUpdateListener);
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordThreadReadyListener(threadUpdateListener),
   );
   registerDiscordListener(
     params.client.listeners,
     new DiscordThreadDeleteListener(params.cfg, params.accountId, params.logger),
   );
 
+  let presenceListener: DiscordPresenceListener | undefined;
   if (params.discordConfig.intents?.presence) {
-    const presenceListener = new DiscordPresenceListener({
+    presenceListener = new DiscordPresenceListener({
+      readPolicy: params.readPolicy,
       cfg: params.cfg,
       logger: params.logger,
       accountId: params.accountId,
@@ -328,23 +308,12 @@ export function registerDiscordMonitorListeners(params: {
     );
     params.runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
   }
-}
-
-function shouldRegisterDiscordReactionListeners(params: {
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupPolicy: "open" | "allowlist" | "disabled";
-  guildEntries?: Record<string, DiscordGuildEntryResolved>;
-}): boolean {
-  if (params.dmEnabled || params.groupDmEnabled) {
-    return true;
-  }
-  if (params.groupPolicy === "disabled") {
-    return false;
-  }
-  const guildEntries = Object.values(params.guildEntries ?? {});
-  if (guildEntries.length === 0) {
-    return true;
-  }
-  return guildEntries.some((entry) => entry.reactionNotifications !== "off");
+  return async () => {
+    const introductionsStopped = guildJoinListener.stop();
+    try {
+      await presenceListener?.stop();
+    } finally {
+      await introductionsStopped;
+    }
+  };
 }

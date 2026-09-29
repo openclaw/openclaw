@@ -1,4 +1,3 @@
-/** Browser tool lifecycle and host-local profile discovery/import actions. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import { resolveBrowserBaseUrl } from "./browser-tool.routing.js";
@@ -87,40 +86,20 @@ export async function executeBrowserLifecycleAction({
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const readBrowserStatus = async () =>
-    proxyRequest
-      ? await proxyRequest({
-          method: "GET",
-          path: "/",
-          profile,
-          timeoutMs: toolTimeoutMs,
-        })
-      : await browserStatus(baseUrl, {
-          profile,
-          timeoutMs: toolTimeoutMs,
-          signal,
-        });
+    await browserStatus(proxyRequest ?? baseUrl, {
+      profile,
+      timeoutMs: toolTimeoutMs,
+      signal,
+    });
   switch (action) {
     case "doctor":
-      return jsonResult(
-        proxyRequest
-          ? await proxyRequest({ method: "GET", path: "/doctor", profile })
-          : await browserDoctor(baseUrl, { profile, signal }),
-      );
+      return jsonResult(await browserDoctor(proxyRequest ?? baseUrl, { profile, signal }));
     case "status":
       return jsonResult(await readBrowserStatus());
     case "start":
     case "stop": {
-      if (proxyRequest) {
-        await proxyRequest({
-          method: "POST",
-          path: `/${action}`,
-          profile,
-          timeoutMs: toolTimeoutMs,
-        });
-      } else {
-        const updateBrowser = action === "start" ? browserStart : browserStop;
-        await updateBrowser(baseUrl, { profile, timeoutMs: toolTimeoutMs, signal });
-      }
+      const updateBrowser = action === "start" ? browserStart : browserStop;
+      await updateBrowser(proxyRequest ?? baseUrl, { profile, timeoutMs: toolTimeoutMs, signal });
       return jsonResult(await readBrowserStatus());
     }
     case "profiles": {

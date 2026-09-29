@@ -36,6 +36,7 @@ vi.mock("node:os", async () => {
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import os from "node:os";
+const actualFs = (await vi.importActual<{ default: typeof fs }>("node:fs")).default;
 const { resolveBrowserExecutableForPlatform, resolveGoogleChromeExecutableForPlatform } =
   await import("./chrome.executables.js");
 
@@ -92,9 +93,11 @@ describe("browser default executable detection", () => {
     vi.mocked(fs.readFileSync).mockReset();
     vi.mocked(os.homedir).mockReset();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
+    vi.spyOn(actualFs, "statSync").mockImplementation(fs.statSync);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 

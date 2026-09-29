@@ -1,10 +1,71 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
+import {
+  catalogPage,
+  createGateway,
+  createGatewayHarness,
+  createSessions,
+  createSessionsHarness,
+  mountSidebar,
+} from "../app-sidebar.ts";
+import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog ownership", () => {
+  it.each([false, true])(
+    "omits the lone Other header when owner filtering hides every catalog row (adopted: %s)",
+    async (adopted) => {
+      const ownKey = "agent:main:own-task";
+      const catalogKey = "agent:main:catalog-task";
+      const harness = createSessionsHarness("main", [ownKey, ...(adopted ? [catalogKey] : [])]);
+      const result = harness.sessions.state.result!;
+      const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
+      const bob = { type: "human", id: "profile-bob", label: "Bob" } as const;
+      result.owners = [ada, bob];
+      for (const row of result.sessions) {
+        row.owner = { actor: row.key === ownKey ? ada : bob };
+      }
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        harness.sessions,
+      );
+      const page = catalogPage([
+        {
+          threadId: "other-thread",
+          name: "Other owner's session",
+          sessionKey: adopted ? catalogKey : undefined,
+        },
+      ]);
+      // Adoption replaces creator provenance with the loaded session's owner.
+      page.catalogs[0]!.hosts[0]!.sessions[0]!.createdActor = adopted ? ada : bob;
+      page.catalogs[0]!.hosts[0]!.nextCursor = "more-owner-filtered-sessions";
+      page.catalogs[0]!.error = { code: "UNAVAILABLE", message: "Another host is unavailable" };
+      sidebar.sessionData.sessionCatalogs = page.catalogs;
+      sidebar.sessionData.requestSessionDataUpdate();
+      await sidebar.updateComplete;
+      const header = () =>
+        sidebar.querySelector('[data-session-section="ungrouped"] .sidebar-recent-sessions__head');
+      expect(header()).not.toBeNull();
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
+
+      sidebar.setSessionOwnerFilter(ada.id);
+      await sidebar.updateComplete;
+      await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(`[data-session-key="${ownKey}"]`)).not.toBeNull();
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+      expect(header()).toBeNull();
+
+      sidebar.setSessionOwnerFilter(null);
+      await sidebar.updateComplete;
+      await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
+      expect(header()).not.toBeNull();
+    },
+  );
+
   it.each([
     { owner: "the selected agent", assistantAgentId: null },
     { owner: "the advertised catalog capability", assistantAgentId: "main" },

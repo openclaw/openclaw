@@ -168,11 +168,15 @@ describe("schema validator", () => {
                 one: { type: "object", [keyword]: { nested: ["left", "right"] } },
               },
             },
+            "room~1one": { type: "object", [keyword]: { tilde: ["left", "right"] } },
+            "room%2Fone": { type: "object", [keyword]: { percent: ["left", "right"] } },
           },
         },
         value: {
           "room/one": { literal: true, left: "present" },
           room: { one: { nested: true, right: "present" } },
+          "room~1one": { tilde: true, left: "present" },
+          "room%2Fone": { percent: true, right: "present" },
         },
         expectedErrors: [
           {
@@ -184,6 +188,16 @@ describe("schema validator", () => {
             path: "room.one",
             message: "must have properties left, right when property nested is present",
             text: "room.one: must have properties left, right when property nested is present",
+          },
+          {
+            path: "room~1one",
+            message: "must have properties left, right when property tilde is present",
+            text: "room~1one: must have properties left, right when property tilde is present",
+          },
+          {
+            path: "room%2Fone",
+            message: "must have properties left, right when property percent is present",
+            text: "room%2Fone: must have properties left, right when property percent is present",
           },
         ],
       },

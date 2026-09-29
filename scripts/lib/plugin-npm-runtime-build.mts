@@ -2,7 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { TsdownPlugin } from "tsdown";
 import { isTypeScriptPackageEntry } from "../../src/plugins/package-entrypoints.ts";
+import {
+  PLUGIN_ACTIVITY_ICON_PATH,
+  PLUGIN_TOOL_ACTIVITY_ICON_DIR,
+  PORTABLE_PLUGIN_ICON_PATH,
+} from "../../src/plugins/portable-icon-paths.ts";
 import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
@@ -10,16 +16,145 @@ import {
   resolvePluginRuntimeFormat,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
-import {
-  listMissingPackageStaticAssetSources,
-  runPackageAssetBuild,
-} from "./plugin-npm-runtime-assets.mts";
+import { createPluginInventoryModuleRefsPlugin } from "./plugin-inventory-module-refs.mts";
+import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
+import { collectPluginThemeAssetPaths } from "./plugin-theme-assets.mts";
 import { isRecord } from "./record-shared.mjs";
-import { copyStaticExtensionAssetsForPackage } from "./static-extension-assets.mts";
 
 const env = {
   NODE_ENV: "production",
 };
+
+// Supported hosts lack this binding; publish the canonical pure implementation with the plugin.
+const BUNDLED_GRAPHEME_SDK_IMPORT = "openclaw/plugin-sdk/text-grapheme";
+const QA_PROTOCOL_SDK_IMPORT = "openclaw/plugin-sdk/qa-channel-protocol";
+
+// Only pure helpers missing from supported hosts belong here; runtime owners stay external.
+// Retire each bundled binding once the declared host floor includes its SDK export.
+const BUNDLED_SDK_EXPORTS: Record<string, Record<string, string[]>> = {
+  "openclaw/plugin-sdk/runtime-doctor-migrations": {
+    "src/plugin-sdk/legacy-webhook-listener-migration.ts": [
+      "createLegacyWebhookListenerDoctorContract",
+    ],
+  },
+  "openclaw/plugin-sdk/gateway-config-runtime": {
+    "src/gateway/gateway-http-route-contracts.ts": ["classifyGatewayProbePath"],
+    "src/gateway/server/plugins-http/path-context.ts": [
+      "resolvePluginRoutePathContext",
+      "isProtectedPluginRoutePathFromContext",
+    ],
+  },
+  "openclaw/plugin-sdk/channel-mention-gating": {
+    "src/channels/mention-gating.ts": ["resolveBotThreadMentionPolicy"],
+  },
+};
+const BUNDLED_SDK_PREFIX = "\0openclaw:bundled-sdk:";
+const HOST_SDK_PREFIX = "\0openclaw:host-sdk:";
+
+function collectNamedSourceExports(source: string) {
+  const names = new Set<string>();
+  const exportClausePattern =
+    /export\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s+["'][^"']+["'])?\s*;?/gms;
+  for (const match of source.matchAll(exportClausePattern)) {
+    for (const segment of (match[1] ?? "").split(",")) {
+      const name = segment
+        .trim()
+        .replace(/^type\s+/u, "")
+        .match(/(?:^|\s+as\s+)([A-Za-z_$][\w$]*)$/u)?.[1];
+      if (name) {
+        names.add(name);
+      }
+    }
+  }
+  for (const pattern of [
+    /\bexport\s+(?:declare\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+type\s+([A-Za-z_$][\w$]*)\s*=/gu,
+    /\bexport\s+interface\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+class\s+([A-Za-z_$][\w$]*)/gu,
+  ]) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1]) {
+        names.add(match[1]);
+      }
+    }
+  }
+  return names;
+}
+
+function selectAvailableBundledSdkExports(
+  repoRoot: string,
+  bundledSdkExports: typeof BUNDLED_SDK_EXPORTS,
+) {
+  return Object.fromEntries(
+    Object.entries(bundledSdkExports).flatMap(([specifier, sources]) => {
+      // Trusted current tooling also builds immutable older source roots. Only
+      // inject bindings owned by that root; later files and exports stay host-owned.
+      const availableSources = Object.fromEntries(
+        Object.entries(sources).flatMap(([source, names]) => {
+          const sourcePath = path.join(repoRoot, source);
+          if (!fs.existsSync(sourcePath)) {
+            return [];
+          }
+          const exportedNames = collectNamedSourceExports(fs.readFileSync(sourcePath, "utf8"));
+          const availableNames = names.filter((name) => exportedNames.has(name));
+          return availableNames.length > 0 ? [[source, availableNames]] : [];
+        }),
+      );
+      return Object.keys(availableSources).length > 0 ? [[specifier, availableSources]] : [];
+    }),
+  );
+}
+
+function createBundledSdkExportsPlugin(
+  repoRoot: string,
+  bundledSdkExports: typeof BUNDLED_SDK_EXPORTS,
+  bundleTelegramLifecycle: boolean,
+): TsdownPlugin {
+  return {
+    name: "openclaw:bundled-sdk-exports",
+    resolveId(id, importer) {
+      // Partial-delivery errors must use the host's configured redactor and secret registry.
+      if (
+        bundleTelegramLifecycle &&
+        id === "../../infra/errors.js" &&
+        importer &&
+        path.resolve(importer) ===
+          path.join(repoRoot, "src/channels/turn/partial-delivery-error.ts")
+      ) {
+        return { id: "openclaw/plugin-sdk/error-runtime", external: true };
+      }
+      if (Object.hasOwn(bundledSdkExports, id)) {
+        return `${BUNDLED_SDK_PREFIX}${id}`;
+      }
+      if (id.startsWith(HOST_SDK_PREFIX)) {
+        return { id: id.slice(HOST_SDK_PREFIX.length), external: true };
+      }
+      if (id.startsWith(BUNDLED_SDK_PREFIX)) {
+        return id;
+      }
+      return undefined;
+    },
+    load(id) {
+      if (!id.startsWith(BUNDLED_SDK_PREFIX)) {
+        return undefined;
+      }
+      const specifier = id.slice(BUNDLED_SDK_PREFIX.length);
+      const sources = bundledSdkExports[specifier];
+      if (!sources) {
+        return undefined;
+      }
+      return [
+        ...Object.entries(sources).map(
+          ([source, names]) =>
+            `export { ${names.join(", ")} } from ${JSON.stringify(path.join(repoRoot, source))};`,
+        ),
+        // The distinct ID avoids resolving the host passthrough back into this facade.
+        `export * from ${JSON.stringify(`${HOST_SDK_PREFIX}${specifier}`)};`,
+      ].join("\n");
+    },
+  };
+}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -27,7 +162,12 @@ export type PluginPackageJson = JsonRecord & {
   dependencies?: JsonRecord;
   openclaw?: {
     assetScripts?: { build?: unknown };
-    build?: { bundledDist?: unknown; openclawVersion?: unknown; runtimeFormat?: unknown };
+    build?: {
+      bundledDist?: unknown;
+      openclawVersion?: unknown;
+      runtimeFormat?: unknown;
+      workerEntries?: unknown;
+    };
     compat?: { pluginApi?: unknown };
     release?: {
       bundleRuntimeDependencies?: unknown;
@@ -45,6 +185,7 @@ type PluginNpmRuntimeBuildParams = {
   repoRoot?: string;
   packageDir: string;
   logLevel?: "silent" | "error" | "warn" | "info";
+  profile?: "qa-gateway-fixture";
 };
 
 function readJsonFile(filePath: string) {
@@ -63,7 +204,7 @@ function normalizePackageEntry(value: unknown) {
   return typeof value === "string" ? value.trim().replaceAll("\\", "/") : "";
 }
 
-function toPackageRuntimeEntry(entry: string, runtimeFormat: RuntimeBuildFormat = "esm") {
+export function toPackageRuntimeEntry(entry: string, runtimeFormat: RuntimeBuildFormat = "esm") {
   const normalized = normalizePackageEntry(entry).replace(/^\.\//u, "");
   return `./dist/${normalized.replace(/\.[^.]+$/u, pluginRuntimeExtension(runtimeFormat))}`;
 }
@@ -89,9 +230,15 @@ function getStringRecord(value: unknown) {
   );
 }
 
-function createNeverBundleDependencyMatcher(packageJson: PluginPackageJson) {
+function createNeverBundleDependencyMatcher(
+  packageJson: PluginPackageJson,
+  bundledSdkImports: ReadonlySet<string>,
+) {
   const externalDependencies = collectExternalDependencyNames(packageJson);
   return (id: string) => {
+    if (bundledSdkImports.has(id)) {
+      return false;
+    }
     if (id === "openclaw" || id.startsWith("openclaw/")) {
       return true;
     }
@@ -227,6 +374,7 @@ function rewriteCommonJsRuntimeSpecifiers(plan: PluginNpmRuntimeBuildPlan) {
 function resolvePluginNpmRuntimePackageFiles(plan: {
   packageJson: PluginPackageJson;
   packageDir: string;
+  manifest: JsonRecord;
 }) {
   const merged = new Set(
     Array.isArray(plan.packageJson.files)
@@ -234,17 +382,25 @@ function resolvePluginNpmRuntimePackageFiles(plan: {
       : [],
   );
   merged.add("dist/**");
-  if (packageRelativePathExists(plan.packageDir, "openclaw.plugin.json")) {
-    merged.add("openclaw.plugin.json");
+  for (const file of [
+    "openclaw.plugin.json",
+    "README.md",
+    "SKILL.md",
+    PORTABLE_PLUGIN_ICON_PATH,
+    PLUGIN_ACTIVITY_ICON_PATH,
+  ]) {
+    if (packageRelativePathExists(plan.packageDir, file)) {
+      merged.add(file);
+    }
   }
-  if (packageRelativePathExists(plan.packageDir, "README.md")) {
-    merged.add("README.md");
-  }
-  if (packageRelativePathExists(plan.packageDir, "SKILL.md")) {
-    merged.add("SKILL.md");
+  if (packageRelativePathExists(plan.packageDir, PLUGIN_TOOL_ACTIVITY_ICON_DIR)) {
+    merged.add(`${PLUGIN_TOOL_ACTIVITY_ICON_DIR}/*.svg`);
   }
   if (packageRelativePathExists(plan.packageDir, "skills")) {
     merged.add("skills/**");
+  }
+  for (const file of collectPluginThemeAssetPaths(plan.manifest)) {
+    merged.add(file);
   }
   return [...merged];
 }
@@ -306,39 +462,114 @@ function resolvePluginNpmRuntimePackagePeerMetadata(plan: {
   };
 }
 
+function projectQaGatewayFixture(
+  packageJson: PluginPackageJson,
+  manifest: JsonRecord,
+): { packageJson: PluginPackageJson; manifest: JsonRecord; sourceEntries: string[] } {
+  const id = manifest.id;
+  if (
+    packageJson.private !== true ||
+    (id !== "qa-lab" && id !== "qa-channel") ||
+    packageJson.name !== `@openclaw/${id}`
+  ) {
+    throw new Error(
+      "The QA Gateway fixture profile requires the private qa-lab or qa-channel package.",
+    );
+  }
+  const {
+    devDependencies: _devDependencies,
+    scripts: _scripts,
+    exports: _exports,
+    files: _files,
+    dependencies: _dependencies,
+    optionalDependencies: _optionalDependencies,
+    ...metadata
+  } = packageJson;
+  const {
+    build: _build,
+    release: _release,
+    runtimeExtensions: _runtimeExtensions,
+    runtimeSetupEntry: _runtimeSetupEntry,
+    setupEntry: _setupEntry,
+    ...openclaw
+  } = packageJson.openclaw ?? {};
+  const entry = id === "qa-lab" ? "./gateway-entry.ts" : "./index.ts";
+  const setupEntry = id === "qa-channel" ? "./setup-entry.ts" : undefined;
+  const dependencies: JsonRecord = {};
+  if (id === "qa-channel") {
+    for (const name of ["typebox", "zod"]) {
+      const version = packageJson.dependencies?.[name];
+      if (typeof version !== "string" || !version) {
+        throw new Error(`QA Channel fixture dependency is missing: ${name}`);
+      }
+      dependencies[name] = version;
+    }
+  }
+  const { cliCommands: _cliCommands, ...gatewayManifest } = manifest;
+  return {
+    packageJson: {
+      ...metadata,
+      dependencies,
+      files: ["dist/**", "openclaw.plugin.json"],
+      openclaw: { ...openclaw, extensions: [entry], ...(setupEntry ? { setupEntry } : {}) },
+    },
+    manifest: gatewayManifest,
+    // The channel entry stores these module names as data rather than import edges.
+    sourceEntries:
+      id === "qa-lab"
+        ? [entry]
+        : [
+            entry,
+            "./setup-entry.ts",
+            "./channel-plugin-api.ts",
+            "./setup-plugin-api.ts",
+            "./api.ts",
+          ],
+  };
+}
+
 /** Resolve the package-local runtime build plan for one plugin package. */
 export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildParams) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
   const packageJsonPath = path.join(packageDir, "package.json");
-  if (!fs.existsSync(packageJsonPath)) {
-    return null;
-  }
-  const packageJson = readJsonFile(packageJsonPath);
+  const sourcePackageJson = readJsonFile(packageJsonPath);
   const rootPackageJsonPath = path.join(repoRoot, "package.json");
   const rootPackageJson = fs.existsSync(rootPackageJsonPath)
     ? readJsonFile(rootPackageJsonPath)
     : undefined;
   // Compilation also serves private source-checkout plugins. Publication selection
   // belongs to listPublishablePluginPackageDirs, not the runtime graph builder.
-  if (!Array.isArray(packageJson.openclaw?.extensions)) {
+  if (!Array.isArray(sourcePackageJson.openclaw?.extensions)) {
     return null;
   }
 
+  const manifestPath = path.join(packageDir, "openclaw.plugin.json");
+  const sourceManifest = fs.existsSync(manifestPath) ? readJsonFile(manifestPath) : {};
+  const projection =
+    params.profile === "qa-gateway-fixture"
+      ? projectQaGatewayFixture(sourcePackageJson, sourceManifest)
+      : undefined;
+  const packageJson = projection?.packageJson ?? sourcePackageJson;
+  const manifest = projection?.manifest ?? sourceManifest;
   const runtimeFormat = resolvePluginRuntimeFormat(packageJson);
-  const packageEntries = collectPluginSourceEntries(packageJson).map(normalizePackageEntry);
+  const packageEntries = collectPluginSourceEntries(packageJson, manifest).map(
+    normalizePackageEntry,
+  );
   const requiresRuntimeBuild = packageEntries.some(isTypeScriptPackageEntry);
   if (!requiresRuntimeBuild) {
     return null;
   }
 
   const pluginDir = path.basename(packageDir);
-  const sourceEntries = [
-    ...new Set([
-      ...packageEntries,
-      ...collectTopLevelPublicSurfaceEntries(packageDir).map(normalizePackageEntry),
-    ]),
-  ].filter(Boolean);
+  const sourceEntries =
+    projection?.sourceEntries ??
+    [
+      ...new Set([
+        ...packageEntries,
+        ...collectTopLevelPublicSurfaceEntries(packageDir).map(normalizePackageEntry),
+      ]),
+    ].filter(Boolean);
   const entry = Object.fromEntries(
     sourceEntries.map((sourceEntry) => [
       packageEntryKey(sourceEntry),
@@ -352,6 +583,8 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
     packageDir,
     pluginDir,
     packageJson,
+    manifest,
+    profile: params.profile,
     rootPackageJson,
     sourceEntries,
     entry,
@@ -369,7 +602,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
   return {
     ...plan,
     runtimeBuildOutputs: listPluginNpmRuntimeBuildOutputs(plan),
-    packageFiles: resolvePluginNpmRuntimePackageFiles(plan),
+    packageFiles: resolvePluginNpmRuntimePackageFiles({ ...plan, manifest }),
     packagePeerMetadata: resolvePluginNpmRuntimePackagePeerMetadata(plan),
   };
 }
@@ -388,6 +621,38 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     return null;
   }
 
+  // The 9.6 host lacks Telegram's final-observation contract. This canonical factory
+  // owns isolated per-turn state; its host error formatter stays external below.
+  // Retire this binding when Telegram's declared host floor includes that contract.
+  const bundleTelegramLifecycle = plan.packageJson.name === "@openclaw/telegram";
+  const bundledSdkExports = selectAvailableBundledSdkExports(plan.repoRoot, {
+    ...BUNDLED_SDK_EXPORTS,
+    ...(bundleTelegramLifecycle
+      ? {
+          "openclaw/plugin-sdk/channel-outbound": {
+            "src/channels/message/live.ts": ["createLivePreviewLifecycle"],
+          },
+        }
+      : {}),
+  });
+  const bundledSdkImports = {
+    [BUNDLED_GRAPHEME_SDK_IMPORT]: path.join(
+      plan.repoRoot,
+      "packages/normalization-core/src/grapheme.ts",
+    ),
+    ...(plan.profile === "qa-gateway-fixture"
+      ? {
+          [QA_PROTOCOL_SDK_IMPORT]: path.join(
+            plan.repoRoot,
+            "src/plugin-sdk/qa-channel-protocol.ts",
+          ),
+        }
+      : {}),
+  };
+  const bundledSdkSpecifiers = new Set([
+    ...Object.keys(bundledSdkImports),
+    ...Object.keys(bundledSdkExports),
+  ]);
   const { build } = await import("tsdown");
   assertRealOutputRoot(plan.outDir);
   fs.rmSync(plan.outDir, { recursive: true, force: true });
@@ -395,10 +660,28 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     clean: false,
     config: false,
     dts: false,
+    alias: bundledSdkImports,
     deps: {
-      neverBundle: createNeverBundleDependencyMatcher(plan.packageJson),
+      alwaysBundle: (id) => bundledSdkSpecifiers.has(id),
+      neverBundle: createNeverBundleDependencyMatcher(plan.packageJson, bundledSdkSpecifiers),
     },
     entry: plan.entry,
+    plugins: [
+      createBundledSdkExportsPlugin(plan.repoRoot, bundledSdkExports, bundleTelegramLifecycle),
+      createPluginInventoryModuleRefsPlugin(plan.packageDir),
+    ],
+    outputOptions: {
+      // Published plugins still support hosts predating these private source facades.
+      paths: {
+        "openclaw/plugin-sdk/media-ffmpeg": "openclaw/plugin-sdk/media-runtime",
+        "openclaw/plugin-sdk/realtime-voice-playback": "openclaw/plugin-sdk/realtime-voice",
+      },
+      chunkFileNames: `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+      entryFileNames: (chunk) =>
+        Object.hasOwn(plan.entry, chunk.name)
+          ? `[name]${pluginRuntimeExtension(plan.runtimeFormat)}`
+          : `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+    },
     env,
     fixedExtension: plan.runtimeFormat === "cjs",
     format: plan.runtimeFormat,
@@ -413,21 +696,9 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     );
   }
   rewriteCommonJsRuntimeSpecifiers(plan);
-  const assetBuildCommand = runPackageAssetBuild(plan);
-  const missingStaticAssets = listMissingPackageStaticAssetSources(plan);
-  if (missingStaticAssets.length > 0) {
-    throw new Error(
-      `${plan.pluginDir} missing static asset source(s): ${missingStaticAssets.join(", ")}`,
-    );
-  }
-  const copiedStaticAssets = copyStaticExtensionAssetsForPackage({
-    rootDir: plan.repoRoot,
-    pluginDir: plan.pluginDir,
-  });
   return {
     ...plan,
-    assetBuildCommand,
-    copiedStaticAssets,
+    ...preparePackageRuntimeAssets(plan),
   };
 }
 
@@ -473,7 +744,7 @@ async function preparePluginNativeImport(params: PluginNpmRuntimeBuildParams) {
   const dependency = resolveOpenClawHostDependency(manifest.value);
   if (!dependency) {
     throw new Error(
-      `${params.packageDir} does not declare openclaw in peerDependencies or dependencies; no host link to prepare.`,
+      `${params.packageDir} does not declare openclaw in peerDependencies, optionalDependencies, or dependencies; no host link to prepare.`,
     );
   }
   if (
@@ -515,16 +786,34 @@ async function preparePluginNativeImport(params: PluginNpmRuntimeBuildParams) {
 
 function usage() {
   return (
-    "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir> [--prepare-native-import]\n" +
-    "  --prepare-native-import  Prepare an already-built source package without rebuilding artifacts; run from the checkout root."
+    "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir> [--prepare-native-import | --qa-gateway-fixture]\n" +
+    "  --prepare-native-import  Prepare an already-built source package without rebuilding artifacts; run from the checkout root.\n" +
+    "  --qa-gateway-fixture     Build the private QA plugin Gateway graph for installed-candidate tests."
   );
 }
 
-function readPackageDirArg(argv: string[]) {
+type PluginNpmRuntimeBuildArgs =
+  | { help: true; packageDir: string }
+  | { help?: false; packageDir: string; prepareNativeImport: true }
+  | {
+      help?: false;
+      packageDir: string;
+      prepareNativeImport?: false;
+      profile?: "qa-gateway-fixture";
+    };
+
+export function parseArgs(argv: string[]): PluginNpmRuntimeBuildArgs {
   const args = argv[0] === "--" ? argv.slice(1) : [...argv];
   const prepareIndex = args.indexOf("--prepare-native-import");
   if (prepareIndex !== -1) {
     args.splice(prepareIndex, 1);
+  }
+  const fixtureIndex = args.indexOf("--qa-gateway-fixture");
+  if (fixtureIndex !== -1) {
+    args.splice(fixtureIndex, 1);
+  }
+  if (prepareIndex !== -1 && fixtureIndex !== -1) {
+    throw new Error("QA Gateway fixtures cannot prepare source-native host imports.");
   }
   const packageDir = args[0];
   if (packageDir === "--help" || packageDir === "-h") {
@@ -534,15 +823,12 @@ function readPackageDirArg(argv: string[]) {
     throw new Error(usage());
   }
   const extraArg = args[1];
-  if (extraArg) {
+  if (args.length > 1) {
     throw new Error(`unexpected plugin npm runtime build argument: ${extraArg}`);
   }
-  return prepareIndex === -1 ? { packageDir } : { packageDir, prepareNativeImport: true };
-}
-
-/** @internal Directly tested script implementation detail. */
-export function parseArgs(argv: string[]) {
-  return readPackageDirArg(argv);
+  return prepareIndex !== -1
+    ? { packageDir, prepareNativeImport: true }
+    : { packageDir, ...(fixtureIndex !== -1 ? { profile: "qa-gateway-fixture" as const } : {}) };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
@@ -555,7 +841,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const { packageDir } = args;
     const result = args.prepareNativeImport
       ? await preparePluginNativeImport({ packageDir })
-      : await buildPluginNpmRuntime({ packageDir });
+      : await buildPluginNpmRuntime({ packageDir, profile: args.profile });
     if (result) {
       console.error(
         `[plugin-npm-runtime-build] built ${result.pluginDir} runtime (${result.sourceEntries.length} entries)`,

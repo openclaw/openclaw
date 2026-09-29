@@ -57,46 +57,60 @@ describe("renderHubTabs", () => {
     }
   });
 
-  it("selects only enabled tabs from direct user activation", () => {
-    const onSelect = vi.fn();
-    const onActivate = vi.fn();
-    const container = document.createElement("div");
-    render(
-      renderHubTabs({
-        id: "example",
-        active: "first",
-        tabs: [
-          { value: "first", label: "First" },
-          { value: "second", label: "Second" },
-          { value: "disabled", label: "Disabled", disabled: true },
-        ],
-        ariaLabel: "Example sections",
-        panelId: "example-panel",
-        onSelect,
-        onActivate,
-      }),
-      container,
-    );
+  it.each([undefined, "first"] as const)(
+    "selects only enabled tabs from direct activation with requested=%s",
+    (requestedActive) => {
+      const onSelect = vi.fn();
+      const onActivate = vi.fn();
+      const container = document.createElement("div");
+      render(
+        renderHubTabs({
+          id: "example",
+          active: "first",
+          requestedActive,
+          tabs: [
+            { value: "first", label: "First" },
+            { value: "second", label: "Second" },
+            { value: "disabled", label: "Disabled", disabled: true },
+          ],
+          ariaLabel: "Example sections",
+          panelId: "example-panel",
+          onSelect,
+          onActivate,
+        }),
+        container,
+      );
 
-    container
-      .querySelector("#example-tab-second")
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    container
-      .querySelector("#example-tab-disabled")
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    container.querySelector("wa-tab-group")?.dispatchEvent(
-      new CustomEvent("wa-tab-show", {
-        bubbles: true,
-        composed: true,
-        detail: { name: "disabled" },
-      }),
-    );
+      container
+        .querySelector("#example-tab-second")
+        ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+      container
+        .querySelector("#example-tab-disabled")
+        ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+      container.querySelector("wa-tab-group")?.dispatchEvent(
+        new CustomEvent("wa-tab-show", {
+          bubbles: true,
+          composed: true,
+          detail: { name: "disabled" },
+        }),
+      );
 
-    expect(onSelect).toHaveBeenCalledOnce();
-    expect(onSelect).toHaveBeenCalledWith("second");
-    expect(onActivate).toHaveBeenCalledWith(container.querySelector("#example-tab-second"));
-    expect(container.querySelector("wa-tab-group")?.getAttribute("activation")).toBe("manual");
-  });
+      container
+        .querySelector("#example-tab-first")
+        ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+      for (const key of ["Enter", " "]) {
+        container
+          .querySelector("#example-tab-first")
+          ?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      }
+
+      expect(onSelect).toHaveBeenCalledOnce();
+      expect(onActivate).toHaveBeenCalledOnce();
+      expect(onSelect).toHaveBeenCalledWith("second");
+      expect(onActivate).toHaveBeenCalledWith(container.querySelector("#example-tab-second"));
+      expect(container.querySelector("wa-tab-group")?.getAttribute("activation")).toBe("manual");
+    },
+  );
 
   it("preserves an intentional no-selection state", () => {
     const container = document.createElement("div");

@@ -4,12 +4,29 @@ import type { Model } from "./types.js";
 const MODEL_LLM_RUNTIME = Symbol("openclaw.modelLlmRuntime");
 const streamLlmRuntimes = new WeakMap<object, LlmRuntime>();
 
-type RuntimeBoundModel = Model & {
-  [MODEL_LLM_RUNTIME]?: {
-    runtime: LlmRuntime;
-    completionTransport?: Model;
-  };
+type ModelCompletionOwner = {
+  run: <T>(run: () => Promise<T>) => Promise<T>;
+  assertCurrent: () => void;
 };
+
+type ModelRuntimeBinding = {
+  runtime?: LlmRuntime;
+  completionTransport?: Model;
+  completionOwner?: ModelCompletionOwner;
+};
+
+type RuntimeBoundModel = Model & {
+  [MODEL_LLM_RUNTIME]?: ModelRuntimeBinding;
+};
+
+function bindModelRuntime(model: Model, binding: ModelRuntimeBinding): Model {
+  const bound: RuntimeBoundModel = { ...model };
+  Object.defineProperty(bound, MODEL_LLM_RUNTIME, {
+    value: binding,
+    enumerable: false,
+  });
+  return bound;
+}
 
 /** Carries the prepared lifecycle runtime without changing the serialized model shape. */
 export function bindModelLlmRuntime(
@@ -17,12 +34,24 @@ export function bindModelLlmRuntime(
   runtime: LlmRuntime,
   completionTransport?: Model,
 ): Model {
-  const bound: RuntimeBoundModel = { ...model };
-  Object.defineProperty(bound, MODEL_LLM_RUNTIME, {
-    value: { runtime, completionTransport },
-    enumerable: false,
+  return bindModelRuntime(model, {
+    runtime,
+    completionTransport,
+    completionOwner: getModelCompletionOwner(model),
   });
-  return bound;
+}
+
+export function bindModelCompletionOwner(
+  model: RuntimeBoundModel,
+  completionOwner: ModelCompletionOwner,
+): Model {
+  return bindModelRuntime(model, { ...model[MODEL_LLM_RUNTIME], completionOwner });
+}
+
+export function getModelCompletionOwner(
+  model: RuntimeBoundModel,
+): ModelCompletionOwner | undefined {
+  return model[MODEL_LLM_RUNTIME]?.completionOwner;
 }
 
 export function getModelLlmRuntime(model: RuntimeBoundModel): LlmRuntime | undefined {

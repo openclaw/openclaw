@@ -39,3 +39,28 @@
 .board-session-surface__board .board-view {
   padding-inline: 16px;
 }
+
+.board-session-surface__state {
+  display: grid;
+  flex: 1 1 0;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 32px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.board-session-surface__state--error {
+  color: var(--danger);
+}
+
+.board-widget__notice {
+  overflow: hidden;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

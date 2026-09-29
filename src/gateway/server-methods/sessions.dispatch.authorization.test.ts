@@ -13,6 +13,7 @@ import {
   dispatchTestSessionKey as sessionKey,
   getDispatchTestMocks,
   getSessionDispatchHandler,
+  invokeSessionDispatch as invoke,
   makeDispatchTestContext,
   makeReclaimedPlacement,
   makeSessionTarget,
@@ -134,6 +135,7 @@ describe("sessions.dispatch authorization", () => {
       expect.objectContaining({ profileId: "mapped" }),
       expect.any(Function),
       expect.any(Function),
+      undefined,
     );
     expect(adminRespond).toHaveBeenCalledWith(
       true,
@@ -144,6 +146,65 @@ describe("sessions.dispatch authorization", () => {
         placement: expect.objectContaining({ state: "active" }),
       }),
       undefined,
+    );
+  });
+  it("forwards caller cancellation to the placement lifecycle owner", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      makeSessionTarget({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+      path: "/repo/worktree",
+    });
+    const controller = new AbortController();
+    const dispatch = vi.fn().mockResolvedValue(activePlacement());
+    const respond = await invoke(
+      makeDispatchTestContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: "test" },
+      undefined,
+      controller.signal,
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "test" }),
+      expect.any(Function),
+      undefined,
+      controller.signal,
+    );
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ sessionId }), undefined);
+  });
+
+  it("rejects an archived session before dispatch", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      makeSessionTarget({
+        sessionId,
+        archivedAt: 2,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeDispatchTestContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("archived"),
+      }),
     );
   });
 });

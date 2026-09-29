@@ -137,7 +137,7 @@ struct WatchApprovalTransportSourceGuardTests {
         let parser = try Self.extract(
             receiverSource,
             from: "private static func parseExecApprovalSnapshotPayload(",
-            to: "private static func parseAppSnapshotPayload(")
+            to: "private static func parseChatCompletionPayload(")
 
         #expect(parser.contains("guard let rawApprovals = payload[\"approvals\"] as? [Any]"))
         #expect(parser.contains("guard let approval = Self.parseExecApprovalItem(item) else { return nil }"))
@@ -153,8 +153,7 @@ struct WatchApprovalTransportSourceGuardTests {
             to: "private static func parseExecApprovalExpiredPayload(")
 
         #expect(parser.contains(
-            "WatchExecApprovalResolvedMessage.parseTransportOutcome(payload[\"outcome\"])"))
-        #expect(parser.contains("outcome: outcome"))
+            "outcome: WatchExecApprovalResolvedMessage.parseTransportOutcome(payload[\"outcome\"])"))
     }
 
     @Test func `watch reuses exact compound identifier policy`() throws {
@@ -174,10 +173,6 @@ struct WatchApprovalTransportSourceGuardTests {
             storeSource,
             from: "func consume(\n        execApprovalSnapshot",
             to: "func consume(appSnapshot")
-        let restore = try Self.extract(
-            storeSource,
-            from: "private func restorePersistedState()",
-            to: "private func persistState()")
         let prefixed = "\u{001C}approval"
         #expect(ExecApprovalIdentifier.exact(prefixed) == prefixed)
         #expect(ExecApprovalIdentifier.exact(" approval ") == " approval ")
@@ -192,7 +187,6 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(snapshotConsume.contains("WatchApprovalID.exact(approval.id) != nil"))
         #expect(snapshotConsume.contains("let hasCanonicalRequestCorrelation ="))
         #expect(snapshotConsume.contains("guard hasCanonicalRequestCorrelation else { return true }"))
-        #expect(restore.contains("WatchApprovalID.exact(record.approvalID) != nil"))
         let composedID = "approval-\u{00E9}"
         let decomposedID = "approval-e\u{0301}"
         let composedKey = ExactOpaqueIdentifierKey(composedID)

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { ProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
@@ -21,6 +22,7 @@ import {
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveSearxngBaseUrl,
   resolveSearxngCategories,
@@ -43,22 +45,9 @@ type SearxngResult = {
   img_src?: string;
 };
 
-type SearxngResponse = {
-  results?: SearxngResult[];
-};
-
 function normalizeSearxngResult(value: unknown): SearxngResult | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const candidate = value as {
-    url?: unknown;
-    title?: unknown;
-    content?: unknown;
-    img_src?: unknown;
-  };
-  if (typeof candidate.url !== "string" || typeof candidate.title !== "string") {
+  const candidate = asOptionalObjectRecord(value);
+  if (typeof candidate?.url !== "string" || typeof candidate.title !== "string") {
     return null;
   }
 
@@ -155,20 +144,15 @@ async function validateSearxngBaseUrl(
 function parseSearxngResponseText(text: string, count: number): SearxngResult[] {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text) as SearxngResponse;
+    parsed = JSON.parse(text);
   } catch {
     throw new Error("SearXNG returned invalid JSON.");
   }
 
-  if (!parsed || typeof parsed !== "object") {
-    return [];
-  }
-
-  const response = parsed as SearxngResponse;
-  const rawResults = Array.isArray(response.results) ? response.results : [];
+  const rawResults = asOptionalObjectRecord(parsed)?.results;
   const results: SearxngResult[] = [];
 
-  for (const rawResult of rawResults) {
+  for (const rawResult of Array.isArray(rawResults) ? rawResults : []) {
     const result = normalizeSearxngResult(rawResult);
     if (result) {
       results.push(result);
@@ -217,8 +201,9 @@ async function fetchSearxngResults(params: {
     async (response) => {
       if (!response.ok) {
         const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
-        throw new Error(
+        throw new ProviderHttpError(
           `SearXNG search error (${response.status}): ${detail || response.statusText}`,
+          { status: response.status },
         );
       }
 
@@ -327,9 +312,5 @@ export async function runSearxngSearch(params: {
 }
 
 export const testing = {
-  buildSearxngSearchUrl,
-  parseSearxngResponseText,
-  shouldRetryEmptyCategorySearchWithGeneral,
-  validateSearxngBaseUrl,
   SEARXNG_SEARCH_CACHE,
 };

@@ -98,6 +98,7 @@ it("borrows the compiled daemon in another process and leaves it serving an exte
         throw error;
       }
       return {
+        port,
         stop: () => {
           owned.kill("SIGTERM");
         },

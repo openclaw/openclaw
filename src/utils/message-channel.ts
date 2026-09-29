@@ -1,4 +1,3 @@
-// Message channel helpers classify and format channel identifiers.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -89,19 +88,6 @@ export function isInternalMessageChannel(
   return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
 }
 
-/** Return whether a channel can resolve exec approvals in the originating chat. */
-export function isNativeApprovalChannel(value?: string | null): boolean {
-  if (!value) {
-    return false;
-  }
-  if (value === INTERNAL_MESSAGE_CHANNEL) {
-    return true;
-  }
-  return listBundledChannelCatalogEntries().some(
-    (entry) => entry.id === value && entry.channel.approvalFlags?.includes("native"),
-  );
-}
-
 /** Return whether a Gateway client is the public webchat surface. */
 export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean {
   const mode = normalizeGatewayClientMode(client?.mode);
@@ -121,11 +107,10 @@ export function isProgressCardRendererClient(
     platform?: string | null;
   } | null,
 ): boolean {
-  const client = { id: paired?.clientId, mode: paired?.clientMode };
-  const clientId = normalizeGatewayClientName(client?.id);
+  const clientId = normalizeGatewayClientName(paired?.clientId);
   const rendererClient =
-    (clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI && isBrowserOperatorUiClient(client)) ||
-    (clientId === GATEWAY_CLIENT_NAMES.WEBCHAT_UI && isWebchatClient(client)) ||
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.WEBCHAT_UI ||
     clientId === GATEWAY_CLIENT_NAMES.IOS_APP ||
     clientId === GATEWAY_CLIENT_NAMES.ANDROID_APP ||
     clientId === GATEWAY_CLIENT_NAMES.MACOS_APP;

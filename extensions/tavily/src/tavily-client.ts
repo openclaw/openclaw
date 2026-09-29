@@ -1,5 +1,5 @@
-// Tavily plugin module implements tavily client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -154,10 +154,7 @@ export async function runTavilySearch(
       "web_search (tavily) needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.",
     );
   }
-  const count =
-    typeof params.maxResults === "number" && Number.isFinite(params.maxResults)
-      ? Math.max(1, Math.min(20, Math.floor(params.maxResults)))
-      : DEFAULT_SEARCH_COUNT;
+  const count = resolveIntegerOption(params.maxResults, DEFAULT_SEARCH_COUNT, { min: 1, max: 20 });
   const timeoutSeconds = resolveTavilySearchTimeoutSeconds(params.timeoutSeconds);
   const baseUrl = resolveTavilyBaseUrl(params.cfg);
 
@@ -416,7 +413,3 @@ export async function runTavilyExtract(
   );
   return result;
 }
-
-export const testing = {
-  resolveEndpoint,
-};

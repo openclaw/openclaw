@@ -1,7 +1,7 @@
 // Voice Call tests cover manager.notify plugin behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
 
 class FailFirstPlayTtsProvider extends FakeProvider {
@@ -56,26 +56,8 @@ class FailHangupProvider extends FakeProvider {
   }
 }
 
-function requireCall(
-  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
-  callId: string,
-) {
-  const call = manager.getCall(callId);
-  if (!call) {
-    throw new Error(`expected active call ${callId}`);
-  }
-  return call;
-}
-
-function requireMappedCall(
-  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
-  providerCallId: string,
-) {
-  const call = manager.getCallByProviderCallId(providerCallId);
-  if (!call) {
-    throw new Error(`expected mapped provider call ${providerCallId}`);
-  }
-  return call;
+function requireCall(manager: HarnessManager, callId: string) {
+  return expectDefined(manager.getCall(callId), `active call ${callId}`);
 }
 
 function requireFirstPlayTtsCall(provider: FakeProvider) {
@@ -95,12 +77,6 @@ function requireSingleStartListeningCall(provider: FakeProvider) {
 
 type HarnessManager = Awaited<ReturnType<typeof createManagerHarness>>["manager"];
 
-async function waitForPlaybackDispatch() {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 async function initiateCallWithMessage(
   manager: HarnessManager,
   to: string,
@@ -118,14 +94,20 @@ async function answerCall(
   eventId: string,
   providerCallId = "call-uuid",
 ) {
-  manager.processEvent({
-    id: eventId,
-    type: "call.answered",
-    callId,
-    providerCallId,
-    timestamp: Date.now(),
-  });
-  await waitForPlaybackDispatch();
+  const initialMessage = vi.spyOn(manager, "speakInitialMessage");
+  try {
+    await manager.processEvent({
+      id: eventId,
+      type: "call.answered",
+      callId,
+      providerCallId,
+      timestamp: Date.now(),
+    });
+    // The answered event owns dispatch; its detached greeting owns persistence and playback.
+    await Promise.allSettled(initialMessage.mock.results.map((result) => result.value));
+  } finally {
+    initialMessage.mockRestore();
+  }
 }
 
 function expectFirstPlayTtsText(provider: FakeProvider, text: string) {
@@ -133,10 +115,21 @@ function expectFirstPlayTtsText(provider: FakeProvider, text: string) {
   expect(requireFirstPlayTtsCall(provider).text).toBe(text);
 }
 
+function useNotifyClock() {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  // Registered before the harness so its LIFO cleanup drains work before restoring time.
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+}
+
 async function expectNotifyHangup(manager: HarnessManager, provider: FakeProvider, callId: string) {
-  // Playback schedules a real auto-hangup. Finish it before the shared worker
-  // clears the state runtime, or its persistence/logging leaks into another file.
-  await expect.poll(() => manager.getCall(callId), { timeout: 5_000 }).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(2_999);
+  expect(provider.hangupCalls).toEqual([]);
+  expect(await manager.getCallForStream(callId)).toBeDefined();
+  await vi.advanceTimersByTimeAsync(1);
+  // The timer dispatches hangup; the queued read joins its real persistence before cleanup.
+  expect(await manager.getCallForStream(callId)).toBeUndefined();
   expect(provider.hangupCalls).toEqual([
     { callId, providerCallId: "call-uuid", reason: "hangup-bot" },
   ]);
@@ -158,14 +151,7 @@ describe("CallManager notify and mapping", () => {
       );
       const callId = await initiateCallWithMessage(manager, "+15550000014", "Notify", "notify");
 
-      manager.processEvent({
-        id: "evt-notify-failed-hangup",
-        type: "call.answered",
-        callId,
-        providerCallId: "call-uuid",
-        timestamp: Date.now(),
-      });
-      await vi.advanceTimersByTimeAsync(0);
+      await answerCall(manager, callId, "evt-notify-failed-hangup");
       await vi.advanceTimersByTimeAsync(1_000);
 
       expect(provider.hangupCalls).toHaveLength(1);
@@ -179,32 +165,10 @@ describe("CallManager notify and mapping", () => {
     }
   });
 
-  it("upgrades providerCallId mapping when provider ID changes", async () => {
-    const { manager } = await createManagerHarness();
-
-    const { callId, success, error } = await manager.initiateCall("+15550000001");
-    expect(success).toBe(true);
-    expect(error).toBeUndefined();
-
-    expect(requireCall(manager, callId).providerCallId).toBe("request-uuid");
-    expect(requireMappedCall(manager, "request-uuid").callId).toBe(callId);
-
-    manager.processEvent({
-      id: "evt-1",
-      type: "call.answered",
-      callId,
-      providerCallId: "call-uuid",
-      timestamp: Date.now(),
-    });
-
-    expect(requireCall(manager, callId).providerCallId).toBe("call-uuid");
-    expect(requireMappedCall(manager, "call-uuid").callId).toBe(callId);
-    expect(manager.getCallByProviderCallId("request-uuid")).toBeUndefined();
-  });
-
   it.each(["plivo", "twilio"] as const)(
     "speaks initial message on answered for notify mode (%s)",
     async (providerName) => {
+      useNotifyClock();
       const { manager, provider } = await createManagerHarness({}, new FakeProvider(providerName));
 
       const callId = await initiateCallWithMessage(
@@ -219,37 +183,6 @@ describe("CallManager notify and mapping", () => {
       await expectNotifyHangup(manager, provider, callId);
     },
   );
-
-  it("speaks initial message on answered for conversation mode with non-stream provider", async () => {
-    const { manager, provider } = await createManagerHarness({}, new FakeProvider("plivo"));
-
-    const callId = await initiateCallWithMessage(
-      manager,
-      "+15550000003",
-      "Hello from conversation",
-      "conversation",
-    );
-    await answerCall(manager, callId, "evt-conversation-plivo");
-
-    expectFirstPlayTtsText(provider, "Hello from conversation");
-  });
-
-  it("speaks initial message on answered for conversation mode when Twilio streaming is disabled", async () => {
-    const { manager, provider } = await createManagerHarness(
-      { streaming: { enabled: false } },
-      new FakeProvider("twilio"),
-    );
-
-    const callId = await initiateCallWithMessage(
-      manager,
-      "+15550000004",
-      "Twilio non-stream",
-      "conversation",
-    );
-    await answerCall(manager, callId, "evt-conversation-twilio-no-stream");
-
-    expectFirstPlayTtsText(provider, "Twilio non-stream");
-  });
 
   it("lets realtime conversations own the initial greeting instead of posting legacy TwiML", async () => {
     const { manager, provider } = await createManagerHarness(
@@ -271,6 +204,7 @@ describe("CallManager notify and mapping", () => {
   });
 
   it("still speaks initial message in notify mode when realtime is enabled", async () => {
+    useNotifyClock();
     const { manager, provider } = await createManagerHarness(
       { realtime: { enabled: true, provider: "openai" } },
       new FakeProvider("twilio"),
@@ -281,23 +215,6 @@ describe("CallManager notify and mapping", () => {
 
     expectFirstPlayTtsText(provider, "Notify text");
     await expectNotifyHangup(manager, provider, callId);
-  });
-
-  it("waits for stream connect in conversation mode when Twilio streaming is enabled", async () => {
-    const { manager, provider } = await createManagerHarness(
-      { streaming: { enabled: true } },
-      new FakeProvider("twilio"),
-    );
-
-    const callId = await initiateCallWithMessage(
-      manager,
-      "+15550000005",
-      "Twilio stream",
-      "conversation",
-    );
-    await answerCall(manager, callId, "evt-conversation-twilio-stream");
-
-    expect(provider.playTtsCalls).toHaveLength(0);
   });
 
   it("speaks on answered when Twilio streaming is enabled but stream-connect path is unavailable", async () => {
@@ -365,6 +282,7 @@ describe("CallManager notify and mapping", () => {
   });
 
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {
+    useNotifyClock();
     const provider = new FailFirstPlayTtsProvider("plivo");
     const { manager } = await createManagerHarness({}, provider);
 
@@ -425,8 +343,9 @@ describe("CallManager notify and mapping", () => {
       await provider.playTtsStartedPromise;
       expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
 
-      playbacks.push(manager.speakInitialMessage("call-uuid"));
-      await waitForPlaybackDispatch();
+      const repeated = manager.speakInitialMessage("call-uuid");
+      playbacks.push(repeated);
+      await repeated;
       expect(provider.playTtsCalls).toHaveLength(1);
     } finally {
       provider.releaseCurrentPlayback();

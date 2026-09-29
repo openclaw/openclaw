@@ -13,6 +13,7 @@ import {
 } from "../../code-mode.test-support.js";
 import { Agent, type AgentTool } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import { jsonResult } from "../../tools/common.js";
 import {
@@ -47,14 +48,7 @@ function streamAssistant(content: AssistantMessage["content"]) {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: content.some((entry) => entry.type === "toolCall") ? "toolUse" : "stop",
     timestamp: Date.now(),
   };
@@ -80,7 +74,7 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
   });
 
   afterEach(async () => {
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
     await cleanupTempPaths(tempPaths);
   });
 
@@ -125,7 +119,14 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
           return streamAssistant(
             code === undefined
               ? [{ type: "text", text: "all changes verified" }]
-              : [{ type: "toolCall", id: `program-${turn}`, name: "exec", arguments: { code } }],
+              : [
+                  {
+                    type: "toolCall",
+                    id: `program-${turn}`,
+                    name: "exec",
+                    arguments: { title: "Continue the source repair", code },
+                  },
+                ],
           );
         },
       });

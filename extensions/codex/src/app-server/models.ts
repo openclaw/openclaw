@@ -1,18 +1,18 @@
-/**
- * Lists and normalizes models exposed by the Codex app-server `model/list`
- * endpoint, including pagination and shared-client lease handling.
- */
-import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  CodexAppServerAuthRequirement,
-  resolveCodexAppServerAuthProfileIdForAgent,
-} from "./auth-bridge.js";
+import {
+  normalizeOptionalString,
+  normalizeUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexAppServerAuthRequirement } from "./auth-bridge.js";
+import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { assertCodexModelListResponse } from "./protocol-validators.js";
-import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";
+import type { CodexModel } from "./protocol.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
 
-/** Normalized model metadata returned by the Codex app-server model listing helper. */
+// Allow Codex's five-second remote catalog refresh to finish or fall back,
+// with headroom for client acquisition, response transit, and account/read.
+export const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+
 export type CodexAppServerModel = {
   id: string;
   model: string;
@@ -22,18 +22,17 @@ export type CodexAppServerModel = {
   isDefault?: boolean;
   inputModalities: string[];
   supportedReasoningEfforts: string[];
+  serviceTiers?: string[];
   defaultReasoningEffort?: string;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
 
-/** One page of Codex app-server model metadata plus optional pagination state. */
 export type CodexAppServerModelListResult = {
   models: CodexAppServerModel[];
   nextCursor?: string;
   truncated?: boolean;
 };
 
-/** Options for querying Codex app-server models through a shared or isolated client. */
 type CodexAppServerListModelsOptions = {
   /** Caller-owned request scope for related catalog/account reads. */
   request?: CodexAppServerScopedRequest;
@@ -49,7 +48,6 @@ type CodexAppServerListModelsOptions = {
   sharedClient?: boolean;
 };
 
-/** Lists one Codex app-server model page using the configured auth/client options. */
 export async function listCodexAppServerModels(
   options: CodexAppServerListModelsOptions = {},
 ): Promise<CodexAppServerModelListResult> {
@@ -58,7 +56,6 @@ export async function listCodexAppServerModels(
   );
 }
 
-/** Walks Codex app-server model pages until exhaustion or the max-page guard. */
 export async function listAllCodexAppServerModels(
   options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
 ): Promise<CodexAppServerModelListResult> {
@@ -90,7 +87,7 @@ async function withCodexAppServerModelRequest<T>(
   if (options.request) {
     return await run(options.request);
   }
-  const timeoutMs = options.timeoutMs ?? 2500;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
   const useSharedClient = options.sharedClient !== false;
   const {
     createIsolatedCodexAppServerClient,
@@ -119,7 +116,7 @@ async function withCodexAppServerModelRequest<T>(
     if (useSharedClient) {
       releaseLeasedSharedCodexAppServerClient(client);
     } else {
-      client.close();
+      await client.closeAndWait();
     }
   }
 }
@@ -139,10 +136,9 @@ async function requestModelListPage(
   return readModelListResult(response);
 }
 
-/** Parses a raw Codex app-server model/list response into OpenClaw's normalized shape. */
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
   const response = assertCodexModelListResponse(value);
-  const models = response.data.map((entry) => readCodexModel(entry));
+  const models = response.data.map(readCodexModel);
   const nextCursor = response.nextCursor ?? undefined;
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
@@ -155,33 +151,28 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
       "Invalid Codex app-server model/list response: model id and name must be non-empty strings",
     );
   }
+  const displayName = normalizeOptionalString(value.displayName);
+  const description = normalizeOptionalString(value.description);
+  const defaultReasoningEffort = normalizeOptionalString(value.defaultReasoningEffort);
   return {
     id,
     model,
-    ...(normalizeOptionalString(value.displayName)
-      ? { displayName: normalizeOptionalString(value.displayName) }
-      : {}),
-    ...(normalizeOptionalString(value.description)
-      ? { description: normalizeOptionalString(value.description) }
-      : {}),
+    ...(displayName ? { displayName } : {}),
+    ...(description ? { description } : {}),
     hidden: value.hidden,
     isDefault: value.isDefault,
     inputModalities: value.inputModalities,
-    supportedReasoningEfforts: readReasoningEfforts(value.supportedReasoningEfforts),
-    ...(normalizeOptionalString(value.defaultReasoningEffort)
-      ? { defaultReasoningEffort: normalizeOptionalString(value.defaultReasoningEffort) }
-      : {}),
+    serviceTiers: normalizeUniqueTrimmedStringList(
+      (value.serviceTiers ?? []).map((tier) => tier.id),
+    ),
+    supportedReasoningEfforts: normalizeUniqueTrimmedStringList(
+      value.supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
+    ),
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(value.multiAgentVersion !== undefined
       ? { multiAgentVersion: value.multiAgentVersion }
       : {}),
   };
-}
-
-function readReasoningEfforts(value: CodexReasoningEffortOption[]): string[] {
-  const efforts = value
-    .map((entry) => normalizeOptionalString(entry.reasoningEffort))
-    .filter((entry): entry is string => entry !== undefined);
-  return uniqueStrings(efforts);
 }
 
 function normalizeMaxPages(value: unknown): number {

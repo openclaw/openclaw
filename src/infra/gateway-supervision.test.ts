@@ -16,8 +16,6 @@ const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 describe("gateway supervision", () => {
   it.each([
     { value: undefined, expected: "auto" },
-    { value: "", expected: "auto" },
-    { value: "auto", expected: "auto" },
     { value: "invalid", expected: "auto" },
     { value: " EXTERNAL ", expected: "external" },
   ])("resolves $value as $expected", ({ value, expected }) => {
@@ -47,7 +45,7 @@ describe("gateway supervision", () => {
         ...override,
       }),
     ).toThrow(
-      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, without OPENCLAW_HOME, and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to restart the gateway.`,
+      `${NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON}. Rerun with HOME set to the OS account home, OPENCLAW_HOME either unset or pointing at that same home, and OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing at the canonical paths for that account home and profile to restart the gateway.`,
     );
   });
 

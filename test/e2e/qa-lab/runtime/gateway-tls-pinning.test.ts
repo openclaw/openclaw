@@ -23,7 +23,10 @@ describe("Gateway TLS pinning evidence", () => {
     });
 
     expect(snapshotGatewayStartupEnv()).toEqual(gatewayStartupEnv);
-    expect(evidence.entries[0]?.result.status).toBe("pass");
+    expect(
+      evidence.entries[0]?.result.status,
+      await fs.readFile(path.join(artifactBase, "gateway-tls-pinning.log"), "utf8"),
+    ).toBe("pass");
     const proof = JSON.parse(
       await fs.readFile(path.join(artifactBase, "gateway-tls-pinning-summary.json"), "utf8"),
     ) as {

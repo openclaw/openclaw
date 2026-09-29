@@ -1,20 +1,20 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { OpenClawPluginApi } from "./api.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/routing";
 import type { MemoryConfig } from "./config.js";
 import {
   type Embeddings,
   isMemoryRecallTimeoutError,
   MemoryRecallEmbeddingError,
-  runWithTimeout,
 } from "./embeddings.js";
 import type { MemoryDB } from "./lancedb-store.js";
 import { dropMediaNoteLines } from "./memory-capture-sanitization.js";
 import {
   cleanMemorySearchResults,
-  extractLatestUserText,
   formatRelevantMemoriesContext,
   normalizeRecallQuery,
 } from "./memory-policy.js";
+import { startMemoryRecall } from "./recall-service.js";
 
 const AUTO_RECALL_TIMEOUT_MS = 15_000;
 const AUTO_RECALL_OVERFETCH_LIMIT = 10;
@@ -27,6 +27,7 @@ type AutoRecallToolAuthority = {
 
 type AutoRecallHookContext = {
   agentId?: string;
+  sessionKey?: string;
   toolAuthority?: AutoRecallToolAuthority;
 };
 
@@ -45,6 +46,9 @@ export function createAutoRecallHook(params: {
   recordCooldown: (agentId: string, error: string) => void;
 }) {
   return async (event: AutoRecallHookEvent, ctx: AutoRecallHookContext) => {
+    if (isIncognitoSessionKey(ctx.sessionKey)) {
+      return undefined;
+    }
     const currentCfg = params.resolveCurrentConfig();
     const recallMaxChars = currentCfg.recallMaxChars;
     if (!currentCfg.autoRecall) {
@@ -77,41 +81,24 @@ export function createAutoRecallHook(params: {
     }
 
     try {
-      const recallQuery = normalizeRecallQuery(
-        dropMediaNoteLines(extractLatestUserText(event.messages) ?? event.prompt),
-        recallMaxChars,
-      );
+      // Prompt hooks receive prior history separately from the current request.
+      const recallQuery = normalizeRecallQuery(dropMediaNoteLines(event.prompt), recallMaxChars);
       if (!recallQuery) {
         return undefined;
       }
-      let recallPhase: "embedding" | "search" = "embedding";
       toolAuthority.assertActive();
-      const recall = await runWithTimeout({
+      const recallOperation = startMemoryRecall({
         timeoutMs: AUTO_RECALL_TIMEOUT_MS,
-        task: async (deadlineAtMs) => {
-          let vector: number[];
-          try {
-            vector = await params.embeddings.embed(
-              agentId,
-              recallQuery,
-              currentCfg.embedding,
-              Math.max(1, deadlineAtMs - Date.now()),
-            );
-          } catch (error) {
-            throw new MemoryRecallEmbeddingError(error);
-          }
-          toolAuthority.assertActive();
-          // Keep one end-to-end deadline, but only let embedding timeouts trip
-          // the shared breaker. LanceDB stalls remain retryable next turn.
-          recallPhase = "search";
-          return await params.db.search(agentId, vector, AUTO_RECALL_OVERFETCH_LIMIT, 0.3, {
-            timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
-          });
-        },
+        embed: (timeoutMs) =>
+          params.embeddings.embed(agentId, recallQuery, currentCfg.embedding, timeoutMs()),
+        beforeSearch: () => toolAuthority.assertActive(),
+        search: (vector, timeoutMs) =>
+          params.db.search(agentId, vector, AUTO_RECALL_OVERFETCH_LIMIT, 0.3, { timeoutMs }),
       });
+      const recall = await recallOperation.result;
       toolAuthority.assertActive();
       if (recall.status === "timeout") {
-        if (recallPhase === "embedding") {
+        if (recallOperation.phase === "embedding") {
           params.recordCooldown(
             agentId,
             `auto-recall timed out after ${Math.round(AUTO_RECALL_TIMEOUT_MS / 1000)}s`,

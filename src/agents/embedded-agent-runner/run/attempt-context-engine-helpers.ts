@@ -1,8 +1,4 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
-/**
- * Bridges attempt bootstrap/history data to context-engine prompt-cache helpers.
- */
-import type { ContextEngine } from "../../../context-engine/types.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
   isHeartbeatLifecycleRunKind,
@@ -13,7 +9,6 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
-export type AttemptContextEngine = ContextEngine;
 
 type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
   bootstrapFiles: TBootstrapFile[];
@@ -119,18 +114,19 @@ export function buildContextEnginePromptCacheInfo(params: {
   return Object.keys(promptCache).length > 0 ? promptCache : undefined;
 }
 
-/**
- * Finds the assistant message produced by the current attempt, ignoring
- * historical messages that were present before prompt submission.
- */
+/** Excludes history that predates this attempt's prompt submission. */
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
 }): AssistantMessage | undefined {
-  return params.messagesSnapshot
-    .slice(Math.max(0, params.prePromptMessageCount))
-    .toReversed()
-    .find((message): message is AssistantMessage => message.role === "assistant");
+  const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
+  for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
+    const message = params.messagesSnapshot[i];
+    if (message?.role === "assistant") {
+      return message;
+    }
+  }
+  return undefined;
 }
 
 /** Finds the newest usable per-call usage without letting a zero-usage abort erase it. */
@@ -138,10 +134,10 @@ function findLatestCurrentAttemptUsageSnapshot(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
 }): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
-  for (const message of params.messagesSnapshot
-    .slice(Math.max(0, params.prePromptMessageCount))
-    .toReversed()) {
-    if (message.role !== "assistant") {
+  const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
+  for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
+    const message = params.messagesSnapshot[i];
+    if (message?.role !== "assistant") {
       continue;
     }
     const usage = normalizeUsage(message.usage);
@@ -164,10 +160,6 @@ export function findLatestUncompactedAttemptUsageSnapshot(params: {
   return findLatestCurrentAttemptUsageSnapshot(params);
 }
 
-function parsePromptCacheTouchTimestamp(value: unknown): number | null {
-  return parseDateFirstTimestampMs(value) ?? null;
-}
-
 /**
  * Resolves the effective prompt-cache touch timestamp for the current assistant
  * turn. Cache-read/write usage is required before an assistant timestamp can
@@ -185,27 +177,17 @@ export function resolvePromptCacheTouchTimestamp(params: {
     return params.fallbackLastCacheTouchAt ?? null;
   }
   return (
-    parsePromptCacheTouchTimestamp(params.assistantTimestamp) ??
-    params.fallbackLastCacheTouchAt ??
-    null
+    parseDateFirstTimestampMs(params.assistantTimestamp) ?? params.fallbackLastCacheTouchAt ?? null
   );
 }
 
-/**
- * Derives prompt-cache metadata from the loop transcript snapshot after a model
- * attempt finishes. It combines the current attempt assistant usage with the
- * carried-forward touch timestamp from earlier attempts.
- */
 export function buildLoopPromptCacheInfo(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
   retention?: "none" | "short" | "long";
   fallbackLastCacheTouchAt?: number | null;
 }): EmbeddedRunAttemptResult["promptCache"] {
-  const latestUsageSnapshot = findLatestCurrentAttemptUsageSnapshot({
-    messagesSnapshot: params.messagesSnapshot,
-    prePromptMessageCount: params.prePromptMessageCount,
-  });
+  const latestUsageSnapshot = findLatestCurrentAttemptUsageSnapshot(params);
   const lastCallUsage = latestUsageSnapshot?.usage;
 
   return buildContextEnginePromptCacheInfo({

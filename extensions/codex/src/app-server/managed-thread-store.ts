@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { z } from "zod";
 
 export const CODEX_MANAGED_THREAD_NAMESPACE = "app-server-managed-threads";
@@ -53,21 +53,66 @@ function managedThreadStoreKey(sourceHomeId: string, threadId: string): string {
 
 /** Durable ownership index for Codex threads created by OpenClaw. */
 export function createCodexManagedThreadStore(
-  state: Pick<
-    PluginStateSyncKeyedStore<StoredCodexManagedThread>,
-    "entries" | "lookup" | "registerIfAbsent"
-  >,
+  state: Pick<PluginStateKeyedStore<StoredCodexManagedThread>, "entries" | "registerIfAbsent">,
 ): CodexManagedThreadStore {
+  type Membership = Pick<StoredCodexManagedThread, "sourceHomeId" | "threadId">;
+  const byHome = new Map<string, Set<string>>();
+  const memberships = new Map<string, Membership>();
+  let hydration: Promise<void> | undefined;
+  const remember = ({ sourceHomeId, threadId }: Membership) => {
+    const key = managedThreadStoreKey(sourceHomeId, threadId);
+    if (memberships.has(key)) {
+      return key;
+    }
+    memberships.set(key, { sourceHomeId, threadId });
+    let ids = byHome.get(sourceHomeId);
+    if (!ids) {
+      ids = new Set();
+      byHome.set(sourceHomeId, ids);
+    }
+    ids.add(threadId);
+    if (memberships.size > CODEX_MANAGED_THREAD_MAX_ENTRIES) {
+      const oldest = memberships.entries().next().value;
+      if (oldest) {
+        memberships.delete(oldest[0]);
+        const oldestHome = byHome.get(oldest[1].sourceHomeId);
+        oldestHome?.delete(oldest[1].threadId);
+        if (oldestHome?.size === 0) {
+          byHome.delete(oldest[1].sourceHomeId);
+        }
+      }
+    }
+    return key;
+  };
+  const snapshot = async () => {
+    hydration ??= state
+      .entries()
+      .then((entries) => {
+        const marked = new Map(memberships);
+        memberships.clear();
+        byHome.clear();
+        for (const entry of entries.toSorted((a, b) => a.createdAt - b.createdAt)) {
+          const parsed = managedThreadSchema.safeParse(entry.value);
+          if (parsed.success) {
+            marked.delete(remember(parsed.data));
+          }
+        }
+        // Marks absent from the loaded snapshot arrived during hydration. Append
+        // those only; marking an existing key must not refresh its eviction age.
+        for (const membership of marked.values()) {
+          remember(membership);
+        }
+      })
+      .catch((error: unknown) => {
+        hydration = undefined;
+        throw error;
+      });
+    await hydration;
+    return byHome;
+  };
   return {
     async has(sourceHomeId, threadId) {
-      const parsed = managedThreadSchema.safeParse(
-        state.lookup(managedThreadStoreKey(sourceHomeId, threadId)),
-      );
-      return (
-        parsed.success &&
-        parsed.data.sourceHomeId === sourceHomeId &&
-        parsed.data.threadId === threadId
-      );
+      return (await snapshot()).get(sourceHomeId)?.has(threadId) ?? false;
     },
     async mark(params) {
       try {
@@ -78,7 +123,11 @@ export function createCodexManagedThreadStore(
           threadId: params.threadId.trim(),
           ...(params.rolloutPath?.trim() ? { rolloutPath: params.rolloutPath.trim() } : {}),
         });
-        state.registerIfAbsent(managedThreadStoreKey(value.sourceHomeId, value.threadId), value);
+        await state.registerIfAbsent(
+          managedThreadStoreKey(value.sourceHomeId, value.threadId),
+          value,
+        );
+        remember(value);
         return true;
       } catch (error) {
         // Catalog ownership is advisory bookkeeping. Losing an old catalog exclusion is safer
@@ -87,18 +136,6 @@ export function createCodexManagedThreadStore(
         return false;
       }
     },
-    async snapshot() {
-      const byHome = new Map<string, Set<string>>();
-      for (const entry of state.entries()) {
-        const parsed = managedThreadSchema.safeParse(entry.value);
-        if (!parsed.success) {
-          continue;
-        }
-        const ids = byHome.get(parsed.data.sourceHomeId) ?? new Set<string>();
-        ids.add(parsed.data.threadId);
-        byHome.set(parsed.data.sourceHomeId, ids);
-      }
-      return byHome;
-    },
+    snapshot,
   };
 }

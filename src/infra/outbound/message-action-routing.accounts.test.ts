@@ -1,5 +1,6 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -28,7 +29,9 @@ describe("runMessageAction plugin dispatch", () => {
     resetMessageActionRunnerMocks();
   });
   describe("accountId defaults", () => {
-    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    const handleAction = vi.fn<NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>>(
+      async () => jsonResult({ ok: true }),
+    );
     const listGroupsLive = vi.fn(async () => [
       { id: "channel:resolved", name: "resolved", kind: "group" as const },
     ]);
@@ -139,6 +142,69 @@ describe("runMessageAction plugin dispatch", () => {
       }
       expect(ctx.accountId).toBe(expectedAccountId);
       expect(ctx.params.accountId).toBe(expectedAccountId);
+    });
+
+    it("uses the authoritative default without enumerating accounts for each local send", async () => {
+      const accounts = Object.fromEntries(
+        Array.from({ length: 1_000 }, (_, index) => [`account-${index}`, { enabled: true }]),
+      );
+      const defaultAccountId = vi.fn(() => "account-999");
+      const plugin: ChannelPlugin = {
+        ...accountPlugin,
+        config: {
+          ...accountPlugin.config,
+          listAccountIds: () => Object.keys(accounts),
+          defaultAccountId,
+        },
+      };
+      setTestPlugin(plugin, "accountchat");
+      const cfg: OpenClawConfig = { channels: { accountchat: { accounts } } };
+      const sends = Array.from({ length: 64 }, (_, index) => ({
+        channel: "accountchat",
+        target: `channel:${index}`,
+        message: `message ${index}`,
+      }));
+      const before = structuredClone({ cfg, sends });
+      const enumeration = vi.spyOn(plugin.config, "listAccountIds");
+      try {
+        const results = [];
+        for (const params of sends) {
+          results.push(await runMessageAction({ cfg, action: "send", params }));
+        }
+        expect(results).toStrictEqual(
+          sends.map(({ target }) => ({
+            kind: "send",
+            channel: "accountchat",
+            action: "send",
+            to: target,
+            handledBy: "plugin",
+            payload: { ok: true },
+            toolResult: {
+              content: [{ type: "text", text: '{\n  "ok": true\n}' }],
+              details: { ok: true },
+            },
+            sendResult: undefined,
+            dryRun: false,
+          })),
+        );
+        expect(handleAction).toHaveBeenCalledTimes(sends.length);
+        for (const [index, call] of handleAction.mock.calls.entries()) {
+          const sent = expectDefined(sends[index], "expected send at matching call index");
+          const context = requireRecord(call[0]);
+          expect(context.cfg).toBe(cfg);
+          expect(context.accountId).toBe("account-999");
+          expect(requireRecord(context.params)).toMatchObject({
+            accountId: "account-999",
+            to: sent.target,
+            message: sent.message,
+          });
+        }
+        expect({ cfg, sends }).toEqual(before);
+        expect(defaultAccountId).toHaveBeenCalledTimes(sends.length);
+        expect(enumeration).toHaveBeenCalledTimes(0);
+      } finally {
+        enumeration.mockRestore();
+      }
     });
 
     it("allows an explicitly selected configured account", async () => {

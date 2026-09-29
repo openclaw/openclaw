@@ -5,6 +5,7 @@ import type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { defineCodexBuildState } from "../build-state.js";
 import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import {
   readMacOSDesktopGenerationFingerprint,
@@ -18,7 +19,6 @@ import {
 const APPLICATIONS_PATH = "/Applications";
 const REARM_INITIAL_DELAY_MS = 100;
 const REARM_MAX_DELAY_MS = 30_000;
-const DESKTOP_GENERATION_STATE = Symbol.for("openclaw.codexDesktopGenerationState");
 
 type GenerationOwner = ReturnType<typeof createCodexDesktopGenerationOwner>;
 type WatchFactory = (
@@ -42,19 +42,13 @@ type DesktopGenerationState = {
   rearmTimer?: NodeJS.Timeout;
   rearmDelayMs?: number;
   context?: OpenClawPluginServiceContext;
-  readFingerprint?: () => Promise<string>;
-  resolveWatchPaths?: () => string[];
-  pathExists?: (watchedPath: string) => boolean;
-  watchPath?: WatchFactory;
+  runtime?: DesktopGenerationRuntime;
 };
 
-function state(): DesktopGenerationState {
-  // SAFETY: this process-global symbol is owned exclusively by this module.
-  const globalState = globalThis as typeof globalThis & {
-    [DESKTOP_GENERATION_STATE]?: DesktopGenerationState;
-  };
-  return (globalState[DESKTOP_GENERATION_STATE] ??= {});
-}
+const state = defineCodexBuildState(
+  "openclaw.codexDesktopGenerationState",
+  (): DesktopGenerationState => ({}),
+);
 
 export function waitForCodexDesktopGeneration(): Promise<CodexDesktopGeneration | undefined> {
   return state().owner?.wait() ?? Promise.resolve(undefined);
@@ -86,12 +80,9 @@ export function createCodexDesktopGenerationService(
       }
       const current = state();
       current.context = ctx;
-      current.readFingerprint = runtime.readFingerprint;
-      current.resolveWatchPaths = runtime.resolveWatchPaths;
-      current.pathExists = runtime.pathExists;
-      current.watchPath = runtime.watchPath;
+      current.runtime = { ...runtime };
       current.owner = createCodexDesktopGenerationOwner({
-        readFingerprint: current.readFingerprint,
+        readFingerprint: runtime.readFingerprint,
         onGenerationChange: params.onGenerationChange,
         initialGeneration: current.lastGeneration,
       });
@@ -105,10 +96,7 @@ export function createCodexDesktopGenerationService(
       current.owner = undefined;
       current.armEpoch = (current.armEpoch ?? 0) + 1;
       current.context = undefined;
-      current.readFingerprint = undefined;
-      current.resolveWatchPaths = undefined;
-      current.pathExists = undefined;
-      current.watchPath = undefined;
+      current.runtime = undefined;
       current.watchHealthy = undefined;
       current.rearmDelayMs = undefined;
       if (current.rearmTimer) {
@@ -133,14 +121,14 @@ function armWatchers(current: DesktopGenerationState): boolean {
     resolveMacOSDesktopCodexAppPathCandidates("darwin").map((candidate) => candidate.appName),
   );
   let complete = true;
-  for (const watchedPath of current.resolveWatchPaths?.() ?? []) {
-    if (!current.pathExists?.(watchedPath)) {
+  for (const watchedPath of current.runtime?.resolveWatchPaths() ?? []) {
+    if (!current.runtime?.pathExists(watchedPath)) {
       continue;
     }
     try {
       // Bundle roots need recursive invalidation: nested plugin bytes can change without
       // updating the app directory metadata that the settled fingerprint observes first.
-      const watcher = current.watchPath?.(
+      const watcher = current.runtime?.watchPath(
         watchedPath,
         { recursive: watchedPath !== APPLICATIONS_PATH },
         (_eventType, filename) => {
@@ -237,16 +225,6 @@ function scheduleRearm(current: DesktopGenerationState, owner: GenerationOwner):
   current.rearmTimer.unref();
 }
 
-function logRefreshFailure(current: DesktopGenerationState, owner: GenerationOwner) {
-  return (error: unknown) => {
-    if (current.owner !== owner) {
-      return;
-    }
-    current.context?.serviceHealth?.reportFailure(error);
-    current.context?.logger.warn(`codex desktop generation refresh failed: ${String(error)}`);
-  };
-}
-
 function refreshGeneration(
   current: DesktopGenerationState,
   owner: GenerationOwner,
@@ -258,7 +236,13 @@ function refreshGeneration(
         current.context?.serviceHealth?.clearFailure();
       }
     })
-    .catch(logRefreshFailure(current, owner));
+    .catch((error: unknown) => {
+      if (current.owner !== owner) {
+        return;
+      }
+      current.context?.serviceHealth?.reportFailure(error);
+      current.context?.logger.warn(`codex desktop generation refresh failed: ${String(error)}`);
+    });
 }
 
 function closeWatchers(current: DesktopGenerationState): void {

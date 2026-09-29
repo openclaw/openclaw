@@ -1,7 +1,7 @@
-# Native Windows companion app Completeness
+# Windows App / Node Completeness
 
 Use this rubric when assigning category Completeness scores for the
-`native-windows-companion-app` surface.
+`windows-app` surface.
 
 ## Category Scope
 

@@ -6,7 +6,7 @@ import {
   validateTargetProviderPrefix,
 } from "../infra/outbound/channel-target-prefix.js";
 import { normalizeAccountId } from "../routing/account-id.js";
-import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveFailureAlert } from "./service/failure-alerts.js";
 import type { CronDelivery, CronFailureAlert, CronJobCreate } from "./types.js";
@@ -96,7 +96,8 @@ function assertEnabledAnnounceAccount(params: {
   // Channels resolve account keys canonically (matrix `"Team Ops"` answers to
   // `team-ops`), so match the same way or a disabled entry is missed.
   if (
-    resolveNormalizedAccountEntry(accounts, params.accountId, normalizeAccountId)?.enabled !== false
+    resolveChannelAccountEntry(accounts, params.accountId, channel, normalizeAccountId)?.enabled !==
+    false
   ) {
     return;
   }

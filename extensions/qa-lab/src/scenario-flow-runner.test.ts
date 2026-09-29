@@ -12,8 +12,37 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
-import type { QaSuiteStep } from "./suite-types.js";
+import {
+  runLoadedScenarioFlow,
+  assertTelegramRichObservationFlow,
+  telegramRichObservationCases,
+} from "./scenario-flow-runner.test-support.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+
+type FlowApi = Parameters<typeof runScenarioFlow>[0]["api"];
+
+function createImportApi(
+  id: string,
+  runScenario: FlowApi["runScenario"] = async (name, steps) => {
+    const stepResults = [];
+    for (const step of steps) {
+      const details = (await step.run())?.details;
+      stepResults.push({
+        name: step.name,
+        status: "pass" as const,
+        ...(details !== undefined ? { details } : {}),
+      });
+    }
+    return { name, status: "pass", steps: stepResults };
+  },
+): FlowApi {
+  return {
+    state: createQaBusState(),
+    scenario: makeQaSuiteTestScenario(id),
+    config: {},
+    runScenario,
+  };
+}
 
 function readWebchatTranscriptWaitFlow() {
   const scenario = readQaScenarioById("webchat-direct-reply-routing");
@@ -68,66 +97,6 @@ async function runWebchatTranscriptWait(
       liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
     },
   });
-}
-
-function readCurrentRunProviderPromptEvidenceFlow(trajectoryEvents: unknown[]): QaScenarioFlow {
-  const scenario = readQaScenarioById("instruction-profile-artifact-followthrough-live");
-  const actions = scenario.execution.flow?.steps[0]?.actions;
-  if (!actions) {
-    throw new Error("instruction profile scenario has no actions");
-  }
-  const evidenceIndex = actions.findIndex(
-    (action) =>
-      typeof action === "object" &&
-      action !== null &&
-      "set" in action &&
-      action.set === "providerPromptEvidence",
-  );
-  const assertionIndex = actions.findIndex(
-    (action, index) =>
-      index > evidenceIndex &&
-      typeof action === "object" &&
-      action !== null &&
-      "assert" in action &&
-      JSON.stringify(action).includes("current-run provider prompt evidence mismatch"),
-  );
-  if (evidenceIndex < 0 || assertionIndex < 0) {
-    throw new Error("instruction profile scenario has no provider prompt evidence assertion");
-  }
-  const instructionContents = scenario.execution.config?.instructionContents;
-  const instructionChars =
-    typeof instructionContents === "string" ? instructionContents.trimEnd().length : 0;
-  return {
-    steps: [
-      {
-        name: "proves current-run provider prompt evidence",
-        actions: [
-          { set: "turn", value: { started: { runId: "current-run" } } },
-          {
-            set: "instructionProfileReport",
-            value: {
-              missing: false,
-              truncated: false,
-              rawChars: instructionChars,
-              injectedChars: instructionChars,
-            },
-          },
-          { set: "trajectoryEvents", value: trajectoryEvents },
-          ...actions
-            .slice(evidenceIndex, assertionIndex + 1)
-            .filter(
-              (action) =>
-                !(
-                  typeof action === "object" &&
-                  action !== null &&
-                  "call" in action &&
-                  action.call === "fs.rm"
-                ),
-            ),
-        ],
-      },
-    ],
-  };
 }
 
 const planningEvidenceCoverageIds = new Set([
@@ -299,63 +268,10 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
-  it("ignores stale provider prompt mismatches when the current run matches", async () => {
-    const currentObservation = {
-      egress: "responses-sdk",
-      payloadVariant: "initial",
-      promptSource: "input.developer",
-      expectedChars: 4096,
-      observedChars: 4096,
-      matchesAssembledPrompt: true,
-    };
-    const result = await runLoadedScenarioFlow("instruction-profile-artifact-followthrough-live", {
-      flow: readCurrentRunProviderPromptEvidenceFlow([
-        {
-          type: "provider.prompt.observed",
-          runId: "stale-run",
-          data: {
-            ...currentObservation,
-            promptSource: "missing",
-            observedChars: 0,
-            matchesAssembledPrompt: false,
-          },
-        },
-        { type: "provider.prompt.observed", runId: "current-run", data: currentObservation },
-      ]),
-    });
-
-    expect(result.status).toBe("pass");
-  });
-
-  it("excludes marker-bearing diagnostic trajectory context from bounded no-leak evidence", async () => {
-    const marker = "INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B";
-    const trajectoryEvents = [
-      {
-        type: "context.compiled",
-        runId: "current-run",
-        data: { systemPrompt: `diagnostic support context ${marker}` },
-      },
-      {
-        type: "provider.prompt.observed",
-        runId: "current-run",
-        data: {
-          egress: "native-codex-websocket",
-          payloadVariant: "initial",
-          promptSource: "instructions",
-          expectedChars: 4096,
-          observedChars: 4096,
-          matchesAssembledPrompt: true,
-        },
-      },
-    ];
-
-    expect(JSON.stringify(trajectoryEvents)).toContain(marker);
-    const result = await runLoadedScenarioFlow("instruction-profile-artifact-followthrough-live", {
-      flow: readCurrentRunProviderPromptEvidenceFlow(trajectoryEvents),
-    });
-
-    expect(result.status).toBe("pass");
-  });
+  it.each(telegramRichObservationCases)(
+    "correlates Telegram rich observations without crossing account IDs: %s",
+    assertTelegramRichObservationFlow,
+  );
 
   it("keeps live goal followthrough inside the active-goal context limit", async () => {
     const state = createQaBusState();
@@ -732,35 +648,7 @@ describe("scenario-flow-runner", () => {
 
   it("supports qaImport inside flow expressions", async () => {
     const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-import",
-          title: "qa-import",
-          sourcePath: "qa/scenarios/qa-import.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: {},
-        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
-          const stepResults = [];
-          for (const step of steps) {
-            const details = (await step.run())?.details;
-            stepResults.push({
-              name: step.name,
-              status: "pass" as const,
-              ...(details !== undefined ? { details } : {}),
-            });
-          }
-          return {
-            name: "qa-import",
-            status: "pass" as const,
-            steps: stepResults,
-          };
-        },
-      },
+      api: createImportApi("qa-import"),
       scenarioTitle: "qa-import",
       vars: { preparedValue: "ready" },
       flow: {
@@ -800,37 +688,9 @@ describe("scenario-flow-runner", () => {
     });
   });
 
-  it("loads bundled QA fixture modules through qaImport", async () => {
+  it("loads bundled QA runtime modules through qaImport", async () => {
     const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-fixture-import",
-          title: "qa-fixture-import",
-          sourcePath: "qa/scenarios/qa-fixture-import.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: {},
-        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
-          const stepResults = [];
-          for (const step of steps) {
-            const details = (await step.run())?.details;
-            stepResults.push({
-              name: step.name,
-              status: "pass" as const,
-              ...(details !== undefined ? { details } : {}),
-            });
-          }
-          return {
-            name: "qa-fixture-import",
-            status: "pass" as const,
-            steps: stepResults,
-          };
-        },
-      },
+      api: createImportApi("qa-fixture-import"),
       scenarioTitle: "qa-fixture-import",
       flow: {
         steps: [
@@ -844,8 +704,19 @@ describe("scenario-flow-runner", () => {
                 },
               },
               {
+                set: "artifacts",
+                value: { expr: 'await qaImport("./suite-artifacts.js")' },
+              },
+              {
+                set: "redaction",
+                value: { expr: 'await qaImport("./gateway-log-redaction.js")' },
+              },
+              {
                 assert: {
-                  expr: 'typeof plugin.evaluateCodexPluginLifecycle === "function"',
+                  expr:
+                    'typeof plugin.evaluateCodexPluginLifecycle === "function" && ' +
+                    'typeof artifacts.publishQaSuiteArtifactFiles === "function" && ' +
+                    'typeof redaction.redactQaGatewayDebugText === "function"',
                 },
               },
             ],
@@ -864,32 +735,19 @@ describe("scenario-flow-runner", () => {
     let receivedError: unknown;
 
     const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-skip-import",
-          title: "qa-skip-import",
-          sourcePath: "qa/scenarios/qa-skip-import.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: {},
-        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
-          try {
-            await steps[0]?.run();
-          } catch (error) {
-            receivedError = error;
-          }
-          return {
-            name: "qa-skip-import",
-            status: "skip" as const,
-            steps: [{ name: "throws imported skip", status: "skip" as const, details: message }],
-            details: message,
-          };
-        },
-      },
+      api: createImportApi("qa-skip-import", async (_name, steps) => {
+        try {
+          await steps[0]?.run();
+        } catch (error) {
+          receivedError = error;
+        }
+        return {
+          name: "qa-skip-import",
+          status: "skip" as const,
+          steps: [{ name: "throws imported skip", status: "skip" as const, details: message }],
+          details: message,
+        };
+      }),
       scenarioTitle: "qa-skip-import",
       flow: {
         steps: [

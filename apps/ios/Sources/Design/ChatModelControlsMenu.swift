@@ -55,15 +55,7 @@ struct ChatActionMenuSectionHeader: View {
             }
             Spacer(minLength: 0)
             if let resetAction, let resetAccessibilityIdentifier {
-                Button(action: resetAction) {
-                    Image(systemName: "arrow.uturn.backward")
-                        .frame(width: ChatActionMenuMetric.rowHeight, height: ChatActionMenuMetric.rowHeight)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(OpenClawBrand.accentForeground)
-                .accessibilityLabel(String(localized: "Use default"))
-                .accessibilityIdentifier(resetAccessibilityIdentifier)
+                ChatActionResetButton(accessibilityIdentifier: resetAccessibilityIdentifier, action: resetAction)
             }
         }
         .foregroundStyle(.secondary)
@@ -71,6 +63,23 @@ struct ChatActionMenuSectionHeader: View {
         .padding(.horizontal, ChatActionMenuMetric.horizontalPadding)
         .padding(.top, 9)
         .padding(.bottom, 3)
+    }
+}
+
+private struct ChatActionResetButton: View {
+    let accessibilityIdentifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: self.action) {
+            Image(systemName: "arrow.uturn.backward")
+                .frame(width: ChatActionMenuMetric.rowHeight, height: ChatActionMenuMetric.rowHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(OpenClawBrand.accentForeground)
+        .accessibilityLabel(String(localized: "Use default"))
+        .accessibilityIdentifier(self.accessibilityIdentifier)
     }
 }
 
@@ -83,13 +92,12 @@ enum ChatModelProviderPalette: Equatable {
 
 enum ChatModelMenuPresentation {
     static func providerID(for model: OpenClawChatModelChoice) -> String? {
-        let metadataProvider = self.normalizedProviderID(model.provider)
-        if let metadataProvider {
+        if let metadataProvider = self.normalizedProviderID(model.provider) {
             return metadataProvider
         }
-        let qualifiedID = model.modelID.split(separator: "/", maxSplits: 1).map(String.init)
+        let qualifiedID = model.modelID.split(separator: "/", maxSplits: 1)
         guard qualifiedID.count == 2 else { return nil }
-        return self.normalizedProviderID(qualifiedID[0])
+        return self.normalizedProviderID(String(qualifiedID[0]))
     }
 
     static func iconAssetName(providerID: String?) -> String? {
@@ -144,9 +152,7 @@ enum ChatModelMenuPresentation {
     }
 
     private static func normalizedProviderID(_ providerID: String?) -> String? {
-        let normalized = providerID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard let normalized, !normalized.isEmpty else { return nil }
-        return normalized
+        self.trimmedValue(providerID)?.lowercased()
     }
 
     private static func trimmedValue(_ value: String?) -> String? {
@@ -182,11 +188,10 @@ enum ChatThinkingSliderPresentation {
         effectiveLevelID: String,
         options: [OpenClawChatThinkingLevelOption]) -> String
     {
-        if selectionID == OpenClawChatViewModel.inheritedThinkingSelectionID {
-            let label = options.first { $0.id == effectiveLevelID }?.label ?? effectiveLevelID
-            return "Default (\(label.capitalized))"
-        }
-        return (options.first { $0.id == selectionID }?.label ?? selectionID).capitalized
+        let resolvedID = selectionID == OpenClawChatViewModel.inheritedThinkingSelectionID
+            ? effectiveLevelID
+            : selectionID
+        return (options.first { $0.id == resolvedID }?.label ?? resolvedID).capitalized
     }
 }
 
@@ -281,7 +286,7 @@ struct ChatModelControlsMenuItems: View {
         if self.viewModel.showsThinkingPicker {
             self.thinkingOptions
         }
-        if self.viewModel.selectedModelSupportsFastMode {
+        if self.viewModel.showsFastModeControls {
             self.fastModeOptions
         }
         self.verbosityOptions
@@ -293,10 +298,12 @@ struct ChatModelControlsMenuItems: View {
             ChatActionMenuSectionHeader(
                 title: "Model",
                 detail: self.viewModel.modelSelectionTargetDescription)
-            self.modelOption(
-                title: self.defaultModelLabel,
-                providerID: self.defaultProviderID,
-                selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+            if self.viewModel.canSelectDefaultModel {
+                self.modelOption(
+                    title: self.defaultModelLabel,
+                    providerID: self.defaultProviderID,
+                    selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+            }
             if !sections.pinned.isEmpty {
                 ChatActionMenuSectionHeader(title: "Pinned")
                 self.modelOptions(sections.pinned)
@@ -432,18 +439,10 @@ struct ChatModelControlsMenuItems: View {
                 }
                 Spacer(minLength: 8)
                 if selectionID != OpenClawChatViewModel.inheritedThinkingSelectionID {
-                    Button {
+                    ChatActionResetButton(accessibilityIdentifier: "chat-fast-mode-use-default") {
                         self.viewModel.selectFastMode(OpenClawChatViewModel.inheritedThinkingSelectionID)
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                            .frame(width: ChatActionMenuMetric.rowHeight, height: ChatActionMenuMetric.rowHeight)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(OpenClawBrand.accentForeground)
                     .disabled(self.viewModel.isUpdatingSessionSettings)
-                    .accessibilityLabel(String(localized: "Use default"))
-                    .accessibilityIdentifier("chat-fast-mode-use-default")
                 }
                 Toggle(isOn: Binding(
                     get: { isOn },
@@ -469,6 +468,7 @@ struct ChatModelControlsMenuItems: View {
                         .tint(OpenClawBrand.accentForeground)
                         .disabled(self.viewModel.isUpdatingSessionSettings)
                         .accessibilityIdentifier("chat-fast-mode-toggle")
+                        .disabled(!self.viewModel.selectedModelSupportsFastMode)
             }
             .frame(minHeight: ChatActionMenuMetric.rowHeight)
             .contentShape(Rectangle())
@@ -500,18 +500,10 @@ struct ChatModelControlsMenuItems: View {
                 }
                 Spacer(minLength: 8)
                 if selectionID != OpenClawChatViewModel.inheritedThinkingSelectionID {
-                    Button {
+                    ChatActionResetButton(accessibilityIdentifier: "chat-verbosity-use-default") {
                         self.viewModel.selectVerboseLevel(OpenClawChatViewModel.inheritedThinkingSelectionID)
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                            .frame(width: ChatActionMenuMetric.rowHeight, height: ChatActionMenuMetric.rowHeight)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(OpenClawBrand.accentForeground)
                     .disabled(self.viewModel.isUpdatingSessionSettings)
-                    .accessibilityLabel(String(localized: "Use default"))
-                    .accessibilityIdentifier("chat-verbosity-use-default")
                 }
             }
             VStack(spacing: 0) {
@@ -546,6 +538,7 @@ struct ChatModelControlsMenuItems: View {
                 providerID: ChatModelMenuPresentation.providerID(for: model),
                 selectionID: model.selectionID,
                 showsDefaultBadge: self.viewModel.isDefaultModel(model),
+                capabilityDescription: model.capabilityDescription,
                 unavailableDescription: self.viewModel.modelUnavailableDescription(model))
         }
     }
@@ -616,6 +609,7 @@ struct ChatModelControlsMenuItems: View {
         providerID: String?,
         selectionID: String,
         showsDefaultBadge: Bool = false,
+        capabilityDescription: String = "",
         unavailableDescription: String? = nil) -> some View
     {
         let isSelected = self.viewModel.isSelectedModel(selectionID)
@@ -630,6 +624,11 @@ struct ChatModelControlsMenuItems: View {
                     Text(title)
                         .font(OpenClawType.body)
                         .multilineTextAlignment(.leading)
+                    if !capabilityDescription.isEmpty {
+                        Text(capabilityDescription)
+                            .font(OpenClawType.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if let unavailableDescription {
                         Text(unavailableDescription)
                             .font(OpenClawType.caption)

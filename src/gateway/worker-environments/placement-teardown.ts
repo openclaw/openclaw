@@ -13,6 +13,28 @@ type PlacementTeardownStore = Pick<
   | "transition"
 >;
 
+export function completeRecoveredWorkspaceTeardown(params: {
+  placements: PlacementTeardownStore & Pick<WorkerSessionPlacementStore, "getPlacementMove">;
+  placement: Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
+  turnClaim: WorkerSessionTurnClaim;
+}) {
+  const move = params.placements.getPlacementMove(params.placement.sessionId);
+  return move
+    ? completeMovedWorkspaceTeardown({
+        placements: params.placements,
+        turnClaim: params.turnClaim,
+        environmentId: params.placement.environmentId,
+        ownerEpoch: params.placement.activeOwnerEpoch,
+        operationId: move.operationId,
+      })
+    : completeReclaimedWorkspaceTeardown({
+        placements: params.placements,
+        turnClaim: params.turnClaim,
+        environmentId: params.placement.environmentId,
+        ownerEpoch: params.placement.activeOwnerEpoch,
+      });
+}
+
 /** Close the workspace-result fence, then advance the exact drained owner into reconciliation. */
 function completeDrainedWorkspaceTeardown(params: {
   placements: PlacementTeardownStore;

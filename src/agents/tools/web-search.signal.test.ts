@@ -1,6 +1,8 @@
 // web_search signal tests cover abort propagation from the agent tool wrapper
 // into provider runtime execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSearchProviderError } from "../../web-search/runtime-error.js";
+import { ToolInputError } from "../tool-input-error.js";
 import { createWebSearchTool } from "./web-search.js";
 
 const mocks = vi.hoisted(() => ({
@@ -20,6 +22,25 @@ describe("web_search signal plumbing", () => {
       result: { ok: true },
     });
   });
+
+  it.each([false, true])(
+    "preserves input errors and caller cancellation (cancelled=%s)",
+    async (cancelled) => {
+      const controller = new AbortController();
+      const failure = cancelled
+        ? new Error("Caller cancelled")
+        : new ToolInputError("query is required");
+      mocks.runWebSearch.mockImplementationOnce(async () => {
+        if (cancelled) {
+          controller.abort(failure);
+        }
+        throw cancelled ? new WebSearchProviderError("fixture-search", failure) : failure;
+      });
+      const tool = createWebSearchTool({ config: {} });
+
+      await expect(tool?.execute("call-search", {}, controller.signal)).rejects.toBe(failure);
+    },
+  );
 
   it("passes the agent abort signal into web search runtime execution", async () => {
     // Provider execution can be long-running; the outer agent cancellation

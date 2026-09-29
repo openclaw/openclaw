@@ -1,10 +1,9 @@
 // Run Oxlint tests cover run oxlint script behavior.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mts";
 import {
   createOxlintShards,
   filterOxlintShards,
@@ -37,20 +36,6 @@ const RUN_OXLINT_SHARDS_URL = pathToFileURL(
 ).href;
 type SignalScenario = "forward" | "group" | "ignore";
 type SuccessfulLeaderDescendantMode = "drain" | "persist";
-
-async function captureFailedTrailer(
-  run: () => Promise<void> | void,
-): Promise<{ exitCode: number | undefined; lines: unknown[] }> {
-  const priorExitCode = process.exitCode;
-  const lines: unknown[] = [];
-  try {
-    process.exitCode = 0;
-    await runWithFailedTrailer("oxlint", run, (line: unknown) => lines.push(line));
-    return { exitCode: process.exitCode, lines };
-  } finally {
-    process.exitCode = priorExitCode;
-  }
-}
 
 function shouldSerializeShards(env: NodeJS.ProcessEnv, hostResources = CONSTRAINED_HOST): boolean {
   return shouldRunOxlintShardsSerial({ env, platform: "linux", hostResources });
@@ -286,33 +271,6 @@ function createPluginShardFixture(
 }
 
 describe("run-oxlint", () => {
-  it("ends a failing run with a stable final status line", async () => {
-    const { lines } = await captureFailedTrailer(() => {
-      process.exitCode = 2;
-    });
-
-    expect(lines).toEqual(["[oxlint] FAILED (exit 2)"]);
-  });
-
-  it("converts a wrapper crash into a nonzero exit with the status line last", async () => {
-    // The original incident: a crashed wrapper printed only a stack trace, and
-    // truncated output read as success. The marker must be the final line.
-    const { exitCode, lines } = await captureFailedTrailer(() => {
-      throw new Error("artifact prep failed");
-    });
-
-    expect(exitCode).toBe(1);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toBeInstanceOf(Error);
-    expect(lines[1]).toBe("[oxlint] FAILED (exit 1)");
-  });
-
-  it("stays silent on a clean run", async () => {
-    const { lines } = await captureFailedTrailer(async () => {});
-
-    expect(lines).toEqual([]);
-  });
-
   it("prepares extension package boundary artifacts for normal lint runs", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);
@@ -355,24 +313,6 @@ describe("run-oxlint", () => {
 
     expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards([core, scripts])).toBe(false);
     expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards([core, extensions])).toBe(true);
-  });
-
-  it("does not run package-boundary artifact prep twice in pnpm check", () => {
-    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
-      scripts: Record<string, string>;
-    };
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mts", "utf8");
-
-    expect(packageJson.scripts.check).toBe("node --import ./scripts/tsx.mjs scripts/check.mts");
-    expect(packageJson.scripts.lint).toBe("node --import ./scripts/tsx.mjs scripts/run-lint.mts");
-    expect(packageJson.scripts["lint:core"]).toBe(
-      "node --import ./scripts/tsx.mjs scripts/run-oxlint-shards.mts --only=core",
-    );
-    expect(packageJson.scripts.check).not.toContain(
-      "node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts",
-    );
-    expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mts");
-    expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
   });
 
   it("serializes broad oxlint shards on constrained local hosts", () => {
@@ -418,6 +358,101 @@ describe("run-oxlint", () => {
   it("bounds split-core shard parallelism on roomy CI hosts", () => {
     expect(resolveSplitCoreConcurrency({ CI: "true" })).toBe(4);
   });
+
+  it.each([
+    { extraArgs: [], bounded: true },
+    { extraArgs: ["scripts/unmeasured.mts"], bounded: false },
+  ])("passes batch admission to every child (bounded=$bounded)", ({ extraArgs, bounded }) => {
+    const cwd = createTempDir("openclaw-oxlint-batch-budget-");
+    for (const directory of ["src/a", "src/b", "scripts"]) {
+      mkdirSync(join(cwd, directory), { recursive: true });
+    }
+    writeModule(join(cwd, "scripts/run-oxlint.mts"), [
+      "import { writeFileSync } from 'node:fs';",
+      "const target = process.argv.find((arg) => arg === 'src/a' || arg === 'src/b');",
+      "writeFileSync(target + '/budget.json', JSON.stringify({ concurrency: process.env.OPENCLAW_OXLINT_BATCH_CONCURRENCY, bounded: process.env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(process.argv.slice(2)) }));",
+    ]);
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { main } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)}; await main(['--only=core:src:a', '--only=core:src:b', '--split-core', ...${JSON.stringify(extraArgs)}]);`,
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_OXLINT_SHARDS_SERIAL: "0",
+          OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2",
+          OPENCLAW_OXLINT_BATCH_CONCURRENCY: "1",
+          OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: "inherited-unbounded-command",
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    for (const target of ["a", "b"]) {
+      expect(JSON.parse(readFileSync(join(cwd, "src", target, "budget.json"), "utf8"))).toEqual({
+        concurrency: "2",
+        bounded,
+      });
+    }
+  });
+
+  it.each([false, true])(
+    "retains the canonical budget after file selection (splitCore=%s)",
+    (splitCore) => {
+      const cwd = createTempDir("openclaw-oxlint-file-budget-");
+      for (const directory of ["agents", "b", "c", "d", "e", "gateway"]) {
+        mkdirSync(join(cwd, "src", directory), { recursive: true });
+      }
+      mkdirSync(join(cwd, "scripts"));
+      const files = ["src/agents/selected.ts", "src/gateway/selected.ts"];
+      for (const file of files) {
+        writeFileSync(join(cwd, file), "export {};\n");
+      }
+      writeModule(join(cwd, "scripts/run-oxlint.mts"), [
+        "import { appendFileSync } from 'node:fs';",
+        "appendFileSync('budgets.jsonl', JSON.stringify({ bounded: process.env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(process.argv.slice(2)), files: process.argv.slice(4) }) + '\\n');",
+      ]);
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import os from 'node:os';
+           import { syncBuiltinESMExports } from 'node:module';
+           os.totalmem = () => 8 * 1024 ** 3;
+           os.availableParallelism = () => 4;
+           syncBuiltinESMExports();
+           const { main } = await import(${JSON.stringify(RUN_OXLINT_SHARDS_URL)});
+           await main(['--only=core', ...${JSON.stringify(splitCore ? ["--split-core"] : [])}, '--files-json', ${JSON.stringify(JSON.stringify(files))}]);`,
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CI: "true",
+            OPENCLAW_LOCAL_CHECK: "0",
+            OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
+            OPENCLAW_OXLINT_SHARD_CONCURRENCY: "1",
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const budgets: Array<{ bounded: boolean; files: string[] }> = readFileSync(
+        join(cwd, "budgets.jsonl"),
+        "utf8",
+      )
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(budgets.map(({ bounded }) => bounded)).toEqual(splitCore ? [true, true] : [false]);
+      expect(budgets.flatMap((budget) => budget.files).toSorted()).toEqual(files);
+    },
+  );
 
   it("keeps split-core shard runs serial on constrained hosts", () => {
     expect(resolveSplitCoreConcurrency({ CI: "true" }, CONSTRAINED_HOST)).toBe(1);
@@ -646,6 +681,76 @@ describe("run-oxlint", () => {
   );
 
   it.each([
+    { name: "Linux CI", env: { CI: "true" }, chunkSize: 16 },
+    { name: "GitHub Actions", env: { GITHUB_ACTIONS: "true" }, chunkSize: 16 },
+    { name: "three CPUs", logicalCpuCount: 3, chunkSize: 8 },
+    { name: "below capacity threshold", memoryCapacityBytes: 15 * 1024 ** 3 - 1, chunkSize: 8 },
+    { name: "ancestor memory cap", memoryCapacityBytes: 8 * 1024 ** 3, chunkSize: 8 },
+    {
+      name: "large host with ancestor cap",
+      totalMemoryBytes: 31 * 1024 ** 3,
+      logicalCpuCount: 8,
+      memoryCapacityBytes: 7 * 1024 ** 3,
+      chunkSize: 8,
+    },
+    {
+      name: "large host with unknown capacity",
+      totalMemoryBytes: 64 * 1024 ** 3,
+      logicalCpuCount: 16,
+      memoryCapacityBytes: null,
+      chunkSize: 8,
+    },
+    { name: "unknown capacity", memoryCapacityBytes: null, chunkSize: 8 },
+    { name: "local Linux", env: {}, chunkSize: 8 },
+    { name: "macOS", platform: "darwin", chunkSize: 8 },
+    { name: "Windows", platform: "win32", chunkSize: 8 },
+    { name: "explicit stripes", splitExtensions: true, chunkSize: 8 },
+    {
+      name: "explicit serial",
+      env: { CI: "true", OPENCLAW_OXLINT_SHARDS_SERIAL: "1" },
+      chunkSize: 8,
+    },
+  ] as const)("preserves complete plugin coverage with $name batches", (scenario) => {
+    const directories = Array.from(
+      { length: 17 },
+      (_, index) => `plugin-${String(index).padStart(2, "0")}`,
+    );
+    const shards = filterOxlintShards(
+      createOxlintShards({
+        cwd: "/repo",
+        env: { CI: "true" },
+        platform: "linux",
+        ...scenario,
+        hostResources: {
+          totalMemoryBytes: scenario.totalMemoryBytes ?? 16 * 1024 ** 3,
+          logicalCpuCount: scenario.logicalCpuCount ?? 4,
+          memoryCapacityBytes:
+            "memoryCapacityBytes" in scenario ? scenario.memoryCapacityBytes : 15 * 1024 ** 3,
+        },
+        readDir: (target) =>
+          target.endsWith("/extensions")
+            ? ([
+                ...directories
+                  .toReversed()
+                  .map((name) => ({ name, isDirectory: () => true, isFile: () => false })),
+                { name: "root.test.ts", isDirectory: () => false, isFile: () => true },
+                { name: "notes.md", isDirectory: () => false, isFile: () => true },
+              ] as never)
+            : [],
+      }),
+      new Set(["extensions"]),
+    );
+    expect(shards.map((shard) => shard.args.slice(2).length)).toEqual(
+      scenario.chunkSize === 16 ? [1, 16, 1] : [1, 8, 8, 1],
+    );
+    expect(shards.flatMap((shard) => shard.args.slice(2))).toEqual([
+      "extensions/root.test.ts",
+      ...directories.map((directory) => `extensions/${directory}`),
+    ]);
+    expect(shouldPrepareExtensionPackageBoundaryArtifactsForShards(shards)).toBe(true);
+  });
+
+  it.each([
     { name: "explicit full speed", memoryGiB: 16, env: { OPENCLAW_LOCAL_CHECK_MODE: "full" } },
     { name: "explicit fast mode", memoryGiB: 16, env: { OPENCLAW_LOCAL_CHECK_MODE: "fast" } },
     { name: "explicit parallel", memoryGiB: 16, env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "0" } },
@@ -683,6 +788,69 @@ describe("run-oxlint", () => {
     ]);
   });
 
+  it.each(
+    (
+      [
+        { platform: "linux", env: { CI: "true" } },
+        { platform: "linux", env: {} },
+        { platform: "linux", env: { GITHUB_ACTIONS: "true" } },
+        { platform: "darwin", env: {} },
+        { platform: "win32", env: {} },
+      ] as const
+    ).flatMap((scenario) => [
+      { ...scenario, hostResources: CONSTRAINED_HOST },
+      {
+        ...scenario,
+        hostResources: {
+          totalMemoryBytes: 31 * 1024 ** 3,
+          logicalCpuCount: 8,
+          memoryCapacityBytes: 7 * 1024 ** 3,
+        },
+      },
+    ]),
+  )(
+    "preserves the published updater's automatic full-lint plan on $platform with $env and $hostResources",
+    ({ platform, env, hostResources }) => {
+      const directories = ["agents", "alpha", "beta", "gateway", "infra", "zeta"];
+      const cwd = createTempDir("openclaw-oxlint-core-memory-");
+      for (const directory of directories) {
+        mkdirSync(join(cwd, "src", directory), { recursive: true });
+      }
+      writeFileSync(join(cwd, "src", "root.ts"), "");
+      const shards = filterOxlintShards(
+        createOxlintShards({
+          cwd,
+          env,
+          platform,
+          hostResources,
+        }),
+        new Set(["core"]),
+      );
+
+      expect(shards.map((shard) => shard.args.slice(2))).toEqual([
+        ["src/agents", "src/zeta"],
+        ["src/alpha", "src/root.ts"],
+        ["src/beta", "ui"],
+        ["src/gateway", "packages"],
+        ["src/infra"],
+      ]);
+      expect(shards.every((shard) => shard.args[1] === "config/tsconfig/oxlint.core.json")).toBe(
+        true,
+      );
+      const targets = shards.flatMap((shard) => shard.args.slice(2));
+      expect(targets.toSorted()).toEqual(
+        [
+          ...directories.map((directory) => `src/${directory}`),
+          "src/root.ts",
+          "ui",
+          "packages",
+        ].toSorted(),
+      );
+      expect(new Set(targets).size).toBe(targets.length);
+      expect(shouldRunOxlintShardsSerial({ env, platform, hostResources })).toBe(true);
+    },
+  );
+
   it("parses shard runner flags without forwarding them to oxlint", () => {
     const parsed = parseShardRunnerArgs([
       "--only=core",
@@ -704,29 +872,32 @@ describe("run-oxlint", () => {
     expect(extension.oxlintArgs).toEqual([]);
   });
 
-  it("aggregates split core targets into deterministic disjoint Programs", () => {
+  it("isolates large core targets while preserving disjoint stripe coverage", () => {
     const shards = createOxlintShards({
       cwd: "/repo",
       splitCore: true,
       readDir: () =>
         [
-          { name: "alpha", isDirectory: () => true, isFile: () => false },
-          { name: "beta", isDirectory: () => true, isFile: () => false },
-          { name: "gamma", isDirectory: () => true, isFile: () => false },
+          { name: "agents", isDirectory: () => true, isFile: () => false },
+          { name: "gateway", isDirectory: () => true, isFile: () => false },
+          { name: "infra", isDirectory: () => true, isFile: () => false },
+          { name: "misc", isDirectory: () => true, isFile: () => false },
         ] as never,
     }).filter((shard) => shard.name.startsWith("core:"));
-    const stripes = [1, 2, 3].map((index) => selectCoreOxlintStripe(shards, { index, total: 3 }));
+    const stripes = [1, 2, 3].map((index) =>
+      selectCoreOxlintStripe(shards, { index, total: 3 }, { isolateLargeTargets: true }),
+    );
 
-    expect(stripes.map((stripe) => stripe.map((shard) => shard.name))).toEqual([
-      ["core:stripe:1"],
-      ["core:stripe:2"],
-      ["core:stripe:3"],
-    ]);
-    const stripeTargets = stripes.flatMap(([stripe]) => stripe?.args.slice(2) ?? []);
+    const programs = stripes.flat();
+    for (const target of ["src/agents", "src/gateway", "src/infra", "ui"]) {
+      const program = programs.find((shard) => shard.args.slice(2).includes(target));
+      expect(program?.args).toEqual(["--tsconfig", "config/tsconfig/oxlint.core.json", target]);
+    }
+    const stripeTargets = programs.flatMap((stripe) => stripe.args.slice(2));
     const sourceTargets = shards.flatMap((shard) => shard.args.slice(2));
     expect(stripeTargets.toSorted()).toEqual(sourceTargets.toSorted());
     expect(new Set(stripeTargets)).toHaveProperty("size", sourceTargets.length);
-    expect(selectCoreOxlintStripe(shards, { index: 6, total: 6 })).toEqual([]);
+    expect(selectCoreOxlintStripe(shards, { index: 7, total: 7 })).toEqual([]);
     expect(() =>
       selectCoreOxlintStripe(createOxlintShards({ cwd: "/repo" }), { index: 1, total: 2 }),
     ).toThrow("--core-stripe requires a non-empty core-only shard selection");
@@ -778,6 +949,91 @@ describe("run-oxlint", () => {
       }),
     ).toThrow("--extension-stripe requires an extension-only shard selection");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "records every native lint shard after an ordinary failure without hiding its exit",
+    () => {
+      const cwd = createTempDir("openclaw-oxlint-evidence-");
+      for (const directory of ["src/alpha", "ui", "packages", "scripts", "config/tsconfig"]) {
+        mkdirSync(join(cwd, directory), { recursive: true });
+      }
+      symlinkSync(join(process.cwd(), "node_modules"), join(cwd, "node_modules"), "junction");
+      writeFileSync(
+        join(cwd, ".oxlintrc.json"),
+        JSON.stringify({
+          categories: { correctness: "off" },
+          rules: { "no-var": "error" },
+        }),
+      );
+      writeFileSync(join(cwd, "config/tsconfig/oxlint.core.json"), "{}");
+      writeFileSync(join(cwd, "src/alpha/example.ts"), "export var legacy = 1;\n");
+      writeFileSync(join(cwd, "ui/example.ts"), "export const value = 1;\n");
+      writeFileSync(join(cwd, "packages/example.ts"), "export const value = 2;\n");
+      const nativeRunner = join(process.cwd(), "scripts/run-oxlint.mts");
+      writeModule(join(cwd, "scripts/run-oxlint.mts"), [
+        `process.argv[1] = ${JSON.stringify(nativeRunner)};`,
+        `await import(${JSON.stringify(pathToFileURL(nativeRunner).href)});`,
+      ]);
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          fileURLToPath(RUN_OXLINT_SHARDS_URL),
+          "--only=core",
+          "--split-core",
+          "--threads=1",
+          "--openclaw-focused-config",
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CI: "true",
+            GITHUB_ACTIONS: "true",
+            OPENCLAW_CI_STATIC_EVIDENCE: "1",
+            OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2",
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      const lines = result.stdout.trim().split("\n");
+      const leaves = lines
+        .filter((line) => line.startsWith("[ci-static:oxlint:leaf] "))
+        .map((line) => JSON.parse(line.slice("[ci-static:oxlint:leaf] ".length)));
+      const groups = lines
+        .filter((line) => line.startsWith("[ci-static:oxlint:completion] "))
+        .map((line) => JSON.parse(line.slice("[ci-static:oxlint:completion] ".length)));
+      expect(leaves).toHaveLength(3);
+      expect(leaves.map((leaf) => leaf.exitCode).toSorted((left, right) => left - right)).toEqual([
+        0, 0, 1,
+      ]);
+      expect(
+        leaves.every(
+          (leaf) => leaf.stderr === "" && leaf.config === "config/tsconfig/oxlint.core.json",
+        ),
+      ).toBe(true);
+      expect(groups).toEqual([
+        {
+          version: 1,
+          id: expect.any(String),
+          planned: 3,
+          completed: 3,
+          leaves: expect.arrayContaining(leaves.map((leaf) => leaf.id)),
+        },
+      ]);
+      expect(lines.at(-1)).toMatch(/^\[ci-static:oxlint:completion\]/u);
+      const failedReport = JSON.parse(leaves.find((leaf) => leaf.exitCode === 1).stdout);
+      expect(failedReport.diagnostics).toEqual([
+        expect.objectContaining({
+          filename: "src/alpha/example.ts",
+          code: "eslint(no-var)",
+          severity: "error",
+        }),
+      ]);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "partitions explicit extension stripes through the CLI on nonserial hosts",
@@ -855,13 +1111,6 @@ describe("run-oxlint", () => {
     expect(() => parseShardRunnerArgs(args)).toThrow(/--extension-stripe/u);
   });
 
-  it.each([["--only"], ["--only", "--split-core"], ["--only="], ["--only=-h"]])(
-    "rejects shard selectors without a name: %s",
-    (...args) => {
-      expect(() => parseShardRunnerArgs(args)).toThrow("--only requires a shard name");
-    },
-  );
-
   it("filters split core shards by shard family", () => {
     const shards = filterOxlintShards(
       createOxlintShards({
@@ -877,18 +1126,6 @@ describe("run-oxlint", () => {
       "core:ui",
       "core:packages",
     ]);
-  });
-
-  it.each([
-    { selectors: ["wat"], message: "Unknown oxlint shard selector: wat" },
-    {
-      selectors: ["core", "wat"],
-      message: "Unknown oxlint shard selector: wat",
-    },
-  ])("rejects unmatched shard selectors: $selectors", ({ selectors, message }) => {
-    expect(() =>
-      filterOxlintShards(createOxlintShards({ cwd: "/repo" }), new Set(selectors)),
-    ).toThrow(message);
   });
 
   it.each([

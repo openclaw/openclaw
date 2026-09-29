@@ -137,9 +137,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
 
   override updated() {
     const snapshot = this.context.gateway.snapshot;
-    if (!this.context.agents.state.agentsList) {
-      void this.context.agents.ensureList();
-    }
     if (
       this.pendingImport &&
       (snapshot.phase !== "connected" ||
@@ -210,7 +207,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private refresh(): Promise<void> {
-    return this.planTask.run();
+    return this.currentAgentId()
+      ? this.planTask.run()
+      : this.context.agents.ensureList().then(() => undefined);
   }
 
   private selectAgent(agentId: string) {
@@ -362,115 +361,8 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     );
   }
 
-  private async previewBackfill() {
-    const snapshot = this.context.gateway.snapshot;
-    const client = snapshot.client;
-    const agentId = this.currentAgentId();
-    if (
-      !this.canAdmin ||
-      !client ||
-      !agentId ||
-      this.backfillBusy !== null ||
-      this.applyingProviderId !== null
-    ) {
-      return;
-    }
-    const epoch = ++this.backfillEpoch;
-    this.backfillBusy = "preview";
-    this.backfillError = null;
-    this.backfillPreview = null;
-    this.backfillProgress = null;
-    this.backfillRollbackResult = null;
-    try {
-      const result = await client.request<SessionBackfillGatewayResult>(
-        "memory.sessionBackfill.preview",
-        this.backfillRequest(agentId),
-      );
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillPreview = result;
-      }
-    } catch (error) {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillError = toErrorMessage(error);
-      }
-    } finally {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillBusy = null;
-      }
-    }
-  }
-
-  private async applyBackfill() {
-    const snapshot = this.context.gateway.snapshot;
-    const client = snapshot.client;
-    const agentId = this.currentAgentId();
-    if (
-      !this.canAdmin ||
-      !client ||
-      !agentId ||
-      this.backfillBusy !== null ||
-      this.applyingProviderId !== null
-    ) {
-      return;
-    }
-    const epoch = ++this.backfillEpoch;
-    this.backfillBusy = "apply";
-    this.backfillError = null;
-    this.backfillPreview = null;
-    this.backfillRollbackResult = null;
-    this.backfillProgress = {
-      days: 0,
-      candidates: 0,
-      staged: 0,
-      complete: false,
-    };
-    let progress = this.backfillProgress;
-    const processedDays = new Set<string>();
-    try {
-      while (true) {
-        const chunk = await client.request<SessionBackfillGatewayResult>(
-          "memory.sessionBackfill.apply",
-          this.backfillRequest(agentId),
-        );
-        if (!this.isCurrentBackfillRequest(epoch, client, agentId)) {
-          return;
-        }
-        if (chunk.candidates > 0 && chunk.cursor?.advanced !== true) {
-          throw new Error("Session backfill stopped because the server cursor did not advance.");
-        }
-        if (chunk.candidates === 0 && chunk.cursor?.exhausted !== true) {
-          throw new Error("Session backfill stopped because the server cursor was not exhausted.");
-        }
-        for (const day of chunk.perDay) {
-          processedDays.add(day.day);
-        }
-        progress = {
-          days: processedDays.size,
-          candidates: progress.candidates + chunk.candidates,
-          staged: progress.staged + chunk.staged,
-          complete: chunk.candidates === 0,
-        };
-        this.backfillProgress = progress;
-        // A zero-candidate call is the idempotent completion sentinel; cursor metadata proves
-        // that the server's persisted scan agrees before the client stops driving chunks.
-        if (chunk.candidates === 0) {
-          break;
-        }
-      }
-    } catch (error) {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillError = toErrorMessage(error);
-      }
-    } finally {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillBusy = null;
-      }
-    }
-  }
-
-  private async confirmBackfillRollback() {
-    const snapshot = this.context.gateway.snapshot;
-    const client = snapshot.client;
+  private async runBackfill(operation: "preview" | "apply" | "rollback") {
+    const client = this.context.gateway.snapshot.client;
     const agentId = this.currentAgentId();
     if (
       !this.canAdmin ||
@@ -478,30 +370,87 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       !agentId ||
       this.backfillBusy !== null ||
       this.applyingProviderId !== null ||
-      !this.backfillRollbackPending
+      (operation === "rollback" && !this.backfillRollbackPending)
     ) {
       return;
     }
     const epoch = ++this.backfillEpoch;
-    this.backfillBusy = "rollback";
+    const isCurrent = () => this.isCurrentBackfillRequest(epoch, client, agentId);
+    this.backfillBusy = operation;
     this.backfillError = null;
+    if (operation !== "rollback") {
+      this.backfillPreview = null;
+      this.backfillProgress = null;
+      this.backfillRollbackResult = null;
+    }
     try {
-      const result = await client.request<SessionBackfillRollbackResult>(
-        "memory.sessionBackfill.rollback",
-        { agentId },
-      );
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillRollbackResult = result;
-        this.backfillPreview = null;
-        this.backfillProgress = null;
-        this.backfillRollbackPending = false;
+      if (operation === "rollback") {
+        const result = await client.request<SessionBackfillRollbackResult>(
+          "memory.sessionBackfill.rollback",
+          { agentId },
+        );
+        if (isCurrent()) {
+          this.backfillRollbackResult = result;
+          this.backfillPreview = null;
+          this.backfillProgress = null;
+          this.backfillRollbackPending = false;
+        }
+      } else if (operation === "preview") {
+        const result = await client.request<SessionBackfillGatewayResult>(
+          "memory.sessionBackfill.preview",
+          this.backfillRequest(agentId),
+        );
+        if (isCurrent()) {
+          this.backfillPreview = result;
+        }
+      } else {
+        let progress: SessionBackfillProgress = {
+          days: 0,
+          candidates: 0,
+          staged: 0,
+          complete: false,
+        };
+        this.backfillProgress = progress;
+        const processedDays = new Set<string>();
+        while (true) {
+          const chunk = await client.request<SessionBackfillGatewayResult>(
+            "memory.sessionBackfill.apply",
+            this.backfillRequest(agentId),
+          );
+          if (!isCurrent()) {
+            return;
+          }
+          if (chunk.candidates > 0 && chunk.cursor?.advanced !== true) {
+            throw new Error("Session backfill stopped because the server cursor did not advance.");
+          }
+          if (chunk.candidates === 0 && chunk.cursor?.exhausted !== true) {
+            throw new Error(
+              "Session backfill stopped because the server cursor was not exhausted.",
+            );
+          }
+          for (const day of chunk.perDay) {
+            processedDays.add(day.day);
+          }
+          progress = {
+            days: processedDays.size,
+            candidates: progress.candidates + chunk.candidates,
+            staged: progress.staged + chunk.staged,
+            complete: chunk.candidates === 0,
+          };
+          this.backfillProgress = progress;
+          // A zero-candidate call is the idempotent completion sentinel; cursor metadata proves
+          // that the server's persisted scan agrees before the client stops driving chunks.
+          if (chunk.candidates === 0) {
+            break;
+          }
+        }
       }
     } catch (error) {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
+      if (isCurrent()) {
         this.backfillError = toErrorMessage(error);
       }
     } finally {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
+      if (isCurrent()) {
         this.backfillBusy = null;
       }
     }
@@ -517,8 +466,8 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       agents: listSelectableAgents(agentsList?.agents ?? []),
       selectedAgentId: agentId,
       plan: this.plan,
-      loading: this.loading,
-      error: this.error,
+      loading: this.loading || this.context.agents.state.agentsLoading,
+      error: (agentId ? null : this.context.agents.state.agentsError) ?? this.error,
       applyError: this.applyError,
       replaceExisting: this.replaceExisting,
       selectedByProvider: this.selectedByProvider,
@@ -563,15 +512,15 @@ export class MemoryImportPage extends OpenClawLightDomElement {
         this.backfillRollbackResult = null;
         this.backfillError = null;
       },
-      onBackfillPreview: () => void this.previewBackfill(),
-      onBackfillApply: () => void this.applyBackfill(),
+      onBackfillPreview: () => void this.runBackfill("preview"),
+      onBackfillApply: () => void this.runBackfill("apply"),
       onBackfillRollbackRequest: () => {
         if (this.backfillBusy === null) {
           this.backfillRollbackPending = true;
           this.backfillError = null;
         }
       },
-      onBackfillRollbackConfirm: () => void this.confirmBackfillRollback(),
+      onBackfillRollbackConfirm: () => void this.runBackfill("rollback"),
       onBackfillRollbackCancel: () => {
         if (this.backfillBusy === null) {
           this.backfillRollbackPending = false;

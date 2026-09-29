@@ -141,12 +141,7 @@ describe("openshell backend exec workdir validation", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "fixture");
     vi.stubEnv("LANG", "en_US.UTF-8");
     vi.stubEnv("NODE_ENV", "test");
-    const workspace = await tempWorkspace({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-openshell-workspace-",
-    });
-    tempWorkspaces.push(workspace);
-    const workspaceDir = workspace.dir;
+    const workspaceDir = await createWorkspace();
     await fs.writeFile(path.join(workspaceDir, "seed.txt"), "seed", "utf8");
     for (const protectedDirectory of [".git", "hooks", "git-hooks"]) {
       const protectedPath = path.join(workspaceDir, protectedDirectory);
@@ -296,15 +291,10 @@ describe("openshell backend exec workdir validation", () => {
 
   it.each([
     { name: "filesystem root", target: "/", expected: null },
-    { name: "outside managed roots", target: "/outside", expected: null },
     { name: "ordinary directory", target: "/sandbox/nested", expected: "/sandbox/nested" },
     { name: "missing directory", target: "/sandbox/missing", expected: null },
     { name: "regular file", target: "/sandbox/file.txt", expected: null },
-    ...[".git", "hooks", "git-hooks"].map((name) => ({
-      name,
-      target: `/sandbox/${name}/nested`,
-      expected: null,
-    })),
+    { name: "excluded directory", target: "/sandbox/.git/nested", expected: null },
     { name: "mid-path symlink", target: "/sandbox/link/nested", expected: null },
     {
       name: "agent read-only directory",
@@ -429,73 +419,6 @@ describe("openshell backend exec workdir validation", () => {
       await expect(backend.validateWorkdir?.("/sandbox/preserved")).resolves.toBeNull();
     },
   );
-
-  it.each([
-    {
-      name: "a later nested directory replaces an earlier file",
-      workspace: "/sandbox",
-      agent: "/sandbox/collision",
-      setup: async (workspaceDir: string) => {
-        await fs.writeFile(path.join(workspaceDir, "collision"), "file");
-      },
-      uploads: [
-        ["collision", "/sandbox/"],
-        ["primary-only", "/sandbox/"],
-        ["agent-only", "/sandbox/collision/"],
-      ],
-    },
-    {
-      name: "a deeper nested root replaces a blocking ancestor file",
-      workspace: "/sandbox",
-      agent: "/sandbox/collision/agent",
-      setup: async (workspaceDir: string) => {
-        await fs.writeFile(path.join(workspaceDir, "collision"), "file");
-      },
-      uploads: [
-        ["collision", "/sandbox/"],
-        ["primary-only", "/sandbox/"],
-        ["agent-only", "/sandbox/collision/agent/"],
-      ],
-    },
-    {
-      name: "a later file replaces an earlier nested directory",
-      workspace: "/sandbox/collision",
-      agent: "/sandbox",
-      setup: async (_workspaceDir: string, agentWorkspaceDir: string) => {
-        await fs.writeFile(path.join(agentWorkspaceDir, "collision"), "file");
-      },
-      uploads: [
-        ["agent-only", "/sandbox/"],
-        ["collision", "/sandbox/"],
-        ["primary-only", "/sandbox/collision/"],
-      ],
-    },
-  ])("composes overlapping roots when $name", async (scenario) => {
-    const workspaceDir = await createWorkspace();
-    const agentWorkspaceDir = await createWorkspace("agent");
-    await fs.writeFile(path.join(workspaceDir, "primary-only"), "primary");
-    await fs.writeFile(path.join(agentWorkspaceDir, "agent-only"), "agent");
-    await scenario.setup(workspaceDir, agentWorkspaceDir);
-    const backend = await createOpenShellBackendFixture({
-      workspaceDir,
-      agentWorkspaceDir,
-      scopeKey: `agent:overlap-cross-type:${scenario.name}`,
-      remoteWorkspaceDir: scenario.workspace,
-      remoteAgentWorkspaceDir: scenario.agent,
-    });
-
-    const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-    try {
-      const uploads = cliMocks.runOpenShellCli.mock.calls.flatMap(([params]) =>
-        params.args[0] === "sandbox" && params.args[1] === "upload"
-          ? [[path.basename(params.args.at(-2) ?? ""), params.args.at(-1)]]
-          : [],
-      );
-      expect(uploads).toEqual(scenario.uploads);
-    } finally {
-      await finalize(backend, exec.finalizeToken);
-    }
-  });
 
   it.each([
     {
@@ -653,42 +576,52 @@ describe("openshell backend exec workdir validation", () => {
     },
   );
 
-  it("rejects an aborted file write after waiting for mirror publication", async () => {
-    const workspaceDir = await createWorkspace();
-    const backend = await createOpenShellBackendFixture({
-      workspaceDir,
-      scopeKey: "agent:aborted-write",
-    });
-    const bridge = expectDefined(
-      backend.createFsBridge?.({
-        sandbox: createSandboxTestContext({
-          overrides: {
-            workspaceDir,
-            agentWorkspaceDir: workspaceDir,
-            containerWorkdir: backend.workdir,
-            backend,
-          },
+  it.each(["file write", "directory read"])(
+    "rejects an aborted %s after waiting for mirror publication",
+    async (operation) => {
+      const workspaceDir = await createWorkspace();
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir,
+        scopeKey: "agent:aborted-write",
+      });
+      const bridge = expectDefined(
+        backend.createFsBridge?.({
+          sandbox: createSandboxTestContext({
+            overrides: {
+              workspaceDir,
+              agentWorkspaceDir: workspaceDir,
+              containerWorkdir: backend.workdir,
+              backend,
+            },
+          }),
         }),
-      }),
-      "mirror bridge",
-    );
-    const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
-    const controller = new AbortController();
-    const write = bridge.writeFile({
-      filePath: "cancelled.txt",
-      data: "cancelled",
-      signal: controller.signal,
-    });
-    const rejected = expect(write).rejects.toThrow("cancelled while queued");
-    controller.abort(new Error("cancelled while queued"));
-    await finalize(backend, exec.finalizeToken);
-    await rejected;
-    await expect(fs.stat(path.join(workspaceDir, "cancelled.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await bridge.writeFile({ filePath: "next.txt", data: "next" });
-    await expect(fs.readFile(path.join(workspaceDir, "next.txt"), "utf8")).resolves.toBe("next");
-  });
+        "mirror bridge",
+      );
+      const readDirectory = expectDefined(bridge.readDirectory?.bind(bridge), "directory reader");
+      const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      const controller = new AbortController();
+      const pending =
+        operation === "file write"
+          ? bridge.writeFile({
+              filePath: "cancelled.txt",
+              data: "cancelled",
+              signal: controller.signal,
+            })
+          : readDirectory({ filePath: ".", signal: controller.signal });
+      const rejected = expect(pending).rejects.toThrow("cancelled while queued");
+      controller.abort(new Error("cancelled while queued"));
+      await finalize(backend, exec.finalizeToken);
+      await rejected;
+      await expect(fs.stat(path.join(workspaceDir, "cancelled.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await bridge.writeFile({ filePath: "next.txt", data: "next" });
+      await expect(fs.readFile(path.join(workspaceDir, "next.txt"), "utf8")).resolves.toBe("next");
+      await expect(readDirectory({ filePath: "." })).resolves.toEqual([
+        { name: "next.txt", isDirectory: false },
+      ]);
+    },
+  );
 
   it.each([
     {

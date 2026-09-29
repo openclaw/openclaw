@@ -36,6 +36,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 });
 
 function registerTestRun(params?: {
+  agentId?: string;
+  sessionKey?: string;
   canAcceptSteering?: () => boolean;
   isAborted?: () => boolean;
   isSettled?: () => boolean;
@@ -56,10 +58,15 @@ function registerTestRun(params?: {
   };
   const handle = registerCopilotActiveRun({
     abortActiveSession: vi.fn(),
+    agentId: params?.agentId ?? "main",
     bridge: undefined,
     canAcceptSteering: params?.canAcceptSteering ?? (() => true),
     startedAtMs: params?.startedAtMs ?? 1_750_000_000_000,
-    input: { runId: "run-1", sessionId: "session-1" } as AttemptParamsLike,
+    input: {
+      runId: "run-1",
+      sessionId: "session-1",
+      sessionKey: params?.sessionKey,
+    } as AttemptParamsLike,
     isAborted: params?.isAborted ?? (() => false),
     isSettled: params?.isSettled ?? (() => false),
     session,
@@ -106,6 +113,17 @@ describe("registerCopilotActiveRun", () => {
     harnessMocks.setActiveEmbeddedRun.mockClear();
   });
 
+  it("retains the resolved agent for raw global registrations", () => {
+    const { handle } = registerTestRun({ agentId: "ops", sessionKey: "global" });
+    expect(harnessMocks.setActiveEmbeddedRun).toHaveBeenCalledWith(
+      "session-1",
+      handle,
+      "global",
+      undefined,
+      "ops",
+    );
+  });
+
   it("refuses scoped controls before the real V1 handle while preserving unscoped injection", async () => {
     const runtime = await vi.importActual<
       typeof import("openclaw/plugin-sdk/agent-harness-runtime")
@@ -113,6 +131,7 @@ describe("registerCopilotActiveRun", () => {
     const { handle, send } = registerTestRun();
     const queue = vi.spyOn(handle.messageInjection, "queueMessage");
     const claim = vi.spyOn(handle, "claimPendingUserInputAnswer");
+    const abort = vi.spyOn(handle, "abort");
     runtime.setActiveEmbeddedRun("session-1", handle, "agent:main:session-1");
     try {
       const result = await controlRealtimeVoiceAgentRun({
@@ -130,39 +149,87 @@ describe("registerCopilotActiveRun", () => {
       expect(claim).not.toHaveBeenCalled();
       expect(harnessMocks.claimPendingAgentQuestionAnswer).not.toHaveBeenCalled();
       expect(send).not.toHaveBeenCalled();
+      const sessionKey = "agent:main:session-1";
+      const unscopedControl = await controlRealtimeVoiceAgentRun({
+        sessionKey,
+        text: "change course",
+        mode: "steer",
+      });
+      expect(unscopedControl).toMatchObject({
+        ok: false,
+        queued: false,
+        reason: "guarded_injection_unsupported",
+      });
+      expect(queue).not.toHaveBeenCalled();
+      expect(claim).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      await expect(
+        controlRealtimeVoiceAgentRun({ sessionKey, text: "status" }),
+      ).resolves.toMatchObject({
+        ok: true,
+        active: true,
+        mode: "status",
+      });
       expect(runtime.queueAgentHarnessMessage("session-1", "unscoped change")).toBe(true);
       await vi.waitFor(() =>
         expect(send).toHaveBeenCalledExactlyOnceWith({ prompt: "unscoped change" }),
       );
+      await expect(
+        controlRealtimeVoiceAgentRun({ sessionKey, text: "cancel" }),
+      ).resolves.toMatchObject({
+        ok: true,
+        active: true,
+        mode: "cancel",
+        aborted: true,
+      });
+      expect(abort).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledOnce();
     } finally {
       runtime.clearActiveEmbeddedRun("session-1", handle);
       vi.restoreAllMocks();
     }
   });
 
-  it("reports acceptance after send while the transcript receipt is still pending", async () => {
-    const receipt = createDeferred<void>();
-    const onQueueAccepted = vi.fn();
-    const { handle, send, waitForSdkUserPersisted } = registerTestRun({
-      receipt: receipt.promise,
-    });
-
-    let deliverySettled = false;
-    const delivery = handle
-      .queueMessage("change course", { onQueueAccepted, waitForTranscriptCommit: true })
-      .then(() => {
-        deliverySettled = true;
+  it.each([true, false])(
+    "settles accepted steering only after its transcript receipt: wait=%s",
+    async (waitForTranscriptCommit) => {
+      const receipt = createDeferred<void>();
+      const accepted = createDeferred<void>();
+      const onQueueAccepted = vi.fn(() => accepted.resolve());
+      const onQueueSettled = vi.fn();
+      const { handle, send, waitForSdkUserPersisted } = registerTestRun({
+        receipt: receipt.promise,
       });
 
-    await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true));
-    expect(send).toHaveBeenCalledWith({ prompt: "change course" });
-    expect(waitForSdkUserPersisted).toHaveBeenCalledWith("steer-1");
-    expect(deliverySettled).toBe(false);
+      let deliverySettled = false;
+      const delivery = handle
+        .queueMessage("change course", {
+          onQueueAccepted,
+          onQueueSettled,
+          waitForTranscriptCommit,
+        })
+        .then(() => {
+          deliverySettled = true;
+        });
 
-    receipt.resolve();
-    await expect(delivery).resolves.toBeUndefined();
-    expect(onQueueAccepted).toHaveBeenCalledOnce();
-  });
+      await accepted.promise;
+      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(send).toHaveBeenCalledWith({ prompt: "change course" });
+      expect(waitForSdkUserPersisted).toHaveBeenCalledExactlyOnceWith("steer-1");
+      if (waitForTranscriptCommit) {
+        expect(deliverySettled).toBe(false);
+      } else {
+        await expect(delivery).resolves.toBeUndefined();
+      }
+      expect(onQueueSettled).not.toHaveBeenCalled();
+
+      receipt.resolve();
+      await receipt.promise;
+      await expect(delivery).resolves.toBeUndefined();
+      expect(onQueueAccepted).toHaveBeenCalledOnce();
+      expect(onQueueSettled).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["before response", "after response", "during tools", "hook replacement"])(
     "persists decorated reply steering with selected mentions once: %s",
@@ -361,10 +428,12 @@ describe("registerCopilotActiveRun", () => {
         harnessMocks.claimPendingAgentQuestionAnswer.mockResolvedValueOnce(true);
       }
       const onQueueAccepted = vi.fn();
+      const onQueueSettled = vi.fn();
       const { handle, send, waitForSdkUserPersisted } = registerTestRun();
       const delivery = handle.queueMessage("answer", {
         isInboundUserMessage: true,
         onQueueAccepted,
+        onQueueSettled,
         waitForTranscriptCommit: true,
       });
 
@@ -375,6 +444,7 @@ describe("registerCopilotActiveRun", () => {
         await expect(delivery).resolves.toBeUndefined();
         expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
       }
+      expect(onQueueSettled).toHaveBeenCalledOnce();
       expect(harnessMocks.claimPendingAgentQuestionAnswer).toHaveBeenCalledOnce();
       expect(send).not.toHaveBeenCalled();
       expect(waitForSdkUserPersisted).not.toHaveBeenCalled();
@@ -444,6 +514,7 @@ describe("registerCopilotActiveRun", () => {
 
   it("reports a rejected send as rejected", async () => {
     const onQueueAccepted = vi.fn();
+    const onQueueSettled = vi.fn();
     const sendError = new Error("send rejected");
     const { handle } = registerTestRun({
       send: vi.fn(async () => {
@@ -451,29 +522,46 @@ describe("registerCopilotActiveRun", () => {
       }),
     });
 
-    await expect(handle.queueMessage("change course", { onQueueAccepted })).rejects.toBe(sendError);
+    await expect(
+      handle.queueMessage("change course", { onQueueAccepted, onQueueSettled }),
+    ).rejects.toBe(sendError);
     expect(onQueueAccepted).toHaveBeenCalledOnce();
     expect(onQueueAccepted).toHaveBeenCalledWith(false);
+    expect(onQueueSettled).toHaveBeenCalledOnce();
   });
 
-  it("keeps acceptance irrevocable when transcript confirmation fails", async () => {
-    const receipt = createDeferred<void>();
-    const onQueueAccepted = vi.fn();
-    const { handle } = registerTestRun({ receipt: receipt.promise });
-    const delivery = handle.queueMessage("change course", {
-      onQueueAccepted,
-      waitForTranscriptCommit: true,
-    });
+  it.each([true, false])(
+    "settles failed transcript confirmation without revoking acceptance: wait=%s",
+    async (waitForTranscriptCommit) => {
+      const receipt = createDeferred<void>();
+      const accepted = createDeferred<void>();
+      const onQueueAccepted = vi.fn(() => accepted.resolve());
+      const onQueueSettled = vi.fn();
+      const { handle } = registerTestRun({ receipt: receipt.promise });
+      const delivery = handle.queueMessage("change course", {
+        onQueueAccepted,
+        onQueueSettled,
+        waitForTranscriptCommit,
+      });
 
-    await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true));
-    receipt.reject(new Error("journal failed"));
+      await accepted.promise;
+      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      if (!waitForTranscriptCommit) {
+        await expect(delivery).resolves.toBeUndefined();
+      }
+      expect(onQueueSettled).not.toHaveBeenCalled();
+      receipt.reject(new Error("journal failed"));
+      await expect(receipt.promise).rejects.toThrow("journal failed");
 
-    await expect(delivery).resolves.toEqual({
-      transcriptCommit: "unconfirmed",
-      errorMessage: "journal failed",
-    });
-    expect(onQueueAccepted).toHaveBeenCalledOnce();
-  });
+      await expect(delivery).resolves.toEqual(
+        waitForTranscriptCommit
+          ? { transcriptCommit: "unconfirmed", errorMessage: "journal failed" }
+          : undefined,
+      );
+      expect(onQueueAccepted).toHaveBeenCalledOnce();
+      expect(onQueueSettled).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 it("threads the attempt start timestamp onto the embedded run handle", () => {

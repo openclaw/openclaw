@@ -12,12 +12,13 @@ import ai.openclaw.app.SessionCatalogHost
 import ai.openclaw.app.SessionCatalogState
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.closeNodeRuntimeTestFixture
-import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.provider.Settings
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -250,9 +251,9 @@ class SidebarCatalogGroupingTest {
     assertFalse(sections.any { it.catalog.id == "archived" })
     assertEquals(
       setOf("codex", "claude"),
-      toggleSidebarCatalogExpansion(listOf("claude"), "codex").toSet(),
+      toggleSidebarExpansion(listOf("claude"), "codex").toSet(),
     )
-    assertEquals(emptyList<String>(), toggleSidebarCatalogExpansion(listOf("claude"), "claude"))
+    assertEquals(emptyList<String>(), toggleSidebarExpansion(listOf("claude"), "claude"))
   }
 
   @Test
@@ -327,8 +328,8 @@ class SidebarCatalogGroupingTest {
 
     try {
       Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
-      prefs.setSidebarPageOrder(defaultSidebarPageOrder)
-      prefs.setSidebarVisiblePages(listOf("settings", "home", "skills", "threads"))
+      prefs.setSidebarPageOrder(listOf("agents", "work", "home", "skills", "threads"))
+      prefs.setSidebarVisiblePages(listOf("agents", "home", "skills", "threads"))
       ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
       composeRule.setContent {
         ClawDesignTheme {
@@ -340,7 +341,7 @@ class SidebarCatalogGroupingTest {
             activeSessionKey = "main",
             activeDestination = null,
             connection = GatewayConnectionDisplay(false, "Offline", null),
-            drawerActive = true,
+            visible = true,
             showCloseButton = false,
             onClose = {},
             onDragActiveChange = { dragStates += it },
@@ -353,33 +354,43 @@ class SidebarCatalogGroupingTest {
           )
         }
       }
-      composeRule.onNodeWithText("Work").assertDoesNotExist()
+      composeRule.onNodeWithText("Overview").assertDoesNotExist()
       composeRule.onNodeWithText("Home").assertIsDisplayed()
-      composeRule.onNodeWithText("Settings").assertIsDisplayed().performTouchInput(dragOnePageDown)
+      composeRule.onNodeWithText("Agents").assertIsDisplayed().performTouchInput(dragOnePageDown)
 
       composeRule.runOnIdle {
         assertEquals(listOf(true, false), dragStates)
-        assertEquals(listOf("home", "work", "settings", "skills", "threads"), prefs.sidebarPageOrder.value)
+        assertEquals(
+          listOf("home", "work", "agents", "skills", "threads", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop"),
+          prefs.sidebarPageOrder.value,
+        )
       }
       val homeTop =
         composeRule
           .onNodeWithText("Home")
           .fetchSemanticsNode()
           .boundsInRoot.top
-      val settingsTop =
+      val agentsTop =
         composeRule
-          .onNodeWithText("Settings")
+          .onNodeWithText("Agents")
           .fetchSemanticsNode()
           .boundsInRoot.top
-      assertTrue("One drag must move Settings below the next visible page", homeTop < settingsTop)
+      assertTrue("One drag must move Agents below the next visible page", homeTop < agentsTop)
 
       composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
-      composeRule.onNodeWithText("Edit pinned items").performClick()
-      composeRule.onNodeWithText("EDIT PINNED ITEMS").assertIsDisplayed()
-      composeRule.onNodeWithText("Work").assertIsDisplayed().performTouchInput(dragOnePageDown)
+      composeRule.onNodeWithText("Edit pinned items").performScrollTo().performClick()
+      composeRule.onNodeWithText("EDIT PINNED ITEMS").performScrollTo().assertIsDisplayed()
+      composeRule
+        .onNodeWithText("Overview")
+        .performScrollTo()
+        .assertIsDisplayed()
+        .performTouchInput(dragOnePageDown)
       composeRule.runOnIdle {
-        assertEquals(listOf("home", "settings", "work", "skills", "threads"), prefs.sidebarPageOrder.value)
-        assertEquals(listOf("settings", "home", "skills", "threads"), prefs.sidebarVisiblePages.value)
+        assertEquals(
+          listOf("home", "agents", "work", "skills", "threads", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop"),
+          prefs.sidebarPageOrder.value,
+        )
+        assertEquals(listOf("agents", "home", "skills", "threads"), prefs.sidebarVisiblePages.value)
       }
     } finally {
       viewModels.clear()
@@ -426,7 +437,7 @@ class SidebarCatalogGroupingTest {
             activeSessionKey = pinnedKey,
             activeDestination = null,
             connection = GatewayConnectionDisplay(false, "Offline", null),
-            drawerActive = true,
+            visible = true,
             showCloseButton = false,
             onClose = {},
             onDragActiveChange = {},
@@ -514,7 +525,7 @@ class SidebarCatalogGroupingTest {
             activeSessionKey = requireNotNull(adopted.sessionKey),
             activeDestination = null,
             connection = GatewayConnectionDisplay(false, "Offline", null),
-            drawerActive = true,
+            visible = true,
             showCloseButton = false,
             onClose = {},
             onDragActiveChange = {},
@@ -557,6 +568,27 @@ class SidebarCatalogGroupingTest {
         liveSessions.value = liveSessions.value.map { it.copy(displayName = null) }
       }
       composeRule.onNodeWithText("Refreshed native title").assertIsDisplayed()
+
+      val adoptedLive = liveSessions.value.single()
+      val working = composeRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Working"), useUnmergedTree = true)
+      composeRule.runOnIdle {
+        liveSessions.value = emptyList()
+        catalogState.value =
+          catalogState.value.copy(
+            catalogs = listOf(catalog.copy(hosts = listOf(host("codex", sessions = listOf(adopted.copy(name = "Refreshed native title", status = "active")))))),
+          )
+      }
+      working.assertIsDisplayed()
+      for ((status, flag, active) in listOf(
+        Triple("running", false, false),
+        Triple("done", true, false),
+        Triple("running", null, true),
+        Triple(null, true, true),
+      )) {
+        composeRule.runOnIdle { liveSessions.value = listOf(adoptedLive.copy(status = status, hasActiveRun = flag)) }
+        composeRule.onNodeWithText("Refreshed native title").assertIsDisplayed()
+        if (active) working.assertIsDisplayed() else working.assertDoesNotExist()
+      }
     } finally {
       viewModels.clear()
       try {

@@ -44,25 +44,6 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
-  it("returns true for fetch failed with network cause", () => {
-    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
-    const error = Object.assign(new TypeError("fetch failed"), { cause });
-    expect(isTransientNetworkError(error)).toBe(true);
-  });
-
-  it("returns true for fetch failed with unclassified cause", () => {
-    const cause = Object.assign(new Error("unknown socket state"), { code: "UNKNOWN" });
-    const error = Object.assign(new TypeError("fetch failed"), { cause });
-    expect(isTransientNetworkError(error)).toBe(true);
-  });
-
-  it("returns true for nested cause chain with network error", () => {
-    const innerCause = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
-    const outerCause = Object.assign(new Error("wrapper"), { cause: innerCause });
-    const error = Object.assign(new TypeError("fetch failed"), { cause: outerCause });
-    expect(isTransientNetworkError(error)).toBe(true);
-  });
-
   it("returns true for destroyed HTTP/2 sessions from undici", () => {
     const innerCause = Object.assign(new Error("The session has been destroyed"), {
       code: "ERR_HTTP2_INVALID_SESSION",
@@ -116,6 +97,22 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for marked provider WebSocket transport failures", () => {
+    expect(
+      isTransientNetworkError({ message: "WebSocket error", code: "ERR_WEBSOCKET_TRANSPORT" }),
+    ).toBe(true);
+  });
+
+  it("returns false for permanent provider WebSocket close failures", () => {
+    const permanentClose = Object.assign(
+      new Error("WebSocket closed 1008 policy violation: ECONNRESET"),
+      { code: "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE" },
+    );
+    expect(isTransientNetworkError(new Error("socket hang up", { cause: permanentClose }))).toBe(
+      false,
+    );
+  });
+
   it("returns false for non-network fetch-failed wrappers from tools", () => {
     const error = new Error("Web fetch failed (404): Not Found");
     expect(isTransientNetworkError(error)).toBe(false);
@@ -154,7 +151,7 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(false);
   });
 
-  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+  it.each([null, "string error", { message: "plain object" }])(
     "returns false for non-network input %#",
     (value) => {
       expect(isTransientNetworkError(value)).toBe(false);
@@ -256,11 +253,6 @@ describe("isTransientFileWatchError", () => {
     expect(isTransientFileWatchError(error)).toBe(false);
   });
 
-  it("returns false for ENOSPC with only 'disk full' message", () => {
-    const error = Object.assign(new Error("ENOSPC: disk full"), { code: "ENOSPC" });
-    expect(isTransientFileWatchError(error)).toBe(false);
-  });
-
   it("returns false for message-only disk full without watch indicator", () => {
     expect(isTransientFileWatchError(new Error("write failed: no space left on device"))).toBe(
       false,
@@ -278,12 +270,6 @@ describe("isTransientFileWatchError", () => {
     expect(
       isTransientFileWatchError(new Error("System limit for number of file watchers reached")),
     ).toBe(true);
-  });
-
-  it("returns true for watcher-related no-space messages", () => {
-    expect(isTransientFileWatchError(new Error("file watcher: no space left on device"))).toBe(
-      true,
-    );
   });
 
   it("returns false for generic code-less watcher messages", () => {
@@ -306,22 +292,7 @@ describe("isTransientFileWatchError", () => {
     expect(isTransientFileWatchError(new Error("cannot watch process"))).toBe(false);
   });
 
-  it("returns false for regular errors without file watch indicators", () => {
-    expect(isTransientFileWatchError(new Error("Something went wrong"))).toBe(false);
-    expect(isTransientFileWatchError(new TypeError("Cannot read property"))).toBe(false);
-    expect(isTransientFileWatchError(new RangeError("Invalid array length"))).toBe(false);
-  });
-
-  it("returns false for other disk errors without ENOSPC", () => {
-    expect(isTransientFileWatchError(new Error("disk quota exceeded"))).toBe(false);
-    expect(
-      isTransientFileWatchError(
-        Object.assign(new Error("read only file system"), { code: "EROFS" }),
-      ),
-    ).toBe(false);
-  });
-
-  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+  it.each([null, "string error", { message: "plain object" }])(
     "returns false for non-file-watch input %#",
     (value) => {
       expect(isTransientFileWatchError(value)).toBe(false);

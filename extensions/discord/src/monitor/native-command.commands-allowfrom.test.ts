@@ -6,6 +6,7 @@ import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/c
 import { matchPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 
@@ -184,6 +185,25 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectNotUnauthorizedReply(interaction);
   });
 
+  it.each([false, true])(
+    "preserves explicit owner name compatibility only when opted in: %s",
+    async (dangerouslyAllowNameMatching) => {
+      const { dispatchSpy, interaction } = await runGuildSlashCommand({
+        mutateConfig: (cfg) => {
+          cfg.commands = { ownerAllowFrom: ["discord:discord-user"] };
+          cfg.channels!.discord!.dangerouslyAllowNameMatching = dangerouslyAllowNameMatching;
+        },
+      });
+      if (dangerouslyAllowNameMatching) {
+        expect(dispatchSpy).toHaveBeenCalledOnce();
+        expectNotUnauthorizedReply(interaction);
+      } else {
+        expect(dispatchSpy).not.toHaveBeenCalled();
+        expectUnauthorizedReply(interaction);
+      }
+    },
+  );
+
   it("authorizes command allowlist users even when commands.ownerAllowFrom is also configured", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       userId: "999999999999999999",
@@ -207,18 +227,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
           allowFrom: {
             "*": ["user:123456789012345678"],
           },
-        };
-      },
-    });
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectNotUnauthorizedReply(interaction);
-  });
-
-  it("authorizes guild slash commands when commands.useAccessGroups is false and commands.allowFrom.discord matches the sender", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
         };
       },
     });
@@ -465,19 +473,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectUnauthorizedReply(interaction);
   });
 
-  it("rejects guild slash commands when commands.useAccessGroups is false and commands.allowFrom.discord does not match the sender", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      userId: "999999999999999999",
-      mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
-        };
-      },
-    });
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectUnauthorizedReply(interaction);
-  });
-
   it("authorizes guild slash commands when commands.allowFrom.discord contains a matching guild: entry", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       userId: "999999999999999999",
@@ -635,3 +630,5 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
 });
+
+installDiscordIngressTestRuntime();

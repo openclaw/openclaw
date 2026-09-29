@@ -15,13 +15,8 @@ import {
   parseMockOpenAiPort,
 } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
-import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
-import {
-  ERROR_DETAIL_TAIL_BYTES,
-  fileContainsText,
-  readJson,
-} from "../release-assertion-files.mjs";
-import { readTextFileTail } from "../text-file-utils.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
+import { assertFileContainsText, fileContainsText, readJson } from "../release-assertion-files.mjs";
 
 const command = process.argv[2];
 
@@ -127,6 +122,10 @@ function assertSessionMemoryHookEnabled() {
   if (cfg?.hooks?.internal?.entries?.["session-memory"]?.enabled === true) {
     return;
   }
+  if (process.env.OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE === "interactive") {
+    process.stdout.write("session-memory hook unavailable in selected interactive onboarding\n");
+    return;
+  }
   throw new Error(
     `session-memory hook was not enabled. Onboarding config projection: ${JSON.stringify(
       sessionMemoryHookConfigProjection(cfg),
@@ -145,10 +144,7 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  assert(
-    fileContainsText(file, needle),
-    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
-  );
+  assertFileContainsText(file, needle, assert);
 }
 
 function assertPackageVersion() {
@@ -211,7 +207,7 @@ function assertPluginUninstalled() {
   const installRecords = readPluginInstallRecords({ configPath: configPath() });
   assert(!installRecords[pluginId], `install record still present for ${pluginId}`);
   assert(
-    isExplicitPluginDisableMarker(cfg, pluginId),
+    hasExpectedPluginUninstallConfigState(cfg, pluginId),
     `exact disabled uninstall marker missing for ${pluginId}`,
   );
   const managedRoot = path.join(

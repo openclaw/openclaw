@@ -6,7 +6,7 @@ import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-co
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -208,6 +208,10 @@ describe("human personal namespace authority", () => {
     });
     const run = await admitted(capability);
     try {
+      const alias = ensureProfileForEmail("alice-alias@example.test");
+      linkEmail("alice-alias@example.test", alice.id);
+      invalidateSkillAuthoringForOtherRequester("agent:main:shared", alias.id);
+      await expect(run.invoke({ action: "list" })).resolves.toMatchObject({ entries: [] });
       invalidateSkillAuthoringForOtherRequester("agent:main:shared", bob.id);
       await expect(run.invoke({ action: "create", slug: "ambiguous", content })).rejects.toThrow(
         "fresh attributed",
@@ -273,8 +277,18 @@ describe("human personal namespace authority", () => {
         () => tool.execute("read", { action: "read", skill_id: created.entry.skillId }),
       );
       expect(JSON.stringify(result).length).toBeLessThan(2000);
-      expect(JSON.stringify(result)).toContain('contentIncluded\\":false');
-      expect(JSON.stringify(result)).toContain("Open My skills");
+      const text = result.content.find((block) => block.type === "text");
+      if (!text || typeof text.text !== "string") {
+        throw new Error("Expected a visible JSON read result");
+      }
+      const payload: unknown = JSON.parse(text.text);
+      expect(payload).toMatchObject({
+        contentIncluded: false,
+        omissionReason: "too-large",
+        nextAction: expect.stringContaining("Open My skills"),
+      });
+      expect(payload).not.toHaveProperty("content");
+      expect(result.details).toEqual(payload);
       expect(
         (await readSkillLibrary(libraryAuthority(owner), created.entry.skillId)).files[0]?.content
           .length,
@@ -331,6 +345,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       requestSessionsSend: unused,
       requestSessionsSpawn: unused,
       requestPortal: unused,
+      requestPresence: unused,
       requestSkillWorkshop: async (input) => {
         expect(validateWorkerSkillWorkshopParams(input)).toBe(true);
         return {

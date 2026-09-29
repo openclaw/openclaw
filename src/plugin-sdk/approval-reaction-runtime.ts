@@ -1,3 +1,4 @@
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 import { summarizeApprovalScope } from "../infra/approval-scope.js";
@@ -12,10 +13,17 @@ import {
 } from "../infra/exec-approval-reply.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
+import type { createChannelApprovalAuth } from "./approval-auth-helpers.js";
+import type {
+  ApprovalResolveResult,
+  resolveApprovalOverGateway,
+} from "./approval-gateway-runtime.js";
+import { readApprovalReactionDecisionList } from "./approval-reaction-binding.js";
 import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
 } from "./approval-renderers.js";
+import { isApprovalNotFoundError } from "./error-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
 export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 export {
@@ -47,9 +55,9 @@ type InMemoryApprovalReactionTarget<TTarget> = {
 
 /** In-memory or backed store for approval targets awaiting reaction decisions. */
 export type ApprovalReactionTargetStore<TTarget> = {
-  register(key: string, target: TTarget, opts?: { ttlMs?: number }): void;
+  register(key: string, target: TTarget, opts?: { ttlMs?: number }): Promise<void>;
   lookup(key: string): Promise<TTarget | null>;
-  delete(key: string): void;
+  delete(key: string): Promise<void>;
   clearForTest(): void;
 };
 
@@ -69,7 +77,7 @@ export type ApprovalReactionDecisionResolution = {
 /** Stored target metadata needed to convert a reaction into an approval decision. */
 export type ApprovalReactionTargetRecord<TRoute = unknown> = {
   approvalId: string;
-  /** Explicit ownership; omission is supported only by the deprecated resolver. */
+  /** Optional for legacy record shapes; typed resolution requires explicit ownership. */
   approvalKind?: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   route?: TRoute;
@@ -83,6 +91,79 @@ export type ApprovalReactionTargetResolution<TRoute = unknown> =
     approvalKind: ChannelApprovalKind;
     route?: TRoute;
   };
+
+/** Validate the shared persisted fields without changing transport-owned metadata. */
+export function readApprovalReactionTargetRecord(
+  target: unknown,
+): (ApprovalReactionTargetRecord & { approvalKind: ChannelApprovalKind }) | null {
+  if (
+    !isRecord(target) ||
+    typeof target.approvalId !== "string" ||
+    (target.approvalKind !== "exec" &&
+      target.approvalKind !== "plugin" &&
+      target.approvalKind !== "system-agent")
+  ) {
+    return null;
+  }
+  const allowedDecisions = readApprovalReactionDecisionList(target.allowedDecisions);
+  return allowedDecisions
+    ? { approvalId: target.approvalId, approvalKind: target.approvalKind, allowedDecisions }
+    : null;
+}
+
+/** Admit an explicit approver and retire transport bindings only on terminal resolution. */
+export async function settleApprovalReaction(params: {
+  request: Parameters<typeof resolveApprovalOverGateway>[0] & {
+    channel: string;
+    accountId: string;
+    senderId: string;
+  };
+  approvers: readonly string[];
+  authorizeActorAction: ReturnType<
+    typeof createChannelApprovalAuth
+  >["approvalAuth"]["authorizeActorAction"];
+  loadResolver: () => Promise<typeof resolveApprovalOverGateway>;
+  clearTarget: () => void | Promise<void>;
+  onResolved: (result: ApprovalResolveResult) => void;
+  onError?: (error: unknown) => void;
+  logVerboseMessage?: (message: string) => void;
+}): Promise<"denied" | "resolved" | "not-found"> {
+  const { request, logVerboseMessage } = params;
+  const { channel, approvalId, senderId } = request;
+  if (params.approvers.length === 0) {
+    logVerboseMessage?.(
+      `${channel}: approval reaction denied id=${approvalId}; reactions require explicit approvers`,
+    );
+    return "denied";
+  }
+  if (!params.authorizeActorAction({ ...request, action: "approve" }).authorized) {
+    logVerboseMessage?.(`${channel}: approval reaction denied id=${approvalId} sender=${senderId}`);
+    return "denied";
+  }
+  const resolve = await params.loadResolver();
+  let result: ApprovalResolveResult;
+  try {
+    result = await resolve(request);
+  } catch (error) {
+    if (isApprovalNotFoundError(error)) {
+      await params.clearTarget();
+      logVerboseMessage?.(
+        `${channel}: approval reaction ignored for expired approval id=${approvalId} sender=${senderId}`,
+      );
+      return "not-found";
+    }
+    params.onError?.(error);
+    logVerboseMessage?.(
+      `${channel}: approval reaction failed id=${approvalId} sender=${senderId}: ${String(error)}`,
+    );
+    // The channel's ingress/poller owns replay; retain the binding and propagate failure.
+    throw error;
+  }
+  // Losing surfaces receive the canonical winner too; both outcomes retire controls.
+  await params.clearTarget();
+  params.onResolved(result);
+  return "resolved";
+}
 
 /** Reply payload enriched with reaction decision metadata. */
 export type ApprovalReactionPromptPayload = ReplyPayload & {
@@ -118,7 +199,7 @@ function normalizeDecisionList(
 export function listApprovalReactionBindings(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): ApprovalReactionDecisionBinding[] {
-  const allowed = new Set(normalizeDecisionList(params.allowedDecisions));
+  const allowed = new Set(params.allowedDecisions);
   return APPROVAL_REACTION_BINDINGS.filter((binding) => allowed.has(binding.decision)).map(
     (binding) => ({
       decision: binding.decision,
@@ -206,10 +287,13 @@ export function resolveApprovalReactionDecision(params: {
   return null;
 }
 
-function resolveApprovalReactionTargetInternal<TRoute>(params: {
-  target: ApprovalReactionTargetRecord<TRoute> | null | undefined;
+/** Resolve an explicitly typed target without deriving ownership from its id. */
+export function resolveTypedApprovalReactionTarget<TRoute = unknown>(params: {
+  target:
+    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ChannelApprovalKind })
+    | null
+    | undefined;
   reactionKey: string;
-  allowLegacyKindInference: boolean;
 }): ApprovalReactionTargetResolution<TRoute> | null {
   const target = params.target;
   if (!target) {
@@ -222,53 +306,25 @@ function resolveApprovalReactionTargetInternal<TRoute>(params: {
   if (!decision) {
     return null;
   }
-  // Typed targets already carry canonical protocol identity. Preserve it byte-for-byte;
-  // only the shipped ownerless path retains its historical trimming behavior.
-  const approvalId = params.allowLegacyKindInference ? target.approvalId.trim() : target.approvalId;
+  const approvalId = target.approvalId;
   const approvalKind = target.approvalKind;
   if (!approvalId) {
     return null;
   }
-  const resolvedKind =
-    approvalKind === "exec" || approvalKind === "plugin"
-      ? approvalKind
-      : params.allowLegacyKindInference
-        ? approvalId.startsWith("plugin:")
-          ? "plugin"
-          : "exec"
-        : null;
-  if (!resolvedKind) {
+  if (approvalKind !== "exec" && approvalKind !== "plugin" && approvalKind !== "system-agent") {
     return null;
   }
   return {
     approvalId,
-    approvalKind: resolvedKind,
+    approvalKind,
     decision: decision.decision,
     normalizedEmoji: decision.normalizedEmoji,
     ...(target.route === undefined ? {} : { route: target.route }),
   };
 }
 
-/** Resolve an explicitly typed target without deriving ownership from its id. */
-export function resolveTypedApprovalReactionTarget<TRoute = unknown>(params: {
-  target:
-    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ChannelApprovalKind })
-    | null
-    | undefined;
-  reactionKey: string;
-}): ApprovalReactionTargetResolution<TRoute> | null {
-  return resolveApprovalReactionTargetInternal({
-    ...params,
-    allowLegacyKindInference: false,
-  });
-}
-
 function formatSeverity(value: "info" | "warning" | "critical"): string {
   return value === "critical" ? "Critical" : value === "info" ? "Info" : "Warning";
-}
-
-function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[]): string {
-  return allowedDecisions.join("|");
 }
 
 function buildManualInstructionSection(params: {
@@ -285,9 +341,7 @@ function buildManualInstructionSection(params: {
     );
   }
   if (params.allowedDecisions.length > 0) {
-    lines.push(
-      `Reply with: /approve ${params.approvalId} ${buildDecisionText(params.allowedDecisions)}`,
-    );
+    lines.push(`Reply with: /approve ${params.approvalId} ${params.allowedDecisions.join("|")}`);
   }
   return lines;
 }
@@ -635,7 +689,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
   };
 
   return {
-    register(key: string, target: TTarget, opts?: { ttlMs?: number }): void {
+    async register(key: string, target: TTarget, opts?: { ttlMs?: number }): Promise<void> {
       const normalizedKey = key.trim();
       if (!normalizedKey) {
         return;
@@ -650,7 +704,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
       if (!store) {
         return;
       }
-      void store
+      await store
         .register(normalizedKey, { version: 1, target }, { ttlMs })
         .catch(disablePersistentStore);
     },
@@ -681,7 +735,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
         return null;
       }
     },
-    delete(key: string): void {
+    async delete(key: string): Promise<void> {
       const normalizedKey = key.trim();
       if (!normalizedKey) {
         return;
@@ -691,7 +745,7 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
       if (!store) {
         return;
       }
-      void store.delete(normalizedKey).catch(disablePersistentStore);
+      await store.delete(normalizedKey).catch(disablePersistentStore);
     },
     clearForTest(): void {
       memory.clear();

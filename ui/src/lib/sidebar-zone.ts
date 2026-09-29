@@ -4,7 +4,6 @@ import {
   type SidebarNavRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import type { SidebarWorkboardBoard } from "../components/app-sidebar-workboard.ts";
 
 type SidebarPinnedSession = { key: string };
 
@@ -21,14 +20,11 @@ export function reconcileSidebarZone(
   pinnedSessions: readonly SidebarPinnedSession[],
   validRoutes: readonly SidebarNavRoute[],
   knownUnpinnedKeys: ReadonlySet<string> = new Set(),
-  workboardBoards: readonly SidebarWorkboardBoard[] = [],
-  workboardEnabled = false,
-  workboardBoardsReady = false,
-  workboardParentVisible = false,
+  pluginNavigationKeys: ReadonlySet<string> = new Set(),
+  defaultPluginNavigationKeys: ReadonlySet<string> = new Set(),
 ): { entries: SidebarZoneEntry[]; sidebarEntries: string[] } {
   const pinnedKeys = new Set(pinnedSessions.map((session) => session.key));
   const validRouteSet = new Set(validRoutes);
-  const validBoardIds = new Set(workboardBoards.map((board) => board.id));
   const seen = new Set<string>();
   const entries: SidebarZoneEntry[] = [];
   const canonical: string[] = [];
@@ -42,58 +38,43 @@ export function reconcileSidebarZone(
     if (seen.has(canonicalKey)) {
       continue;
     }
-    if (entry.type === "route") {
-      if (entry.route === "workboard") {
-        seen.add(canonicalKey);
-        canonical.push(canonicalKey);
-        if (workboardParentVisible) {
-          entries.push(entry);
-        }
-        continue;
-      }
-      if (!validRouteSet.has(entry.route)) {
-        continue;
-      }
-      seen.add(canonicalKey);
-      entries.push(entry);
-      canonical.push(canonicalKey);
+    if (entry.type === "route" && !validRouteSet.has(entry.route)) {
       continue;
     }
-    if (entry.type === "workboard") {
-      seen.add(canonicalKey);
-      canonical.push(canonicalKey);
-      // Disabled reads exactly like startup: the runtime config snapshot is
-      // unloaded until the gateway answers, so a zone write in that window
-      // would erase every persisted pin. Preserve the slot, render nothing;
-      // only a loaded catalog that positively lacks the id deletes below.
-      if (!workboardEnabled || !workboardBoardsReady) {
-        continue;
-      }
-      if (!validBoardIds.has(entry.boardId)) {
-        canonical.pop();
-        continue;
-      }
-      entries.push(entry);
+    if (
+      entry.type === "session" &&
+      !pinnedKeys.has(entry.key) &&
+      knownUnpinnedKeys.has(entry.key)
+    ) {
       continue;
     }
-    if (pinnedKeys.has(entry.key)) {
-      seen.add(canonicalKey);
-      entries.push(entry);
-      canonical.push(canonicalKey);
-      continue;
-    }
-    if (knownUnpinnedKeys.has(entry.key)) {
-      continue;
-    }
-    // Unknown state: keep the position, render nothing.
+    // Unavailable plugins and unknown sessions retain their saved position without rendering.
     seen.add(canonicalKey);
     canonical.push(canonicalKey);
+    if (
+      entry.type === "route" ||
+      (entry.type === "plugin" ? pluginNavigationKeys.has(entry.key) : pinnedKeys.has(entry.key))
+    ) {
+      entries.push(entry);
+    }
   }
 
   for (const session of pinnedSessions) {
     const entry = { type: "session", key: session.key } as const;
     const serialized = serializeSidebarEntry(entry);
     if (!seen.has(serialized)) {
+      seen.add(serialized);
+      entries.push(entry);
+      canonical.push(serialized);
+    }
+  }
+
+  // Plugin defaults join the same ordered zone as explicit pins. Rendering and
+  // drag writes must see the same complete order, including newly loaded plugins.
+  for (const key of defaultPluginNavigationKeys) {
+    const entry = { type: "plugin", key } as const;
+    const serialized = serializeSidebarEntry(entry);
+    if (pluginNavigationKeys.has(key) && !seen.has(serialized)) {
       seen.add(serialized);
       entries.push(entry);
       canonical.push(serialized);

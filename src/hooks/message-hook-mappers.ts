@@ -14,6 +14,7 @@ import { normalizeMediaFacts } from "../media/media-facts.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundMessageMetadata,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
@@ -28,81 +29,20 @@ import type {
 } from "./internal-hooks.js";
 import { projectMessageHookMediaFacts, type MessageHookMediaFact } from "./message-hook-media.js";
 
-type CanonicalInboundMessageHookContext = {
-  from: string;
-  to?: string;
-  content: string;
-  body?: string;
-  bodyForAgent?: string;
-  transcript?: string;
-  timestamp?: number;
-  channelId: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  messageId?: string;
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  senderE164?: string;
-  replyToId?: string;
-  replyToIdFull?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
-  provider?: string;
-  surface?: string;
-  threadId?: string | number;
-  threadParentId?: string | number;
-  media?: MessageHookMediaFact[];
-  originalMedia?: MessageHookMediaFact[];
-  // `mediaPath(s)` are files OpenClaw has already staged locally. `mediaUrl(s)`
-  // are provider/media-server references that may not exist on this host.
-  mediaPath?: string;
-  mediaUrl?: string;
-  mediaType?: string;
-  mediaPaths?: string[];
-  mediaUrls?: string[];
-  mediaTypes?: string[];
-  mediaRemoteHost?: string;
-  mediaStagingPending?: boolean;
-  originalMediaPath?: string;
-  originalMediaUrl?: string;
-  originalMediaType?: string;
-  originalMediaPaths?: string[];
-  originalMediaUrls?: string[];
-  originalMediaTypes?: string[];
-  originatingChannel?: string;
-  originatingTo?: string;
-  guildId?: string;
-  channelName?: string;
-  isGroup: boolean;
-  groupId?: string;
-  topicName?: string;
-  location?: PluginHookInboundClaimEvent["location"];
-  providerUpdate?: PluginHookInboundClaimEvent["providerUpdate"];
-  trace?: DiagnosticTraceContext;
-  callDepth?: number;
-};
+type CanonicalSentMessageHookContext = MessageSentHookContext &
+  Pick<PluginHookMessageContext, "sessionKey" | "runId" | "trace" | "callDepth">;
 
-type CanonicalSentMessageHookContext = {
-  to: string;
-  content: string;
-  success: boolean;
-  error?: string;
-  channelId: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  runId?: string;
-  messageId?: string;
-  trace?: DiagnosticTraceContext;
-  callDepth?: number;
-  isGroup?: boolean;
-  groupId?: string;
-};
+function projectHookMediaAliases(canonical: CanonicalInboundMessageHookContext) {
+  const media = canonical.mediaStagingPending ? undefined : canonical;
+  return {
+    mediaPath: media?.mediaPath,
+    mediaUrl: media?.mediaUrl,
+    mediaType: media?.mediaType,
+    mediaPaths: media?.mediaPaths,
+    mediaUrls: media?.mediaUrls,
+    mediaTypes: media?.mediaTypes,
+  };
+}
 
 function assignRemoteMediaStagingMetadata(
   target: Record<string, unknown>,
@@ -138,13 +78,13 @@ function projectHookMediaState(canonical: CanonicalInboundMessageHookContext) {
   };
 }
 
-export function deriveInboundMessageHookContext(
+function deriveInboundMessageHookContextBase(
   ctx: FinalizedMsgContext,
   overrides?: {
     content?: string;
     messageId?: string;
   },
-): CanonicalInboundMessageHookContext {
+) {
   const content =
     overrides?.content ??
     readNonBlankString(ctx.BodyForCommands) ??
@@ -175,7 +115,7 @@ export function deriveInboundMessageHookContext(
     Number.isFinite(ctx.LocationLat) &&
     typeof ctx.LocationLon === "number" &&
     Number.isFinite(ctx.LocationLon);
-  const locationSource =
+  const locationSource: NonNullable<PluginHookInboundClaimEvent["location"]>["source"] =
     ctx.LocationSource === "pin" || ctx.LocationSource === "place" || ctx.LocationSource === "live"
       ? ctx.LocationSource
       : undefined;
@@ -270,22 +210,47 @@ export function deriveInboundMessageHookContext(
   };
 }
 
-export function buildCanonicalSentMessageHookContext(params: {
-  to: string;
-  content: string;
-  success: boolean;
-  error?: string;
-  channelId: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  runId?: string;
-  messageId?: string;
-  trace?: DiagnosticTraceContext;
-  callDepth?: number;
-  isGroup?: boolean;
-  groupId?: string;
-}): CanonicalSentMessageHookContext {
+type DerivedInboundMessageHookContext = ReturnType<typeof deriveInboundMessageHookContextBase>;
+type InboundMessageHookMetadataFields = Pick<
+  PluginHookInboundMessageMetadata,
+  | "mediaPath"
+  | "mediaUrl"
+  | "mediaType"
+  | "mediaPaths"
+  | "mediaUrls"
+  | "mediaTypes"
+  | "originalMediaPath"
+  | "originalMediaUrl"
+  | "originalMediaType"
+  | "originalMediaPaths"
+  | "originalMediaUrls"
+  | "originalMediaTypes"
+  | "mediaStagingPending"
+>;
+type CanonicalInboundMessageHookContext = Pick<
+  DerivedInboundMessageHookContext,
+  "from" | "content" | "channelId" | "isGroup"
+> &
+  Partial<DerivedInboundMessageHookContext> &
+  Partial<Pick<PluginHookMessageContext, "runId" | "trace" | "callDepth">> &
+  Partial<InboundMessageHookMetadataFields> & {
+    originalMedia?: MessageHookMediaFact[];
+    mediaRemoteHost?: string;
+  };
+
+export function deriveInboundMessageHookContext(
+  ctx: FinalizedMsgContext,
+  overrides?: {
+    content?: string;
+    messageId?: string;
+  },
+): CanonicalInboundMessageHookContext {
+  return deriveInboundMessageHookContextBase(ctx, overrides);
+}
+
+export function buildCanonicalSentMessageHookContext(
+  params: CanonicalSentMessageHookContext,
+): CanonicalSentMessageHookContext {
   return {
     to: params.to,
     content: params.content,
@@ -341,6 +306,29 @@ function assignTraceFields(
   }
 }
 
+function projectHookReplyFields(
+  canonical: CanonicalInboundMessageHookContext | CanonicalSentMessageHookContext,
+) {
+  // Sent contexts may omit reply fields; empty strings and false remain meaningful.
+  return {
+    ...("replyToId" in canonical && canonical.replyToId !== undefined
+      ? { replyToId: canonical.replyToId }
+      : {}),
+    ...("replyToIdFull" in canonical && canonical.replyToIdFull !== undefined
+      ? { replyToIdFull: canonical.replyToIdFull }
+      : {}),
+    ...("replyToBody" in canonical && canonical.replyToBody !== undefined
+      ? { replyToBody: canonical.replyToBody }
+      : {}),
+    ...("replyToSender" in canonical && canonical.replyToSender !== undefined
+      ? { replyToSender: canonical.replyToSender }
+      : {}),
+    ...("replyToIsQuote" in canonical && canonical.replyToIsQuote !== undefined
+      ? { replyToIsQuote: canonical.replyToIsQuote }
+      : {}),
+  };
+}
+
 export function toPluginMessageContext(
   canonical: CanonicalInboundMessageHookContext | CanonicalSentMessageHookContext,
 ): PluginHookMessageContext {
@@ -361,21 +349,7 @@ export function toPluginMessageContext(
   if ("senderId" in canonical && canonical.senderId) {
     context.senderId = canonical.senderId;
   }
-  if ("replyToId" in canonical && canonical.replyToId !== undefined) {
-    context.replyToId = canonical.replyToId;
-  }
-  if ("replyToIdFull" in canonical && canonical.replyToIdFull !== undefined) {
-    context.replyToIdFull = canonical.replyToIdFull;
-  }
-  if ("replyToBody" in canonical && canonical.replyToBody !== undefined) {
-    context.replyToBody = canonical.replyToBody;
-  }
-  if ("replyToSender" in canonical && canonical.replyToSender !== undefined) {
-    context.replyToSender = canonical.replyToSender;
-  }
-  if ("replyToIsQuote" in canonical && canonical.replyToIsQuote !== undefined) {
-    context.replyToIsQuote = canonical.replyToIsQuote;
-  }
+  Object.assign(context, projectHookReplyFields(canonical));
   assignTraceFields(context, canonical.trace);
   if (canonical.callDepth != null) {
     context.callDepth = canonical.callDepth;
@@ -415,13 +389,17 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
   return { conversationId: baseConversationId };
 }
 
-function buildPluginInboundClaimContext(
+export function toPluginInboundClaimPair(
   canonical: CanonicalInboundMessageHookContext,
-  conversation: {
-    conversationId?: string;
-    parentConversationId?: string;
+  extras?: {
+    commandAuthorized?: boolean;
+    wasMentioned?: boolean;
   },
-): PluginHookInboundClaimContext {
+): {
+  context: PluginHookInboundClaimContext;
+  event: PluginHookInboundClaimEvent;
+} {
+  const conversation = resolveInboundConversation(canonical);
   const context: PluginHookInboundClaimContext = {
     channelId: canonical.channelId,
     accountId: canonical.accountId,
@@ -434,33 +412,8 @@ function buildPluginInboundClaimContext(
     runId: canonical.runId,
     callDepth: canonical.callDepth,
   };
-  if (canonical.replyToId !== undefined) {
-    context.replyToId = canonical.replyToId;
-  }
-  if (canonical.replyToIdFull !== undefined) {
-    context.replyToIdFull = canonical.replyToIdFull;
-  }
-  if (canonical.replyToBody !== undefined) {
-    context.replyToBody = canonical.replyToBody;
-  }
-  if (canonical.replyToSender !== undefined) {
-    context.replyToSender = canonical.replyToSender;
-  }
-  if (canonical.replyToIsQuote !== undefined) {
-    context.replyToIsQuote = canonical.replyToIsQuote;
-  }
+  Object.assign(context, projectHookReplyFields(canonical));
   assignTraceFields(context, canonical.trace);
-  return context;
-}
-
-function buildPluginInboundClaimEvent(
-  canonical: CanonicalInboundMessageHookContext,
-  context: PluginHookInboundClaimContext,
-  extras?: {
-    commandAuthorized?: boolean;
-    wasMentioned?: boolean;
-  },
-): PluginHookInboundClaimEvent {
   const event: PluginHookInboundClaimEvent = {
     content: canonical.content,
     body: canonical.body,
@@ -474,11 +427,7 @@ function buildPluginInboundClaimEvent(
     senderId: canonical.senderId,
     senderName: canonical.senderName,
     senderUsername: canonical.senderUsername,
-    ...(canonical.replyToId !== undefined ? { replyToId: canonical.replyToId } : {}),
-    ...(canonical.replyToIdFull !== undefined ? { replyToIdFull: canonical.replyToIdFull } : {}),
-    ...(canonical.replyToBody !== undefined ? { replyToBody: canonical.replyToBody } : {}),
-    ...(canonical.replyToSender !== undefined ? { replyToSender: canonical.replyToSender } : {}),
-    ...(canonical.replyToIsQuote !== undefined ? { replyToIsQuote: canonical.replyToIsQuote } : {}),
+    ...projectHookReplyFields(canonical),
     threadId: canonical.threadId,
     messageId: canonical.messageId,
     sessionKey: canonical.sessionKey,
@@ -502,12 +451,7 @@ function buildPluginInboundClaimEvent(
       replyToBody: canonical.replyToBody,
       replyToSender: canonical.replyToSender,
       replyToIsQuote: canonical.replyToIsQuote,
-      mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
-      mediaUrl: canonical.mediaStagingPending ? undefined : canonical.mediaUrl,
-      mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
-      mediaPaths: canonical.mediaStagingPending ? undefined : canonical.mediaPaths,
-      mediaUrls: canonical.mediaStagingPending ? undefined : canonical.mediaUrls,
-      mediaTypes: canonical.mediaStagingPending ? undefined : canonical.mediaTypes,
+      ...projectHookMediaAliases(canonical),
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       groupId: canonical.groupId,
@@ -518,25 +462,7 @@ function buildPluginInboundClaimEvent(
     assignRemoteMediaStagingMetadata(event.metadata, canonical);
   }
   assignTraceFields(event, canonical.trace);
-  return event;
-}
-
-export function toPluginInboundClaimPair(
-  canonical: CanonicalInboundMessageHookContext,
-  extras?: {
-    commandAuthorized?: boolean;
-    wasMentioned?: boolean;
-  },
-): {
-  context: PluginHookInboundClaimContext;
-  event: PluginHookInboundClaimEvent;
-} {
-  const conversation = resolveInboundConversation(canonical);
-  const context = buildPluginInboundClaimContext(canonical, conversation);
-  return {
-    context,
-    event: buildPluginInboundClaimEvent(canonical, context, extras),
-  };
+  return { context, event };
 }
 
 export function toPluginMessageReceivedEvent(
@@ -549,11 +475,7 @@ export function toPluginMessageReceivedEvent(
     threadId: canonical.threadId,
     messageId: canonical.messageId,
     senderId: canonical.senderId,
-    ...(canonical.replyToId !== undefined ? { replyToId: canonical.replyToId } : {}),
-    ...(canonical.replyToIdFull !== undefined ? { replyToIdFull: canonical.replyToIdFull } : {}),
-    ...(canonical.replyToBody !== undefined ? { replyToBody: canonical.replyToBody } : {}),
-    ...(canonical.replyToSender !== undefined ? { replyToSender: canonical.replyToSender } : {}),
-    ...(canonical.replyToIsQuote !== undefined ? { replyToIsQuote: canonical.replyToIsQuote } : {}),
+    ...projectHookReplyFields(canonical),
     sessionKey: canonical.sessionKey,
     runId: canonical.runId,
     ...(canonical.location ? { location: { ...canonical.location } } : {}),
@@ -576,12 +498,7 @@ export function toPluginMessageReceivedEvent(
       replyToBody: canonical.replyToBody,
       replyToSender: canonical.replyToSender,
       replyToIsQuote: canonical.replyToIsQuote,
-      mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
-      mediaUrl: canonical.mediaStagingPending ? undefined : canonical.mediaUrl,
-      mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
-      mediaPaths: canonical.mediaStagingPending ? undefined : canonical.mediaPaths,
-      mediaUrls: canonical.mediaStagingPending ? undefined : canonical.mediaUrls,
-      mediaTypes: canonical.mediaStagingPending ? undefined : canonical.mediaTypes,
+      ...projectHookMediaAliases(canonical),
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -631,12 +548,7 @@ export function toInternalMessageReceivedContext(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
-      mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
-      mediaUrl: canonical.mediaStagingPending ? undefined : canonical.mediaUrl,
-      mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
-      mediaPaths: canonical.mediaStagingPending ? undefined : canonical.mediaPaths,
-      mediaUrls: canonical.mediaStagingPending ? undefined : canonical.mediaUrls,
-      mediaTypes: canonical.mediaStagingPending ? undefined : canonical.mediaTypes,
+      ...projectHookMediaAliases(canonical),
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -652,9 +564,8 @@ export function toInternalMessageTranscribedContext(
   canonical: CanonicalInboundMessageHookContext,
   cfg: OpenClawConfig,
 ): MessageTranscribedHookContext & { cfg: OpenClawConfig } {
-  const shared = toInternalInboundMessageHookContextBase(canonical);
   return {
-    ...shared,
+    ...toInternalInboundMessageHookContextBase(canonical),
     transcript: canonical.transcript ?? "",
     cfg,
   };
@@ -664,9 +575,8 @@ export function toInternalMessagePreprocessedContext(
   canonical: CanonicalInboundMessageHookContext,
   cfg: OpenClawConfig,
 ): MessagePreprocessedHookContext & { cfg: OpenClawConfig } {
-  const shared = toInternalInboundMessageHookContextBase(canonical);
   return {
-    ...shared,
+    ...toInternalInboundMessageHookContextBase(canonical),
     transcript: canonical.transcript,
     isGroup: canonical.isGroup,
     groupId: canonical.groupId,

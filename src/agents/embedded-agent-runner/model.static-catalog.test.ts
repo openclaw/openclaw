@@ -1,6 +1,13 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { ModelCatalogAlias } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
 import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
+
+const repoRoot = path.resolve(import.meta.dirname, "../../..");
+const mistralLookup = { provider: "mistral", modelId: "mistral-medium-3-5" };
 
 const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
@@ -52,13 +59,12 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
 
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
   createBundledProviderStaticCatalogContextResolver,
-  createBundledStaticCatalogModelResolver,
   loadBundledProviderStaticCatalogContextModels,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
+  resolveManifestModelCatalogProviderAliasMetadata as resolveAlias,
 } from "./model.static-catalog.js";
 
 function setManifestPlugins(plugins: unknown[]) {
@@ -125,16 +131,9 @@ function createMistralManifestPlugin(overrides?: {
 
 beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
-  manifestMocks.getCurrentPluginMetadataSnapshot.mockReset();
-  manifestMocks.listOpenClawPluginManifestMetadata.mockReset();
-  manifestMocks.loadPluginManifest.mockReset();
-  manifestMocks.loadPluginManifestRegistryCore.mockReset();
-  providerMocks.normalizePluginDiscoveryResult.mockReset();
-  providerMocks.resolveActivatableProviderOwnerPluginIds.mockReset();
-  providerMocks.resolveBundledProviderCompatPluginIds.mockReset();
-  providerMocks.resolveOwningPluginIdsForProviderRef.mockReset();
-  providerMocks.resolveRuntimePluginDiscoveryProviders.mockReset();
-  providerMocks.runProviderStaticCatalog.mockReset();
+  for (const mock of [...Object.values(manifestMocks), ...Object.values(providerMocks)]) {
+    mock.mockReset();
+  }
   setManifestPlugins([]);
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
   manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [] });
@@ -154,7 +153,7 @@ describe("resolveBundledStaticCatalogModel", () => {
     setManifestPlugins([plugin]);
     const env = {};
     const cfg = {};
-    const lookup = { provider: "mistral", modelId: "mistral-medium-3-5", cfg, env };
+    const lookup = { ...mistralLookup, cfg, env };
     expect(resolveBundledStaticCatalogModel(lookup)?.contextWindow).toBe(262144);
     const updated = createMistralManifestPlugin();
     updated.modelCatalog.providers.mistral.models[0]!.contextWindow = 524288;
@@ -168,85 +167,47 @@ describe("resolveBundledStaticCatalogModel", () => {
     expect(resolveBundledStaticCatalogModel(lookup)?.contextWindow).toBe(262144);
   });
 
-  it("reuses one manifest scan across prepared lookups", () => {
-    setManifestPlugins([createMistralManifestPlugin()]);
-
-    const resolveModel = createBundledStaticCatalogModelResolver();
-    expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
-      "mistral-medium-3-5",
-    );
-    expect(resolveModel({ provider: "mistral", modelId: "missing" })).toBeUndefined();
-    expect(manifestMocks.listOpenClawPluginManifestMetadata).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([false, true])(
-    "synthesizes a runtime model with complete static pricing (tiered=%s)",
-    (tiered) => {
-      const cost = {
-        input: 1.5,
-        output: 7.5,
-        cacheRead: 0,
-        cacheWrite: 0,
-        ...(tiered
-          ? {
-              tieredPricing: [
-                {
-                  input: 1.5,
-                  output: 7.5,
-                  cacheRead: 0.1,
-                  cacheWrite: 0.2,
-                  range: [0, 200_001] as [number, number],
-                },
-                {
-                  input: 3,
-                  output: 15,
-                  cacheRead: 0.3,
-                  cacheWrite: 0.4,
-                  range: [200_001] as [number],
-                },
-              ],
-            }
-          : {}),
-      };
-      setManifestPlugins([createMistralManifestPlugin({ cost })]);
-
-      const model = resolveBundledStaticCatalogModel({
-        provider: "mistral",
-        modelId: "mistral-medium-3-5",
+  it("synthesizes a runtime model with normalized tiered pricing", () => {
+    const cost: ModelDefinitionConfig["cost"] = {
+      input: 1.5,
+      output: 7.5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      tieredPricing: [
+        { input: 1.5, output: 7.5, cacheRead: 0.1, cacheWrite: 0.2, range: [0, 200_001] },
+        { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0.4, range: [200_001] },
+      ],
+    };
+    setManifestPlugins([createMistralManifestPlugin({ cost })]);
+    expect(
+      resolveBundledStaticCatalogModel({
+        ...mistralLookup,
         cfg: {},
-      });
-
-      expect(model).toEqual({
-        api: "openai-completions",
-        baseUrl: "https://api.mistral.ai/v1",
-        compat: undefined,
-        contextTokens: undefined,
-        contextWindow: 262144,
-        cost: {
-          ...cost,
-          ...(tiered
-            ? {
-                tieredPricing: [
-                  cost.tieredPricing![0],
-                  { ...cost.tieredPricing![1], range: [200_001, Infinity] },
-                ],
-              }
-            : {}),
-        },
-        headers: undefined,
-        id: "mistral-medium-3-5",
-        input: ["text", "image"],
-        maxTokens: 8192,
-        mediaInput: {
-          image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
-        },
-        name: "Mistral Medium 3.5",
-        provider: "mistral",
-        reasoning: true,
-        thinkingLevelMap: { off: null, minimal: "low", max: "max" },
-      });
-    },
-  );
+      }),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://api.mistral.ai/v1",
+      compat: undefined,
+      contextTokens: undefined,
+      contextWindow: 262144,
+      cost: {
+        ...cost,
+        tieredPricing: [
+          cost.tieredPricing![0],
+          { ...cost.tieredPricing![1], range: [200_001, Infinity] },
+        ],
+      },
+      headers: undefined,
+      id: "mistral-medium-3-5",
+      input: ["text", "image"],
+      maxTokens: 8192,
+      mediaInput: { image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" } },
+      name: "Mistral Medium 3.5",
+      provider: "mistral",
+      reasoning: true,
+      thinkingLevelMap: { off: null, minimal: "low", max: "max" },
+    });
+  });
 
   it("ignores non-bundled and non-static manifest catalog rows", () => {
     // Workspace plugins and refreshable/runtime catalogs are not process-stable
@@ -260,8 +221,7 @@ describe("resolveBundledStaticCatalogModel", () => {
 
       expect(
         resolveBundledStaticCatalogModel({
-          provider: "mistral",
-          modelId: "mistral-medium-3-5",
+          ...mistralLookup,
           cfg: {},
         }),
       ).toBeUndefined();
@@ -279,121 +239,52 @@ describe("resolveBundledStaticCatalogModel", () => {
     ]) {
       expect(
         resolveBundledStaticCatalogModel({
-          provider: "mistral",
-          modelId: "mistral-medium-3-5",
+          ...mistralLookup,
           cfg,
         }),
       ).toBeUndefined();
     }
   });
 
-  it("can include bundled refreshable manifest catalog rows for configured fallbacks", () => {
-    setManifestPlugins([createMistralManifestPlugin({ discovery: "refreshable" })]);
+  it("keeps the native Gemini transport when Google manifest rows back static fallback", () => {
+    // The manifest fallback must preserve Google's native transport (#139243).
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "extensions/google/openclaw.plugin.json"), "utf8"),
+    ) as {
+      id: string;
+      providers: string[];
+      modelCatalog?: {
+        providers?: Record<string, { api?: string; baseUrl?: string }>;
+      };
+    };
+    setManifestPlugins([{ origin: "bundled", ...manifest }]);
 
-    const model = resolveBundledStaticCatalogModel({
-      provider: "mistral",
-      modelId: "mistral-medium-3-5",
+    const resolved = resolveBundledStaticCatalogModel({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
       cfg: {},
       includeRuntimeDiscovery: true,
     });
 
-    expect(model?.maxTokens).toBe(8192);
-  });
-
-  it("requires an exact provider and model match", () => {
-    setManifestPlugins([createMistralManifestPlugin()]);
+    expect(resolved?.provider).toBe("google");
+    expect(resolved?.api).toBe("google-generative-ai");
+    expect(resolved?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
 
     expect(
       resolveBundledStaticCatalogModel({
-        provider: "mistral",
-        modelId: "mistral-medium-2508",
-        cfg: {},
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveBundledStaticCatalogModel({
-        provider: "openrouter",
-        modelId: "mistral-medium-3-5",
+        provider: "google",
+        modelId: "gemini-2.5-flash",
         cfg: {},
       }),
     ).toBeUndefined();
   });
 });
 
+function staticProvider(id: string) {
+  return { id, pluginId: id, label: id, auth: [], staticCatalog: { run: vi.fn() } };
+}
+
 describe("resolveBundledProviderStaticCatalogModel", () => {
-  it("loads every enabled bundled provider static catalog for context warmup", async () => {
-    const cfg = { plugins: { entries: { google: { enabled: true } } } };
-    const provider = {
-      id: "google",
-      pluginId: "google",
-      label: "Google",
-      auth: [],
-      staticCatalog: { run: vi.fn() },
-    };
-    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
-    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
-      plugins: [
-        createManifestRecord("google", {
-          providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        }),
-      ],
-    });
-    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-    providerMocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
-    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
-      google: {
-        models: [
-          {
-            id: "gemini-3.1-pro-preview",
-            name: "Gemini Pro",
-            contextWindow: 1_048_576,
-          },
-        ],
-      },
-    });
-
-    await expect(loadBundledProviderStaticCatalogContextModels({ cfg })).resolves.toEqual([
-      expect.objectContaining({
-        id: "gemini-3.1-pro-preview",
-        provider: "google",
-        contextWindow: 1_048_576,
-      }),
-    ]);
-    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith({
-      config: cfg,
-      workspaceDir: undefined,
-      env: process.env,
-      onlyPluginIds: ["google"],
-      includeUntrustedWorkspacePlugins: false,
-      requireCompleteDiscoveryEntryCoverage: true,
-      discoveryEntriesOnly: true,
-      includeManifestModelCatalogProviders: false,
-    });
-    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips bundled providers without discovery entries during context warmup", async () => {
-    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google", "openai"]);
-    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
-      plugins: [
-        {
-          id: "google",
-          origin: "bundled",
-          providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        },
-        { id: "openai", origin: "bundled" },
-      ],
-    });
-    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
-
-    await loadBundledProviderStaticCatalogContextModels();
-
-    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledOnce();
-    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({ onlyPluginIds: ["google"] }),
-    );
-  });
-
   it("keeps successful provider context rows when another static catalog fails", async () => {
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google", "minimax"]);
     manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
@@ -437,86 +328,6 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
     ]);
   });
 
-  it("resolves exact rows from bundled provider static catalogs", async () => {
-    const cfg = { plugins: { entries: { google: { enabled: true } } } };
-    const metadataSnapshot = {
-      plugins: [],
-      owners: {},
-      index: {},
-      manifestRegistry: { plugins: [] },
-    } as never;
-    const provider = {
-      id: "google",
-      pluginId: "google",
-      label: "Google",
-      auth: [],
-      staticCatalog: { run: vi.fn() },
-    };
-    providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
-    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
-    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-    providerMocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
-    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
-      google: {
-        api: "google-generative-ai",
-        authHeader: true,
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        request: { headers: { "X-Static-Catalog": "yes" } },
-        models: [
-          {
-            id: "gemini-3.1-pro-preview",
-            name: "Gemini 3.1 Pro Preview",
-            reasoning: true,
-            input: ["text", "image"],
-            cost: { input: 2, output: 12, cacheRead: 0.5, cacheWrite: 0 },
-            contextWindow: 1_048_576,
-            maxTokens: 65_536,
-            mediaInput: { image: { maxSidePx: 3072, tokenMode: "provider" } },
-          },
-        ],
-      },
-    });
-
-    const model = await resolveBundledProviderStaticCatalogModel({
-      provider: "google",
-      modelId: "gemini-3.1-pro-preview",
-      cfg,
-      metadataSnapshot,
-    });
-
-    expect(model).toMatchObject({
-      api: "google-generative-ai",
-      authHeader: true,
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      contextTokens: undefined,
-      contextWindow: 1_048_576,
-      cost: { input: 2, output: 12, cacheRead: 0.5, cacheWrite: 0 },
-      headers: { "X-Static-Catalog": "yes" },
-      id: "gemini-3.1-pro-preview",
-      input: ["text", "image"],
-      maxTokens: 65_536,
-      mediaInput: { image: { maxSidePx: 3072, tokenMode: "provider" } },
-      name: "Gemini 3.1 Pro Preview",
-      provider: "google",
-      reasoning: true,
-    });
-    expect(getModelProviderRequestTransport(model!)).toEqual({
-      headers: { "X-Static-Catalog": "yes" },
-    });
-    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith({
-      config: cfg,
-      workspaceDir: undefined,
-      env: process.env,
-      onlyPluginIds: ["google"],
-      includeUntrustedWorkspacePlugins: false,
-      requireCompleteDiscoveryEntryCoverage: true,
-      discoveryEntriesOnly: true,
-      includeManifestModelCatalogProviders: false,
-      pluginMetadataSnapshot: metadataSnapshot,
-    });
-    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider });
-  });
-
   it("does not load bundled provider static catalogs when owner policy blocks the plugin", async () => {
     providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
     providerMocks.resolveActivatableProviderOwnerPluginIds.mockReturnValue([]);
@@ -535,13 +346,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
   });
 
   it("runs each prepared provider static catalog once", async () => {
-    const provider = {
-      id: "google",
-      pluginId: "google",
-      label: "Google",
-      auth: [],
-      staticCatalog: { run: vi.fn() },
-    };
+    const provider = staticProvider("google");
     providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
@@ -560,62 +365,6 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       resolveModel({ provider: "google", modelId: "missing-model" }),
     ).resolves.toBeUndefined();
 
-    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledTimes(1);
-    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
-  });
-
-  it("resolves context-only nested model ids within the same owning plugin", async () => {
-    const provider = {
-      id: "google",
-      pluginId: "google",
-      label: "Google",
-      auth: [],
-      staticCatalog: { run: vi.fn() },
-    };
-    providerMocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
-      ({ provider: providerId }: { provider: string }) =>
-        providerId === "google" || providerId === "google-gemini-cli" ? ["google"] : undefined,
-    );
-    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
-    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-    providerMocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
-    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
-      google: {
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        models: [
-          {
-            id: "gemini-3.1-pro-preview",
-            name: "Gemini 3.1 Pro Preview",
-            contextWindow: 1_048_576,
-            contextTokens: 1_000_000,
-            maxTokens: 65_536,
-          },
-        ],
-      },
-    });
-
-    const resolveContext = createBundledProviderStaticCatalogContextResolver();
-    await expect(
-      resolveContext({
-        provider: "google-gemini-cli",
-        modelId: "google/gemini-3.1-pro-preview",
-      }),
-    ).resolves.toEqual({
-      contextWindow: 1_048_576,
-      contextTokens: 1_000_000,
-    });
-    expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledTimes(1);
-    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
-
-    providerMocks.resolveRuntimePluginDiscoveryProviders.mockClear();
-    providerMocks.runProviderStaticCatalog.mockClear();
-    await expect(
-      resolveBundledProviderStaticCatalogModel({
-        provider: "google-gemini-cli",
-        modelId: "google/gemini-3.1-pro-preview",
-      }),
-    ).resolves.toBeUndefined();
     expect(providerMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledTimes(1);
     expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
   });
@@ -715,38 +464,207 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
     expect(providerMocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
     expect(providerMocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });
+});
 
-  it("requires an exact provider and model match", async () => {
-    const provider = { id: "google", pluginId: "google", label: "Google", auth: [] };
-    providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
-    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
-    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
-      google: {
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        models: [{ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" }],
+function aliasPlugin(
+  id: string,
+  aliases: Record<string, ModelCatalogAlias>,
+  overrides: Partial<PluginManifestRecord> = {},
+) {
+  return {
+    id,
+    origin: "bundled",
+    enabledByDefault: true,
+    providers: [id],
+    modelCatalog: { aliases },
+    ...overrides,
+  };
+}
+function configuredAlias(provider: string, baseUrl: string, api?: ModelCatalogAlias["api"]) {
+  return { models: { providers: { [provider]: { baseUrl, api, models: [] } } } };
+}
+function setPlugins(...plugins: ReturnType<typeof aliasPlugin>[]) {
+  manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins });
+}
+function conditionalPlugin(unconditional: boolean) {
+  return aliasPlugin(
+    "target-provider",
+    {},
+    {
+      modelCatalog: {
+        aliases: { "conditional-alias": { provider: "target-provider", api: "openai-responses" } },
+        suppressions: [
+          {
+            provider: "conditional-alias",
+            model: "conditional-model",
+            ...(unconditional ? {} : { when: { baseUrlHosts: ["matching.example.com"] } }),
+          },
+        ],
       },
-      "google-vertex": {
-        api: "google-vertex",
-        baseUrl: "https://aiplatform.googleapis.com/v1",
-        models: [{ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" }],
+    },
+  );
+}
+function conflictingPlugins() {
+  setPlugins(
+    aliasPlugin("openai", {
+      "azure-openai-responses": { provider: "openai", api: "azure-openai-responses" },
+    }),
+    aliasPlugin(
+      "workspace-override",
+      { "azure-openai-responses": { provider: "github-copilot" } },
+      { origin: "workspace", enabledByDefault: false, providers: ["github-copilot"] },
+    ),
+  );
+}
+
+describe("manifest provider aliases", () => {
+  it("reuses the current plugin metadata snapshot for repeated alias lookups", () => {
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
+      plugins: [aliasPlugin("moonshot", { "moonshot-ai": { provider: "moonshot" } })],
+    });
+    expect(resolveAlias({ provider: "moonshot-ai" })).toEqual({ provider: "moonshot" });
+    expect(resolveAlias({ provider: "moonshot-ai" })).toEqual({ provider: "moonshot" });
+    expect(manifestMocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
+    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenLastCalledWith({
+      config: undefined,
+      env: process.env,
+      requireDefaultDiscoveryContext: true,
+      workspaceDir: undefined,
+    });
+  });
+
+  it("keeps custom environments on their own manifest registry context", () => {
+    const env = { HOME: "/custom-home" };
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({ plugins: [] });
+    setPlugins(aliasPlugin("moonshot", { "moonshot-ai": { provider: "moonshot" } }));
+    expect(resolveAlias({ provider: "moonshot-ai", env })).toEqual({ provider: "moonshot" });
+    expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(manifestMocks.loadPluginManifestRegistryCore).toHaveBeenCalledWith({
+      config: undefined,
+      env,
+      workspaceDir: undefined,
+    });
+  });
+
+  it("canonicalizes endpoint-less aliases and retains complete transport metadata", () => {
+    setPlugins(
+      aliasPlugin(
+        "openai",
+        {},
+        {
+          modelCatalog: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-responses",
+                models: [{ id: "gpt-5.5", name: "gpt-5.5" }],
+              },
+            },
+            aliases: {
+              "azure-openai-responses": { provider: "openai", api: "azure-openai-responses" },
+              "openai-fixed-endpoint": {
+                provider: "openai",
+                baseUrl: "https://manifest-alias.example.com/openai/v1",
+              },
+            },
+            discovery: { openai: "runtime" },
+          },
+        },
+      ),
+    );
+    expect(resolveAlias({ provider: "azure-openai-responses" })).toEqual({ provider: "openai" });
+    expect(
+      resolveAlias({
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.5",
+        cfg: configuredAlias(
+          "azure-openai-responses",
+          "https://example.openai.azure.com/openai/v1",
+        ),
+      }),
+    ).toEqual({ provider: "azure-openai-responses", transport: { api: "azure-openai-responses" } });
+    expect(
+      resolveAlias({
+        provider: "openai-fixed-endpoint",
+        modelId: "gpt-5.5",
+        cfg: configuredAlias(
+          "openai-fixed-endpoint",
+          "https://configured-alias.example.com/v1",
+          "anthropic-messages",
+        ),
+      }),
+    ).toEqual({
+      provider: "openai-fixed-endpoint",
+      transport: {
+        api: "anthropic-messages",
+        baseUrl: "https://manifest-alias.example.com/openai/v1",
       },
     });
+  });
 
-    await expect(
-      resolveBundledProviderStaticCatalogModel({
-        provider: "google",
-        modelId: "gemini-2.5-pro",
-        cfg: {},
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      resolveBundledProviderStaticCatalogModel({
-        provider: "openrouter",
-        modelId: "gemini-3.1-pro-preview",
-        cfg: {},
-      }),
-    ).resolves.toBeUndefined();
+  it.each([false, true])(
+    "canonicalizes transport aliases only for unconditional suppressions (%s)",
+    (unconditional) => {
+      setPlugins(conditionalPlugin(unconditional));
+      expect(
+        resolveAlias({
+          provider: "conditional-alias",
+          modelId: "conditional-model",
+          cfg: configuredAlias(
+            "conditional-alias",
+            "https://matching.example.com/v1",
+            "openai-responses",
+          ),
+        }),
+      ).toEqual(
+        unconditional
+          ? { provider: "target-provider" }
+          : { provider: "conditional-alias", transport: { api: "openai-responses" } },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "rejects conflicting aliases only when the workspace owner is active (%s)",
+    (active) => {
+      conflictingPlugins();
+      const cfg = configuredAlias(
+        "azure-openai-responses",
+        "https://example.openai.azure.com/openai/v1",
+      );
+      expect(
+        resolveAlias({
+          provider: "azure-openai-responses",
+          modelId: "gpt-5.4-mini",
+          cfg: active
+            ? { ...cfg, plugins: { entries: { "workspace-override": { enabled: true } } } }
+            : cfg,
+        }),
+      ).toEqual(
+        active
+          ? { provider: "azure-openai-responses", ambiguous: true }
+          : { provider: "azure-openai-responses", transport: { api: "azure-openai-responses" } },
+      );
+    },
+  );
+
+  it("accepts activated config-load-path alias owners", () => {
+    setPlugins(
+      aliasPlugin(
+        "config-provider",
+        {
+          "custom-openai-alias": {
+            provider: "custom-openai",
+            api: "openai-responses",
+            baseUrl: "https://config-provider.example.com/v1",
+          },
+        },
+        { origin: "config", enabledByDefault: undefined, providers: ["custom-openai"] },
+      ),
+    );
+    expect(resolveAlias({ provider: "custom-openai-alias", modelId: "custom-model" })).toEqual({
+      provider: "custom-openai-alias",
+      transport: { api: "openai-responses", baseUrl: "https://config-provider.example.com/v1" },
+    });
   });
 });

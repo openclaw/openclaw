@@ -1,14 +1,18 @@
-// Type-only outbound delivery queue contracts shared by storage and failure lifecycle owners.
+// Outbound delivery queue contracts shared by storage and failure lifecycle owners.
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   ChannelMessageUnknownSendReconciliationResult,
   OutboundReplyFacts,
-  RenderedMessageBatchPlanItem,
+  RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
-import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
+import type {
+  DeliveryQueueCompletionRetention,
+  DeliveryQueueEntryState,
+} from "../delivery-queue-sqlite.types.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -17,16 +21,21 @@ import type { IndexedOutboundAuditTerminal } from "./outbound-audit.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
-export type QueuedRenderedMessageBatchPlan = {
-  payloadCount: number;
-  textCount: number;
-  mediaCount: number;
-  voiceCount: number;
-  presentationCount: number;
-  interactiveCount: number;
-  channelDataCount: number;
-  items: readonly RenderedMessageBatchPlanItem[];
-};
+export type QueuedRenderedMessageBatchPlan = RenderedMessageBatchPlan;
+
+export function hasActiveDeliveryOwner(entry: DeliveryQueueEntryState, now: number): boolean {
+  return (
+    (typeof entry.completionRetention === "object" ||
+      entry.completionRetention === "permanent" ||
+      entry.requiresProducerClaim === true) &&
+    (entry.recoveryState === "producer_claimed" ||
+      ((entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send") &&
+        entry.requiresProducerClaim === true)) &&
+    typeof entry.availableAt === "number" &&
+    entry.availableAt > now
+  );
+}
 
 export type QueuedReplyPayloadSendingHook = {
   kind: ReplyDispatchKind;
@@ -37,6 +46,7 @@ export type QueuedReplyPayloadSendingHook = {
 };
 
 export type QueuedDeliveryPayload = {
+  sessionGeneration?: SessionDeliveryGeneration;
   channel: string;
   to: string;
   accountId?: string;
@@ -68,26 +78,15 @@ export type QueuedDeliveryPayload = {
   maxRetries?: number;
 };
 
-type LegacyQueuedDeliveryPayload = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
+export interface LegacyQueuedDelivery extends Omit<
+  QueuedDelivery,
+  "preparedBatch" | "settlement" | "retainOnFailure" | "recoveryState"
+> {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
-};
-
-export interface LegacyQueuedDelivery extends LegacyQueuedDeliveryPayload {
-  id: string;
-  enqueuedAt: number;
-  retryCount: number;
-  attemptCount: number;
-  availableAt?: number;
-  producerClaimId?: string;
-  lastAttemptAt?: number;
-  lastError?: string;
-  platformSendAttemptId?: string;
-  platformSendStartedAt?: number;
-  effectiveReplyToId?: string | null;
-  recoveryState?: "producer_claimed" | "send_attempt_started" | "unknown_after_send";
+  recoveryState?: Exclude<QueuedDelivery["recoveryState"], "settlement_pending">;
 }
 
 export type LegacyQueuedDeliveryPreparation = LegacyQueuedDelivery & {

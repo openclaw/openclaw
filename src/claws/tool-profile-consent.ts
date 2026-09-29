@@ -1,12 +1,20 @@
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { expandToolGroups, resolveToolProfilePolicy } from "../agents/tool-policy-shared.js";
-import type { ClawOpenClawProfile } from "./types.js";
+import type { ClawOpenClawAgentSettings } from "./manifest-contract.js";
 
-type ClawToolSettings = NonNullable<ClawOpenClawProfile["agent"]["tools"]>;
+type ClawToolSettings = NonNullable<ClawOpenClawAgentSettings["tools"]>;
 type ClawToolProfileSelection = Omit<
   Pick<ClawToolSettings, "profile" | "allow" | "alsoAllow" | "deny">,
   "profile"
 > & { profile?: string };
+
+export function resolveClawProfileCapabilities(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const policy = resolveToolProfilePolicy(value);
+  return policy?.allow ? expandToolGroups(policy.allow).toSorted() : value;
+}
 
 export function isConcreteBundleMcpToolName(name: string): boolean {
   return name.length <= 64 && /^[A-Za-z][A-Za-z0-9_-]*__[A-Za-z][A-Za-z0-9_-]*$/u.test(name);
@@ -45,9 +53,9 @@ export function resolveClawToolProfileSnapshot(
 }
 
 export function materializeClawToolProfile(
-  settings: ClawOpenClawProfile["agent"],
+  settings: ClawOpenClawAgentSettings,
   options: { allowLegacyDynamicProfile?: boolean } = {},
-): ClawOpenClawProfile["agent"] {
+): ClawOpenClawAgentSettings {
   const tools = settings.tools;
   if (!tools) {
     return settings;

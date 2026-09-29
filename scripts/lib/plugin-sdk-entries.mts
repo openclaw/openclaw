@@ -41,6 +41,14 @@ export const publicPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
  */
 export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints;
 
+/** Facades emitted only for the trusted private QA harness, never package exports. */
+export const privateQaPluginSdkEntrypoints = [
+  "qa-channel",
+  "qa-channel-protocol",
+  "qa-lab",
+  "qa-runtime",
+];
+
 // These local-only entries were already omitted from ordinary packaged builds
 // before bundled runtime facades moved behind the same private-local boundary.
 const nonProductionPluginSdkSubpathSet = new Set([
@@ -55,10 +63,7 @@ const nonProductionPluginSdkSubpathSet = new Set([
   "plugin-test-runtime",
   "provider-http-test-mocks",
   "provider-test-contracts",
-  "qa-channel",
-  "qa-channel-protocol",
-  "qa-lab",
-  "qa-runtime",
+  ...privateQaPluginSdkEntrypoints,
   "reply-payload-testing",
   "sqlite-runtime-testing",
   "test-env",
@@ -121,56 +126,22 @@ export function buildPluginSdkEntrySources(entries: readonly string[] = pluginSd
 export function buildPluginSdkPackageExports() {
   return Object.fromEntries(
     pluginSdkEntrypoints.flatMap((entry) => {
-      if (publicPluginSdkEntrypoints.includes(entry)) {
-        return [
-          [
-            `./plugin-sdk/${entry}`,
-            {
-              types: `./dist/plugin-sdk/${entry}.d.ts`,
-              default: `./dist/plugin-sdk/${entry}.js`,
-            },
-          ],
-        ];
+      const publicEntry = publicPluginSdkEntrypoints.includes(entry);
+      if (!publicEntry && !packagedPrivatePluginSdkRuntimeEntrypoints.includes(entry)) {
+        return [];
       }
-      if (packagedPrivatePluginSdkRuntimeEntrypoints.includes(entry)) {
-        // Official plugins ship separately but execute against the host's private runtime.
-        // Their declarations stay pack-excluded by listUnpackagedPrivatePluginSdkDistArtifacts.
-        return [
-          [
-            `./plugin-sdk/${entry}`,
-            {
-              default: `./dist/plugin-sdk/${entry}.js`,
-            },
-          ],
-        ];
-      }
-      return [];
+      // Official plugins use private host runtime exports without publishing declarations.
+      return [
+        [
+          `./plugin-sdk/${entry}`,
+          {
+            ...(publicEntry ? { types: `./dist/plugin-sdk/${entry}.d.ts` } : {}),
+            default: `./dist/plugin-sdk/${entry}.js`,
+          },
+        ],
+      ];
     }),
   );
-}
-
-/**
- * List all packaged plugin SDK dist artifacts, including production-private runtime JS.
- * @internal Shared repository-script contract.
- */
-export function listPluginSdkDistArtifacts(
-  entries: readonly string[] = pluginSdkEntrypoints,
-  privateEntries: readonly string[] = privateLocalOnlyPluginSdkEntrypoints,
-) {
-  const privateSet = new Set(privateEntries);
-  return [
-    ...entries
-      .filter((entry) => !privateSet.has(entry))
-      .flatMap((entry) => [`dist/plugin-sdk/${entry}.js`, `dist/plugin-sdk/${entry}.d.ts`]),
-    ...entries
-      .filter((entry) => privateSet.has(entry) && !nonProductionPluginSdkSubpathSet.has(entry))
-      .map((entry) => `dist/plugin-sdk/${entry}.js`),
-  ];
-}
-
-/** List private runtime facade artifacts required inside package output. */
-export function listPackagedPrivatePluginSdkRuntimeArtifacts() {
-  return packagedPrivatePluginSdkRuntimeEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`);
 }
 
 /** List private artifacts that must stay out of package output. */

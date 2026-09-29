@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeRestartRecoveryEntryFields } from "../config/sessions/restart-recovery-state.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
@@ -16,16 +17,11 @@ import {
   applyFileBackedSessionStoreMaintenance,
   type SessionMaintenanceApplyReport,
 } from "../config/sessions/store-maintenance-operations.js";
+import { planSessionEntryMaintenance } from "../config/sessions/store-maintenance-plan.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import {
-  archiveStaleDashboardEntries,
-  capEntryCount,
   countUnarchivedSessionEntries,
-  pruneStaleEntries,
-  pruneStaleModelRunEntries,
-  shouldRunModelRunPrune,
-  shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "../config/sessions/store-maintenance.js";
@@ -86,9 +82,6 @@ export type LegacySessionStoreSaveOptions = {
 type LegacySessionStoreUpdateOptions<T> = LegacySessionStoreSaveOptions & {
   reentrant?: boolean;
   skipSaveWhenResult?: (result: T) => boolean;
-  resolveSingleEntryPersistence?: (
-    result: T,
-  ) => { sessionKey: string; entry: SessionEntry } | null | undefined;
 };
 
 const log = createSubsystemLogger("sessions/legacy-importer");
@@ -98,11 +91,6 @@ const loadSessionArchiveRuntime = createLazyRuntimeModule(
 const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
   () => import("../trajectory/cleanup.js"),
 );
-
-function normalizeRecordKey(value: string): string | undefined {
-  const key = value.trim();
-  return key.length > 0 ? key : undefined;
-}
 
 function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
   if (!isRecord(value)) {
@@ -173,7 +161,7 @@ function normalizeLegacyPluginState(
   let changed = false;
   const normalizedState: Record<string, Record<string, PluginJsonValue>> = {};
   for (const [rawPluginId, rawPluginState] of Object.entries(state)) {
-    const pluginId = normalizeRecordKey(rawPluginId);
+    const pluginId = normalizeOptionalString(rawPluginId);
     if (!pluginId || !isRecord(rawPluginState)) {
       changed = true;
       continue;
@@ -181,7 +169,7 @@ function normalizeLegacyPluginState(
     changed ||= pluginId !== rawPluginId;
     const normalizedPluginState: Record<string, PluginJsonValue> = {};
     for (const [rawNamespace, rawValue] of Object.entries(rawPluginState)) {
-      const namespace = normalizeRecordKey(rawNamespace);
+      const namespace = normalizeOptionalString(rawNamespace);
       const value = normalizeValue(rawValue);
       if (!namespace || value === undefined) {
         changed = true;
@@ -273,36 +261,15 @@ export function loadLegacySessionStore(
         storePath,
         store: sessionStore,
       });
-      archiveStaleDashboardEntries(sessionStore, maintenance.archiveDashboardAfterMs, {
+      planSessionEntryMaintenance({
+        profile: "legacy-read",
+        maintenance,
+        initialUnarchivedCount: beforeCount,
+        readPreserveKeys: () => preserveSessionKeys,
         log: false,
-        preserveKeys: preserveSessionKeys,
+        readAgeCandidates: () => sessionStore,
+        readCapCandidates: () => ({ store: sessionStore, maxEntries: maintenance.maxEntries }),
       });
-      if (shouldRunModelRunPrune({ maintenance, entryCount: beforeCount })) {
-        pruneStaleModelRunEntries(sessionStore, maintenance.modelRunPruneAfterMs, {
-          log: false,
-          preserveKeys: preserveSessionKeys,
-          preserveRecentMs: maintenance.preserveRecentMs,
-        });
-      }
-      if (countUnarchivedSessionEntries(sessionStore) > maintenance.maxEntries) {
-        pruneStaleEntries(sessionStore, maintenance.pruneAfterMs, {
-          log: false,
-          preserveKeys: preserveSessionKeys,
-          preserveRecentMs: maintenance.preserveRecentMs,
-        });
-        if (
-          shouldRunSessionEntryMaintenance({
-            entryCount: countUnarchivedSessionEntries(sessionStore),
-            maxEntries: maintenance.maxEntries,
-          })
-        ) {
-          capEntryCount(sessionStore, maintenance.maxEntries, {
-            log: false,
-            preserveKeys: preserveSessionKeys,
-            preserveRecentMs: maintenance.preserveRecentMs,
-          });
-        }
-      }
     }
   }
   return sessionStore;

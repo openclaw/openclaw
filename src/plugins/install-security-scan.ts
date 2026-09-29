@@ -1,6 +1,10 @@
 // Runs security checks over plugin install candidates before activation.
+import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
-export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
+export type {
+  InstallSafetyOverrides,
+  SkillInstallSpecMetadata,
+} from "./install-security-scan.types.js";
 
 /** Result returned by plugin/skill install security policy checks. */
 export type InstallSecurityScanResult = {
@@ -11,98 +15,49 @@ export type InstallSecurityScanResult = {
   };
 };
 
-/** Skill install metadata shape passed into shared install policy evaluation. */
-export type SkillInstallSpecMetadata = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  sha256?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
-
 /** Lazily loads install scanning so normal plugin startup avoids policy/runtime imports. */
 async function loadInstallSecurityScanRuntime() {
   return await import("./install-security-scan.runtime.js");
 }
 
+const bindInstallSecurityScanRuntime = createLazyRuntimeMethodBinder(
+  loadInstallSecurityScanRuntime,
+);
+
 /** Scans an unpacked bundle source before plugin install/update. */
-export async function scanBundleInstallSource(
-  params: Parameters<
-    typeof import("./install-security-scan.runtime.js").scanBundleInstallSourceRuntime
-  >[0],
-): Promise<InstallSecurityScanResult | undefined> {
-  const { scanBundleInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
-  return await scanBundleInstallSourceRuntime(params);
-}
+export const scanBundleInstallSource = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.scanBundleInstallSourceRuntime,
+);
 
 /** Scans a package source directory and executable metadata before install/update. */
-export async function scanPackageInstallSource(
-  params: Parameters<
-    typeof import("./install-security-scan.runtime.js").scanPackageInstallSourceRuntime
-  >[0],
-): Promise<InstallSecurityScanResult | undefined> {
-  const { scanPackageInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
-  return await scanPackageInstallSourceRuntime(params);
-}
+export const scanPackageInstallSource = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.scanPackageInstallSourceRuntime,
+);
 
 /** Scans the installed package dependency tree after npm resolution. */
-export async function scanInstalledPackageDependencyTree(
-  params: Parameters<
-    typeof import("./install-security-scan.runtime.js").scanInstalledPackageDependencyTreeRuntime
-  >[0],
-): Promise<InstallSecurityScanResult | undefined> {
-  const { scanInstalledPackageDependencyTreeRuntime } = await loadInstallSecurityScanRuntime();
-  return await scanInstalledPackageDependencyTreeRuntime(params);
-}
+export const scanInstalledPackageDependencyTree = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.scanInstalledPackageDependencyTreeRuntime,
+);
 
 /**
  * Retained for install.runtime compatibility with pre-v2026.6.5 lazy install chunks.
  * Remove only with the matching runtime-postbuild legacy alias cleanup.
  */
-export async function scanFileInstallSource(
-  params: Parameters<
-    typeof import("./install-security-scan.runtime.js").scanFileInstallSourceRuntime
-  >[0],
-): Promise<InstallSecurityScanResult | undefined> {
-  const { scanFileInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
-  return await scanFileInstallSourceRuntime(params);
-}
+export const scanFileInstallSource = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.scanFileInstallSourceRuntime,
+);
 
 /** Runs npm install policy checks before package install side effects. */
-export async function preflightPluginNpmInstallPolicy(
-  params: Parameters<
-    typeof import("./install-security-scan.runtime.js").preflightPluginNpmInstallPolicyRuntime
-  >[0],
-): Promise<InstallSecurityScanResult | undefined> {
-  const { preflightPluginNpmInstallPolicyRuntime } = await loadInstallSecurityScanRuntime();
-  return await preflightPluginNpmInstallPolicyRuntime(params);
-}
+export const preflightPluginNpmInstallPolicy = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.preflightPluginNpmInstallPolicyRuntime,
+);
 
 /** Runs git install policy checks before plugin install side effects. */
-export async function preflightPluginGitInstallPolicy(
-  params: Parameters<
-    typeof import("./install-security-scan.runtime.js").preflightPluginGitInstallPolicyRuntime
-  >[0],
-): Promise<InstallSecurityScanResult | undefined> {
-  const { preflightPluginGitInstallPolicyRuntime } = await loadInstallSecurityScanRuntime();
-  return await preflightPluginGitInstallPolicyRuntime(params);
-}
+export const preflightPluginGitInstallPolicy = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.preflightPluginGitInstallPolicyRuntime,
+);
 
 /** Evaluates shared install policy for skill-managed dependency installs. */
-export async function evaluateSkillInstallPolicy(
-  params: Parameters<
-    typeof import("./install-security-scan.runtime.js").evaluateSkillInstallPolicyRuntime
-  >[0],
-): Promise<InstallSecurityScanResult | undefined> {
-  const { evaluateSkillInstallPolicyRuntime } = await loadInstallSecurityScanRuntime();
-  return await evaluateSkillInstallPolicyRuntime(params);
-}
+export const evaluateSkillInstallPolicy = bindInstallSecurityScanRuntime(
+  (runtime) => runtime.evaluateSkillInstallPolicyRuntime,
+);

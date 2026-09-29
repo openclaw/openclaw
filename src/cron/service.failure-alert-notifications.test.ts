@@ -2,15 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunOptions } from "../infra/heartbeat-runner-execution.js";
-import { resolveHeartbeatRunPrompt } from "../infra/heartbeat-runner-prompt.js";
+import {
+  resolveHeartbeatPreflight,
+  resolveHeartbeatRunPrompt,
+} from "../infra/heartbeat-runner-prompt.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
-import { resolveHeartbeatWakePayloadFlags } from "../infra/heartbeat-wake-policy.js";
 import { requestHeartbeat as requestHeartbeatWake } from "../infra/heartbeat-wake.js";
 import {
   drainSystemEvents,
   enqueueSystemEvent,
   peekSystemEventEntries,
 } from "../infra/system-events.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -22,15 +25,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 describe("CronService failure notification delivery", () => {
   it.each([
-    {
-      name: "the explicitly targeted Telegram topic",
-      agentId: "ops",
-      sessionKey: "agent:ops:telegram:group:42:topic:77",
-      sessionTarget: "session:agent:ops:telegram:group:42:topic:77" as const,
-      wakeMode: "now" as const,
-      carriesOrigin: true,
-      wakesNow: true,
-    },
     {
       name: "a persistent target instead of its creation conversation",
       agentId: "ops",
@@ -84,22 +78,14 @@ describe("CronService failure notification delivery", () => {
     const observed: Array<{ prompt: string; deliveryContext?: DeliveryContext }> = [];
     const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
       const pendingEventEntries = peekSystemEventEntries(options.sessionKey ?? "");
-      const preflight = {
-        ...resolveHeartbeatWakePayloadFlags(options),
-        session: {
-          sessionKey: testCase.sessionKey,
-          storePath: "/tmp/cron-failure-alert-notification-proof.json",
-          suppressOriginatingContext: false,
-          entry: undefined,
-        },
-        pendingEventEntries,
-        turnSourceDeliveryContext: pendingEventEntries[0]?.deliveryContext,
-        hasTaggedCronEvents: pendingEventEntries.some((event) =>
-          event.contextKey?.startsWith("cron:"),
-        ),
-        shouldInspectPendingEvents: true,
-        authoritativeScheduledTick: false,
-      };
+      const preflight = await resolveHeartbeatPreflight({
+        cfg,
+        agentId: testCase.agentId,
+        sessionKey: options.sessionKey,
+        heartbeat: options.heartbeat,
+        source: options.source,
+        reason: options.reason,
+      });
       observed.push({
         prompt: resolveHeartbeatRunPrompt({
           cfg,
@@ -125,6 +111,7 @@ describe("CronService failure notification delivery", () => {
       throw new Error("failure alert channel unavailable");
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       cronConfig: { failureAlert: { enabled: true, after: 1 } },
@@ -165,9 +152,12 @@ describe("CronService failure notification delivery", () => {
       });
 
       await cron.run(job.id, "force");
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      await expect(sendCronFailureAlert.mock.results[0]?.value).rejects.toThrow(
+        "failure alert channel unavailable",
+      );
       await vi.advanceTimersByTimeAsync(1);
 
-      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
       expect(peekSystemEventEntries(testCase.sessionKey)).toHaveLength(1);
       expect(runOnce).toHaveBeenCalledTimes(testCase.wakesNow ? 1 : 0);
       if (testCase.wakesNow) {

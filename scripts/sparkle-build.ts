@@ -1,7 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 // Sparkle Build script supports OpenClaw repository automation.
 
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 export type SparkleBuildFloors = {
   releaseKey: number;
@@ -135,6 +136,6 @@ function runCli(args: string[]): number {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (process.argv[1] && isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url)) {
   process.exit(runCli(process.argv.slice(2)));
 }

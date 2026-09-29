@@ -1,4 +1,3 @@
-// Control UI module implements presenter behavior.
 import { resolveExactDurationParts } from "../../../src/infra/format-time/format-duration-exact.ts";
 import type { CronJob, GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -10,6 +9,7 @@ import {
   formatMs,
   formatUnknownText,
 } from "../lib/format.ts";
+import { resolveSessionContextLimit } from "./sessions/context-budget.ts";
 
 export function formatNextRun(ms?: number | null) {
   if (!ms) {
@@ -27,7 +27,7 @@ export function formatSessionTokens(row: GatewaySessionRow) {
     return t("common.na");
   }
   const total = row.totalTokens ?? 0;
-  const ctx = row.contextTokens ?? 0;
+  const ctx = resolveSessionContextLimit(row).tokens;
   return ctx ? `${total} / ${ctx}` : String(total);
 }
 
@@ -84,9 +84,6 @@ export function formatCronPayload(job: CronJob) {
   }
   if (p.kind === "heartbeat") {
     return "Heartbeat monitor";
-  }
-  if (p.kind === "skillCollectionReview") {
-    return "Skill collection review";
   }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;

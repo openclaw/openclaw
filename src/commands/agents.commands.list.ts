@@ -1,4 +1,3 @@
-// Implements `openclaw agents list` text and JSON summaries.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { listRouteBindings } from "../config/bindings.js";
@@ -6,8 +5,13 @@ import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson, defaultRuntime } from "../runtime.js";
 import {
+  evaluateAgentDatabaseAdmissions,
+  hasAgentDatabaseAdmissions,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import {
   listAgentProvenance,
-  readAgentProvenance,
+  readAgentProvenanceForDisplay,
   type AgentProvenance,
 } from "../state/agent-provenance.js";
 import { shortenHomePath } from "../utils.js";
@@ -30,7 +34,7 @@ type AgentsListOptions = {
 
 function formatSummaryHeader(summary: AgentSummary): string {
   const safe = sanitizeTerminalText;
-  const defaultTag = summary.isDefault ? " (default)" : "";
+  const defaultTag = `${summary.isDefault ? " (default)" : ""}${summary.status === "degraded" ? " (degraded)" : ""}`;
   return summary.name && summary.name !== summary.id
     ? `${safe(summary.id)}${defaultTag} (${safe(summary.name)})`
     : `${safe(summary.id)}${defaultTag}`;
@@ -40,13 +44,9 @@ function formatSummary(summary: AgentSummary) {
   const safe = sanitizeTerminalText;
   const header = formatSummaryHeader(summary);
 
-  const identityParts = [];
-  if (summary.identityEmoji) {
-    identityParts.push(safe(summary.identityEmoji));
-  }
-  if (summary.identityName) {
-    identityParts.push(safe(summary.identityName));
-  }
+  const identityParts = [summary.identityEmoji, summary.identityName]
+    .filter((part): part is string => Boolean(part))
+    .map(safe);
   const identityLine = identityParts.length > 0 ? identityParts.join(" ") : null;
   const identitySource =
     summary.identitySource === "identity"
@@ -56,6 +56,10 @@ function formatSummary(summary: AgentSummary) {
         : null;
 
   const lines = [`- ${header}`];
+  if (summary.admissionRefusal) {
+    lines.push(`  Refused: ${safe(summary.admissionRefusal.reason)}`);
+    lines.push(`  Repair: ${safe(summary.admissionRefusal.repairHint)}`);
+  }
   if (identityLine) {
     lines.push(`  Identity: ${identityLine}${identitySource ? ` (${identitySource})` : ""}`);
   }
@@ -69,17 +73,15 @@ function formatSummary(summary: AgentSummary) {
   if (summary.routes?.length) {
     lines.push(`  Routing: ${summary.routes.map(safe).join(", ")}`);
   }
-  if (summary.providers?.length) {
-    lines.push("  Providers:");
-    for (const provider of summary.providers) {
-      lines.push(`    - ${safe(provider)}`);
-    }
-  }
-
-  if (summary.bindingDetails?.length) {
-    lines.push("  Routing rules:");
-    for (const binding of summary.bindingDetails) {
-      lines.push(`    - ${safe(binding)}`);
+  for (const [heading, entries] of [
+    ["  Providers:", summary.providers],
+    ["  Routing rules:", summary.bindingDetails],
+  ] as const) {
+    if (entries?.length) {
+      lines.push(heading);
+      for (const entry of entries) {
+        lines.push(`    - ${safe(entry)}`);
+      }
     }
   }
   return lines.join("\n");
@@ -121,7 +123,6 @@ function formatAgentTree(summaries: AgentSummary[], provenance: AgentProvenance[
   return lines;
 }
 
-/** Print configured agent summaries with optional binding/provider detail enrichment. */
 export async function agentsListCommand(
   opts: AgentsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -131,11 +132,16 @@ export async function agentsListCommand(
     return;
   }
 
-  const summaries = buildAgentSummaries(cfg);
-  const provenance = opts.tree ? listAgentProvenance() : [];
+  if (!hasAgentDatabaseAdmissions()) {
+    recordAgentDatabaseAdmissions(await evaluateAgentDatabaseAdmissions(cfg));
+  }
+  const summaries = await buildAgentSummaries(cfg);
+  const provenance = opts.tree ? await listAgentProvenance() : [];
   if (opts.json) {
+    const records = await readAgentProvenanceForDisplay(summaries.map((summary) => summary.id));
+    const recordsById = new Map(records.map((record) => [record.agentId, record]));
     for (const summary of summaries) {
-      const record = readAgentProvenance(summary.id);
+      const record = recordsById.get(summary.id);
       if (record) {
         summary.createdVia = record.createdVia;
         summary.creatorAgentId = record.creatorAgentId;
@@ -160,11 +166,7 @@ export async function agentsListCommand(
     }
   }
 
-  // Provider details are only used for human text output
-  // (`summary.providers` is rendered in the text formatter). JSON callers
-  // (dashboards, monitors, IDE plugins) poll the config/state-derived fields, so
-  // skip the provider detail pass unless they explicitly ask for enrichment.
-  // This keeps JSON and tree output off the bundled plugin runtime path.
+  // JSON and tree queries avoid plugin runtime unless --bindings requests provider enrichment.
   const includeProviderDetails = (!opts.json && !opts.tree) || opts.bindings === true;
   const providerStatus = includeProviderDetails ? await buildProviderStatusIndex(cfg) : null;
   const providerMetadata = includeProviderDetails ? buildProviderSummaryMetadataIndex(cfg) : null;

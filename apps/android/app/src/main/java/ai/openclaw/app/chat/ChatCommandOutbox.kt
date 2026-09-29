@@ -658,13 +658,12 @@ class RoomChatCommandOutbox internal constructor(
       rows.map { row ->
         val scope = row.branchScope()
         ensureBranchScopeLocked(gateway, scope)
-        ensureDeliveryStateLocked(row.id, gateway, scope)
+        val branch = ensureDeliveryStateLocked(row, scope)
         val delivery = checkNotNull(readDeliveryStateLocked(row.id))
-        val branch = checkNotNull(readBranchStateLocked(gateway, scope))
         row.toItem(
           attachments = attachmentsByCommand[row.id].orEmpty(),
           deliveryState = delivery,
-          scopeBranchEpoch = branch.epoch,
+          scopeBranchEpoch = checkNotNull(branch).epoch,
         )
       }
     }
@@ -846,7 +845,7 @@ class RoomChatCommandOutbox internal constructor(
     database.withWriteTransaction {
       ensureBranchStorageLocked()
       val dao = database.outboxDao()
-      val row = dao.allCommands().firstOrNull { it.id == id } ?: return@withWriteTransaction 0
+      val row = dao.command(id) ?: return@withWriteTransaction 0
       val delivery = readDeliveryStateLocked(id) ?: return@withWriteTransaction 0
       if (delivery.attemptVersion != expectedAttemptVersion) return@withWriteTransaction 0
       val scope = row.branchScope()
@@ -879,7 +878,7 @@ class RoomChatCommandOutbox internal constructor(
           ?: throw IllegalStateException("cannot pin an ownerless outbox row")
       val previousScope = row.branchScope()
       ensureBranchScopeLocked(row.gatewayId, previousScope)
-      ensureDeliveryStateLocked(id, row.gatewayId, previousScope)
+      ensureDeliveryStateLocked(row, previousScope)
       val delivery = checkNotNull(readDeliveryStateLocked(id))
       val nextScope = ChatOutboxScope(key, owner)
       ensureBranchScopeLocked(row.gatewayId, nextScope)
@@ -1227,7 +1226,7 @@ class RoomChatCommandOutbox internal constructor(
       for (row in sendingRows) {
         val scope = row.branchScope()
         ensureBranchScopeLocked(row.gatewayId, scope)
-        ensureDeliveryStateLocked(row.id, row.gatewayId, scope)
+        ensureDeliveryStateLocked(row, scope)
       }
       usePrepared(
         "UPDATE outbox_delivery_state SET hadUnacknowledgedSend = 1 WHERE commandId IN " +
@@ -1321,27 +1320,24 @@ class RoomChatCommandOutbox internal constructor(
   }
 
   private suspend fun PooledConnection.ensureDeliveryStateLocked(
-    commandId: String,
-    gatewayId: String,
+    command: OutboxCommandEntity,
     scope: ChatOutboxScope,
-  ) {
-    val branchEpoch = readBranchStateLocked(gatewayId, scope)?.epoch ?: 0
-    val command = database.outboxDao().command(id = commandId)
+  ): ChatOutboxBranchState? {
+    val branch = readBranchStateLocked(command.gatewayId, scope)
     val hadUnacknowledgedSend =
-      command?.let { row ->
-        ChatOutboxStatus.fromDb(row.status) == ChatOutboxStatus.Failed &&
-          chatOutboxDisplayError(row.lastError) == OUTBOX_DELIVERY_UNCONFIRMED_ERROR
-      } == true
+      ChatOutboxStatus.fromDb(command.status) == ChatOutboxStatus.Failed &&
+        chatOutboxDisplayError(command.lastError) == OUTBOX_DELIVERY_UNCONFIRMED_ERROR
     usePrepared(
       "INSERT OR IGNORE INTO outbox_delivery_state(" +
         "commandId, attemptVersion, branchEpoch, parkedWasAccepted, hadUnacknowledgedSend" +
         ") VALUES (?, 1, ?, 0, ?)",
     ) { statement ->
-      statement.bindText(1, commandId)
-      statement.bindInt(2, branchEpoch)
+      statement.bindText(1, command.id)
+      statement.bindInt(2, branch?.epoch ?: 0)
       statement.bindBoolean(3, hadUnacknowledgedSend)
       statement.step()
     }
+    return branch
   }
 
   private suspend fun PooledConnection.insertDeliveryStateLocked(

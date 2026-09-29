@@ -25,7 +25,7 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
     loading: false,
     refreshDisabled: false,
-    status: { error: null, hasLoaded: false, stale: false },
+    status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     file: null,
     entries: [
       {
@@ -82,11 +82,49 @@ async function useTestPortugueseLogsLabels() {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   i18n.registerTranslation("pt-BR", pt_BR);
   await i18n.setLocale("en");
 });
 
 describe("renderLogs", () => {
+  it("bounds time formatting setup per render while preserving localized timestamps", async () => {
+    const container = document.createElement("div");
+    const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
+    const props = createProps({
+      status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+      entries: [...validTimes, "not a timestamp", "", null, undefined].map((time) => ({
+        time,
+        raw: "log entry",
+      })),
+    });
+    const timeCalls = vi.spyOn(Date.prototype, "toLocaleTimeString");
+    const formatterSetups = vi.spyOn(Intl, "DateTimeFormat");
+
+    for (const locale of ["en", "fr", "en"] as const) {
+      await i18n.setLocale(locale);
+      const expected = [
+        ...validTimes.map((time) =>
+          new Date(time).toLocaleTimeString(locale, { timeStyle: "short" }),
+        ),
+        "not a timestamp",
+        "",
+        "",
+        "",
+      ];
+      timeCalls.mockClear();
+      formatterSetups.mockClear();
+      render(renderLogs(props), container);
+      expect(Array.from(container.querySelectorAll(".log-time"), (row) => row.textContent)).toEqual(
+        expected,
+      );
+      // Native toLocaleTimeString prepares its formatter internally too.
+      expect(timeCalls.mock.calls.length + formatterSetups.mock.calls.length).toBeLessThanOrEqual(
+        1,
+      );
+    }
+  });
+
   it("does not claim the log is empty before the initial load completes", () => {
     const container = document.createElement("div");
 
@@ -112,7 +150,12 @@ describe("renderLogs", () => {
       renderLogs(
         createProps({
           refreshDisabled: true,
-          status: { error: "logs unavailable", hasLoaded: false, stale: false },
+          status: {
+            error: "logs unavailable",
+            hasLoaded: false,
+            stale: false,
+            awaitingGateway: false,
+          },
         }),
       ),
       container,
@@ -121,9 +164,7 @@ describe("renderLogs", () => {
     expect(
       container.querySelector<HTMLButtonElement>(".settings-section__actions .btn")?.disabled,
     ).toBe(true);
-    expect(
-      container.querySelector<HTMLButtonElement>(".logs-refresh-status button")?.disabled,
-    ).toBe(true);
+    expect(container.querySelector(".logs-refresh-status button")).toBeNull();
   });
 
   it("renders the subtitle under the section header", () => {
@@ -156,15 +197,18 @@ describe("renderLogs", () => {
     },
   );
 
-  it("renders a panel-local retry and stale marker without hiding loaded logs", () => {
-    const onRefresh = vi.fn();
+  it("renders the error and stale marker without a retry button or hiding loaded logs", () => {
     const container = document.createElement("div");
 
     render(
       renderLogs(
         createProps({
-          status: { error: "logs unavailable", hasLoaded: true, stale: true },
-          onRefresh,
+          status: {
+            error: "logs unavailable",
+            hasLoaded: true,
+            stale: true,
+            awaitingGateway: false,
+          },
         }),
       ),
       container,
@@ -174,7 +218,6 @@ describe("renderLogs", () => {
     expect(status?.textContent).toContain("logs unavailable");
     expect(status?.textContent).toContain("Showing stale data");
     expect(container.textContent).toContain("matched line");
-    status?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(status?.querySelector("button")).toBeNull();
   });
 });

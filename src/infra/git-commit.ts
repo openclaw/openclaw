@@ -1,29 +1,17 @@
 // Resolves git commit metadata for build/runtime diagnostics.
-import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isMissingPathError } from "./errors.js";
-import { readFileWindowFullySync } from "./file-read.js";
-import { resolveGitHeadPath } from "./git-root.js";
+import { readGitHead, readGitMetadataPrefix } from "./git-root.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 const formatCommit = (value?: string | null) => {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const match = trimmed.match(/[0-9a-fA-F]{7,40}/);
-  if (!match) {
-    return null;
-  }
-  return normalizeLowercaseStringOrEmpty(match[0].slice(0, 7));
+  const match = value?.match(/[0-9a-fA-F]{7,40}/);
+  return match ? normalizeLowercaseStringOrEmpty(match[0].slice(0, 7)) : null;
 };
 
 export function gitCommitPrefixesMatch(left: string, right: string): boolean {
@@ -60,18 +48,6 @@ const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) =
   return process.cwd();
 };
 
-/** Read at most `limit` bytes from a file to avoid unbounded reads. */
-const safeReadFilePrefix = (filePath: string, limit = 256) => {
-  const fd = fs.openSync(filePath, "r");
-  try {
-    const buf = Buffer.alloc(limit);
-    const bytesRead = readFileWindowFullySync(fd, buf, 0);
-    return buf.subarray(0, bytesRead).toString("utf-8");
-  } finally {
-    fs.closeSync(fd);
-  }
-};
-
 const cacheGitCommit = (searchDir: string, commit: string | null) => {
   cachedGitCommitBySearchDir.set(searchDir, commit);
   pruneMapToMaxSize(cachedGitCommitBySearchDir, GIT_COMMIT_CACHE_LIMIT);
@@ -93,90 +69,10 @@ const readCommitFromGit = (
   searchDir: string,
   packageRoot: string | null,
 ): string | null | undefined => {
-  const headPath = resolveGitHeadPath(searchDir, {
+  const head = readGitHead(searchDir, {
     maxDepth: resolveGitLookupDepth(searchDir, packageRoot),
   });
-  if (!headPath) {
-    return undefined;
-  }
-  const head = fs.readFileSync(headPath, "utf-8").trim();
-  if (!head) {
-    return null;
-  }
-  if (head.startsWith("ref:")) {
-    const ref = head.replace(/^ref:\s*/i, "").trim();
-    const refsBase = resolveGitRefsBase(headPath);
-    const refPath = resolveRefPath(refsBase, ref);
-    if (!refPath) {
-      return null;
-    }
-    try {
-      const refHash = safeReadFilePrefix(refPath).trim();
-      return formatCommit(refHash);
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-    }
-    return readCommitFromPackedRefs(refsBase, ref);
-  }
-  return formatCommit(head);
-};
-
-const resolveGitRefsBase = (headPath: string) => {
-  const gitDir = path.dirname(headPath);
-  try {
-    const commonDir = safeReadFilePrefix(path.join(gitDir, "commondir")).trim();
-    if (commonDir) {
-      return path.resolve(gitDir, commonDir);
-    }
-  } catch (error) {
-    if (!isMissingPathError(error)) {
-      throw error;
-    }
-    // Plain repo git dirs do not have commondir.
-  }
-  return gitDir;
-};
-
-const readCommitFromPackedRefs = (refsBase: string, ref: string) => {
-  try {
-    const packedRefs = fs.readFileSync(path.join(refsBase, "packed-refs"), "utf-8");
-    for (const line of packedRefs.split("\n")) {
-      if (!line || line.startsWith("#") || line.startsWith("^")) {
-        continue;
-      }
-      const [commit, packedRef] = line.trim().split(/\s+/, 2);
-      if (packedRef === ref) {
-        return formatCommit(commit);
-      }
-    }
-    return null;
-  } catch (error) {
-    if (!isMissingPathError(error)) {
-      throw error;
-    }
-    return null;
-  }
-};
-
-/** Safely resolve a git ref path, rejecting traversal attacks from a crafted HEAD file. */
-const resolveRefPath = (refsBase: string, ref: string) => {
-  if (!ref.startsWith("refs/")) {
-    return null;
-  }
-  if (path.isAbsolute(ref)) {
-    return null;
-  }
-  if (ref.split(/[/]/).includes("..")) {
-    return null;
-  }
-  const resolved = path.resolve(refsBase, ref);
-  const rel = path.relative(refsBase, resolved);
-  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
-    return null;
-  }
-  return resolved;
+  return head === undefined ? undefined : formatCommit(head.value);
 };
 
 const readCommitFromPackageJson = () => {
@@ -205,7 +101,7 @@ const readCommitProbe = (
       const filePath = fileURLToPath(new URL(candidate, moduleUrl));
       let raw: string;
       try {
-        raw = safeReadFilePrefix(filePath, 1024);
+        raw = readGitMetadataPrefix(filePath, 1024);
       } catch (error) {
         if (isMissingPathError(error)) {
           continue;

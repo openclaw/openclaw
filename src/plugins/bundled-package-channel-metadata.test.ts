@@ -6,6 +6,7 @@ import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/hel
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 vi.mock("./bundled-dir.js", () => ({
+  isPluginInPackageBundledRoots: vi.fn(() => false),
   resolveBundledPluginsDir: vi.fn(),
   resolveSourceCheckoutDependencyDiagnostic: vi.fn(() => null),
 }));

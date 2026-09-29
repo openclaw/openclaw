@@ -1,7 +1,6 @@
-/** Shared predicates and mutations for plugin host-owned session-state cleanup. */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../../sessions/session-key-utils.js";
 import type { SessionEntry } from "./types.js";
 
 /** Cleanup variants owned by plugin host lifecycle paths. */
@@ -20,7 +19,7 @@ export type PluginHostSessionCleanupStoreParams = {
   sessionEntrySlotKeys?: ReadonlySet<string>;
   /** Locked-harness ids whose sessions this cleanup must leave untouched. */
   preserveLockedHarnessIds?: ReadonlySet<string>;
-  /** Per-store file-backed transaction boundary. */
+  /** Per-store SQLite transaction boundary. */
   storePath: string;
   /** Cancels the cleanup before persistence when host lifecycle state changes. */
   shouldCleanup?: () => boolean;
@@ -116,28 +115,19 @@ export function clearPluginOwnedSessionState(
   sessionEntrySlotKeys?: ReadonlySet<string>,
 ): void {
   clearPromotedSessionEntrySlots(entry, pluginId, sessionEntrySlotKeys);
-  if (!pluginId) {
-    delete entry.pluginExtensions;
-    delete entry.pluginExtensionSlotKeys;
-    delete entry.pluginNextTurnInjections;
-    return;
-  }
-  if (entry.pluginExtensions) {
-    delete entry.pluginExtensions[pluginId];
-    if (Object.keys(entry.pluginExtensions).length === 0) {
-      delete entry.pluginExtensions;
-    }
-  }
-  if (entry.pluginExtensionSlotKeys) {
-    delete entry.pluginExtensionSlotKeys[pluginId];
-    if (Object.keys(entry.pluginExtensionSlotKeys).length === 0) {
-      delete entry.pluginExtensionSlotKeys;
-    }
-  }
-  if (entry.pluginNextTurnInjections) {
-    delete entry.pluginNextTurnInjections[pluginId];
-    if (Object.keys(entry.pluginNextTurnInjections).length === 0) {
-      delete entry.pluginNextTurnInjections;
+  for (const field of [
+    "pluginExtensions",
+    "pluginExtensionSlotKeys",
+    "pluginNextTurnInjections",
+  ] as const) {
+    const state = entry[field];
+    if (!pluginId) {
+      delete entry[field];
+    } else if (state) {
+      delete state[pluginId];
+      if (Object.keys(state).length === 0) {
+        delete entry[field];
+      }
     }
   }
 }
@@ -148,9 +138,6 @@ function hasPromotedSessionEntrySlot(
   sessionEntrySlotKeys?: ReadonlySet<string>,
 ): boolean {
   const slotKeys = collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
-  if (slotKeys.size === 0) {
-    return false;
-  }
   for (const slotKey of slotKeys) {
     if (Object.hasOwn(entry, slotKey)) {
       return true;
@@ -184,13 +171,14 @@ export function matchesPluginHostCleanupSession(
   entry: SessionEntry,
   sessionKey?: string,
 ): boolean {
-  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const normalizedSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   if (!normalizedSessionKey) {
     return true;
   }
+  // Only session keys have opaque peer spans; runtime IDs remain case-insensitive.
   return (
-    normalizeLowercaseStringOrEmpty(entryKey) === normalizedSessionKey ||
-    normalizeLowercaseStringOrEmpty(entry.sessionId) === normalizedSessionKey
+    normalizeSessionKeyPreservingOpaquePeerIds(entryKey) === normalizedSessionKey ||
+    entry.sessionId.trim().toLowerCase() === sessionKey?.trim().toLowerCase()
   );
 }
 

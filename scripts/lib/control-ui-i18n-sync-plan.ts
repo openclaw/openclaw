@@ -43,7 +43,15 @@ export type TranslationBatchItem = {
   key: string;
   text: string;
   textHash: string;
+  sourcePath?: string;
+  sourceContext?: string;
 };
+
+export function extractTranslationPlaceholders(text: string): string[] {
+  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
 
 export function flattenTranslations(
   value: TranslationMap,
@@ -67,12 +75,18 @@ export function createControlUiLocaleSyncPlan(input: {
   entry: LocaleEntry;
   existingFlat: ReadonlyMap<string, string>;
   force: boolean;
+  refreshKeys?: ReadonlySet<string>;
   hashText: (text: string) => string;
   previousMeta: LocaleMeta | null;
   sourceFlat: ReadonlyMap<string, string>;
   sourceHash: string;
   translationMemory: ReadonlyMap<string, TranslationMemoryEntry>;
 }) {
+  for (const key of input.refreshKeys ?? []) {
+    if (!input.sourceFlat.has(key)) {
+      throw new Error(`unknown refresh key: ${key}`);
+    }
+  }
   const previousFallbackKeys = new Set(input.previousMeta?.fallbackKeys ?? []);
   const translationMemory = new Map(input.translationMemory);
   const translationMemoryBySegment = new Map(
@@ -95,7 +109,7 @@ export function createControlUiLocaleSyncPlan(input: {
   for (const [key, text] of input.sourceFlat.entries()) {
     const textHash = input.hashText(text);
     const segmentCacheKey = input.cacheKeyFor(key, textHash);
-    if (input.force && input.allowTranslate) {
+    if ((input.force || input.refreshKeys?.has(key)) && input.allowTranslate) {
       pending.push({ cacheKey: segmentCacheKey, key, text, textHash });
       continue;
     }
@@ -110,6 +124,15 @@ export function createControlUiLocaleSyncPlan(input: {
 
     if (cached && shouldReuse) {
       nextFlat.set(key, cached.translated);
+      if (cached.segment_id !== key) {
+        // Retain reused aliases before a selected primary overwrites their grouped record.
+        const { segment_ids: _aliases, ...retained } = cached;
+        translationMemory.set(segmentCacheKey, {
+          ...retained,
+          cache_key: segmentCacheKey,
+          segment_id: key,
+        });
+      }
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);
       }
@@ -232,7 +255,7 @@ export function createControlUiLocaleSyncPlan(input: {
   };
 }
 
-export function compareStringArrays(left: string[], right: string[]): boolean {
+export function compareStringArrays(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 

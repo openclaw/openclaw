@@ -1,16 +1,65 @@
 // @vitest-environment node
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { describe, expect, it } from "vitest";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
+  isPinnableUiSessionRow,
+  normalizeSessionKeyForUiComparison,
+  parseAgentSessionKey,
   parseSessionKeyParts,
+  resolveAgentIdFromSessionKey,
   resolveUiSessionNavigationParentKey,
   resolveUiConversationIdentity,
   uiSessionEventMatches,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
+
+describe("Dashboard fixture session keys", () => {
+  it.each([
+    ["agent:main:main", "main", "main"],
+    ["agent:research:main:thread", "research", "main:thread"],
+    ["agent:main:telegram:direct:12345😀67890", "main", "telegram:direct:12345😀67890"],
+    [
+      "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+      "data-expert",
+      "dingtalk:cidzg6sF43NZMy52Rnk8EN",
+      "dingtalk:cidzg6sf43nzmy52rnk8en",
+    ],
+  ] as const)("retains ownership and tail for %s", (key, agentId, rest, uiRest?: string) => {
+    expect(parseAgentSessionKeyParts(key)).toEqual({ agentId, rest });
+    expect(parseAgentSessionKey(key)).toEqual({ agentId, rest: uiRest ?? rest });
+  });
+
+  it.each(["main", "catalog:claude:gateway%3Alocal:thread-1"])(
+    "keeps %s unscoped while retaining the UI owner fallback",
+    (key) => {
+      expect(parseAgentSessionKeyParts(key)).toBeNull();
+      expect(parseAgentSessionKey(key)).toBeNull();
+      expect(resolveAgentIdFromSessionKey(key)).toBe("main");
+    },
+  );
+
+  it.each([
+    ["agent:ops:room::part", { agentId: "ops", rest: "room::part" }, "ops", "room:part"],
+    ["agent:ops:main:", { agentId: "ops", rest: "main:" }, "ops", "main"],
+    ["agent:ops::cron:job", null, "ops", "cron:job"],
+    ["agent::cron:job", null, "cron", "job"],
+    [":agent:ops:main", null, "ops", "main"],
+    ["agent:ops: :", { agentId: "ops", rest: " :" }, "ops", " "],
+  ] as const)("preserves the display adapter's accepted shape %s", (key, raw, agentId, rest) => {
+    expect(parseAgentSessionKeyParts(key)).toEqual(raw);
+    expect(parseAgentSessionKey(key)).toEqual({ agentId, rest });
+    expect(resolveAgentIdFromSessionKey(key)).toBe(agentId);
+  });
+
+  it("retains the UI fallback for a malformed owner", () => {
+    expect(parseAgentSessionKey("agent::secret")).toBeNull();
+    expect(resolveAgentIdFromSessionKey("agent::secret")).toBe("main");
+  });
+});
 
 describe("session archive eligibility", () => {
   it.each([
@@ -60,10 +109,8 @@ describe("parseSessionKeyParts", () => {
   });
 
   it.each([
-    "global:default",
     "direct:some-key",
     "",
-    "agent:",
     "agent:main",
     "agent:main:",
     "agent:main:telegram",
@@ -74,6 +121,23 @@ describe("parseSessionKeyParts", () => {
 });
 
 describe("UI session identity", () => {
+  it.each([
+    [
+      "Agent:Ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
+      "agent:ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
+    ],
+    ["agent:ops:other:signal:group:AbC", "agent:ops:other:signal:group:abc"],
+    ["agent:ops:signal:group:AbC:signal:group:DeF", "agent:ops:signal:group:AbC:signal:group:def"],
+    [":Matrix:Channel:!Room:Org", ":matrix:channel:!Room:Org"],
+    ["agent:ops: :Matrix:Channel:!Room:Org", "agent:ops: :matrix:channel:!Room:Org"],
+    [
+      "agent:ops:matrix:channel: !Room:Org :thread:$Event",
+      "agent:ops:matrix:channel: !Room:Org :thread:$Event",
+    ],
+  ])("retains UI comparison normalization for %s", (key, expected) => {
+    expect(normalizeSessionKeyForUiComparison(key)).toBe(expected);
+  });
+
   it.each([
     {
       name: "native catalog source IDs",
@@ -144,11 +208,16 @@ describe("UI session identity", () => {
     ["main", { defaultId: "work", mainKey: "home" }, "agent:work:home", "work"],
     ["main", { defaultId: "ops", mainKey: "next" }, "agent:ops:next", "ops"],
     ["main", { defaultId: "ops", mainKey: "home", scope: "global" }, "global", "ops"],
+    ["main", undefined, "agent:work:home", "work", "work"],
+    ["home", undefined, "agent:work:home", "work", "work"],
+    ["main", { defaultId: "ops", mainKey: "home", scope: "global" }, "global", "work", "work"],
+    ["agent:ops:main", undefined, "agent:ops:current", "ops", "work"],
   ] as const)(
     "uses advertised main identity for %s without overriding current roster %j",
-    (key, agentsList, sessionKey, agentId) => {
+    (key, agentsList, sessionKey, agentId, agentIdOverride?: string) => {
       const host = {
         agentsList,
+        assistantAgentId: agentId,
         hello: {
           snapshot: {
             sessionDefaults: {
@@ -159,7 +228,10 @@ describe("UI session identity", () => {
           },
         },
       };
-      expect(resolveUiConversationIdentity(host, key)).toEqual({ sessionKey, agentId });
+      expect(resolveUiConversationIdentity(host, key, agentIdOverride)).toEqual({
+        sessionKey,
+        agentId,
+      });
       expect(uiSessionEventMatches({ ...host, sessionKey }, key, agentId)).toBe(true);
       expect(uiSessionEventMatches({ ...host, sessionKey }, key, "unrelated")).toBe(false);
     },
@@ -172,13 +244,8 @@ describe("UI session identity", () => {
       expected: "agent:main:dashboard:navigation-parent",
     },
     {
-      parentSessionKey: "",
-      spawnedBy: "  agent:main:controller  ",
-      expected: "agent:main:controller",
-    },
-    {
       parentSessionKey: "  \t  ",
-      spawnedBy: "agent:main:controller",
+      spawnedBy: "  agent:main:controller  ",
       expected: "agent:main:controller",
     },
     { parentSessionKey: null, spawnedBy: "  ", expected: undefined },
@@ -225,5 +292,29 @@ describe("canonical host-scoped event and row matching", () => {
     };
     expect(uiSessionRowMatchesSelectedChat(custom, "main", custom.sessionKey)).toBe(true);
     expect(uiSessionRowMatchesSelectedChat(custom, "global", custom.sessionKey)).toBe(false);
+  });
+});
+
+describe("session pin eligibility", () => {
+  it.each([
+    [{ key: "agent:main:dashboard:ordinary" }, true],
+    [{ key: "agent:main:dashboard:ordinary", parentSessionKey: "agent:main:main" }, true],
+    [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:other:main" }, true],
+    [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:main:main" }, false],
+    [
+      { key: "agent:main:dashboard:nested", parentSessionKey: "agent:main:dashboard:parent" },
+      false,
+    ],
+    [
+      {
+        key: "agent:main:dashboard:spawned",
+        parentSessionKey: "agent:main:main",
+        spawnedBy: "agent:main:main",
+      },
+      false,
+    ],
+    [{ key: "agent:main:subagent:spawned", parentSessionKey: "agent:main:main" }, false],
+  ])("projects pin eligibility for %j", (row, expected) => {
+    expect(isPinnableUiSessionRow(row)).toBe(expected);
   });
 });

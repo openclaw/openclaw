@@ -9,10 +9,15 @@ type DraftSessionStartupIntent = {
   startedAt: number;
   deadline: number;
   interrupted: boolean;
+  background: boolean;
 };
 
 /** A creation attempt the submission flow resumes after reconnecting. */
-export type DraftStartupResumption = { params: SessionCreateParams; startedAt: number };
+export type DraftStartupResumption = {
+  params: SessionCreateParams;
+  startedAt: number;
+  background: boolean;
+};
 
 type DraftSessionStartupResume =
   | { kind: "wait" | "expired" | "owner-changed" }
@@ -29,7 +34,7 @@ export class DraftSessionStartup {
     return this.pending !== null;
   }
 
-  start(params: SessionCreateParams): SessionCreateParams {
+  start(params: SessionCreateParams, background = false): SessionCreateParams {
     const scope = this.gateway.sessionCreateScope;
     if (!scope) {
       return params;
@@ -42,6 +47,7 @@ export class DraftSessionStartup {
         startedAt,
         deadline: startedAt + SESSION_CREATE_RETRY_WINDOW_MS,
         interrupted: false,
+        background,
       };
     }
     return this.pending.params;
@@ -84,7 +90,12 @@ export class DraftSessionStartup {
       return { kind: "wait" };
     }
     this.pending.interrupted = false;
-    return { kind: "resume", params: this.pending.params, startedAt: this.pending.startedAt };
+    return {
+      kind: "resume",
+      params: this.pending.params,
+      startedAt: this.pending.startedAt,
+      background: this.pending.background,
+    };
   }
 
   private matchesGateway(): boolean {

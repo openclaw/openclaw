@@ -113,7 +113,6 @@ export async function startHotReloadUpstreams(mockBaseUrl: string) {
   const githubRequests: number[] = [];
   const relayRequests: Array<{ route: string; signed: boolean }> = [];
   let faviconRequests = 0;
-  let toolTitleRequests = 0;
   let relayDelayMs = 0;
   const server = createServer((req, res) => {
     void (async () => {
@@ -177,27 +176,18 @@ export async function startHotReloadUpstreams(mockBaseUrl: string) {
       for await (const chunk of req) {
         chunks.push(Buffer.from(chunk));
       }
-      let body = Buffer.concat(chunks).toString("utf8");
-      if (body.includes("HOT_RELOAD_TOOL_TITLE")) {
-        toolTitleRequests += 1;
-        const request = JSON.parse(body) as Record<string, unknown>;
-        request.input = [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: 'Reply exactly `{"titles":{"0":"Reviewed project notes"}}`',
-              },
-            ],
-          },
-        ];
-        delete request.instructions;
-        body = JSON.stringify(request);
-      }
+      const body = Buffer.concat(chunks).toString("utf8");
       const upstream = await fetch(`${mockBaseUrl}${url.pathname}${url.search}`, {
         method: req.method,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(typeof req.headers.session_id === "string"
+            ? { session_id: req.headers.session_id }
+            : {}),
+          ...(typeof req.headers["x-session-affinity"] === "string"
+            ? { "x-session-affinity": req.headers["x-session-affinity"] }
+            : {}),
+        },
         ...(body ? { body } : {}),
       });
       res.statusCode = upstream.status;
@@ -221,9 +211,6 @@ export async function startHotReloadUpstreams(mockBaseUrl: string) {
     relayRequests,
     get faviconRequests() {
       return faviconRequests;
-    },
-    get toolTitleRequests() {
-      return toolTitleRequests;
     },
     setRelayDelay(ms: number) {
       relayDelayMs = ms;

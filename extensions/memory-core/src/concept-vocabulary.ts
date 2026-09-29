@@ -1,4 +1,3 @@
-// Memory Core plugin module implements concept vocabulary behavior.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -374,18 +373,9 @@ const GLOSSARY_ENTRIES = PROTECTED_GLOSSARY.map((entry) => ({
 
 function collectGlossaryMatches(source: string): string[] {
   const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
-  const matches: string[] = [];
-  for (const { entry, wholeWord } of GLOSSARY_ENTRIES) {
-    const present = wholeWord ? wholeWord.test(normalizedSource) : normalizedSource.includes(entry);
-    if (present) {
-      matches.push(entry);
-    }
-  }
-  return matches;
-}
-
-function collectCompoundTokens(source: string): string[] {
-  return source.match(COMPOUND_TOKEN_RE) ?? [];
+  return GLOSSARY_ENTRIES.filter(({ entry, wholeWord }) =>
+    wholeWord ? wholeWord.test(normalizedSource) : normalizedSource.includes(entry),
+  ).map(({ entry }) => entry);
 }
 
 function collectSegmentTokens(source: string): string[] {
@@ -416,7 +406,7 @@ export function deriveConceptTags(params: {
   const tags: string[] = [];
   const tokenSources = [
     collectGlossaryMatches(source),
-    collectCompoundTokens(source),
+    source.match(COMPOUND_TOKEN_RE) ?? [],
     collectSegmentTokens(source),
   ];
   for (const tokens of tokenSources) {
@@ -445,35 +435,8 @@ export function summarizeConceptTagScriptCoverage(
   };
 
   for (const conceptTags of conceptTagsByEntry) {
-    let hasLatin = false;
-    let hasCjk = false;
-    let hasOther = false;
-    for (const tag of conceptTags) {
-      const family = classifyConceptTagScript(tag);
-      if (family === "mixed") {
-        hasLatin = true;
-        hasCjk = true;
-        continue;
-      }
-      if (family === "latin") {
-        hasLatin = true;
-        continue;
-      }
-      if (family === "cjk") {
-        hasCjk = true;
-        continue;
-      }
-      hasOther = true;
-    }
-
-    if (hasLatin && hasCjk) {
-      coverage.mixedEntryCount += 1;
-    } else if (hasCjk) {
-      coverage.cjkEntryCount += 1;
-    } else if (hasLatin) {
-      coverage.latinEntryCount += 1;
-    } else if (hasOther) {
-      coverage.otherEntryCount += 1;
+    if (conceptTags.length > 0) {
+      coverage[`${classifyConceptTagScript(conceptTags.join(" "))}EntryCount`] += 1;
     }
   }
 

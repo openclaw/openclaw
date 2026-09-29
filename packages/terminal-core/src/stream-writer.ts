@@ -10,8 +10,6 @@ export type SafeStreamWriterOptions = {
 export type SafeStreamWriter = {
   write: (stream: NodeJS.WriteStream, text: string) => boolean;
   writeLine: (stream: NodeJS.WriteStream, text: string) => boolean;
-  reset: () => void;
-  isClosed: () => boolean;
 };
 
 /** Detect broken pipe style stream errors. */
@@ -23,22 +21,15 @@ function isBrokenPipeError(err: unknown): err is NodeJS.ErrnoException {
 /** Create a stream writer that stops writing after EPIPE/EIO. */
 export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): SafeStreamWriter {
   let closed = false;
-  let notified = false;
-
-  const noteBrokenPipe = (err: NodeJS.ErrnoException, stream: NodeJS.WriteStream) => {
-    if (notified) {
-      return;
-    }
-    notified = true;
-    options.onBrokenPipe?.(err, stream);
-  };
 
   const handleError = (err: unknown, stream: NodeJS.WriteStream): boolean => {
     if (!isBrokenPipeError(err)) {
       throw err;
     }
-    closed = true;
-    noteBrokenPipe(err, stream);
+    if (!closed) {
+      closed = true;
+      options.onBrokenPipe?.(err, stream);
+    }
     return false;
   };
 
@@ -59,16 +50,8 @@ export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): S
     }
   };
 
-  const writeLine = (stream: NodeJS.WriteStream, text: string): boolean =>
-    write(stream, `${text}\n`);
-
   return {
     write,
-    writeLine,
-    reset: () => {
-      closed = false;
-      notified = false;
-    },
-    isClosed: () => closed,
+    writeLine: (stream, text) => write(stream, `${text}\n`),
   };
 }

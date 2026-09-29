@@ -63,9 +63,11 @@ async function startAuthenticatedCdpServer(params: {
     sockets,
     authorizations,
     close: async () => {
-      server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       });
     },
   };
@@ -170,10 +172,22 @@ describe("browser CDP authenticated HTTP transport", () => {
     }
   });
 
-  it("preserves authenticated, fully consumed CDP JSON responses", async () => {
+  it.each<{ label: string; headers?: HeadersInit }>([
+    { label: "URL credentials" },
+    { label: "record headers", headers: { Authorization: EXPECTED_AUTHORIZATION } },
+    {
+      label: "Headers objects",
+      headers: new Headers({ Authorization: EXPECTED_AUTHORIZATION }),
+    },
+    { label: "tuple headers", headers: [["Authorization", EXPECTED_AUTHORIZATION]] },
+  ])("preserves authenticated CDP JSON responses with $label", async ({ headers }) => {
     const server = await startAuthenticatedCdpServer({ status: 200, streaming: false });
     try {
-      await expect(fetchJson(server.url, 1_000)).resolves.toEqual({
+      const url = new URL(server.url);
+      if (headers) {
+        url.password = "wrong-url-credential";
+      }
+      await expect(fetchJson(url.toString(), 1_000, { headers })).resolves.toEqual({
         Browser: "OpenClaw transport fixture",
       });
 

@@ -70,6 +70,7 @@ describe("managed worktree protocol schemas", () => {
         defaultBranch: "main",
         headBranch: "feature",
         repositoryStatus: "git",
+        branchesUnavailable: true,
       }),
     ).toBe(true);
     expect(

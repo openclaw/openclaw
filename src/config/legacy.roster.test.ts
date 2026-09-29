@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { configIncludeOwnsAgentRoster } from "./agent-roster-provenance.js";
 import { createConfigIO, readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
@@ -92,12 +94,14 @@ describe("persisted implicit-main roster migration", () => {
           path: ["agents", "entries"],
           kind: "single",
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPath: path.join(configDir, "entries.json"),
         },
         {
           path: [],
           kind: "single",
           hasSiblingOverrides: true,
+          hasArrayAncestor: false,
           targetPath: path.join(configDir, "base.json"),
         },
       ]);
@@ -281,40 +285,46 @@ describe("persisted implicit-main roster migration", () => {
           plugins: { enabled: false },
         };
         await fs.writeFile(configPath, JSON.stringify(raw));
-        const io = createConfigIO({
-          configPath,
-          env: source === "env" ? { HOME: selectedHome } : {},
-          homedir: () => selectedHome,
-          observe: false,
-          pluginValidation: "core-only",
-        });
-        const snapshot = await io.readConfigFileSnapshot();
-        const workspace = path.join(selectedHome, ".openclaw", "workspace");
-        expect(snapshot.sourceConfig.agents?.entries?.first?.workspace).toBe(
-          marked ? undefined : workspace,
-        );
-        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(raw);
-        const next = structuredClone(snapshot.sourceConfig);
-        next.agents = {
-          ...next.agents,
-          ownership: "explicit",
-          entries: {
-            ...next.agents?.entries,
-            first: { ...next.agents?.entries?.first, name: "first-updated" },
-          },
-        };
-        await io.writeConfigFile(next, {
-          skipPluginValidation: true,
-          explicitSetPaths: [
-            ["agents", "entries"],
-            ["agents", "ownership"],
-          ],
-        });
-        const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
-        expect(saved.agents.entries.first.workspace).toBe(workspace);
-        expect(
-          (await io.readConfigFileSnapshot()).sourceConfig.agents?.entries?.first?.workspace,
-        ).toBe(workspace);
+        try {
+          const io = createConfigIO({
+            configPath,
+            env: source === "env" ? { HOME: selectedHome } : {},
+            homedir: () => selectedHome,
+            observe: false,
+            pluginValidation: "core-only",
+          });
+          const snapshot = await io.readConfigFileSnapshot();
+          const workspace = path.join(selectedHome, ".openclaw", "workspace");
+          expect(snapshot.sourceConfig.agents?.entries?.first?.workspace).toBe(
+            marked ? undefined : workspace,
+          );
+          expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(raw);
+          const next = structuredClone(snapshot.sourceConfig);
+          next.agents = {
+            ...next.agents,
+            ownership: "explicit",
+            entries: {
+              ...next.agents?.entries,
+              first: { ...next.agents?.entries?.first, name: "first-updated" },
+            },
+          };
+          await io.writeConfigFile(next, {
+            skipPluginValidation: true,
+            explicitSetPaths: [
+              ["agents", "entries"],
+              ["agents", "ownership"],
+            ],
+          });
+          const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+          expect(saved.agents.entries.first.workspace).toBe(workspace);
+          expect(
+            (await io.readConfigFileSnapshot()).sourceConfig.agents?.entries?.first?.workspace,
+          ).toBe(workspace);
+        } finally {
+          await closeOpenClawStateDatabaseByPathAsync(
+            resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.dirname(configPath) }),
+          );
+        }
       });
     },
   );

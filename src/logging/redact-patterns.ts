@@ -7,6 +7,8 @@ import {
   HTTP_AUTH_SCHEME_PATTERN,
   HTTP_AUTH_SERIALIZED_QUOTE_PATTERN,
 } from "../../packages/acp-core/src/structured-auth-redaction.js";
+import type { RedactMatch, RedactPattern } from "./redact-pattern-runtime.js";
+import { PEM_REDACT_PATTERN_SOURCE } from "./redact-pem.js";
 
 export const PAYMENT_CREDENTIAL_ENV_KEYS = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN`;
 export const PAYMENT_CREDENTIAL_QUERY_KEYS = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`;
@@ -16,6 +18,10 @@ const AUTH_QUERY_KEYS = String.raw`access[-_]?token|auth[-_]?token|hook[-_]?toke
 const FORM_BODY_FIRST_PAIR_KEYS = String.raw`${AUTH_QUERY_KEYS}|app[-_]?secret|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const STANDALONE_ASSIGNMENT_SECRET_KEYS = String.raw`access_token|refresh_token|id_token|auth[-_]?token|hook[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|private[-_]?key|authorization|jwt|token|secret|password|pass|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const CONFIG_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
+// Bare `pass` is ordinary prose far more often than a key ("tests now pass: older clients"), so the
+// generic unquoted colon form skips it; BARE_PASS_ASSIGNMENT_MATCHER keeps config-shaped `pass:` masked, and
+// `pass=`, `pass = `, namespaced, prefixed, and quoted forms are unchanged.
+const CONFIG_COLON_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|client[-_]?secret|app[-_]?secret|private[-_]?key|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|passwd|credential|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS = String.raw`access-token|refresh-token|id-token|auth-token|hook-token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|passphrase`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS = String.raw`password|passphrase|pass|passwd`;
 const CLI_SECRET_FLAG_KEYS = String.raw`${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
@@ -64,11 +70,11 @@ const ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRE
 const ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`;
 // Quoted values may contain the other quote characters; only the matching closing quote ends
 // the value. The unquoted variant accepts one leading quote so unterminated values still mask.
-const STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN = String.raw`(^|[\s,;({\[])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`;
-const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;({\[])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60]?[^\s&#"'\x60<>]+)`;
+const STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN = String.raw`(^|[\s,;({\["])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`;
+const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;({\["])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60]?[^\s&#"'\x60<>]+)`;
 const CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`;
-const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=\s+)([^\s#"'\x60<>]+)/g`;
+const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*|(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`;
 const CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS})=([^\s#"'\x60<>]+)/g`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
 const CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
@@ -79,14 +85,279 @@ const AMBIGUOUS_QUOTED_AUTH_FIELD_REDACT_PATTERN = String.raw`(^|[\s,{])["']?(?:
 // Pure-base64 prefixes require a non-alphanumeric boundary and skip explicit data-URL payloads.
 export const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
 export const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
-const AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY = String.raw`(^|[^A-Za-z0-9/+=_])(?<!;base64,[A-Za-z0-9+/=]*)`;
-export const AWS_SECRET_ACCESS_KEY_VALUE_PATTERN = String.raw`(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}`;
-const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = String.raw`/${AWS_SECRET_ACCESS_KEY_VALUE_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})(?!_)/g`;
+
+function isAwsValueCharacter(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    (code >= 48 && code <= 57) ||
+    char === "/" ||
+    char === "+" ||
+    char === "="
+  );
+}
+
+const AWS_SECRET_ACCESS_KEY_VALUE_RE =
+  /(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[G-Zg-z/+=])[A-Za-z0-9/+=]{40}/u;
+const AWS_SECRET_ACCESS_KEY_RUN_RE = /[A-Za-z0-9/+=]{40}/u;
+
+function couldMatchAwsSecretAccessKey(text: string): boolean {
+  // Reject short word runs before the value rule retries its lookaheads at every character.
+  return (
+    text.length >= 40 &&
+    AWS_SECRET_ACCESS_KEY_RUN_RE.test(text) &&
+    AWS_SECRET_ACCESS_KEY_VALUE_RE.test(text)
+  );
+}
+
+const AWS_VALUE_WHITESPACE_RE = /\s/;
+const AWS_URL_SCHEME_CHARACTER_RE = /[A-Za-z0-9+.-]/;
+const AWS_URL_SCHEME_START_RE = /[A-Za-z]/;
+
+function* matchAwsSecretAccessKeys(text: string): Iterable<RedactMatch> {
+  if (!couldMatchAwsSecretAccessKey(text)) {
+    return;
+  }
+  type UrlContext = {
+    start: number;
+    end: number;
+    authorityEnd: number;
+    portStart: number;
+    portValid: boolean;
+    hasAt: boolean;
+    queryOrFragment: boolean;
+    closing: string | undefined;
+    closingEscapeDepth: number;
+  };
+  const closingDelimiters: Readonly<Record<string, string>> = {
+    '"': '"',
+    "'": "'",
+    "`": "`",
+    "<": ">",
+    "(": ")",
+    "[": "]",
+    "{": "}",
+  };
+  let runStart = -1;
+  let schemeStart = -1;
+  let url: UrlContext | undefined;
+  let backslashes = 0;
+  const runs: Array<{ start: number; end: number; origin: number; url: UrlContext | undefined }> =
+    [];
+  for (let index = 0; index <= text.length; index++) {
+    const char = text[index] ?? "";
+    const whitespace = index === text.length || AWS_VALUE_WHITESPACE_RE.test(char);
+    const escapeDepth = backslashes;
+    backslashes = char === "\\" ? backslashes + 1 : 0;
+    if (char && isAwsValueCharacter(char)) {
+      if (runStart === -1) {
+        runStart = index;
+      }
+    } else if (runStart !== -1) {
+      if (index - runStart === 40) {
+        runs.push({ start: runStart, end: index, origin: runStart, url });
+      } else if (index - runStart > 40 && char === "@" && text[index - 41] === "/") {
+        runs.push({ start: index - 40, end: index, origin: runStart, url });
+      }
+      runStart = -1;
+    }
+    if (whitespace) {
+      if (url) {
+        url.end = Math.min(url.end, index);
+      }
+      for (const run of runs) {
+        const context = run.url;
+        const publicUrl =
+          context &&
+          !context.hasAt &&
+          context.portValid &&
+          (context.portStart === -1 ||
+            (context.authorityEnd === -1 ? context.end : context.authorityEnd) >
+              context.portStart + 1);
+        const before = text[run.start - 1] ?? "";
+        const after = text[run.end] ?? "";
+        const slashCredential = run.start !== run.origin;
+        // Preserve the existing malformed credential spanning a numeric port and path.
+        // Its terminal @ qualifies that whole run, not userinfo in the URL's path.
+        const portCredential =
+          context &&
+          context.portStart !== -1 &&
+          run.origin === context.portStart + 1 &&
+          context.authorityEnd > run.origin &&
+          run.end > context.authorityEnd &&
+          after === "@";
+        if (
+          (!slashCredential && (before === "_" || isAwsValueCharacter(before))) ||
+          after === "_" ||
+          text.slice(run.origin - 8, run.origin) === ";base64," ||
+          (publicUrl && !portCredential && run.start >= context.start && run.end <= context.end)
+        ) {
+          continue;
+        }
+        const match = text.slice(run.start, run.end);
+        if (AWS_SECRET_ACCESS_KEY_VALUE_RE.test(match)) {
+          yield { match, groups: [match], input: text, offset: run.start };
+        }
+      }
+      runs.length = 0;
+      schemeStart = -1;
+      url = undefined;
+      continue;
+    }
+    if (url && index >= url.start) {
+      // A quoted/marked value ends independently of punctuation inside raw userinfo.
+      if (char === url.closing && escapeDepth === url.closingEscapeDepth) {
+        url.end = Math.min(url.end, index);
+        url = undefined;
+      } else {
+        if ("?#\"'<>`|()[]{}".includes(char)) {
+          url.end = Math.min(url.end, index);
+        }
+        url.queryOrFragment ||= char === "?" || char === "#";
+        if (url.authorityEnd === -1) {
+          url.hasAt ||= char === "@";
+          if ("/?#".includes(char)) {
+            url.authorityEnd = index;
+          } else if (index < url.end) {
+            if (char === ":") {
+              url.portValid &&= url.portStart === -1;
+              url.portStart = index;
+            } else if (url.portStart !== -1 && (char < "0" || char > "9")) {
+              url.portValid = false;
+            }
+          }
+        }
+      }
+    }
+    if (AWS_URL_SCHEME_CHARACTER_RE.test(char)) {
+      if (schemeStart === -1) {
+        schemeStart = index;
+      }
+    } else {
+      if (
+        (!url || (index >= url.end && !url.queryOrFragment)) &&
+        char === ":" &&
+        text.startsWith("//", index + 1) &&
+        schemeStart !== -1 &&
+        AWS_URL_SCHEME_START_RE.test(text[schemeStart]!)
+      ) {
+        const opening = text[schemeStart - 1];
+        let closingEscapeDepth = 0;
+        for (let offset = schemeStart - 2; offset >= 0 && text[offset] === "\\"; offset--) {
+          closingEscapeDepth++;
+        }
+        url = {
+          start: index + 3,
+          end: text.length,
+          authorityEnd: -1,
+          portStart: -1,
+          portValid: true,
+          hasAt: false,
+          queryOrFragment: false,
+          closing: opening ? closingDelimiters[opening] : undefined,
+          closingEscapeDepth,
+        };
+      }
+      schemeStart = -1;
+    }
+  }
+}
+
+export const AWS_SECRET_ACCESS_KEY_MATCHER = Object.freeze({
+  source: "aws-secret-access-key",
+  exec: matchAwsSecretAccessKeys,
+  couldMatch: couldMatchAwsSecretAccessKey,
+});
+
+// Bare `pass:` reads as prose only when a plain word or number and one space precede it on a line that
+// carries no assignment before it ("The tests now pass: older clients", "12 pass: 0 fail"). A spaced
+// `key: value` phrase earlier on the line is how prose introduces lists ("Release notes: all suites
+// pass: nothing else changed"), so it is not an assignment; an inline `user: bot pass: x` record is the
+// accepted cost, while `user=bot pass: x` and `user:bot pass: x` stay records. Every other
+// position is a record start and masks exactly like the generic assignment rule did: line or text start,
+// YAML `- `, punctuation, tabs, or an inline `key=value` / `key:value` field of any spacing or length.
+// Namespaced (`smtp.pass:`) and prefixed (`db-pass:`, `db_pass:`) keys belong to their own patterns but
+// still make their line a record, as does any other credential key with a colon in any letter case
+// (`password: x pass: y`, `Authorization: Bearer x pass: y`);
+// `pass` inside another word (`bypass:`) is not a key. Whitespace around
+// the colon may include line breaks, as in the generic rule, so YAML explicit keys and indented
+// continuations stay covered. One forward pass classifies every key, so the cost is linear in the text
+// regardless of line length or key count.
+const BARE_PASS_KEY_PATTERN = String.raw`(?<![A-Za-z0-9])(pass|${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*`;
+const BARE_PASS_VALUE_PATTERN = String.raw`[^\s#"'\x60<>]+`;
+const ASCII_WORD_CHAR_RE = /[A-Za-z0-9]/;
+const INLINE_WHITESPACE_RE = /[ \t\r\n]/;
+
+function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
+  const keys = [...text.matchAll(new RegExp(BARE_PASS_KEY_PATTERN, "gi"))];
+  if (keys.length === 0) {
+    return;
+  }
+  const valueRe = new RegExp(BARE_PASS_VALUE_PATTERN, "y");
+  let next = 0;
+  let assignmentSeen = false;
+  for (let index = 0; index < text.length; index++) {
+    const key = keys[next];
+    if (!key) {
+      return;
+    }
+    if (index === key.index) {
+      next++;
+      const before = text[index - 1] ?? "";
+      const owned = key[1] !== "pass" || before === "." || before === "-" || before === "_";
+      const prose =
+        !owned &&
+        !assignmentSeen &&
+        before === " " &&
+        ASCII_WORD_CHAR_RE.test(text[index - 2] ?? "");
+      if (!prose) {
+        // A key, this rule's or a namespaced one's, makes the rest of its value's line a record, so a
+        // second `pass:` masks too. Skip the key so a line break after its colon does not reset that.
+        assignmentSeen = true;
+        let end = index + key[0].length;
+        if (!owned) {
+          valueRe.lastIndex = end;
+          const value = valueRe.exec(text)?.[0];
+          if (value) {
+            end += value.length;
+            yield { match: text.slice(index, end), groups: [value], input: text, offset: index };
+          }
+        }
+        // Keys inside the skipped span were consumed as value text.
+        let following = keys[next];
+        while (following && following.index < end) {
+          next++;
+          following = keys[next];
+        }
+        index = end - 1;
+        continue;
+      }
+    }
+    const char = text[index];
+    if (char === "\n" || char === "\r") {
+      assignmentSeen = false;
+    } else if (char === "=") {
+      assignmentSeen = true;
+    } else if (char === ":" && !INLINE_WHITESPACE_RE.test(text[index + 1] ?? " ")) {
+      assignmentSeen = true;
+    }
+  }
+}
+
+const BARE_PASS_ASSIGNMENT_MATCHER = Object.freeze({
+  source: "bare-pass-assignment",
+  exec: matchBarePassAssignments,
+});
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const CREDENTIAL_STYLE_HEADER_KEYS = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token";
 const GATEWAY_SECURITY_HEADER_KEYS =
   "X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token";
+export const CREDENTIAL_HEADER_FIELD_RE = new RegExp(
+  `^(?:${CREDENTIAL_STYLE_HEADER_KEYS}|${GATEWAY_SECURITY_HEADER_KEYS})$`,
+  "i",
+);
 // Colons identify HTTP headers. Equals assignments may be form bodies, so stop only before an
 // actual following `&key=` pair; otherwise opaque credential punctuation stays fully masked.
 const LOG_HEADER_BOUNDARY_PATTERN = String.raw`(^|[^A-Za-z0-9_?&-]|\\{1,64}[rn])`;
@@ -123,11 +394,10 @@ export const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
   AUTHORIZATION_BASIC_REDACT_PATTERN,
   AUTHORIZATION_BOT_REDACT_PATTERN,
   STANDALONE_BEARER_REDACT_PATTERN,
-  AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN,
   ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
 ]);
 
-export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
+const DEFAULT_REDACT_FIELD_PATTERNS: readonly RedactPattern[] = [
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
   STRUCTURED_JSON_SECRET_REDACT_PATTERN,
@@ -150,11 +420,16 @@ export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_ASSIGNMENT_REDACT_PATTERN,
+  // Runs where the generic rule handled bare `pass:`, before the namespaced and prefixed rules.
+  BARE_PASS_ASSIGNMENT_MATCHER,
   CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN,
-  String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`,
+  PEM_REDACT_PATTERN_SOURCE,
   String.raw`(^|[\s,{])["']?(?:${AWS_SECRET_ACCESS_KEY_FIELD_KEYS})["']?\s*[:=]\s*(["']?)([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])\2`,
+];
+
+export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   String.raw`\b(sk-[A-Za-z0-9_-]{8,})\b`,
   String.raw`(ghp_[A-Za-z0-9]{10,})`,
   String.raw`(github_pat_[A-Za-z0-9_]{10,})`,
@@ -245,7 +520,12 @@ export const DEFAULT_REDACT_PATTERNS: readonly string[] = [
   String.raw`(r8_[A-Za-z0-9]{10,})`,
   TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
   TELEGRAM_TOKEN_REDACT_PATTERN,
-  AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN,
+];
+
+export const DEFAULT_REDACT_PATTERNS: readonly RedactPattern[] = [
+  ...DEFAULT_REDACT_FIELD_PATTERNS,
+  ...VENDOR_TOKEN_REDACT_PATTERNS,
+  AWS_SECRET_ACCESS_KEY_MATCHER,
 ];
 
 export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set([
@@ -263,8 +543,16 @@ export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set([
   CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN,
 ]);
 
+/** Programmatic counterparts of the ambiguous assignment rules: kept out of tool payloads, preserved in source. */
+export const AMBIGUOUS_ASSIGNMENT_MATCHERS: ReadonlySet<RedactPattern> = new Set([
+  BARE_PASS_ASSIGNMENT_MATCHER,
+]);
+
 // Tool output commonly contains source code. Keep key-name matching in logs, direct `.env` reads,
 // and payment JSON; other model-visible text relies on registered and recognizable secret values.
-export const TOOL_PAYLOAD_REDACT_PATTERNS: readonly string[] = DEFAULT_REDACT_PATTERNS.filter(
-  (pattern) => !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern),
-);
+export const TOOL_PAYLOAD_REDACT_PATTERNS: readonly RedactPattern[] =
+  DEFAULT_REDACT_PATTERNS.filter((pattern) =>
+    typeof pattern === "string"
+      ? !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern)
+      : !AMBIGUOUS_ASSIGNMENT_MATCHERS.has(pattern),
+  );

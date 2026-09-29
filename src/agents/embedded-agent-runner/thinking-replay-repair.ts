@@ -23,29 +23,34 @@ type ReplayRepairParams = {
 
 type ReplayRepairResult = { repaired: boolean; repairedCount: number; reason?: string };
 
-function rewriteRejectedReplayInSessionManager(
+async function rewriteRejectedReplayInSessionManager(
   params: ReplayRepairParams,
   repair: {
     replacements: Array<{ entryId: string; message: AgentMessage }>;
     emptyReason: string;
     logMessage: string;
   },
-): ReplayRepairResult {
+): Promise<ReplayRepairResult> {
   if (repair.replacements.length === 0) {
     return { repaired: false, repairedCount: 0, reason: repair.emptyReason };
   }
-  const rewriteResult = rewriteTranscriptEntriesInSessionManager({
+  const rewriteResult = await rewriteTranscriptEntriesInSessionManager({
     sessionManager: params.sessionManager,
     replacements: repair.replacements,
   });
   if (!rewriteResult.changed) {
     return { repaired: false, repairedCount: 0, reason: rewriteResult.reason };
   }
-  if (params.sessionFile) {
+  const target = params.sessionManager.getSessionTarget();
+  if (target || params.sessionFile) {
     emitSessionTranscriptUpdate({
-      sessionFile: params.sessionFile,
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+      ...(target
+        ? { target }
+        : {
+            sessionKey: params.sessionKey,
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+          }),
     });
   }
   log.warn(
@@ -61,7 +66,7 @@ function rewriteRejectedReplayInSessionManager(
 
 export function repairRejectedThinkingReplayInSessionManager(
   params: ReplayRepairParams,
-): ReplayRepairResult {
+): Promise<ReplayRepairResult> {
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
   for (const entry of params.sessionManager.getBranch()) {
     if (entry.type !== "message") {
@@ -83,7 +88,7 @@ export function repairRejectedThinkingReplayInSessionManager(
 
 export function repairRejectedCompactionReplayInSessionManager(
   params: ReplayRepairParams & { checkpoint: OpenAIResponsesCompactionRejection },
-): ReplayRepairResult {
+): Promise<ReplayRepairResult> {
   const owner = params.sessionManager
     .getBranch()
     .findLast(

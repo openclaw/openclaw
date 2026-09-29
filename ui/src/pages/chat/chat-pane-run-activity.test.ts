@@ -19,7 +19,7 @@ function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
   };
 }
 
-describe("chat pane run activity", () => {
+describe.each([false, true])("chat run activity (recovery ready: %s)", (recoveryScopeReady) => {
   afterEach(() => resetChatComposerState());
 
   it.each([
@@ -66,7 +66,10 @@ describe("chat pane run activity", () => {
       parentSessionKey: parentKey,
       startedAt: 1,
     } satisfies GatewaySessionRow;
-    const client = { request: async () => ({}) } as unknown as GatewayBrowserClient;
+    const client = {
+      request: async () => ({}),
+      recoveryScopeReady,
+    } as unknown as GatewayBrowserClient;
     const { pane, state, context } = createRefreshChatPane(client);
     context.gateway.snapshot.hello = sessionMutationGatewayHello(["operator.write"]);
     state.sessionKey = selectedKey;

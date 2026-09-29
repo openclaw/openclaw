@@ -43,6 +43,7 @@ export type IMessagePayload = {
   poll?: IMessagePoll | null;
   chat_id?: number | null;
   sender?: string | null;
+  sender_name?: string | null;
   destination_caller_id?: string | null;
   is_from_me?: boolean | null;
   text?: string | null;

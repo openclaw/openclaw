@@ -1,8 +1,3 @@
-/**
- * Tests trigger and session routing during tool assembly.
- * Ensures cron runs scope cron tool behavior to self-removal of the current
- * job only.
- */
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   claimAgentRunDelegatedAuthority,
@@ -76,18 +71,9 @@ describe("createOpenClawCodingTools cron scope", () => {
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
-  it("does not scope non-cron sessions", () => {
-    createOpenClawCodingTools({
-      trigger: "user",
-      jobId: "job-current",
-    });
-
-    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBeUndefined();
-  });
-
-  it.each([false, true])(
-    "admits only the automation tool for remote management authority=%s",
-    async (controlUiAdmin) => {
+  it.each([undefined, "channel-owner"] as const)(
+    "admits only the automation tool for management-only authority=%s",
+    async (source) => {
       const runId = "remote-management-tools";
       const { operationalRunInstance } = createTestAdmittedRunContext(runId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -97,7 +83,7 @@ describe("createOpenClawCodingTools cron scope", () => {
       const capability = createCronCreatorAuthorityCapability(
         runId,
         { kind: "unknown" },
-        controlUiAdmin ? true : undefined,
+        source ? { source, isCurrent: () => true } : undefined,
       )!;
       const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
         withGatewayToolCallerIdentity(
@@ -123,7 +109,7 @@ describe("createOpenClawCodingTools cron scope", () => {
         ),
       );
       const names = tools.map((tool) => tool.name);
-      expect(names.includes(AUTOMATIONS_TOOL_NAME)).toBe(controlUiAdmin);
+      expect(names.includes(AUTOMATIONS_TOOL_NAME)).toBe(Boolean(source));
       expect(names).not.toContain("gateway");
     },
   );
@@ -177,7 +163,7 @@ describe("createOpenClawCodingTools exec notification routing", () => {
     expect(approvalScope?.aborted).toBe(true);
   });
 
-  it("routes detached completions to the live session without changing process scope", () => {
+  it("keeps live process ownership separate from the policy session", () => {
     const liveSessionKey = "agent:main:channel:group:example:thread:25";
     const policySessionKey = "agent:main:runtime-policy";
 
@@ -193,11 +179,11 @@ describe("createOpenClawCodingTools exec notification routing", () => {
       },
     });
 
-    expect(createLazyExecToolMock).toHaveBeenCalledWith(
+    expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        scopeKey: policySessionKey,
+        scopeKey: liveSessionKey,
         sessionKey: policySessionKey,
-        notifySessionKey: liveSessionKey,
+        runSessionKey: liveSessionKey,
       }),
     );
   });

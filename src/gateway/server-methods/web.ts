@@ -7,13 +7,15 @@ import {
   errorShape,
   validateWebLoginStartParams,
   validateWebLoginWaitParams,
+  type WebLoginStartParams,
+  type WebLoginWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listChannelPlugins, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listLoadedChannelPluginsForRegistry } from "../../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { formatForLog } from "../ws-log.js";
+import { respondUnavailable } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -64,10 +66,6 @@ type WebLoginProvider = NonNullable<ReturnType<typeof resolveWebLoginProvider>>;
 type WebLoginGateway = NonNullable<WebLoginProvider["gateway"]>;
 type WebLoginGatewayMethod = "loginWithQrStart" | "loginWithQrWait";
 
-function resolveAccountId(params: Record<string, unknown>): string | undefined {
-  return typeof params.accountId === "string" ? params.accountId : undefined;
-}
-
 function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): string | null {
   const cfg = context.getRuntimeConfig();
   const channels = cfg.channels;
@@ -109,13 +107,9 @@ function respondProviderUnsupported(respond: RespondFn, providerId: string) {
   );
 }
 
-function respondWebLoginUnavailable(respond: RespondFn, err: unknown) {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-}
-
 /** Resolves a concrete provider gateway login method or sends the public error. */
 function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
-  rawParams: Record<string, unknown>;
+  rawParams: WebLoginStartParams | WebLoginWaitParams;
   respond: RespondFn;
   context: GatewayRequestContext;
   gatewayMethod: TMethod;
@@ -124,10 +118,8 @@ function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   provider: WebLoginProvider;
   run: NonNullable<WebLoginGateway[TMethod]>;
 } | null {
-  const accountId = resolveAccountId(params.rawParams);
-  const provider = resolveWebLoginProvider(
-    typeof params.rawParams.channel === "string" ? params.rawParams.channel : undefined,
-  );
+  const accountId = params.rawParams.accountId;
+  const provider = resolveWebLoginProvider(params.rawParams.channel);
   if (!provider) {
     respondProviderUnavailable({
       respond: params.respond,
@@ -193,7 +185,7 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       const result = await run({
         force: forceLogin,
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+        timeoutMs: params.timeoutMs,
         verbose: Boolean(params.verbose),
         accountId,
       });
@@ -211,7 +203,7 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       respond(true, result, undefined);
     } catch (err) {
-      respondWebLoginUnavailable(respond, err);
+      respondUnavailable(respond, err);
     }
   },
   "web.login.wait": async ({ params, respond, context }) => {
@@ -230,18 +222,17 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       const { accountId, provider, run } = request;
       const result = await run({
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+        timeoutMs: params.timeoutMs,
         accountId,
-        sessionKey: typeof params.sessionKey === "string" ? params.sessionKey : undefined,
-        currentQrDataUrl:
-          typeof params.currentQrDataUrl === "string" ? params.currentQrDataUrl : undefined,
+        sessionKey: params.sessionKey,
+        currentQrDataUrl: params.currentQrDataUrl,
       });
       if (result.connected) {
         await context.startChannel(provider.id, accountId);
       }
       respond(true, result, undefined);
     } catch (err) {
-      respondWebLoginUnavailable(respond, err);
+      respondUnavailable(respond, err);
     }
   },
 };

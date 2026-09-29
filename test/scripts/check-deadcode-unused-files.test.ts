@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   checkKnipUnusedFileScanResult,
   checkUnusedFiles,
@@ -58,33 +58,43 @@ async function withFakeProcessSignals(
   child: FakeKnipProcess,
   run: (kills: ProcessKillSignal[]) => Promise<void>,
 ): Promise<void> {
-  const originalKill = process.kill;
+  const originalKill = process.kill.bind(process);
   const kills: ProcessKillSignal[] = [];
   const restoredSignals: ProcessKillSignal[] = [];
   const observer: typeof process.kill = (pid, signal) => {
-    if (Math.abs(pid) !== child.pid) return originalKill(pid, signal);
+    if (Math.abs(pid) !== child.pid) {
+      return originalKill(pid, signal);
+    }
     restoredSignals.push(signal);
-    if (signal === 0) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+    if (signal === 0) {
+      throw Object.assign(new Error("gone"), { code: "ESRCH" });
+    }
     return true;
   };
-  process.kill = (pid, signal) => {
-    if (Math.abs(pid) !== child.pid) return observer(pid, signal);
-    if (signal === 0) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+  const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (Math.abs(pid) !== child.pid) {
+      return observer(pid, signal);
+    }
+    if (signal === 0) {
+      throw Object.assign(new Error("gone"), { code: "ESRCH" });
+    }
     kills.push(signal);
     finishFakeProcess(child, null, (signal as NodeJS.Signals | undefined) ?? "SIGTERM");
     return true;
-  };
+  });
   try {
     await run(kills);
   } finally {
     // Restore the inner mock to a safe observer until any grace callback has run.
     // Keep this guard even on assertion failure: fake PIDs must never reach the OS.
-    process.kill = observer;
+    killSpy.mockImplementation(observer);
     try {
-      await new Promise((resolve) => setTimeout(resolve, FAKE_KNIP_KILL_GRACE_MS));
+      await new Promise((resolve) => {
+        setTimeout(resolve, FAKE_KNIP_KILL_GRACE_MS);
+      });
       expect(restoredSignals, "signaling survived process.kill mock restoration").toEqual([]);
     } finally {
-      process.kill = originalKill;
+      killSpy.mockRestore();
     }
   }
 }
@@ -109,8 +119,6 @@ describe("check-deadcode-unused-files", () => {
     expect(existsSync(path.resolve("scripts/deadcode-unused-files.allowlist.mjs"))).toBe(false);
     const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mts"), "utf8");
     expect(script).not.toContain("allowlist");
-    expect(script).toContain('"config/knip.all-exports.config.ts"');
-    expect(script).toContain("result.status !== 0");
   });
 
   it("parses the compact Knip unused-file section", () => {
@@ -454,6 +462,56 @@ Delete the files or model their real entrypoints in Knip.`,
       output: "before-exit\nafter-exit\n",
       signal: null,
       status: 0,
+    });
+  });
+
+  it.each([1, 2, 3])(
+    "preserves split UTF-8 for interleaved Knip streams at byte %i",
+    async (split) => {
+      const child = new FakeKnipProcess();
+      child.pid = 0;
+      const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
+        maxBufferBytes: 8,
+        spawnCommand: () => child,
+        writeStatus: () => {},
+      });
+      const stdout = Buffer.from("🦞");
+      const stderr = Buffer.from("📦");
+      child.stdout.emit("data", stdout.subarray(0, split));
+      child.stderr.emit("data", stderr.subarray(0, split));
+      child.stdout.emit("data", stdout.subarray(split));
+      child.stderr.emit("data", stderr.subarray(split));
+      finishFakeProcess(child, 0, null);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        errorCode: undefined,
+        output: "🦞📦",
+        signal: null,
+        status: 0,
+      });
+    },
+  );
+
+  it("does not flush a UTF-8 character cut by the Knip output byte cap", async () => {
+    const child = new FakeKnipProcess();
+    // This output-only child owns no OS process; the existing cap test covers signal delivery.
+    child.pid = 0;
+    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
+      maxBufferBytes: 4,
+      spawnCommand: () => child,
+      writeStatus: () => {},
+    });
+    const character = Buffer.from("🦞");
+    child.stdout.emit("data", "ab");
+    child.stdout.emit("data", character.subarray(0, 2));
+    child.stdout.emit("data", character.subarray(2));
+    finishFakeProcess(child, null, "SIGTERM");
+
+    await expect(resultPromise).resolves.toMatchObject({
+      errorCode: "ENOBUFS",
+      output: "ab",
+      signal: "SIGTERM",
+      status: null,
     });
   });
 

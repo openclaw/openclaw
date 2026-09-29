@@ -53,22 +53,24 @@ async function captureSidebar(page: Page, fileName: string) {
 }
 
 suite.define(() => {
-  it("hydrates the owner-first roster with the event subscription", async () => {
+  it("hydrates the owner-first roster separately from the event subscription", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const sharedRoster = sessionsList();
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.subscribe"],
+      heldMethods: ["sessions.list"],
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
       sessionKey: "agent:main:ada",
-      methodResponses: { "sessions.subscribe": { subscribed: true, list: sharedRoster } },
+      methodResponses: { "sessions.list": sharedRoster },
     });
 
     try {
       // A literal key avoids the independent slug lookup while the roster is deferred.
       await page.goto(`${suite.server?.baseUrl ?? ""}chat/main/~key/ada`);
       const subscribe = await gateway.waitForRequest("sessions.subscribe");
-      expect(subscribe.params).toEqual(
+      expect(subscribe.params).toEqual({});
+      const roster = await gateway.waitForRequest("sessions.list", { match: rosterMatch });
+      expect(roster.params).toEqual(
         expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
       );
       const adaRow = page.locator('[data-session-key="agent:main:ada"]');
@@ -76,12 +78,12 @@ suite.define(() => {
       // The selected session has an optimistic placeholder before roster hydration.
       await expect.poll(() => adaRow.count()).toBe(1);
       await expect.poll(() => bobRow.count()).toBe(0);
-      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
 
-      await gateway.resolveDeferred("sessions.subscribe", { subscribed: true, list: sharedRoster });
+      await gateway.resolveDeferred("sessions.list");
       await adaRow.waitFor();
       await bobRow.waitFor();
-      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(1);
       await captureSidebar(page, "owner-first-bootstrap.png");
     } finally {
       await context.close();

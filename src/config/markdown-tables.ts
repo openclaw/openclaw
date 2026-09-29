@@ -2,7 +2,7 @@
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listChannelPlugins } from "../channels/plugins/registry.js";
 import { getActivePluginChannelRegistryVersion } from "../plugins/runtime.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ResolveMarkdownTableModeParams } from "./markdown-tables.types.js";
 import type { MarkdownTableMode } from "./types.base.js";
@@ -45,6 +45,7 @@ const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
 
 function resolveMarkdownModeFromSection(
   section: MarkdownConfigSection | undefined,
+  channel: string,
   accountId?: string | null,
 ): MarkdownTableMode | undefined {
   if (!section) {
@@ -53,7 +54,7 @@ function resolveMarkdownModeFromSection(
   const normalizedAccountId = normalizeAccountId(accountId);
   const accounts = section.accounts;
   if (accounts && typeof accounts === "object") {
-    const match = resolveAccountEntry(accounts, normalizedAccountId);
+    const match = resolveChannelAccountEntry(accounts, normalizedAccountId, channel);
     const matchMode = match?.markdown?.tables;
     if (isMarkdownTableMode(matchMode)) {
       return matchMode;
@@ -75,7 +76,7 @@ export function resolveMarkdownTableMode(
     const section = (channelsConfig?.[channel] ?? rootConfig[channel]) as
       | MarkdownConfigSection
       | undefined;
-    resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
+    resolved = resolveMarkdownModeFromSection(section, channel, params.accountId) ?? defaultMode;
   }
   return resolved === "block" && !params.supportsBlockTables ? "code" : resolved;
 }

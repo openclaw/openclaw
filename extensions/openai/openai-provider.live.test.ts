@@ -6,7 +6,7 @@ import { buildOpenAIProvider } from "./openai-provider.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const DEFAULT_LIVE_MODEL_IDS = [
-  "gpt-5.6",
+  "gpt-5.6-luna",
   "chat-latest",
   "gpt-5.5",
   "gpt-5.4-mini",
@@ -34,6 +34,21 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         templateId: "gpt-5.6-sol",
         templateName: "GPT-5.6 Sol",
         cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
+      };
+    case "gpt-6-sol":
+    case "gpt-6-luna":
+      return {
+        modelId,
+        templateId: "gpt-5.6-sol",
+        templateName: "GPT-5.6 Sol",
+        cost:
+          modelId === "gpt-6-sol"
+            ? { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }
+            : { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
         contextWindow: 1_050_000,
         maxTokens: 128_000,
         reasoning: true,

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  commitPresence,
   listSystemPresence,
   touchPresence,
   updateSystemPresence,
@@ -29,6 +30,33 @@ describe("system-presence", () => {
     listSystemPresence();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("keeps a replacement connection private until its own delivery commits", () => {
+    const key = randomUUID();
+    upsertPresence(key, { connectionId: "first", reason: "connect" }, { pending: true });
+    upsertPresence(key, { connectionId: "replacement", reason: "connect" }, { pending: true });
+    touchPresence(key);
+    upsertPresence(key, { host: "updated host" });
+    updateSystemPresence({ instanceId: key, text: "updated beacon" });
+
+    commitPresence(key, "first");
+    expect(listSystemPresence().some((entry) => entry.connectionId === "replacement")).toBe(false);
+    expect(
+      listSystemPresence({ includeConnectionId: "first" }).some(
+        (entry) => entry.connectionId === "replacement",
+      ),
+    ).toBe(false);
+    expect(listSystemPresence({ includeConnectionId: "replacement" })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ connectionId: "replacement", host: "updated host" }),
+      ]),
+    );
+
+    commitPresence(key, "replacement");
+    expect(listSystemPresence()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ connectionId: "replacement" })]),
+    );
   });
 
   it("dedupes entries across sources by case-insensitive instanceId key", () => {
@@ -118,17 +146,9 @@ describe("system-presence", () => {
 
     expect(update.key).toBe("mixed-case-node");
     expect(update.changedKeys).toEqual(["host", "ip", "version", "mode", "reason"]);
-    expect(update).toEqual({
+    expect({ key: update.key, changedKeys: update.changedKeys, next: update.next }).toEqual({
       key: "mixed-case-node",
-      previous: undefined,
       changedKeys: ["host", "ip", "version", "mode", "reason"],
-      changes: {
-        host: "Relay-Host",
-        ip: "10.0.0.9",
-        version: "2.1.0",
-        mode: "ui",
-        reason: "beacon",
-      },
       next: {
         instanceId: "  Mixed-Case-Node  ",
         lastInputSeconds: 7,
@@ -141,6 +161,24 @@ describe("system-presence", () => {
         reason: "beacon",
       },
     });
+
+    const refreshed = updateSystemPresence({
+      text: update.next.text,
+      instanceId: "mixed-case-node",
+      lastInputSeconds: 11,
+    });
+    expect(refreshed.changedKeys).toEqual([]);
+    expect(refreshed.next.lastInputSeconds).toBe(11);
+    expect(update.next.lastInputSeconds).toBe(7);
+
+    const moved = updateSystemPresence({
+      text: update.next.text,
+      instanceId: "mixed-case-node",
+      ip: "10.0.0.10",
+    });
+    expect(moved.changedKeys).toEqual(["ip"]);
+    expect(moved.next.ip).toBe("10.0.0.10");
+    expect(refreshed.next.ip).toBe("10.0.0.9");
   });
 
   it("drops blank role and scope entries while keeping fallback text", () => {

@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements the memory wiki overview.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -91,21 +90,21 @@ export function projectMemoryWikiOverviewItem(
   const updatedAt = normalizeOptionalString(page.updatedAt);
   const sourceType = normalizeOptionalString(page.sourceType);
   const snippet = extractSnippet(body);
-  return Object.assign(
-    { pagePath: page.relativePath, title: page.title, kind: page.kind },
-    page.id ? { id: page.id } : {},
-    updatedAt ? { updatedAt } : {},
-    sourceType ? { sourceType } : {},
-    {
-      claimCount: page.claims.length,
-      questionCount: page.questions.length,
-      contradictionCount: page.contradictions.length,
-      claims: page.claims.map((claim) => claim.text).slice(0, 3),
-      questions: page.questions.slice(0, 3),
-      contradictions: page.contradictions.slice(0, 3),
-    },
-    snippet ? { snippet } : {},
-  );
+  return {
+    pagePath: page.relativePath,
+    title: page.title,
+    kind: page.kind,
+    ...(page.id ? { id: page.id } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+    ...(sourceType ? { sourceType } : {}),
+    claimCount: page.claims.length,
+    questionCount: page.questions.length,
+    contradictionCount: page.contradictions.length,
+    claims: page.claims.map((claim) => claim.text).slice(0, 3),
+    questions: page.questions.slice(0, 3),
+    contradictions: page.contradictions.slice(0, 3),
+    ...(snippet ? { snippet } : {}),
+  };
 }
 
 export function buildMemoryWikiOverview(

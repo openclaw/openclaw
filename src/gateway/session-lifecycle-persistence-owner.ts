@@ -5,6 +5,8 @@ import {
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { getAgentRunContextOwnerStatus } from "../infra/agent-run-registry.js";
+import type { CapturedAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 type LifecyclePersistenceParams = Parameters<typeof persistGatewaySessionLifecycleEvent>[0];
@@ -18,6 +20,7 @@ type ObservedTerminalPersistenceParams = Omit<
   "assertCommitAllowed" | "event"
 > & {
   authority?: TerminalPersistenceAuthority;
+  writeContext?: CapturedAgentRunTerminalWriteContext;
   clientRunId?: string;
   event: AgentEventRuntimePayload;
 };
@@ -25,7 +28,7 @@ type PreparedPersistence = {
   expired: boolean;
   promise: Promise<void>;
   settled: boolean;
-  timer: ReturnType<typeof setTimeout>;
+  cancelExpiry: () => void;
 };
 
 function assertTerminalAuthority(authority: TerminalPersistenceAuthority): void {
@@ -65,7 +68,7 @@ function terminalEventKey(event: {
 }
 
 /** Owns each definitive lifecycle write before optional chat presentation code runs. */
-export function createSessionLifecyclePersistenceOwner() {
+export function createSessionLifecyclePersistenceOwner(scheduler: GatewayScheduler) {
   const prepared = new Map<string, PreparedPersistence>();
   const inFlight = new Set<Promise<void>>();
 
@@ -76,25 +79,38 @@ export function createSessionLifecyclePersistenceOwner() {
       return existing;
     }
     const authority = params.authority;
-    const promise = persistGatewaySessionLifecycleEvent({
-      sessionKey: params.sessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      event: {
-        ...params.event,
-        ...(params.event.lifecycleGeneration
-          ? { lifecycleGeneration: params.event.lifecycleGeneration }
+    const persist = () =>
+      persistGatewaySessionLifecycleEvent({
+        sessionKey: params.sessionKey,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        event: {
+          ...params.event,
+          ...(params.event.controlUiVisible !== undefined
+            ? { controlUiVisible: params.event.controlUiVisible }
+            : {}),
+          ...(params.event.isHeartbeat !== undefined
+            ? { isHeartbeat: params.event.isHeartbeat }
+            : {}),
+          ...(params.event.lifecycleGeneration
+            ? { lifecycleGeneration: params.event.lifecycleGeneration }
+            : {}),
+          ...(params.event.mainSessionRestartRecovery === true
+            ? { mainSessionRestartRecovery: true as const }
+            : {}),
+          ...(params.clientRunId ? { clientRunId: params.clientRunId } : {}),
+        },
+        ...(authority || params.writeContext
+          ? {
+              assertCommitAllowed: () => {
+                if (authority) {
+                  assertTerminalAuthority(authority);
+                }
+                params.writeContext?.assertCurrent();
+              },
+            }
           : {}),
-        ...(params.event.mainSessionRestartRecovery === true
-          ? { mainSessionRestartRecovery: true as const }
-          : {}),
-        ...(params.clientRunId ? { clientRunId: params.clientRunId } : {}),
-      },
-      ...(authority
-        ? {
-            assertCommitAllowed: () => assertTerminalAuthority(authority),
-          }
-        : {}),
-    });
+      });
+    const promise = params.writeContext ? params.writeContext.run(persist) : persist();
     inFlight.add(promise);
     let entry: PreparedPersistence | undefined;
     const settle = () => {
@@ -115,18 +131,21 @@ export function createSessionLifecyclePersistenceOwner() {
         expired: false,
         promise,
         settled: false,
-        timer: setTimeout(() => {
-          if (prepared.get(key) !== preparedEntry) {
-            return;
-          }
-          preparedEntry.expired = true;
-          if (preparedEntry.settled) {
-            prepared.delete(key);
-          }
-        }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS),
+        cancelExpiry: scheduler.schedule({
+          id: `session-lifecycle-persistence:${key}`,
+          delayMs: AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
+          run: () => {
+            if (prepared.get(key) !== preparedEntry) {
+              return;
+            }
+            preparedEntry.expired = true;
+            if (preparedEntry.settled) {
+              prepared.delete(key);
+            }
+          },
+        }).cancel,
       };
       entry = preparedEntry;
-      preparedEntry.timer.unref?.();
       prepared.set(key, preparedEntry);
     }
     return promise;
@@ -141,7 +160,7 @@ export function createSessionLifecyclePersistenceOwner() {
     if (!entry) {
       return undefined;
     }
-    clearTimeout(entry.timer);
+    entry.cancelExpiry();
     prepared.delete(key);
     return entry.promise;
   };
@@ -170,7 +189,7 @@ export function createSessionLifecyclePersistenceOwner() {
     async drain(): Promise<void> {
       await Promise.allSettled(inFlight);
       for (const entry of prepared.values()) {
-        clearTimeout(entry.timer);
+        entry.cancelExpiry();
       }
       prepared.clear();
     },

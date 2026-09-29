@@ -1,8 +1,16 @@
 import { html, type TemplateResult } from "lit";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import {
+  renderLearnMoreLink,
+  renderSettingsRow,
+  renderSettingsValue,
+} from "../../components/settings-ui.ts";
 import "../../components/mcp-servers-card.ts";
-import { renderSettingsRow, renderSettingsValue } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
+
+registerMcpEnglish();
 
 const MCP_DOCS_URL = "https://docs.openclaw.ai/tools/mcp";
 
@@ -13,35 +21,30 @@ type McpViewProps = {
   editor: TemplateResult;
 };
 
+export function renderMcpIntro() {
+  return html`${t("mcpPage.intro")} ${renderLearnMoreLink(MCP_DOCS_URL)}`;
+}
+
 export function renderMcp(props: McpViewProps) {
   const rows = summarizeMcpServers(props.configObject) ?? [];
-  const enabledCount = rows.filter((row) => row.enabled).length;
-  const oauthCount = rows.filter((row) => row.auth === "oauth").length;
-  const filteredCount = rows.filter((row) => row.toolFilter).length;
   return html`
     <section class="mcp-page">
-      <div class="settings-page">
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
         <section class="settings-section mcp-page__summary">
           <div class="settings-section__header">
             <h2 class="settings-section__heading">${t("mcpPage.servers")}</h2>
           </div>
           <div class="settings-group">
-            ${renderSettingsRow({
-              title: t("mcpPage.servers"),
-              control: renderSettingsValue(rows.length),
-            })}
-            ${renderSettingsRow({
-              title: t("common.enabled"),
-              control: renderSettingsValue(enabledCount),
-            })}
-            ${renderSettingsRow({
-              title: t("mcpPage.oauth"),
-              control: renderSettingsValue(oauthCount),
-            })}
-            ${renderSettingsRow({
-              title: t("mcpPage.filtered"),
-              control: renderSettingsValue(filteredCount),
-            })}
+            ${(
+              [
+                ["mcpPage.servers", rows.length],
+                ["common.enabled", rows.filter((row) => row.enabled).length],
+                ["mcpPage.oauth", rows.filter((row) => row.auth === "oauth").length],
+                ["mcpPage.filtered", rows.filter((row) => row.toolFilter).length],
+              ] as const
+            ).map(([label, count]) =>
+              renderSettingsRow({ title: t(label), control: renderSettingsValue(count) }),
+            )}
           </div>
         </section>
 

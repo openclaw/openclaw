@@ -7,23 +7,9 @@ import type {
 } from "../../embedded-agent-messaging.types.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../delivery-evidence.js";
 
-type EmbeddedRunReplyItem = {
+type EmbeddedRunReplyItem = ReplyPayload & {
   text: string;
   media?: string[];
-  mediaUrl?: string;
-  isError?: boolean;
-  isReasoning?: boolean;
-  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
-  isCommentary?: boolean;
-  audioAsVoice?: boolean;
-  attachments?: ReplyPayload["attachments"];
-  trustedLocalMedia?: boolean;
-  replyToId?: string;
-  replyToTag?: boolean;
-  replyToCurrent?: boolean;
-  presentation?: ReplyPayload["presentation"];
-  interactive?: ReplyPayload["interactive"];
-  channelData?: Record<string, unknown>;
   sourceReplyMirror?: { idempotencyKey?: string; transcriptOwner?: true };
 };
 
@@ -38,7 +24,6 @@ export function buildSourceReplyPayloadState(params: {
   replyItems: EmbeddedRunReplyItem[];
   hasSourceReplyPayload: boolean;
   deliveredSourceReplyViaMessageTool: boolean;
-  explicitFinalSourceReply: boolean | undefined;
   completedSourceReplyViaMessageTool: boolean;
 } {
   const sourceReplyPayloads = params.payloads ?? [];
@@ -92,7 +77,6 @@ export function buildSourceReplyPayloadState(params: {
     replyItems,
     hasSourceReplyPayload,
     deliveredSourceReplyViaMessageTool,
-    explicitFinalSourceReply,
     completedSourceReplyViaMessageTool:
       explicitFinalSourceReply ?? (hasSourceReplyPayload || deliveredSourceReplyViaMessageTool),
   };

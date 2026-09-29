@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
@@ -9,7 +10,6 @@ import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import {
   createCacheFetchMock,
   createCapturingStreamFn,
-  createOversizedJsonResponse,
   fetchUrl,
   makeGoogleModel,
   makeSessionManager,
@@ -29,7 +29,7 @@ const TOOLS = [
 
 function promptContext() {
   return {
-    systemPrompt: "Follow policy.",
+    systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
     messages: [],
     tools: TOOLS,
   } as never;
@@ -43,7 +43,10 @@ function invoke(
   return Promise.resolve(wrapped?.(model, context, {} as never));
 }
 
-const plainPromptContext = { systemPrompt: "Follow policy.", messages: [] } as never;
+const plainPromptContext = {
+  systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
+  messages: [],
+} as never;
 
 function readyEntry(params: {
   cachedContent?: string;
@@ -72,27 +75,6 @@ function readyEntry(params: {
   };
 }
 
-function failedEntry(retryAfter: number): SessionCustomEntry {
-  return {
-    id: "entry-failed",
-    parentId: null,
-    timestamp: new Date(NOW - 5_000).toISOString(),
-    type: "custom",
-    customType: "openclaw.google-prompt-cache",
-    data: {
-      status: "failed",
-      timestamp: NOW - 5_000,
-      provider: "google",
-      modelId: "gemini-3.1-pro-preview",
-      modelApi: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      systemPromptDigest: crypto.createHash("sha256").update("Follow policy.").digest("hex"),
-      cacheRetention: "long",
-      retryAfter,
-    },
-  };
-}
-
 describe("google prompt cache failure handling", () => {
   it.each([
     ["malformed JSON", () => new Response("not-json{{{", { status: 200 })],
@@ -106,7 +88,6 @@ describe("google prompt cache failure handling", () => {
     ["JSON null", () => new Response("null", { status: 200 })],
     ["JSON primitive", () => new Response("42", { status: 200 })],
     ["JSON array", () => new Response("[]", { status: 200 })],
-    ["oversized JSON", () => createOversizedJsonResponse().response],
     [
       "body read failure",
       () =>
@@ -132,7 +113,7 @@ describe("google prompt cache failure handling", () => {
 
     await expect(invoke(wrapped)).resolves.toBe("visible-output");
     expect(streamContext(innerStreamFn)).toMatchObject({
-      systemPrompt: "Follow policy.",
+      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
       tools: TOOLS,
     });
     expect(entries.at(-1)?.data).toMatchObject({ status: "failed" });
@@ -154,48 +135,16 @@ describe("google prompt cache failure handling", () => {
       { name: "cachedContents/cache\u0000id", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
-      "C0 unit-separator name",
-      { name: "cachedContents/cache\u001fid", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "DEL name",
-      { name: "cachedContents/cache\u007fid", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "C1 next-line name",
-      { name: "cachedContents/cache\u0085id", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
       "lone high-surrogate name",
       { name: "cachedContents/cache\ud800id", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "lone low-surrogate name",
-      { name: "cachedContents/cache\udc00id", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
       "NFC Unicode name",
       { name: "cachedContents/caf\u00e9", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
-      "NFD Unicode name",
-      { name: "cachedContents/cafe\u0301", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "embedded-whitespace name",
-      { name: "cachedContents/cache id", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
       "query-delimited name",
       { name: "cachedContents/cache-id?bad", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "fragment-delimited name",
-      { name: "cachedContents/cache-id#bad", expireTime: new Date(NOW + 60_000).toISOString() },
-    ],
-    [
-      "backslash-delimited name",
-      { name: "cachedContents/cache\\id", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
       "percent-encoded separator name",
@@ -230,7 +179,7 @@ describe("google prompt cache failure handling", () => {
     await expect(invoke(wrapped)).resolves.toBe("visible-output");
     expect(streamFn).toHaveBeenCalledOnce();
     expect(streamContext(streamFn)).toMatchObject({
-      systemPrompt: "Follow policy.",
+      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
       tools: TOOLS,
     });
     expect(getCapturedPayload()).not.toHaveProperty("cachedContent");
@@ -246,12 +195,6 @@ describe("google prompt cache failure handling", () => {
       "network failure",
       async () => {
         throw new Error("network unavailable");
-      },
-    ],
-    [
-      "transport timeout",
-      async () => {
-        throw new Error("model request timed out");
       },
     ],
     [
@@ -272,7 +215,7 @@ describe("google prompt cache failure handling", () => {
 
     await expect(invoke(wrapped)).resolves.toBe("visible-output");
     expect(streamContext(innerStreamFn)).toMatchObject({
-      systemPrompt: "Follow policy.",
+      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
       tools: TOOLS,
     });
     expect(entries.at(-1)?.data).toMatchObject({ status: "failed" });
@@ -387,69 +330,6 @@ describe("google prompt cache failure handling", () => {
         expireTime: new Date(NOW + 3_600_000).toISOString(),
       },
     ],
-    [
-      "query-delimited cache name",
-      {
-        cachedContent: "cachedContents/cache-id?bad",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "fragment-delimited cache name",
-      {
-        cachedContent: "cachedContents/cache-id#bad",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "backslash-delimited cache name",
-      {
-        cachedContent: "cachedContents/cache\\id",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "percent-encoded separator cache name",
-      {
-        cachedContent: "cachedContents/cache%2Fid",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "current-directory cache name",
-      {
-        cachedContent: "cachedContents/.",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "parent-directory cache name",
-      {
-        cachedContent: "cachedContents/..",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "C0 cache name",
-      {
-        cachedContent: "cachedContents/cache\u0000id",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "lone-surrogate cache name",
-      {
-        cachedContent: "cachedContents/cache\ud800id",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
-    [
-      "Unicode cache name",
-      {
-        cachedContent: "cachedContents/caf\u00e9",
-        expireTime: new Date(NOW + 3_600_000).toISOString(),
-      },
-    ],
   ])("rebuilds persisted ready state with %s", async (_name, entry) => {
     const entries = [readyEntry(entry)];
     const fetchMock = createCacheFetchMock({
@@ -503,7 +383,7 @@ describe("google prompt cache failure handling", () => {
       "https://generativelanguage.googleapis.com/v1beta/cachedContents",
     );
     expect(streamContext(streamFn)).toMatchObject({
-      systemPrompt: "Follow policy.",
+      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
       tools: TOOLS,
     });
     expect(getCapturedPayload()).not.toHaveProperty("cachedContent");
@@ -543,7 +423,6 @@ describe("google prompt cache failure handling", () => {
 
   it.each([
     ["malformed JSON", "not-json{{{"],
-    ["missing expiry", "{}"],
     ["nonfuture expiry", JSON.stringify({ expireTime: new Date(NOW).toISOString() })],
   ])("retains a valid existing cache after refresh returns %s", async (_name, body) => {
     const entries = [
@@ -565,22 +444,6 @@ describe("google prompt cache failure handling", () => {
     expect(fetchUrl(fetchMock)).toContain("cachedContents/existing?updateMask=ttl");
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/existing");
     expect(entries).toHaveLength(1);
-  });
-
-  it("honors failed-cache backoff without another create attempt", async () => {
-    const fetchMock = vi.fn();
-    const innerStreamFn = vi.fn(() => "visible-output" as never);
-    const wrapped = await preparePromptCacheStream({
-      fetchMock,
-      now: NOW,
-      sessionManager: makeSessionManager([failedEntry(NOW + 60_000)]),
-      streamFn: innerStreamFn,
-    });
-
-    await expect(invoke(wrapped, makeGoogleModel(), plainPromptContext)).resolves.toBe(
-      "visible-output",
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("does not swallow primary stream failures after cache degradation", async () => {

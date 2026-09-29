@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { isControlUiCatalogShareId } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BeamStore } from "./store.js";
+import type { BeamSessionSummary, BeamStore } from "./store.js";
 import { BEAM_HOST_ID, BEAM_SESSION_SHARE_ROUTE, type BeamStoredSession } from "./types.js";
 
 const DEFAULT_LIMIT = 50;
@@ -20,7 +20,7 @@ function cursorOffset(value: string | undefined): number {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
-function searchableText(session: BeamStoredSession): string {
+function searchableText(session: BeamSessionSummary): string {
   return `${session.title}\n${session.source}`.toLowerCase();
 }
 
@@ -95,7 +95,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             source: session.source,
             archived: false,
             canContinue: true,
-            canArchive: false,
+            canArchive: true,
           })),
           ...(offset + page.length < sessions.length
             ? { nextCursor: String(offset + page.length) }
@@ -113,12 +113,18 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       }
       const cursor =
         params.cursor === undefined ? undefined : decodeTranscriptCursor(params.cursor);
-      const revision = transcriptRevision(session);
-      if (cursor && cursor.revision !== revision) {
-        throw new Error("stale Beam transcript cursor");
-      }
       const end = Math.min(session.items.length, cursor?.end ?? session.items.length);
       const start = Math.max(0, end - boundedLimit(params.limit));
+      let nextCursor: string | undefined;
+      if (cursor || start > 0) {
+        const revision = transcriptRevision(session);
+        if (cursor && cursor.revision !== revision) {
+          throw new Error("stale Beam transcript cursor");
+        }
+        if (start > 0) {
+          nextCursor = encodeTranscriptCursor({ revision, end: start });
+        }
+      }
       return {
         hostId: BEAM_HOST_ID,
         label: session.title,
@@ -138,8 +144,17 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
                 : undefined,
           }))
           .toReversed(),
-        ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
+        ...(nextCursor ? { nextCursor } : {}),
       };
+    },
+    async archive(params) {
+      if (params.hostId !== BEAM_HOST_ID) {
+        throw new Error(`unknown Beam host: ${params.hostId}`);
+      }
+      if (!(await store.delete(params.threadId))) {
+        throw new Error(`unknown Beam session: ${params.threadId}`);
+      }
+      return { ok: true };
     },
     async copyToGatewaySession(params) {
       if (params.hostId !== BEAM_HOST_ID) {

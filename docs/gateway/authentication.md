@@ -64,6 +64,16 @@ The gateway service must resolve `claude` on `PATH`. If a deployment needs a
 nonstandard executable path, register a wrapper through a
 [CLI backend plugin](/plugins/cli-backend-plugins).
 
+### Anthropic setup-token
+
+Run `claude setup-token` on any machine with Claude Code installed. It prints a long-lived token starting with `sk-ant-oat01-`. Store it on the gateway host with:
+
+```bash
+openclaw models auth login --provider anthropic --method setup-token
+```
+
+The command requires an interactive TTY. See [`openclaw models`](/cli/models#auth-profiles) for the auth-profile commands that manage the stored token afterwards, and [Anthropic](/providers/anthropic) for the provider-side details.
+
 ## Manual token entry
 
 Works for any provider; writes the per-agent SQLite auth store and updates config:
@@ -190,7 +200,7 @@ Use `--agent <id>` to target a specific agent; omit it to use the configured def
 
 ### "No credentials found"
 
-Configure an Anthropic API key on the **gateway host**, or set up the Anthropic setup-token path, then re-check:
+Configure an Anthropic API key on the **gateway host**, or set up the [Anthropic setup-token](#anthropic-setup-token) path, then re-check:
 
 ```bash
 openclaw models status
@@ -198,7 +208,7 @@ openclaw models status
 
 ### Token expiring/expired
 
-Run `openclaw models status` to see which profile is expiring. If an Anthropic token profile is missing or expired, refresh it via setup-token or migrate to an Anthropic API key.
+Run `openclaw models status` to see which profile is expiring. If an Anthropic token profile is missing or expired, refresh it via [setup-token](#anthropic-setup-token) or migrate to an Anthropic API key.
 
 ## Related
 

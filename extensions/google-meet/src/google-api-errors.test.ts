@@ -1,32 +1,11 @@
 // Google Meet tests cover bounded Google API error handling.
 import { describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { googleApiError } from "./google-api-errors.js";
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
 
 describe("googleApiError", () => {
   it("bounds Google API error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"access denied ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"access denied ".repeat(1024)}tail`, {
       status: 403,
       headers: { "content-type": "text/plain" },
     });

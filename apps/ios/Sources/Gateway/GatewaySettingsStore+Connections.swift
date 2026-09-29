@@ -11,6 +11,11 @@ extension GatewaySettingsStore {
 
         static let empty = GatewayRegistry()
 
+        var activeEntry: GatewayRegistryEntry? {
+            guard let activeStableID else { return nil }
+            return self.entries.first { GatewayStableIdentifier.matches($0.stableID, activeStableID) }
+        }
+
         private enum CodingKeys: String, CodingKey {
             case version
             case activeStableID
@@ -73,14 +78,5 @@ extension GatewaySettingsStore {
             registry.connectedStableIDs.append(storedID)
         }
         return self.saveGatewayRegistry(registry)
-    }
-
-    static func connectedGatewayEntries() -> [GatewayRegistryEntry] {
-        let registry = self.loadGatewayRegistry()
-        return registry.connectedStableIDs.compactMap { connectedID in
-            registry.entries.first {
-                GatewayStableIdentifier.matches($0.stableID, connectedID)
-            }
-        }
     }
 }

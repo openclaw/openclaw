@@ -1,7 +1,7 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SessionTranscriptContextVersion } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
-import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
+import type { CodexHistoryReadResult } from "./src/app-server/history-rejection.js";
 import type { JsonValue } from "./src/app-server/protocol.js";
 import {
   readCodexNativeHistory,
@@ -12,20 +12,16 @@ import {
   type SettledTurnMessages,
 } from "./src/app-server/settled-turn-evidence.js";
 
-type ReadInput = {
+export type CodexHistoryWorkerInput = {
   target: ResolvedCodexHistoryTarget;
   sessionId: string;
   admission?: TranscriptTurnAdmission;
+  evidence: SettledTurnMessages;
 };
-export type CodexHistoryWorkerInput = ReadInput &
-  ({ kind: "messages" } | { kind: "settled"; evidence: SettledTurnMessages });
-export type CodexHistoryWorkerResult = (
-  | { kind: "messages"; messages: AgentMessage[] | undefined }
-  | { kind: "settled"; data: JsonValue[] | undefined }
-) & { version?: SessionTranscriptContextVersion };
-
-// This top-level plugin entry is packaged in both standalone and bundled builds.
-export const codexHistoryWorkerUrl = new URL(import.meta.url);
+export type CodexHistoryWorkerResult = {
+  result: CodexHistoryReadResult<JsonValue[]>;
+  version?: SessionTranscriptContextVersion;
+};
 
 export async function runCodexHistoryWorkerInput(
   input: unknown,
@@ -36,33 +32,14 @@ export async function runCodexHistoryWorkerInput(
   const onSnapshot = (value: SessionTranscriptContextVersion | undefined) => {
     version = value;
   };
-  if (request.kind === "messages") {
-    return {
-      kind: request.kind,
-      messages: await readCodexNativeHistory(
-        request.target,
-        request.sessionId,
-        (messages) => Array.from(messages),
-        request.admission,
-        onSnapshot,
-      ),
-      version,
-    };
-  }
-  if (request.kind === "settled") {
-    return {
-      kind: request.kind,
-      data: await readCodexNativeHistory(
-        request.target,
-        request.sessionId,
-        (messages) => projectVerifiedSettledCodexMessages(messages, request.evidence),
-        request.admission,
-        onSnapshot,
-      ),
-      version,
-    };
-  }
-  throw new Error("Invalid Codex history worker operation");
+  const result = await readCodexNativeHistory(
+    request.target,
+    request.sessionId,
+    (messages) => projectVerifiedSettledCodexMessages(messages, request.evidence),
+    request.admission,
+    onSnapshot,
+  );
+  return { result, version };
 }
 
 serveWorkerTasks(runCodexHistoryWorkerInput);

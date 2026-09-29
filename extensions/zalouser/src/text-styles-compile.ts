@@ -6,11 +6,7 @@ import {
   type MarkdownIRWithBlockMetadata,
   type TextEdit,
 } from "./text-styles-shared.js";
-import {
-  sourceContainerPrefixLength,
-  sourceContainerProjection,
-  sourceListItemContent,
-} from "./text-styles-source-spans.js";
+import { sourceContainerProjection, sourceListItemContent } from "./text-styles-source-spans.js";
 import { sourceAtxIsMarkerOnly } from "./text-styles-source.js";
 import { TextStyle } from "./zca-constants.js";
 
@@ -286,7 +282,14 @@ export function collectBlockEdits(
     }
   }
   edits.push(
-    ...collectSourceSpacingEdits(ir, sourceIR, offsets, projectedText, source).filter(
+    ...collectSourceSpacingEdits(
+      ir,
+      sourceIR,
+      offsets,
+      projectedText,
+      sourceLines,
+      sourceLineStarts,
+    ).filter(
       (spacingEdit) =>
         !edits.some((edit) => spacingEdit.start < edit.end && spacingEdit.end > edit.start),
     ),
@@ -341,15 +344,9 @@ function collectSourceSpacingEdits(
   sourceIR: MarkdownIRWithBlockMetadata,
   offsets: number[],
   text: string,
-  source: string,
+  sourceLines: string[],
+  sourceLineStarts: number[],
 ): TextEdit[] {
-  const sourceLines = source.split("\n");
-  const sourceLineStarts = sourceLines.reduce<number[]>((starts, _line, index) => {
-    starts.push(
-      index === 0 ? 0 : (starts[index - 1] ?? 0) + (sourceLines[index - 1]?.length ?? 0) + 1,
-    );
-    return starts;
-  }, []);
   const boundaries = [
     ...(ir.blocks ?? []).map((block) =>
       Object.assign({}, block, {
@@ -477,14 +474,14 @@ function normalizeCodeBlock(
       }
       const lineIndex = sourceStartLine + index;
       const rawLine = sourceLines[lineIndex] ?? "";
-      const prefixLength = sourceContainerPrefixLength(
+      const prefixLength = sourceContainerProjection(
         rawLine,
         lineIndex,
         ir,
         sourceLineStarts,
         sourceLines,
         blockquoteDepth,
-      );
+      ).offset;
       const sourceContent = rawLine.slice(prefixLength);
       return /^[ \t]+$/u.test(sourceContent)
         ? normalizeCodeBlockLeadingWhitespace(sourceContent)

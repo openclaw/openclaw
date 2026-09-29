@@ -68,6 +68,7 @@ import {
 } from "./web-runtime.js";
 
 beforeEach(async () => {
+  vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", undefined);
   const page = {
     on: pageOn,
     goto,

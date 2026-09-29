@@ -1,4 +1,3 @@
-// Tlon API module exposes the plugin public contract.
 import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -10,12 +9,13 @@ import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
 import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "./urbit/context.js";
 
-type ClientConfig = {
+export type ClientConfig = {
   shipUrl: string;
   shipName: string;
   verbose: boolean;
   getCode: () => Promise<string>;
   dangerouslyAllowPrivateNetwork?: boolean;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 type StorageService = "presigned-url" | "credentials";
@@ -56,8 +56,6 @@ const TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS = 30_000;
 /** Total deadline for Memex and custom S3 PUTs, including DNS and the full upload. */
 const TLON_UPLOAD_TIMEOUT_MS = 300_000;
 
-let currentClientConfig: ClientConfig | null = null;
-
 async function releaseUploadResponse(
   guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined,
 ): Promise<void> {
@@ -75,24 +73,6 @@ async function releaseUploadResponse(
   } finally {
     await guarded.release();
   }
-}
-
-export function configureClient(params: ClientConfig): void {
-  currentClientConfig = {
-    ...params,
-    shipName: params.shipName.replace(/^~/, ""),
-  };
-}
-
-function requireClientConfig(): ClientConfig {
-  if (!currentClientConfig) {
-    throw new Error("Tlon client not configured");
-  }
-  return currentClientConfig;
-}
-
-function getExtensionFromMimeType(mimeType?: string): string {
-  return extensionForMime(mimeType) || ".jpg";
 }
 
 function hasCustomS3Creds(
@@ -188,12 +168,6 @@ function sanitizeFileName(fileName: string): string {
   return fileName.split(/[/\\]/).pop() || fileName;
 }
 
-async function getAuthCookie(config: ClientConfig): Promise<string> {
-  return await authenticate(config.shipUrl, await config.getCode(), {
-    ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
-  });
-}
-
 async function scryJson<T>(config: ClientConfig, cookie: string, path: string): Promise<T> {
   return (await scryUrbitPath(
     {
@@ -202,6 +176,7 @@ async function scryJson<T>(config: ClientConfig, cookie: string, path: string): 
       ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(
         config.dangerouslyAllowPrivateNetwork,
       ),
+      beforeRequest: config.assertDirectAdapterHandoff,
     },
     { path, auditContext: "tlon-storage-scry" },
   )) as T;
@@ -277,6 +252,7 @@ async function getMemexUploadUrl(params: {
       capture: false,
       maxRedirects: 0,
       timeoutMs: TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS,
+      beforeRequest: params.config.assertDirectAdapterHandoff,
     });
     if (!guarded.response.ok) {
       throw new Error(`Memex upload request failed: ${guarded.response.status}`);
@@ -297,9 +273,18 @@ async function getMemexUploadUrl(params: {
   }
 }
 
-export async function uploadFile(params: UploadFileParams): Promise<UploadResult> {
-  const config = requireClientConfig();
-  const cookie = await getAuthCookie(config);
+export async function uploadFile(
+  params: UploadFileParams,
+  clientConfig: ClientConfig,
+): Promise<UploadResult> {
+  const config: ClientConfig = {
+    ...clientConfig,
+    shipName: clientConfig.shipName.replace(/^~/, ""),
+  };
+  const cookie = await authenticate(config.shipUrl, await config.getCode(), {
+    ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
+    beforeRequest: config.assertDirectAdapterHandoff,
+  });
   const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
     config.dangerouslyAllowPrivateNetwork,
   );
@@ -310,7 +295,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
   ]);
 
   const contentType = params.contentType || params.blob.type || "application/octet-stream";
-  const extension = getExtensionFromMimeType(contentType);
+  const extension = extensionForMime(contentType) || ".jpg";
   const fileName = sanitizeFileName(params.fileName || `upload${extension}`);
   const fileKey = `${config.shipName}/${Date.now()}-${crypto.randomUUID()}-${fileName}`;
 
@@ -344,6 +329,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
         capture: false,
         maxRedirects: 0,
         timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
+        beforeRequest: config.assertDirectAdapterHandoff,
       });
       assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
       if (!guarded.response.ok) {
@@ -402,6 +388,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       maxRedirects: 0,
       policy: privateNetworkPolicy,
       timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
+      beforeRequest: config.assertDirectAdapterHandoff,
     });
     if (!guarded.response.ok) {
       throw new Error(`Upload failed: ${guarded.response.status}`);

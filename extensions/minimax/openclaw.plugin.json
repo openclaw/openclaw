@@ -1,5 +1,7 @@
 {
   "id": "minimax",
+  "categories": ["models"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -43,6 +45,8 @@
       "method": "oauth",
       "choiceId": "minimax-global-oauth",
       "appGuidedAuth": "device-code",
+      "credentialOnly": true,
+      "channelLogin": {},
       "choiceLabel": "MiniMax OAuth (Global)",
       "choiceHint": "Global endpoint - api.minimax.io",
       "groupId": "minimax",
@@ -70,6 +74,8 @@
       "method": "oauth-cn",
       "choiceId": "minimax-cn-oauth",
       "appGuidedAuth": "device-code",
+      "credentialOnly": true,
+      "channelLogin": {},
       "choiceLabel": "MiniMax OAuth (CN)",
       "choiceHint": "CN endpoint - api.minimaxi.com",
       "groupId": "minimax",
@@ -146,6 +152,14 @@
       "help": "Search endpoint region override. Leave unset to reuse your configured MiniMax host or MINIMAX_API_HOST."
     }
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

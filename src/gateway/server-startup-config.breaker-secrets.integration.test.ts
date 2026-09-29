@@ -1,6 +1,7 @@
 /** Integration coverage for breaker-safe startup SecretRef activation. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../secrets/runtime-telegram.test-support.ts";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import {
   asConfig,
@@ -17,10 +18,8 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  createRuntimeSecretsActivator,
-  prepareGatewayStartupConfig,
-} from "./server-startup-config.js";
+import { prepareGatewayStartupConfig } from "./server-startup-config-helpers.js";
+import { createRuntimeSecretsActivator } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
 const GATEWAY_TOKEN_ENV = "BREAKER_GATEWAY_AUTH_TOKEN";
@@ -103,11 +102,7 @@ describe("gateway breaker SecretRef integration", () => {
               loadAuthStore: () => loadAuthStoreWithProfiles({}),
             });
           const activateRuntimeSecrets = createRuntimeSecretsActivator({
-            logSecrets: {
-              info: vi.fn(),
-              warn: vi.fn(),
-              error: vi.fn(),
-            },
+            logSecrets: createInfoWarnErrorLogger(),
             emitStateEvent: vi.fn(),
             prepareRuntimeSecretsSnapshot,
             activateRuntimeSecretsSnapshot: activateSecretsRuntimeSnapshot,

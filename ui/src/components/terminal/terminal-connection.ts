@@ -1,6 +1,11 @@
 // Typed terminal RPCs plus per-session event routing; DOM-free for focused tests.
 
-import type { TerminalOpenParams } from "@openclaw/gateway-protocol";
+import type {
+  EventFrame,
+  SessionsCatalogStartTerminalParams,
+  TerminalOpenParams,
+} from "@openclaw/gateway-protocol";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
@@ -12,7 +17,7 @@ export interface TerminalGatewayClient {
     params?: unknown,
     options?: TerminalRequestOptions,
   ): Promise<T>;
-  addEventListener(listener: (evt: { event: string; payload: unknown }) => void): () => void;
+  addEventListener(listener: (evt: Pick<EventFrame, "event" | "payload">) => void): () => void;
   inboundActivitySeq?: number;
   /** Recovers unreplayable output gaps and half-open terminal streams. */
   forceReconnect(reason: string): void;
@@ -35,15 +40,8 @@ type TerminalAttachResult = TerminalOpenResult & {
   seq?: number;
 };
 
-export type TerminalSessionInfo = {
-  sessionId: string;
-  agentId: string;
-  shell: string;
-  title?: string;
-  cwd: string;
-  confined: boolean;
+export type TerminalSessionInfo = TerminalOpenResult & {
   attached: boolean;
-  owner?: "conn" | `agent:${string}`;
   createdAtMs: number;
 };
 
@@ -104,16 +102,12 @@ export class TerminalOpenUnusableSessionError extends Error {
   }
 }
 
-function nonEmptyStringField(value: unknown): boolean {
-  return typeof value === "string" && value.length > 0;
-}
-
 /** Names the first protocol-required field the payload failed to deliver.
  *  `terminal.open`/`terminal.attach` responses reach the panel through a bare
  *  cast, so every consumer downstream would otherwise trust unchecked data. */
 function missingTerminalSessionField(result: Partial<TerminalAttachResult>): string | null {
   for (const field of ["sessionId", "agentId", "shell", "cwd"] as const) {
-    if (!nonEmptyStringField(result[field])) {
+    if (!readNonEmptyStringPreservingWhitespace(result[field])) {
       return field;
     }
   }
@@ -123,7 +117,9 @@ function missingTerminalSessionField(result: Partial<TerminalAttachResult>): str
 function isTerminalOpenRequestTimeout(error: unknown): boolean {
   return (
     error instanceof Error &&
-    /^gateway request timed out after \d+ms: terminal\.open$/u.test(error.message)
+    /^gateway request timed out after \d+ms: (?:terminal\.open|sessions\.catalog\.startTerminal)$/u.test(
+      error.message,
+    )
   );
 }
 
@@ -136,7 +132,6 @@ function isTerminalOpenTimeout(error: unknown): boolean {
 
 /** Routes the shared terminal event stream to the session that owns each id. */
 export class TerminalConnection {
-  private readonly client: TerminalGatewayClient;
   private readonly streams = new Map<string, StreamState>();
   // Events can race ahead of open/attach responses. Preserve their seq so a
   // capped buffer becomes a detectable gap instead of silent output loss.
@@ -157,9 +152,7 @@ export class TerminalConnection {
   // Failed opens never register, so bound their pre-registration output.
   private static readonly MAX_PENDING_EVENTS = 512;
 
-  constructor(client: TerminalGatewayClient) {
-    this.client = client;
-  }
+  constructor(private readonly client: TerminalGatewayClient) {}
 
   /** Starts listening for terminal events; idempotent. */
   private ensureSubscribed(): void {
@@ -206,12 +199,8 @@ export class TerminalConnection {
             error: payload.error,
           };
           const stream = this.streams.get(payload.sessionId);
-          if (stream) {
-            if (stream.recovering) {
-              this.bufferEarly(payload.sessionId, { kind: "exit", info });
-            } else {
-              this.deliverExit(payload.sessionId, stream, info);
-            }
+          if (stream && !stream.recovering) {
+            this.deliverExit(payload.sessionId, stream, info);
           } else {
             this.bufferEarly(payload.sessionId, { kind: "exit", info });
           }
@@ -222,10 +211,25 @@ export class TerminalConnection {
 
   /** Opens a session and registers its output/exit sinks before returning. */
   async open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
+    return this.openRequest("terminal.open", params, sink);
+  }
+
+  async start(
+    params: SessionsCatalogStartTerminalParams,
+    sink: SessionSink,
+  ): Promise<TerminalOpenResult> {
+    return this.openRequest("sessions.catalog.startTerminal", params, sink);
+  }
+
+  private async openRequest(
+    method: "terminal.open" | "sessions.catalog.startTerminal",
+    params: TerminalOpenParams | SessionsCatalogStartTerminalParams,
+    sink: SessionSink,
+  ): Promise<TerminalOpenResult> {
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>
-        this.client.request<TerminalOpenResult>("terminal.open", params, {
+        this.client.request<TerminalOpenResult>(method, params, {
           timeoutMs: TERMINAL_OPEN_WATCHDOG_MS,
         }),
       );
@@ -245,7 +249,7 @@ export class TerminalConnection {
       // The gateway already created the session. Without the fields the protocol
       // guarantees it cannot be driven, so release it here instead of leaving a
       // live server session that nothing owns and nothing can close.
-      if (nonEmptyStringField(result.sessionId)) {
+      if (readNonEmptyStringPreservingWhitespace(result.sessionId)) {
         void this.close(result.sessionId);
       }
       throw new TerminalOpenUnusableSessionError(missingField);

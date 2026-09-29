@@ -13,11 +13,11 @@ vi.mock("../tools/gateway.js", async (importOriginal) => ({
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
-afterEach(() => {
+afterEach(async () => {
   // restoreAllMocks does not clear call history on module-mock vi.fn()s.
   mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
-  testing.clearNativeHookRelaysForTests();
+  await testing.clearNativeHookRelaysForTests();
 });
 
 function mockGatewayApproval(waitResult: { id?: string; decision?: string | null }) {

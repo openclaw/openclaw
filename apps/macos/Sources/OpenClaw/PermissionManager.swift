@@ -3,7 +3,6 @@ import ApplicationServices
 import AVFoundation
 import CoreLocation
 import Foundation
-import Observation
 import OpenClawIPC
 import PeekabooAutomationKit
 import Speech
@@ -74,18 +73,16 @@ enum PermissionManager {
         switch cap {
         case .notifications:
             await self.ensureNotifications(interactive: interactive)
-        case .appleScript:
-            await self.ensureAppleScript(interactive: interactive)
         case .accessibility:
             await self.ensureAccessibility(interactive: interactive)
         case .screenRecording:
             await self.ensureScreenRecording(interactive: interactive)
         case .microphone:
-            await self.ensureMicrophone(interactive: interactive)
+            await self.ensureCapture(.audio, capability: .microphone, interactive: interactive)
         case .speechRecognition:
             await self.ensureSpeechRecognition(interactive: interactive)
         case .camera:
-            await self.ensureCamera(interactive: interactive)
+            await self.ensureCapture(.video, capability: .camera, interactive: interactive)
         case .location:
             await self.ensureLocation(interactive: interactive)
         }
@@ -105,19 +102,9 @@ enum PermissionManager {
             return granted && self.isNotificationAuthorized(status: updated.authorizationStatus)
         }
         if settings.authorizationStatus == .denied, interactive {
-            SystemSettingsURLSupport.openFirst([
-                "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
-                "x-apple.systempreferences:com.apple.preference.notifications",
-            ])
+            SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .notifications))
         }
         return false
-    }
-
-    private static func ensureAppleScript(interactive: Bool) async -> Bool {
-        if interactive {
-            return await TerminalAutomationPermission.requestAuthorization()
-        }
-        return await TerminalAutomationPermission.isAuthorized()
     }
 
     private static func ensureAccessibility(interactive: Bool) async -> Bool {
@@ -139,17 +126,21 @@ enum PermissionManager {
         return await self.screenRecordingPermissions.checkScreenRecordingPermissionLive(forceProbe: interactive)
     }
 
-    private static func ensureMicrophone(interactive: Bool) async -> Bool {
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+    private static func ensureCapture(
+        _ mediaType: AVMediaType,
+        capability: Capability,
+        interactive: Bool) async -> Bool
+    {
+        let status = AVCaptureDevice.authorizationStatus(for: mediaType)
         switch status {
         case .authorized:
             return true
         case .notDetermined:
             guard interactive else { return false }
-            return await AVCaptureDevice.requestAccess(for: .audio)
+            return await AVCaptureDevice.requestAccess(for: mediaType)
         case .denied, .restricted:
             if interactive {
-                SystemSettingsURLSupport.openPrivacySettings(for: .microphone)
+                SystemSettingsURLSupport.openPrivacySettings(for: capability)
             }
             return false
         @unknown default:
@@ -170,24 +161,6 @@ enum PermissionManager {
             }
         }
         return SFSpeechRecognizer.authorizationStatus() == .authorized
-    }
-
-    private static func ensureCamera(interactive: Bool) async -> Bool {
-        let status = AVCaptureDevice.authorizationStatus(for: .video)
-        switch status {
-        case .authorized:
-            return true
-        case .notDetermined:
-            guard interactive else { return false }
-            return await AVCaptureDevice.requestAccess(for: .video)
-        case .denied, .restricted:
-            if interactive {
-                SystemSettingsURLSupport.openPrivacySettings(for: .camera)
-            }
-            return false
-        @unknown default:
-            return false
-        }
     }
 
     private static func ensureLocation(interactive: Bool) async -> Bool {
@@ -245,9 +218,6 @@ enum PermissionManager {
                 let settings = await center.notificationSettings()
                 results[cap] = self.isNotificationAuthorized(status: settings.authorizationStatus)
                     ? .granted : .notGranted
-
-            case .appleScript:
-                results[cap] = await TerminalAutomationPermission.authorizationStatus()
 
             case .accessibility:
                 results[cap] = await MainActor.run { AXIsProcessTrusted() } ? .granted : .notGranted
@@ -414,75 +384,5 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
         Task { @MainActor in
             self.finish(status: status)
         }
-    }
-}
-
-@MainActor
-@Observable
-final class PermissionMonitor {
-    static let shared = PermissionMonitor()
-
-    private(set) var status: [Capability: CapabilityAuthorizationStatus] = [:]
-
-    private var monitorTimer: Timer?
-    private var isChecking = false
-    private var registrations = 0
-    private var lastCheck: Date?
-    private let minimumCheckInterval: TimeInterval = 0.5
-
-    func register() {
-        self.registrations += 1
-        if self.registrations == 1 {
-            self.startMonitoring()
-        }
-    }
-
-    func unregister() {
-        guard self.registrations > 0 else { return }
-        self.registrations -= 1
-        if self.registrations == 0 {
-            self.stopMonitoring()
-        }
-    }
-
-    func refreshNow() async {
-        await self.checkStatus(force: true)
-    }
-
-    private func startMonitoring() {
-        Task { await self.checkStatus(force: true) }
-
-        if ProcessInfo.processInfo.isRunningTests { return }
-        self.monitorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.checkStatus(force: false)
-            }
-        }
-    }
-
-    private func stopMonitoring() {
-        self.monitorTimer?.invalidate()
-        self.monitorTimer = nil
-        self.lastCheck = nil
-    }
-
-    private func checkStatus(force: Bool) async {
-        if self.isChecking { return }
-        let now = Date()
-        if !force, let lastCheck, now.timeIntervalSince(lastCheck) < self.minimumCheckInterval {
-            return
-        }
-
-        self.isChecking = true
-
-        let latest = await PermissionManager.authorizationStatus()
-        if latest != self.status {
-            self.status = latest
-            NotificationCenter.default.post(name: .openclawPermissionsChanged, object: nil)
-        }
-        self.lastCheck = Date()
-
-        self.isChecking = false
     }
 }

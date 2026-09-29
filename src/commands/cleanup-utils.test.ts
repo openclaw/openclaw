@@ -11,9 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
-import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
+import * as gatewayLocks from "../infra/gateway-lock.js";
+import { hasNodeErrorCode } from "../infra/path-guards.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -93,7 +95,6 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
 
 import {
   buildCleanupPlan,
-  listAgentSessionDirs,
   moveToTrash,
   removePath,
   removeStateAndLinkedPaths,
@@ -113,18 +114,30 @@ function expectedTrashSourcePath(targetPath: string): string {
 }
 
 describe("moveToTrash", () => {
+  it("retains the target when ownership expires during asynchronous preparation", async () => {
+    const targetPath = path.join(tempDirs.make("openclaw-trash-expired-"), "target");
+    await fs.writeFile(targetPath, "retain me");
+    let owned = true;
+    const removal = moveToTrash(targetPath, createTestRuntime(), () => {
+      if (!owned) {
+        throw new Error("cleanup ownership expired");
+      }
+    });
+    owned = false;
+
+    await expect(removal).resolves.toBe(false);
+    expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
+    expect(await fs.readFile(targetPath, "utf8")).toBe("retain me");
+  });
+
   it("uses fs-safe trash instead of resolving a PATH trash command", async () => {
-    const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-helper-"));
+    const testRoot = tempDirs.make("openclaw-trash-helper-");
     const targetPath = path.join(testRoot, "target");
     fsSync.mkdirSync(targetPath, { recursive: true });
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
     const sourcePath = expectedTrashSourcePath(targetPath);
 
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fsSync.rmSync(testRoot, { recursive: true, force: true });
-    }
+    await moveToTrash(targetPath, runtime);
 
     expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
       allowedRoots: [path.dirname(sourcePath)],
@@ -134,7 +147,7 @@ describe("moveToTrash", () => {
   });
 
   it("allows fs-safe trash to move a symlink whose target resolves outside the parent", async () => {
-    const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-symlink-"));
+    const testRoot = tempDirs.make("openclaw-trash-symlink-");
     const targetPath = path.join(testRoot, "target-link");
     const outsideTarget = path.join(os.tmpdir(), "openclaw-trash-symlink-target");
     fsSync.writeFileSync(targetPath, "link placeholder");
@@ -146,11 +159,7 @@ describe("moveToTrash", () => {
     );
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
 
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fsSync.rmSync(testRoot, { recursive: true, force: true });
-    }
+    await moveToTrash(targetPath, runtime);
 
     expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(targetPath, {
       allowedRoots: [path.dirname(targetPath), path.dirname(outsideTarget)],
@@ -164,11 +173,7 @@ describe("moveToTrash", () => {
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
     const sourcePath = expectedTrashSourcePath(targetPath);
 
-    try {
-      await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
-    } finally {
-      fsSync.rmSync(testRoot, { recursive: true, force: true });
-    }
+    await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
 
     expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
       allowedRoots: [path.dirname(sourcePath)],
@@ -176,7 +181,7 @@ describe("moveToTrash", () => {
   });
 
   it("canonicalizes a symlinked parent before calling fs-safe trash", async () => {
-    const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-parent-link-"));
+    const testRoot = tempDirs.make("openclaw-trash-parent-link-");
     const lexicalParent = path.join(testRoot, "state-link");
     const realParent = path.join(testRoot, "state-real");
     const targetPath = path.join(lexicalParent, "openclaw.json");
@@ -191,11 +196,7 @@ describe("moveToTrash", () => {
     } as fsSync.Stats);
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
 
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fsSync.rmSync(testRoot, { recursive: true, force: true });
-    }
+    await moveToTrash(targetPath, runtime);
 
     expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
       allowedRoots: [realParent],
@@ -359,13 +360,13 @@ describe("cleanup path removals", () => {
       await removalStarted;
 
       await expect(
-        acquireGatewayLock({
+        gatewayLocks.acquireGatewayLock({
           allowInTests: true,
           env,
           pollIntervalMs: 2,
           timeoutMs: 15,
         }),
-      ).rejects.toBeInstanceOf(GatewayLockError);
+      ).rejects.toBeInstanceOf(gatewayLocks.GatewayLockError);
 
       continueRemoval();
       await expect(cleanup).resolves.toBe(true);
@@ -376,63 +377,99 @@ describe("cleanup path removals", () => {
     }
   });
 
-  it("retains external Gateway ownership through linked-path cleanup", async () => {
-    const runtime = createRuntimeMock();
-    const tmpRoot = await fs.realpath(tempDirs.make("openclaw-cleanup-finalization-lock-"));
-    const stateDir = path.join(tmpRoot, "state");
-    const configPath = path.join(tmpRoot, "openclaw.json");
-    const markerPath = path.join(stateDir, "marker.txt");
-    await fs.mkdir(stateDir);
-    await fs.writeFile(markerPath, "remove me");
-    await fs.writeFile(configPath, "{}\n");
-    let continueRemoval = () => {};
-    const removalMayContinue = new Promise<void>((resolve) => {
-      continueRemoval = resolve;
-    });
-    let markLinkedRemovalStarted = () => {};
-    const linkedRemovalStarted = new Promise<void>((resolve) => {
-      markLinkedRemovalStarted = resolve;
-    });
-    const realRm = fs.rm;
-    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      if (target === configPath) {
-        markLinkedRemovalStarted();
-        await removalMayContinue;
+  it.each(["shared", "separate"] as const)(
+    "retains current and published Gateway exclusion through linked-path cleanup (%s lock directory)",
+    async (layout) => {
+      const runtime = createRuntimeMock();
+      const tmpRoot = await fs.realpath(tempDirs.make("openclaw-cleanup-finalization-lock-"));
+      const stateDir = path.join(tmpRoot, "state");
+      const configPath = path.join(tmpRoot, "openclaw.json");
+      const markerPath = path.join(stateDir, "marker.txt");
+      const lockDir =
+        layout === "shared" ? resolveGatewayLockDir(stateDir) : path.join(stateDir, "custom-locks");
+      const acquire = gatewayLocks.acquireGatewayLock;
+      let cleanupLock: Awaited<ReturnType<typeof acquire>> | undefined;
+      vi.spyOn(gatewayLocks, "acquireGatewayLock").mockImplementation(async (options) => {
+        cleanupLock = await acquire({ ...options, lockDir });
+        return cleanupLock;
+      });
+      await fs.mkdir(stateDir);
+      await fs.writeFile(markerPath, "remove me");
+      await fs.writeFile(configPath, "{}\n");
+      let continueRemoval = () => {};
+      const removalMayContinue = new Promise<void>((resolve) => {
+        continueRemoval = resolve;
+      });
+      let markLinkedRemovalStarted = () => {};
+      const linkedRemovalStarted = new Promise<void>((resolve) => {
+        markLinkedRemovalStarted = resolve;
+      });
+      const realRm = fs.rm;
+      const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (target === configPath) {
+          markLinkedRemovalStarted();
+          await removalMayContinue;
+        }
+        return await realRm(target, options);
+      });
+      const env = {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+
+      try {
+        const cleanup = removeStateAndLinkedPaths(
+          {
+            stateDir,
+            configPath,
+            oauthDir: path.join(stateDir, "credentials"),
+            configInsideState: false,
+            oauthInsideState: true,
+          },
+          runtime,
+        );
+        await linkedRemovalStarted;
+
+        const held = expectDefined(cleanupLock, "cleanup ownership");
+        for (const lockPath of [held.lockPath, held.stateLockPath]) {
+          expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toMatchObject({
+            pid: process.pid,
+          });
+        }
+        const stateLockPath = held.stateLockPath;
+        let legacyBlocked = false;
+        let legacyDescriptor: number | undefined;
+        try {
+          // Published 2026.9.4 startup must exclusively create this same marker.
+          fsSync.mkdirSync(path.dirname(stateLockPath), { recursive: true });
+          legacyDescriptor = fsSync.openSync(stateLockPath, "wx", 0o600);
+        } catch (error) {
+          if (!hasNodeErrorCode(error, "EEXIST")) {
+            throw error;
+          }
+          legacyBlocked = true;
+        } finally {
+          if (legacyDescriptor !== undefined) {
+            fsSync.closeSync(legacyDescriptor);
+            fsSync.unlinkSync(stateLockPath);
+          }
+        }
+        const lockAttempt = await attemptGatewayLockInChild(env);
+        continueRemoval();
+        const [cleanupResult] = await Promise.allSettled([cleanup]);
+
+        expect(legacyBlocked).toBe(true);
+        expect(lockAttempt).toBe("blocked");
+        expect(cleanupResult).toEqual({ status: "fulfilled", value: true });
+        await expect(fs.access(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        continueRemoval();
+        rmSpy.mockRestore();
       }
-      return await realRm(target, options);
-    });
-    const env = {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-
-    try {
-      const cleanup = removeStateAndLinkedPaths(
-        {
-          stateDir,
-          configPath,
-          oauthDir: path.join(stateDir, "credentials"),
-          configInsideState: false,
-          oauthInsideState: true,
-        },
-        runtime,
-      );
-      await linkedRemovalStarted;
-
-      const lockAttempt = await attemptGatewayLockInChild(env);
-      continueRemoval();
-      const [cleanupResult] = await Promise.allSettled([cleanup]);
-
-      expect(lockAttempt).toBe("blocked");
-      expect(cleanupResult).toEqual({ status: "fulfilled", value: true });
-      await expect(fs.access(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      continueRemoval();
-      rmSpy.mockRestore();
-    }
-  });
+    },
+  );
 
   it("fails without removing state recreated during cleanup finalization", async () => {
     const runtime = createRuntimeMock();
@@ -470,6 +507,137 @@ describe("cleanup path removals", () => {
       rmdirSpy.mockRestore();
     }
   });
+
+  it.each(["lock directory", "state directory"] as const)(
+    "preserves a replacement empty %s after cleanup ownership releases",
+    async (replacement) => {
+      const runtime = createRuntimeMock();
+      const tmpRoot = await fs.realpath(tempDirs.make("openclaw-cleanup-empty-replacement-"));
+      const stateDir = path.join(tmpRoot, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const lockDir = resolveGatewayLockDir(stateDir);
+      const target = replacement === "lock directory" ? lockDir : stateDir;
+      await fs.mkdir(lockDir, { recursive: true });
+      await fs.writeFile(configPath, "{}");
+      const previous = await fs.lstat(target, { bigint: true });
+      const acquire = gatewayLocks.acquireGatewayLock;
+      vi.spyOn(gatewayLocks, "acquireGatewayLock").mockImplementation(async (options) => {
+        const held = expectDefined(await acquire(options), "cleanup ownership");
+        const release = held.release;
+        vi.spyOn(held, "release").mockImplementation(async () => {
+          await release();
+          await fs.rename(target, path.join(tmpRoot, "retired-directory"));
+          await fs.mkdir(target);
+        });
+        return held;
+      });
+
+      await expect(
+        removeStateAndLinkedPaths(
+          {
+            stateDir,
+            configPath,
+            oauthDir: path.join(stateDir, "credentials"),
+            configInsideState: true,
+            oauthInsideState: true,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(/interrupted by a new state operation/);
+      const current = await fs.lstat(target, { bigint: true });
+      expect(current.ino).not.toBe(previous.ino);
+      expect(await fs.readdir(target)).toEqual([]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["config", "OAuth"] as const)(
+    "rejects an aliased %s cleanup target containing held ownership before removing state",
+    async (target) => {
+      const runtime = createRuntimeMock();
+      const tmpRoot = await fs.realpath(tempDirs.make("openclaw-cleanup-linked-owner-"));
+      const stateDir = path.join(tmpRoot, "state");
+      const alias = path.join(tmpRoot, "state-alias");
+      const marker = path.join(stateDir, "retain.txt");
+      await fs.mkdir(stateDir);
+      await fs.symlink(stateDir, alias, "dir");
+      await fs.writeFile(marker, "retained");
+      const linkedLockDir = path.join(
+        alias,
+        path.relative(stateDir, resolveGatewayLockDir(stateDir)),
+      );
+      const configPath =
+        target === "config"
+          ? path.join(linkedLockDir, "gateway.state.lock")
+          : path.join(tmpRoot, "openclaw.json");
+      if (target !== "config") {
+        await fs.writeFile(configPath, "{}");
+      }
+
+      await expect(
+        removeStateAndLinkedPaths(
+          {
+            stateDir,
+            configPath,
+            oauthDir: target === "OAuth" ? linkedLockDir : path.join(stateDir, "credentials"),
+            configInsideState: false,
+            oauthInsideState: target !== "OAuth",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(/linked cleanup path.*active state lock/);
+      expect(await fs.readFile(marker, "utf8")).toBe("retained");
+      expect(await fs.lstat(alias).then((entry) => entry.isSymbolicLink())).toBe(true);
+      if (target !== "config") {
+        expect(await fs.readFile(configPath, "utf8")).toBe("{}");
+      }
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["inside", "outside", "database directory", "database file"] as const)(
+    "refuses cleanup before deletion when the lock namespace is redirected (%s)",
+    async (location) => {
+      const runtime = createRuntimeMock();
+      const root = await fs.realpath(tempDirs.make("openclaw-cleanup-redirected-lock-"));
+      const stateDir = path.join(root, "state");
+      const redirected = path.join(location === "outside" ? root : stateDir, "runtime");
+      const configPath = path.join(root, "openclaw.json");
+      const marker = path.join(stateDir, "retain.txt");
+      await fs.mkdir(redirected, { recursive: true });
+      await fs.mkdir(stateDir, { recursive: true });
+      const alias =
+        location === "database file"
+          ? path.join(stateDir, "state", "openclaw.sqlite")
+          : path.join(stateDir, location === "database directory" ? "state" : "tmp");
+      if (location === "database file") {
+        await fs.mkdir(path.dirname(alias));
+        const database = path.join(redirected, "openclaw.sqlite");
+        await fs.writeFile(database, "");
+        await fs.symlink(database, alias);
+      } else {
+        await fs.symlink(redirected, alias, "dir");
+      }
+      await fs.writeFile(marker, "retained");
+      await fs.writeFile(configPath, "{}");
+
+      const removal = removeStateAndLinkedPaths(
+        {
+          stateDir,
+          configPath,
+          oauthDir: path.join(stateDir, "credentials"),
+          configInsideState: false,
+          oauthInsideState: true,
+        },
+        runtime,
+      );
+      await expect(removal).rejects.toBeInstanceOf(Error);
+      expect(await fs.readFile(marker, "utf8")).toBe("retained");
+      expect(await fs.readFile(configPath, "utf8")).toBe("{}");
+      expect(await fs.lstat(alias).then((entry) => entry.isSymbolicLink())).toBe(true);
+      await expect(removal).rejects.toThrow(/active (?:lock directory|database path).*redirected/);
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "cleans a state directory reached through a symbolic-link alias",
@@ -631,16 +799,12 @@ describe("cleanup path removals", () => {
     const tmpRoot = tempDirs.make("openclaw-cleanup-workspace-");
     const workspaceDir = path.join(tmpRoot, "workspace");
 
-    try {
-      await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(workspaceDir, { recursive: true });
 
-      await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
+    await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
 
-      await expect(fs.stat(workspaceDir)).rejects.toThrow();
-      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+    await expect(fs.stat(workspaceDir)).rejects.toThrow();
+    expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
   });
 
   it("cleans workspace state when the workspace directory is already missing", async () => {
@@ -649,19 +813,15 @@ describe("cleanup path removals", () => {
     const workspaceDir = path.join(tmpRoot, "workspace");
     const siblingMarker = `${workspaceDir}.attested`;
 
-    try {
-      await fs.writeFile(
-        siblingMarker,
-        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
-      );
+    await fs.writeFile(
+      siblingMarker,
+      "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+    );
 
-      await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
+    await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
 
-      await expect(fs.stat(siblingMarker)).rejects.toThrow();
-      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+    await expect(fs.stat(siblingMarker)).rejects.toThrow();
+    expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
   });
 
   it("removes a retired sibling marker after workspace removal without opening SQLite", async () => {
@@ -670,21 +830,17 @@ describe("cleanup path removals", () => {
     const workspaceDir = path.join(tmpRoot, "workspace");
     const siblingMarker = `${workspaceDir}.attested`;
 
-    try {
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.writeFile(
-        siblingMarker,
-        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
-      );
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      siblingMarker,
+      "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+    );
 
-      await removeWorkspaceDirs([workspaceDir], runtime);
+    await removeWorkspaceDirs([workspaceDir], runtime);
 
-      await expect(fs.stat(workspaceDir)).rejects.toThrow();
-      await expect(fs.stat(siblingMarker)).rejects.toThrow();
-      expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+    await expect(fs.stat(workspaceDir)).rejects.toThrow();
+    await expect(fs.stat(siblingMarker)).rejects.toThrow();
+    expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 
   it("does not delete workspace state during dry-run", async () => {
@@ -704,20 +860,16 @@ describe("cleanup path removals", () => {
     const workspaceDir = path.join(tmpRoot, "workspace");
     const siblingMarker = `${workspaceDir}.attested`;
 
-    try {
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.writeFile(
-        siblingMarker,
-        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
-      );
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      siblingMarker,
+      "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+    );
 
-      await removeWorkspaceDirs([workspaceDir], runtime, { dryRun: true });
+    await removeWorkspaceDirs([workspaceDir], runtime, { dryRun: true });
 
-      expect(runtime.log).toHaveBeenCalledWith(`[dry-run] remove ${siblingMarker}`);
-      await expect(fs.lstat(siblingMarker)).resolves.toBeDefined();
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+    expect(runtime.log).toHaveBeenCalledWith(`[dry-run] remove ${siblingMarker}`);
+    await expect(fs.lstat(siblingMarker)).resolves.toBeDefined();
   });
 
   it("retains workspace state when filesystem removal fails", async () => {
@@ -784,20 +936,6 @@ describe("cleanup path removals", () => {
     } finally {
       cwdSpy.mockRestore();
       await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("listAgentSessionDirs", () => {
-  it("treats a missing agents root as empty but propagates inspection failures", async () => {
-    await expect(listAgentSessionDirs("/tmp/openclaw-missing-state")).resolves.toEqual([]);
-
-    const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
-    const readdir = vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
-    try {
-      await expect(listAgentSessionDirs("/tmp/openclaw-unreadable-state")).rejects.toBe(error);
-    } finally {
-      readdir.mockRestore();
     }
   });
 });

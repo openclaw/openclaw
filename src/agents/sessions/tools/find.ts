@@ -1,16 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
-/**
- * Built-in find session tool.
- *
- * Searches files by glob through fd/local operations and returns bounded, renderable results.
- */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
+import { textResult } from "../../tools/tool-results.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
@@ -25,6 +21,7 @@ import {
 } from "./render-utils.js";
 import type { FindToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { findSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 function isInsideGitRepository(searchPath: string): boolean {
@@ -40,13 +37,6 @@ function isInsideGitRepository(searchPath: string): boolean {
   }
 }
 
-const findSchema = Type.Object({
-  pattern: Type.String({
-    description: "File glob, e.g. **/*.ts.",
-  }),
-  path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
-  limit: Type.Optional(Type.Integer({ description: "Max results; default 1000." })),
-});
 const DEFAULT_LIMIT = 1000;
 
 /**
@@ -63,12 +53,6 @@ export interface FindOperations {
     options: { ignore: string[]; limit: number },
   ) => Promise<string[]> | string[];
 }
-
-const defaultFindOperations: FindOperations = {
-  exists: existsSync,
-  // This is a placeholder. Actual fd execution happens in execute() when no custom glob is provided.
-  glob: () => [],
-};
 
 export interface FindToolOptions {
   /** Custom operations for find. Default: local filesystem plus fd */
@@ -96,10 +80,7 @@ function formatFindCall(
 }
 
 function formatFindResult(
-  result: {
-    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-    details?: FindToolDetails;
-  },
+  result: AgentToolResult<FindToolDetails>,
   options: ToolRenderResultOptions,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   showImages: boolean,
@@ -120,10 +101,7 @@ function buildFindResult(params: {
   searchPath: string;
   effectiveLimit: number;
   limitNotice: string;
-}): {
-  content: Array<{ type: "text"; text: string }>;
-  details: FindToolDetails | undefined;
-} {
+}) {
   const resultLimitReached = params.paths.length > params.effectiveLimit;
   const rawOutput = params.paths
     .slice(0, params.effectiveLimit)
@@ -139,9 +117,8 @@ function buildFindResult(params: {
         : relativePath;
     })
     .join("\n");
-  const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-  let resultOutput = truncation.content;
-  const details: FindToolDetails = {};
+  const { content, ...truncation } = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+  const details: FindToolDetails = { content };
   const notices: string[] = [];
   if (resultLimitReached) {
     notices.push(params.limitNotice);
@@ -152,18 +129,15 @@ function buildFindResult(params: {
     details.truncation = truncation;
   }
   if (notices.length > 0) {
-    resultOutput += `\n\n[${notices.join(". ")}]`;
+    details.content += `\n\n[${notices.join(". ")}]`;
   }
-  return {
-    content: [{ type: "text", text: resultOutput }],
-    details: Object.keys(details).length > 0 ? details : undefined,
-  };
+  return textResult(details.content, details);
 }
 
 export function createFindToolDefinition(
   cwd: string,
   options?: FindToolOptions,
-): ToolDefinition<typeof findSchema, FindToolDetails | undefined> {
+): ToolDefinition<typeof findSchema, FindToolDetails> {
   const customOps = options?.operations;
   const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
@@ -172,16 +146,7 @@ export function createFindToolDefinition(
     description: `Find by glob; paths relative to search dir. Respects .gitignore. Caps ${DEFAULT_LIMIT} results/${DEFAULT_MAX_BYTES / 1024}KB.`,
     promptSnippet: "Find files by glob pattern (respects .gitignore)",
     parameters: findSchema,
-    async execute(
-      toolCallId,
-      { pattern, path: searchDir, limit }: { pattern: string; path?: string; limit?: number },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
-    ) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
+    async execute(_toolCallId, { pattern, path: searchDir, limit }, signal, _onUpdate, _ctx) {
       return new Promise((resolve, reject) => {
         if (signal?.aborted) {
           reject(new Error("Operation aborted"));
@@ -215,11 +180,9 @@ export function createFindToolDefinition(
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             // One extra candidate distinguishes an exact-size result from a truncated one.
             const observationLimit = effectiveLimit + 1;
-            const ops = customOps ?? defaultFindOperations;
-
             // If custom operations provide glob(), use that instead of fd.
             if (customOps?.glob) {
-              if (!(await ops.exists(searchPath))) {
+              if (!(await customOps.exists(searchPath))) {
                 settle(() => reject(new Error(`Path not found: ${searchPath}`)));
                 return;
               }
@@ -227,7 +190,7 @@ export function createFindToolDefinition(
                 settle(() => reject(new Error("Operation aborted")));
                 return;
               }
-              const results = await ops.glob(pattern, searchPath, {
+              const results = await customOps.glob(pattern, searchPath, {
                 ignore: ["**/node_modules/**", "**/.git/**"],
                 limit: observationLimit,
               });
@@ -237,10 +200,11 @@ export function createFindToolDefinition(
               }
               if (results.length === 0) {
                 settle(() =>
-                  resolve({
-                    content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: undefined,
-                  }),
+                  resolve(
+                    textResult("No files found matching pattern", {
+                      content: "No files found matching pattern",
+                    }),
+                  ),
                 );
                 return;
               }
@@ -294,17 +258,28 @@ export function createFindToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(child.nodeChildProcess);
-            const rl = createInterface({ input: child.stdout });
-            let stderr = "";
-            let stderrDroppedBytes = 0;
-            const lines: string[] = [];
-
-            stopChild = () => {
+            const stop = () => {
               if (!child.nodeChildProcess.killed) {
                 child.kill();
               }
             };
+            stopChild = stop;
+            if (child.pid === undefined) {
+              await waitForCommandSpawn(child);
+            }
+            if (settled) {
+              stop();
+              return;
+            }
+            releaseChildProcessOutputAfterExit(child.nodeChildProcess);
+            if (!child.stdout) {
+              const result = await child;
+              throw result instanceof Error ? result : new Error("fd stdout is unavailable");
+            }
+            const rl = createInterface({ input: child.stdout });
+            let stderr = "";
+            let stderrDroppedBytes = 0;
+            const lines: string[] = [];
 
             const cleanup = () => {
               rl.close();
@@ -356,10 +331,11 @@ export function createFindToolDefinition(
               }
               if (!output) {
                 settle(() =>
-                  resolve({
-                    content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: undefined,
-                  }),
+                  resolve(
+                    textResult("No files found matching pattern", {
+                      content: "No files found matching pattern",
+                    }),
+                  ),
                 );
                 return;
               }
@@ -399,6 +375,6 @@ export function createFindToolDefinition(
 export function createFindTool(
   cwd: string,
   options?: FindToolOptions,
-): AgentTool<typeof findSchema> {
+): AgentTool<typeof findSchema, FindToolDetails> {
   return wrapToolDefinition(createFindToolDefinition(cwd, options));
 }

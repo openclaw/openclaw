@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { getActiveWebListener } from "./active-listener.js";
 import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
@@ -825,40 +826,46 @@ describe("web auto-reply connection", () => {
     scenario.assertAfterRun?.(context);
   });
 
-  it("passes the global inbound debounce into the live listener", async () => {
-    const capture = createWebListenerFactoryCapture();
+  it.each([undefined, 75])(
+    "keeps live debounce config and explicit transport override (%s)",
+    async (debounceMs) => {
+      const capture = createWebListenerFactoryCapture();
 
-    setLoadConfigMock({
-      messages: {
-        inbound: {
-          debounceMs: 250,
+      setLoadConfigMock({
+        messages: {
+          inbound: {
+            debounceMs: 250,
+          },
         },
-      },
-      channels: {
-        whatsapp: {
-          accounts: {
-            work: {
-              authDir: "/tmp/work",
+        channels: {
+          whatsapp: {
+            accounts: {
+              work: {
+                authDir: "/tmp/work",
+              },
             },
           },
         },
-      },
-    } as OpenClawConfig);
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "work",
-      },
-    );
+      } as OpenClawConfig);
+      await monitorWebChannel(
+        false,
+        capture.listenerFactory as never,
+        false,
+        async () => ({ text: "ok" }),
+        undefined,
+        undefined,
+        {
+          accountId: "work",
+          debounceMs,
+        },
+      );
 
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
+      resetLoadConfigMock();
+      expect(capture.getLastOptions()?.debounceMs).toBe(debounceMs);
+      expect(capture.getLastOptions()?.cfg.messages?.inbound?.debounceMs).toBe(250);
+      expect(capture.getLastOptions()?.loadConfig).toEqual(expect.any(Function));
+    },
+  );
 
   it("raises the process listener budget before opening the web listener", async () => {
     const originalMax = process.getMaxListeners();
@@ -878,11 +885,8 @@ describe("web auto-reply connection", () => {
   });
 
   it("builds separate timestamped inbound envelopes without batching", () => {
-    const cfg = {} as OpenClawConfig;
     const buildLine = (body: string, id: string, timestamp: number) =>
       buildInboundLine({
-        cfg,
-        agentId: "main",
         envelope: { timezone: "utc" },
         msg: createTestWebInboundMessage({
           event: { id, timestamp },
@@ -902,13 +906,13 @@ describe("web auto-reply connection", () => {
 
     expect(firstBody).toMatch(
       new RegExp(
-        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(firstTimestamp)}\\] \\+1: \\[openclaw\\] first`,
+        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(firstTimestamp)}\\] \\+1: first`,
       ),
     );
     expect(firstBody).not.toContain("second");
     expect(secondBody).toMatch(
       new RegExp(
-        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(secondTimestamp)}\\] \\+1: \\[openclaw\\] second`,
+        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(secondTimestamp)}\\] \\+1: second`,
       ),
     );
     expect(secondBody).not.toContain("first");
@@ -919,11 +923,7 @@ describe("web auto-reply connection", () => {
     const logPath = `/tmp/openclaw-heartbeat-${crypto.randomUUID()}.log`;
     setLoggerOverride({ level: "trace", file: logPath });
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     const controller = new AbortController();
     const listenerFactory = vi.fn(async () => {

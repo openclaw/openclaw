@@ -115,7 +115,7 @@ type KeyEncodingRequest = {
 };
 
 type KeyEncodingResult = {
-  data: string;
+  data: Buffer;
   warnings: string[];
 };
 
@@ -136,35 +136,30 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
   );
 }
 
-/** Encodes literal, hex, and named key tokens into one PTY input string. */
+/** Encodes literal, hex, and named key tokens into one PTY byte payload. */
 export function encodeKeySequence(
   request: KeyEncodingRequest,
   cursorKeyMode?: "normal" | "application",
 ): KeyEncodingResult {
   const warnings: string[] = [];
-  let data = "";
-
-  if (request.literal) {
-    data += request.literal;
-  }
-
-  if (request.hex?.length) {
-    for (const raw of request.hex) {
-      const byte = parseHexByte(raw);
-      if (byte === null) {
-        warnings.push(`Invalid hex byte: ${raw}`);
-        continue;
-      }
-      data += String.fromCharCode(byte);
+  const hexBytes: number[] = [];
+  for (const raw of request.hex ?? []) {
+    const byte = parseHexByte(raw);
+    if (byte === null) {
+      warnings.push(`Invalid hex byte: ${raw}`);
+      continue;
     }
+    hexBytes.push(byte);
   }
-
-  if (request.keys?.length) {
-    for (const token of request.keys) {
-      data += encodeKeyToken(token, warnings, cursorKeyMode);
-    }
-  }
-
+  const keys = request.keys
+    ?.map((token) => encodeKeyToken(token, warnings, cursorKeyMode))
+    .join("");
+  // Hex values are already bytes; only text fragments pass through UTF-8 encoding.
+  const data = Buffer.concat([
+    Buffer.from(request.literal ?? ""),
+    Buffer.from(hexBytes),
+    Buffer.from(keys ?? ""),
+  ]);
   return { data, warnings };
 }
 
@@ -229,7 +224,7 @@ function encodeKeyToken(
     return applyCharModifiers(base, parsed.mods);
   }
 
-  if (parsed.hasModifiers) {
+  if (hasAnyModifier(parsed.mods)) {
     warnings.push(`Unknown key "${base}" for modifiers; sending literal.`);
   }
   return base;
@@ -238,7 +233,6 @@ function encodeKeyToken(
 function parseModifiers(token: string) {
   const mods: Modifiers = { ctrl: false, alt: false, shift: false };
   let rest = token;
-  let sawModifiers = false;
 
   while (rest.length > 2 && rest[1] === "-") {
     const mod = normalizeLowercaseStringOrEmpty(rest[0]);
@@ -251,11 +245,10 @@ function parseModifiers(token: string) {
     } else {
       break;
     }
-    sawModifiers = true;
     rest = rest.slice(2);
   }
 
-  return { mods, base: rest, hasModifiers: sawModifiers };
+  return { mods, base: rest };
 }
 
 function applyCharModifiers(char: string, mods: Modifiers): string {
@@ -276,9 +269,6 @@ function applyCharModifiers(char: string, mods: Modifiers): string {
 }
 
 function toCtrlChar(char: string): string | null {
-  if (char.length !== 1) {
-    return null;
-  }
   if (char === "?") {
     return "\x7f";
   }
@@ -313,9 +303,5 @@ function parseHexByte(raw: string): number | null {
   if (!/^[0-9a-f]{1,2}$/.test(normalized)) {
     return null;
   }
-  const value = Number.parseInt(normalized, 16);
-  if (Number.isNaN(value) || value < 0 || value > 0xff) {
-    return null;
-  }
-  return value;
+  return Number.parseInt(normalized, 16);
 }

@@ -1,8 +1,7 @@
 // Shared destructive-cleanup planning and guarded removal helpers.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { hasNodeErrorCode, isPathInside } from "@openclaw/fs-safe/path";
 import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
@@ -14,13 +13,14 @@ import {
   deleteWorkspaceState,
   prepareWorkspaceStateDeletion,
 } from "../agents/workspace-state-store.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
-import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveHomeDir, shortenHomeInString, shortenHomePath } from "../utils.js";
 
@@ -61,12 +61,14 @@ function trashFailure(pathname: string, error: unknown, runtime: RuntimeEnv): Mo
 export async function moveToTrashResult(
   pathname: string,
   runtime: RuntimeEnv,
+  assertCurrent?: () => void,
 ): Promise<MoveToTrashResult> {
   if (!pathname) {
     return { failed: { path: pathname, reason: "path is empty" } };
   }
+  let isSymbolicLink: boolean;
   try {
-    await fs.lstat(pathname);
+    isSymbolicLink = (await fs.lstat(pathname)).isSymbolicLink();
   } catch (error) {
     return isMissingPathError(error)
       ? { removed: { path: pathname, method: "missing" } }
@@ -75,9 +77,14 @@ export async function moveToTrashResult(
   try {
     const targetPath = path.resolve(pathname);
     const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
-    await movePathToTrash(sourcePath, {
-      allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
-    });
+    // fs-safe resolves valid symlinks before allow-root checks; a broken link is handled lexically.
+    const allowedRoots = trashAllowedRoots(
+      [sourcePath],
+      isSymbolicLink ? await fs.realpath(sourcePath).catch(() => undefined) : undefined,
+    );
+    // Preparation can outlive its owner; revalidate immediately before Trash dispatch.
+    assertCurrent?.();
+    await movePathToTrash(sourcePath, { allowedRoots });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
     return { removed: { path: pathname, method: "trash" } };
   } catch (error) {
@@ -86,27 +93,33 @@ export async function moveToTrashResult(
 }
 
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<boolean> {
-  return "removed" in (await moveToTrashResult(pathname, runtime));
+export async function moveToTrash(
+  pathname: string,
+  runtime: RuntimeEnv,
+  assertCurrent?: () => void,
+): Promise<boolean> {
+  return "removed" in (await moveToTrashResult(pathname, runtime, assertCurrent));
+}
+
+/**
+ * Allowed Trash roots for OpenClaw-owned paths: each declared path's own parent, plus the
+ * resolved parent when the moved path is a symlink (fs-safe checks the link target, and
+ * moving a link never touches the directory behind it). fs-safe's default roots (home + tmp)
+ * alone refuse every path of a state dir on a volume such as `/data`.
+ */
+export function trashAllowedRoots(
+  declaredPaths: readonly string[],
+  resolvedLinkPath?: string,
+): string[] {
+  const roots = declaredPaths.map((declaredPath) => path.dirname(declaredPath));
+  if (resolvedLinkPath !== undefined) {
+    roots.push(path.dirname(resolvedLinkPath));
+  }
+  return [...new Set(roots)];
 }
 
 async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {
   return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
-}
-
-async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<string[]> {
-  const allowedRoots = [path.dirname(targetPath)];
-  const stat = await fs.lstat(targetPath);
-  if (stat.isSymbolicLink()) {
-    try {
-      // fs-safe resolves valid symlinks before allow-root checks; include the
-      // resolved parent so deleting a configured symlink moves the link itself.
-      allowedRoots.push(path.dirname(await fs.realpath(targetPath)));
-    } catch {
-      // Broken symlinks are handled lexically by fs-safe.
-    }
-  }
-  return uniqueStrings(allowedRoots);
 }
 
 function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
@@ -133,15 +146,10 @@ export function buildCleanupPlan(params: {
   workspaceDirs: string[];
 } {
   return {
-    configInsideState: isPathWithin(params.configPath, params.stateDir),
-    oauthInsideState: isPathWithin(params.oauthDir, params.stateDir),
+    configInsideState: isPathInside(params.stateDir, params.configPath),
+    oauthInsideState: isPathInside(params.stateDir, params.oauthDir),
     workspaceDirs: collectWorkspaceDirs(params.cfg),
   };
-}
-
-/** Return true when `child` resolves inside `parent`. */
-export function isPathWithin(child: string, parent: string): boolean {
-  return isPathInside(parent, child);
 }
 
 function isUnsafeRemovalTarget(target: string): boolean {
@@ -157,7 +165,7 @@ function isUnsafeRemovalTarget(target: string): boolean {
   if (home && resolved === path.resolve(home)) {
     return true;
   }
-  if (isPathWithin(path.resolve(process.cwd()), resolved)) {
+  if (isPathInside(resolved, path.resolve(process.cwd()))) {
     return true;
   }
   return false;
@@ -169,28 +177,7 @@ export async function removePath(
   runtime: RuntimeEnv,
   opts?: RemovalOptions,
 ): Promise<RemovalResult> {
-  if (!target?.trim()) {
-    return { ok: false };
-  }
-  const resolved = path.resolve(target);
-  const label = opts?.label ?? resolved;
-  const displayLabel = shortenHomeInString(label);
-  if (isUnsafeRemovalTarget(resolved)) {
-    runtime.error(`Refusing to remove unsafe path: ${displayLabel}`);
-    return { ok: false };
-  }
-  if (opts?.dryRun) {
-    runtime.log(`[dry-run] remove ${displayLabel}`);
-    return { ok: true };
-  }
-  try {
-    await fs.rm(resolved, { recursive: true, force: true });
-    runtime.log(`Removed ${displayLabel}`);
-    return { ok: true };
-  } catch (err) {
-    runtime.error(`Failed to remove ${displayLabel}: ${String(err)}`);
-    return { ok: false };
-  }
+  return removePathPreserving(target, [], runtime, opts);
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -223,7 +210,9 @@ async function existingPaths(paths: readonly string[]): Promise<string[]> {
 }
 
 // Service-manager status is advisory; the state lock also covers externally supervised Gateways.
-async function acquireStateCleanupOwnership(cleanup: CleanupResolvedPaths) {
+async function acquireStateCleanupOwnership(
+  cleanup: Pick<CleanupResolvedPaths, "configPath" | "stateDir">,
+) {
   const env = {
     ...process.env,
     OPENCLAW_CONFIG_PATH: cleanup.configPath,
@@ -235,9 +224,7 @@ async function acquireStateCleanupOwnership(cleanup: CleanupResolvedPaths) {
       allowInTests: true,
       env,
       pollIntervalMs: STATE_CLEANUP_LOCK_POLL_INTERVAL_MS,
-      // Shipped readers validate this role as any live OpenClaw process. A new
-      // wire role would let mixed-version Gateways misclassify cleanup as stale.
-      role: "agent-embedded",
+      role: "sqlite-maintenance",
       timeoutMs: STATE_CLEANUP_LOCK_TIMEOUT_MS,
     });
   } catch (error) {
@@ -253,14 +240,6 @@ async function acquireStateCleanupOwnership(cleanup: CleanupResolvedPaths) {
     throw new Error("Cannot remove OpenClaw state without exclusive state ownership.");
   }
   return lock;
-}
-
-function shouldPreservePath(target: string, preservePaths: readonly string[]): boolean {
-  return preservePaths.some((preservePath) => isPathWithin(target, preservePath));
-}
-
-function pathContainsPreservedPath(target: string, preservePaths: readonly string[]): boolean {
-  return preservePaths.some((preservePath) => isPathWithin(preservePath, target));
 }
 
 async function removePathPreserving(
@@ -279,33 +258,36 @@ async function removePathPreserving(
     runtime.error(`Refusing to remove unsafe path: ${displayLabel}`);
     return { ok: false };
   }
-  if (shouldPreservePath(resolved, preservePaths)) {
+  if (preservePaths.some((preservePath) => isPathInside(preservePath, resolved))) {
     return { ok: true };
   }
-  if (!pathContainsPreservedPath(resolved, preservePaths)) {
-    return removePath(resolved, runtime, opts);
-  }
+  const nestedPreservedPaths = preservePaths.filter((preservePath) =>
+    isPathInside(resolved, preservePath),
+  );
   if (opts?.dryRun) {
-    const preserved = preservePaths
-      .filter((preservePath) => isPathWithin(preservePath, resolved))
-      .map((preservePath) => shortenHomeInString(preservePath))
-      .join(", ");
-    runtime.log(`[dry-run] remove ${displayLabel} preserving ${preserved}`);
+    const suffix = nestedPreservedPaths.length
+      ? ` preserving ${nestedPreservedPaths.map((preservePath) => shortenHomeInString(preservePath)).join(", ")}`
+      : "";
+    runtime.log(`[dry-run] remove ${displayLabel}${suffix}`);
     return { ok: true };
   }
   try {
-    const stat = await fs.lstat(resolved);
-    if (!stat.isDirectory()) {
-      return removePath(resolved, runtime, opts);
-    }
-    const entries = await fs.readdir(resolved);
-    for (const entry of entries) {
-      const result = await removePathPreserving(path.join(resolved, entry), preservePaths, runtime);
-      if (!result.ok) {
-        return result;
+    if (nestedPreservedPaths.length > 0 && (await fs.lstat(resolved)).isDirectory()) {
+      for (const entry of await fs.readdir(resolved)) {
+        const result = await removePathPreserving(
+          path.join(resolved, entry),
+          preservePaths,
+          runtime,
+        );
+        if (!result.ok) {
+          return result;
+        }
       }
+      runtime.log(`Removed contents of ${displayLabel}`);
+    } else {
+      await fs.rm(resolved, { recursive: true, force: true });
+      runtime.log(`Removed ${displayLabel}`);
     }
-    runtime.log(`Removed contents of ${displayLabel}`);
     return { ok: true };
   } catch (err) {
     runtime.error(`Failed to remove ${displayLabel}: ${String(err)}`);
@@ -313,34 +295,17 @@ async function removePathPreserving(
   }
 }
 
-async function detachStateLockDirectory(
-  lockDir: string,
-  stateDir: string,
-  runtime: RuntimeEnv,
-): Promise<string> {
-  const tombstone = path.join(
-    path.dirname(stateDir),
-    `.${path.basename(stateDir)}-locks.cleanup-${randomUUID()}`,
-  );
-  try {
-    await fs.rename(lockDir, tombstone);
-    return tombstone;
-  } catch (error) {
-    const message = `Failed to finalize OpenClaw state cleanup because the lock directory changed: ${String(error)}`;
-    runtime.error(message);
-    throw new Error(message, { cause: error });
-  }
-}
-
 async function removeStateDirectoryAlias(
   requestedStateDir: string,
   stateDir: string,
+  assertCurrent: () => void,
 ): Promise<void> {
   if (requestedStateDir === stateDir) {
     return;
   }
   try {
     if ((await fs.lstat(requestedStateDir)).isSymbolicLink()) {
+      assertCurrent();
       await fs.unlink(requestedStateDir);
     }
   } catch (error) {
@@ -350,36 +315,93 @@ async function removeStateDirectoryAlias(
   }
 }
 
-async function removeEmptyStateAncestors(startDir: string, stateDir: string): Promise<boolean> {
-  for (let current = startDir; isPathWithin(current, stateDir); current = path.dirname(current)) {
+type CleanupDirectoryIdentity = { path: string; dev: bigint; ino: bigint };
+
+function stateCleanupInterrupted(): Error {
+  return new Error(
+    "OpenClaw state cleanup was interrupted by a new state operation. Stop other OpenClaw commands and retry.",
+  );
+}
+
+async function captureStateCleanupAncestors(
+  lockDirs: readonly string[],
+  stateDir: string,
+): Promise<CleanupDirectoryIdentity[]> {
+  const directories = new Map<string, CleanupDirectoryIdentity>();
+  for (const lockDir of lockDirs) {
+    for (let current = lockDir; isPathInside(stateDir, current); current = path.dirname(current)) {
+      if (!directories.has(current)) {
+        const observed = await fs.lstat(current, { bigint: true });
+        if (!observed.isDirectory()) {
+          throw new Error(
+            `Cannot remove OpenClaw state because its active lock directory is redirected or not a real directory: ${shortenHomeInString(current)}. Restore a real lock directory and retry.`,
+          );
+        }
+        directories.set(current, { path: current, dev: observed.dev, ino: observed.ino });
+      }
+      if (current === stateDir) {
+        break;
+      }
+    }
+  }
+  return [...directories.values()].toSorted((left, right) => right.path.length - left.path.length);
+}
+
+async function removeEmptyStateAncestors(directories: readonly CleanupDirectoryIdentity[]) {
+  for (const expected of directories) {
     try {
-      await fs.rmdir(current);
+      const observed = await fs.lstat(expected.path, { bigint: true });
+      if (
+        !observed.isDirectory() ||
+        observed.dev !== expected.dev ||
+        observed.ino !== expected.ino
+      ) {
+        throw stateCleanupInterrupted();
+      }
+      await fs.rmdir(expected.path);
     } catch (error) {
       if (hasNodeErrorCode(error, "ENOENT")) {
         continue;
       }
       if (hasNodeErrorCode(error, "ENOTEMPTY") || hasNodeErrorCode(error, "EEXIST")) {
-        return false;
+        continue;
       }
       throw error;
     }
-    if (current === stateDir) {
-      return true;
-    }
   }
-  return false;
+}
+
+function linkedCleanupPaths(cleanup: CleanupResolvedPaths): string[] {
+  return [
+    cleanup.configInsideState ? undefined : cleanup.configPath,
+    cleanup.oauthInsideState ? undefined : cleanup.oauthDir,
+  ].filter((target): target is string => target !== undefined);
+}
+
+async function resolveLinkedCleanupPath(target: string, lockPaths: readonly string[]) {
+  if (!(await pathExists(target))) {
+    return undefined;
+  }
+  // Resolve parent aliases, but keep a final symlink lexical: removal only unlinks it.
+  const entry = await resolveMoveToTrashSourcePath(path.resolve(target));
+  if (lockPaths.some((lockPath) => isPathInside(entry, lockPath))) {
+    throw new Error(
+      `Cannot remove linked cleanup path ${shortenHomeInString(target)} because it contains an active state lock. Move the linked path outside the lock directory and retry.`,
+    );
+  }
+  return entry;
 }
 
 async function removeLinkedCleanupPaths(
   cleanup: CleanupResolvedPaths,
   runtime: RuntimeEnv,
+  lockPaths: readonly string[],
+  assertCurrent: () => void,
 ): Promise<void> {
-  const externalPaths = [
-    cleanup.configInsideState ? undefined : cleanup.configPath,
-    cleanup.oauthInsideState ? undefined : cleanup.oauthDir,
-  ].filter((target): target is string => target !== undefined);
-  for (const target of externalPaths) {
-    if (!(await removePath(target, runtime, { label: target })).ok) {
+  for (const target of linkedCleanupPaths(cleanup)) {
+    const entry = await resolveLinkedCleanupPath(target, lockPaths);
+    assertCurrent();
+    if (entry && !(await removePath(entry, runtime, { label: target })).ok) {
       throw new Error(`Failed to remove linked cleanup path: ${shortenHomeInString(target)}`);
     }
   }
@@ -397,18 +419,14 @@ export async function removeStateAndLinkedPaths(
     : await existingPaths(opts?.preservePaths ?? []);
   if (opts?.dryRun) {
     const preservePaths = requestedPreservePaths.filter((target) =>
-      isPathWithin(target, requestedStateDir),
+      isPathInside(requestedStateDir, target),
     );
-    const stateRemoval =
-      preservePaths.length > 0
-        ? await removePathPreserving(requestedStateDir, preservePaths, runtime, {
-            dryRun: true,
-            label: cleanup.stateDir,
-          })
-        : await removePath(cleanup.stateDir, runtime, {
-            dryRun: true,
-            label: cleanup.stateDir,
-          });
+    const stateRemoval = await removePathPreserving(
+      preservePaths.length > 0 ? requestedStateDir : cleanup.stateDir,
+      preservePaths,
+      runtime,
+      { dryRun: true, label: cleanup.stateDir },
+    );
     const configRemoval = cleanup.configInsideState
       ? { ok: true }
       : await removePath(cleanup.configPath, runtime, { dryRun: true, label: cleanup.configPath });
@@ -424,7 +442,7 @@ export async function removeStateAndLinkedPaths(
 
   const lock = await acquireStateCleanupOwnership(cleanup);
   let lockHeld = true;
-  let stateCoordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+  let removalAdmission: Awaited<ReturnType<typeof prepareOpenClawStateDatabaseRemoval>> | undefined;
   const releaseLock = async () => {
     if (!lockHeld) {
       return;
@@ -432,9 +450,9 @@ export async function removeStateAndLinkedPaths(
     lockHeld = false;
     await lock.release();
   };
-  const releaseStateCoordinator = () => {
-    const held = stateCoordinator;
-    stateCoordinator = undefined;
+  const releaseRemovalAdmission = () => {
+    const held = removalAdmission;
+    removalAdmission = undefined;
     held?.release();
   };
   try {
@@ -442,36 +460,56 @@ export async function removeStateAndLinkedPaths(
     if (isUnsafeRemovalTarget(stateDir)) {
       throw new Error(`Refusing to remove unsafe path: ${shortenHomeInString(stateDir)}`);
     }
-    const lockDir = path.dirname(lock.stateLockPath);
-    if (!isPathWithin(lockDir, stateDir)) {
-      throw new Error("Cannot remove OpenClaw state because its active lock is outside state.");
+    const lockPaths = await Promise.all(
+      [...new Set([lock.lockPath, lock.stateLockPath])].map(resolveMoveToTrashSourcePath),
+    );
+    const lockDirs = [...new Set(lockPaths.map((lockPath) => path.dirname(lockPath)))];
+    for (const target of linkedCleanupPaths(cleanup)) {
+      await resolveLinkedCleanupPath(target, lockPaths);
     }
+    lock.assertCurrent();
     const databasePath = resolveOpenClawStateSqlitePath({
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
     });
-    stateCoordinator = acquireStateDatabaseCoordinator({
-      databasePath,
-      busyTimeoutMs: 0,
-    });
+    if (resolveIdentityPathViaExistingAncestorSync(databasePath) !== databasePath) {
+      throw new Error(
+        "Cannot remove OpenClaw state because its active database path is redirected. Select the actual state directory before retrying cleanup.",
+      );
+    }
+    // Deleting a lexical link would let startup select a different owner while
+    // the canonical lock files are still held. Admit the complete namespace first.
+    const directories = await captureStateCleanupAncestors(
+      [
+        ...lockDirs,
+        path.dirname(lock.stateLockPath),
+        ...(process.platform === "win32" ? [] : [resolveGatewayLockDir(stateDir)]),
+      ],
+      stateDir,
+    );
+    lock.assertCurrent();
+    removalAdmission = await lock.run(() =>
+      prepareOpenClawStateDatabaseRemoval(databasePath, lock.assertCurrent),
+    );
     const preservePaths = requestedPreservePaths
       .map((target) =>
-        isPathWithin(target, requestedStateDir)
+        isPathInside(requestedStateDir, target)
           ? path.join(stateDir, path.relative(requestedStateDir, target))
           : target,
       )
-      .filter((target) => isPathWithin(target, stateDir));
-    const overlappingPreservePath = preservePaths.find(
-      (target) => isPathWithin(target, lockDir) || isPathWithin(lockDir, target),
+      .filter((target) => isPathInside(stateDir, target));
+    const overlappingPreservePath = preservePaths.find((target) =>
+      lockDirs.some((lockDir) => isPathInside(lockDir, target) || isPathInside(target, lockDir)),
     );
     if (overlappingPreservePath) {
       throw new Error(
         `Cannot remove OpenClaw state while preserving ${shortenHomeInString(overlappingPreservePath)} because it overlaps the active state lock. Move the workspace outside the lock directory and retry.`,
       );
     }
+    removalAdmission.assertCurrent();
     const stateRemoval = await removePathPreserving(
       stateDir,
-      [...preservePaths, lockDir],
+      [...preservePaths, ...lockPaths],
       runtime,
       { label: cleanup.stateDir },
     );
@@ -479,30 +517,32 @@ export async function removeStateAndLinkedPaths(
       throw new Error("Failed to remove non-preserved OpenClaw state while ownership was held.");
     }
 
-    // Drop only the removable in-tree handles; external Gateway presence stays held
-    // through finalization so a new owner cannot start inside the cleanup window.
-    await lock.releaseInTree();
-    const lockTombstone = await detachStateLockDirectory(lockDir, stateDir, runtime);
-    if (!(await removePath(lockTombstone, runtime, { label: "detached state locks" })).ok) {
-      throw new Error(`Failed to remove detached state locks at ${lockTombstone}.`);
+    removalAdmission.assertCurrent();
+    await removeLinkedCleanupPaths(cleanup, runtime, lockPaths, lock.assertCurrent);
+    if (preservePaths.length === 0) {
+      removalAdmission.assertCurrent();
+      await removeStateDirectoryAlias(requestedStateDir, stateDir, lock.assertCurrent);
     }
 
-    const stateDirRemoved = await removeEmptyStateAncestors(path.dirname(lockDir), stateDir);
+    // A replacement empty directory belongs to the next operation.
+    removalAdmission.assertCurrent();
+    await releaseLock();
+    await removeEmptyStateAncestors(directories);
+    const remainingLockPaths = await Promise.all(
+      [...lockPaths, ...lockDirs.filter((lockDir) => isPathInside(stateDir, lockDir))].map(
+        pathExists,
+      ),
+    );
     const newStateOperationStarted =
-      (await pathExists(lockDir)) || (preservePaths.length === 0 && !stateDirRemoved);
+      remainingLockPaths.some(Boolean) ||
+      (preservePaths.length === 0 && (await pathExists(stateDir)));
     if (newStateOperationStarted) {
-      throw new Error(
-        "OpenClaw state cleanup was interrupted by a new state operation. Stop other OpenClaw commands and retry.",
-      );
+      throw stateCleanupInterrupted();
     }
-    if (stateDirRemoved) {
-      await removeStateDirectoryAlias(requestedStateDir, stateDir);
-    }
-    await removeLinkedCleanupPaths(cleanup, runtime);
     return true;
   } finally {
     try {
-      releaseStateCoordinator();
+      releaseRemovalAdmission();
     } finally {
       await releaseLock();
     }
@@ -565,26 +605,53 @@ export async function removeWorkspaceDirs(
       }
     }
     if (!opts?.dryRun && statePlan) {
-      await attempt(stateLabel, () => {
-        deleteWorkspaceState(statePlan);
-      });
+      await attempt(stateLabel, () => deleteWorkspaceState(statePlan));
     }
   }
   return [...failures];
 }
 
-/** List per-agent session directories beneath a state directory. */
-export async function listAgentSessionDirs(stateDir: string): Promise<string[]> {
-  const root = path.join(stateDir, "agents");
-  try {
-    const entries = await fs.readdir(root, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(root, entry.name, "sessions"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+/** Reset canonical session history while preserving each database's unrelated state. */
+export async function removeAgentSessions(
+  cleanup: Pick<CleanupResolvedPaths, "configPath" | "stateDir"> & { cfg: OpenClawConfig },
+  runtime: RuntimeEnv,
+  opts?: { dryRun?: boolean },
+): Promise<void> {
+  const { previewSessionStoreReset, resetSessionStore } =
+    await import("../config/sessions/session-accessor.sqlite-reset.js");
+  const { resolveAllAgentSessionStoreTargetsSync } = await import("../config/sessions/targets.js");
+  const lock = opts?.dryRun ? undefined : await acquireStateCleanupOwnership(cleanup);
+  const resetStores = async () => {
+    const failures: string[] = [];
+    for (const target of resolveAllAgentSessionStoreTargetsSync(cleanup.cfg)) {
+      try {
+        const preview = previewSessionStoreReset(target);
+        const label = shortenHomePath(preview.databasePath);
+        if (opts?.dryRun) {
+          runtime.log(
+            `[dry-run] remove session history from ${label}: ${preview.sessionKeys.length} sessions, ${preview.transcriptCount} transcripts, ${preview.archiveCount} retained archives`,
+          );
+          for (const sessionKey of preview.sessionKeys) {
+            runtime.log(`[dry-run] remove session ${sessionKey}`);
+          }
+          for (const artifact of preview.artifactPaths) {
+            runtime.log(`[dry-run] remove ${shortenHomePath(artifact)}`);
+          }
+        } else {
+          await resetSessionStore(target);
+          runtime.log(`Removed session history from ${label}`);
+        }
+      } catch (error) {
+        failures.push(`${shortenHomePath(target.storePath)}: ${String(error)}`);
+      }
     }
-    throw error;
+    if (failures.length > 0) {
+      throw new Error(failures.join("\n"));
+    }
+  };
+  try {
+    await (lock ? lock.run(resetStores) : resetStores());
+  } finally {
+    await lock?.release();
   }
 }

@@ -4,10 +4,12 @@
  */
 import { createHash } from "node:crypto";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
   type ChannelMessageUnknownSendContext,
   type ChannelMessageUnknownSendReconciliationResult,
+  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
@@ -50,6 +52,7 @@ async function createTargetMessage(params: {
   provenance?: ClickClackMessageProvenance;
   nonce?: string;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<ClickClackMessage> {
   const parsed = parseClickClackTarget(params.to);
   const explicitThreadId = params.threadId == null ? "" : String(params.threadId);
@@ -58,6 +61,7 @@ async function createTargetMessage(params: {
     // Genuine thread context stays in that thread. A bare reply to a top-level
     // message remains a quote-reply so it does not silently leave the timeline.
     const rootId = explicitThreadId || parsed.id;
+    params.assertDirectAdapterHandoff?.();
     await params.onPlatformSendDispatch?.();
     return await params.client.createThreadReply(rootId, params.text, {
       provenance: params.provenance,
@@ -65,14 +69,16 @@ async function createTargetMessage(params: {
     });
   }
   if (parsed.kind === "dm") {
-    await params.onPlatformSendDispatch?.();
     const dm = await params.client.createDirectConversation(params.workspaceId, [parsed.id]);
+    params.assertDirectAdapterHandoff?.();
+    await params.onPlatformSendDispatch?.();
     return await params.client.createDirectMessage(dm.id, params.text, {
       quotedMessageId: replyToId || undefined,
       nonce: params.nonce,
     });
   }
   const channelId = await resolveChannelId(params.client, params.workspaceId, parsed.id);
+  params.assertDirectAdapterHandoff?.();
   await params.onPlatformSendDispatch?.();
   return await params.client.createChannelMessage(channelId, params.text, {
     provenance: params.provenance,
@@ -118,27 +124,19 @@ function textDeliveryNonce(params: {
   return digest ? `openclaw-text:${digest}` : undefined;
 }
 
-function createDispatchOnce(onPlatformSendDispatch?: () => Promise<void>): () => Promise<void> {
-  let dispatched = false;
-  return async () => {
-    if (dispatched) {
-      return;
-    }
-    await onPlatformSendDispatch?.();
-    dispatched = true;
-  };
-}
-
 async function attachUploadRetrySafe(params: {
   client: ClickClackClient;
   messageId: string;
   uploadId: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<void> {
   try {
     await params.client.attachUpload(params.messageId, params.uploadId);
   } catch (firstError) {
     // The attachment write is idempotent. A read distinguishes a lost success
     // response; otherwise one bounded retry reuses the same upload and message.
+    // Keep currentness checks outside recovery catches so they cannot become retries.
+    params.assertDirectAdapterHandoff?.();
     try {
       const persisted = await params.client.message(params.messageId);
       if (persisted.attachments?.some((attachment) => attachment.id === params.uploadId)) {
@@ -147,6 +145,7 @@ async function attachUploadRetrySafe(params: {
     } catch {
       // A failed reconciliation read must not prevent the safe attach retry.
     }
+    params.assertDirectAdapterHandoff?.();
     try {
       await params.client.attachUpload(params.messageId, params.uploadId);
     } catch {
@@ -159,12 +158,21 @@ function createOutboundContext(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   correlationId?: string;
+  assertDirectAdapterHandoff?: () => void;
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const assertDirectAdapterHandoff = params.assertDirectAdapterHandoff;
+  const fetcher = fetch;
   const client = createClickClackClient({
     baseUrl: account.apiEndpoint,
     token: account.token,
     correlationId: params.correlationId,
+    fetch: assertDirectAdapterHandoff
+      ? (input, init) => {
+          assertDirectAdapterHandoff();
+          return fetcher(input, init);
+        }
+      : undefined,
   });
   return { account, client };
 }
@@ -188,8 +196,9 @@ export async function sendClickClackText(params: {
   deliveryQueueId?: string;
   /** Stable platform-send index within the durable intent. */
   deliveryPartIndex?: number;
-  /** Persists unknown-send state immediately before the first platform write. */
+  /** Records recipient-visible dispatch immediately before message creation. */
   onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<string | undefined> {
   // Custom inbound replies bypass shared outbound normalization, so this private
   // sender owns ClickClack assistant-text sanitization for every delivery path.
@@ -199,7 +208,6 @@ export async function sendClickClackText(params: {
   }
   const { account, client } = createOutboundContext(params);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
-  const dispatch = createDispatchOnce(params.onPlatformSendDispatch);
   const message = await createTargetMessage({
     client,
     workspaceId,
@@ -212,7 +220,8 @@ export async function sendClickClackText(params: {
       deliveryQueueId: params.deliveryQueueId,
       deliveryPartIndex: params.deliveryPartIndex,
     }),
-    onPlatformSendDispatch: dispatch,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   return message.id;
 }
@@ -233,8 +242,13 @@ export async function sendClickClackMedia(params: {
   deliveryQueueId?: string;
   /** Stable platform-send index within the durable intent. */
   deliveryPartIndex?: number;
-  /** Persists unknown-send state immediately before the first platform write. */
+  /** Records recipient-visible dispatch immediately before message creation. */
   onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
+  onDeliveryResult?: (result: {
+    messageId: string;
+    receipt: MessageReceipt;
+  }) => Promise<void> | void;
 }): Promise<string> {
   const nonces = mediaDeliveryNonces({
     deliveryQueueId: params.deliveryQueueId,
@@ -261,7 +275,6 @@ export async function sendClickClackMedia(params: {
   const persistedUpload = nonces.upload
     ? await client.findUploadByNonce({ workspaceId, nonce: nonces.upload })
     : undefined;
-  const dispatch = createDispatchOnce(params.onPlatformSendDispatch);
   let upload = persistedUpload;
   let mediaFilename = preloadedMedia?.fileName?.trim();
   if (!upload) {
@@ -276,7 +289,6 @@ export async function sendClickClackMedia(params: {
     const contentType = media.contentType?.trim() || "application/octet-stream";
     const filename = media.fileName?.trim() || `attachment${extensionForMime(contentType) ?? ""}`;
     mediaFilename = filename;
-    await dispatch();
     upload = await client.createUpload({
       workspaceId,
       buffer: media.buffer,
@@ -300,11 +312,32 @@ export async function sendClickClackMedia(params: {
     threadId: params.threadId,
     replyToId: params.replyToId,
     nonce: nonces.message,
-    onPlatformSendDispatch: dispatch,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
-  // Do not report delivery until ClickClack has durably attached the upload and
-  // emitted message.updated; otherwise callers would accept a text-only receipt.
-  await attachUploadRetrySafe({ client, messageId: message.id, uploadId: upload.id });
+  const receipt = createMessageReceiptFromOutboundResults({
+    results: [{ channel: "clickclack", messageId: message.id }],
+    threadId: params.threadId == null ? undefined : String(params.threadId),
+    replyToId: params.replyToId == null ? undefined : String(params.replyToId),
+    kind: "text",
+  });
+  try {
+    // Preserve the accepted text identity if attachment fails. The final media
+    // receipt replaces this progress result only after the upload is attached.
+    await params.onDeliveryResult?.({ messageId: message.id, receipt });
+    await attachUploadRetrySafe({
+      client,
+      messageId: message.id,
+      uploadId: upload.id,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    });
+  } catch (error) {
+    throw createChannelPartialDeliveryError(error, {
+      visibleReplySent: true,
+      messageIds: [message.id],
+      receipt,
+    });
+  }
   return message.id;
 }
 

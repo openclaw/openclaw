@@ -1,6 +1,5 @@
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
-// Control UI chat module implements input history behavior.
 import { extractText } from "../../lib/chat/message-extract.ts";
 
 const CHAT_INPUT_HISTORY_LIMIT = 100;
@@ -62,9 +61,6 @@ function collectUserInputHistory(
   messages: unknown[],
   localEntries: ChatLocalInputHistoryEntry[],
 ): string[] {
-  if (messages.length === 0 && localEntries.length === 0) {
-    return [];
-  }
   // Bound input recall independently from the transcript's loaded rendering depth.
   const start = Math.max(0, messages.length - CHAT_INPUT_HISTORY_LIMIT);
   const candidates: Array<{ text: string; ts: number }> = [...localEntries];
@@ -73,7 +69,7 @@ function collectUserInputHistory(
     if (!message || typeof message !== "object") {
       continue;
     }
-    const entry = message as { role?: unknown };
+    const entry = message as { role?: unknown; timestamp?: unknown };
     const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
     if (role !== "user") {
       continue;
@@ -82,24 +78,11 @@ function collectUserInputHistory(
     if (!text || !text.trim()) {
       continue;
     }
-    const timestamp =
-      typeof (message as { timestamp?: unknown }).timestamp === "number"
-        ? ((message as { timestamp?: number }).timestamp ?? 0)
-        : 0;
-    candidates.push({ text, ts: timestamp });
+    candidates.push({ text, ts: typeof entry.timestamp === "number" ? entry.timestamp : 0 });
   }
 
   candidates.sort((a, b) => b.ts - a.ts);
-  const items: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    if (seen.has(candidate.text)) {
-      continue;
-    }
-    seen.add(candidate.text);
-    items.push(candidate.text);
-  }
-  return items;
+  return [...new Set(candidates.map(({ text }) => text))];
 }
 
 export function recordNonTranscriptInputHistory(state: ChatInputHistoryState, text: string) {
@@ -135,36 +118,9 @@ export function handleChatDraftChange(
   resetChatInputHistoryNavigation(state);
 }
 
-export function appendChatDraftText(
-  state: Pick<ChatInputHistoryState, "chatMessage" | "chatMentions"> & {
-    handleChatDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
-  },
-  text: string,
-): string {
-  const separator = state.chatMessage && !/\s$/u.test(state.chatMessage) ? " " : "";
-  const next = `${state.chatMessage}${separator}${text}`;
-  // Appending after the current draft leaves every mention span unchanged.
-  state.handleChatDraftChange(next, state.chatMentions);
-  return next;
-}
-
-function hasStaleActiveHistorySelection(state: ChatInputHistoryState): boolean {
-  if (state.chatInputHistoryIndex === -1) {
-    return false;
-  }
-  if (
-    !Array.isArray(state.chatInputHistoryItems) ||
-    state.chatInputHistorySessionKey !== state.sessionKey
-  ) {
-    return true;
-  }
-  const activeItem = state.chatInputHistoryItems[state.chatInputHistoryIndex];
-  return typeof activeItem !== "string" || activeItem !== state.chatMessage;
-}
-
 function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] {
   if (
-    Array.isArray(state.chatInputHistoryItems) &&
+    state.chatInputHistoryItems !== null &&
     state.chatInputHistorySessionKey === state.sessionKey
   ) {
     return state.chatInputHistoryItems;
@@ -188,28 +144,16 @@ function navigateChatInputHistory(state: ChatInputHistoryState, direction: "up" 
     return false;
   }
 
-  if (direction === "up") {
-    if (state.chatInputHistoryIndex >= items.length - 1) {
-      return false;
-    }
-    state.chatInputHistoryIndex += 1;
-    state.chatMessage = items[state.chatInputHistoryIndex] ?? state.chatMessage;
-    state.chatMentions = [];
-    return true;
-  }
-
-  if (state.chatInputHistoryIndex === -1) {
+  const nextIndex = state.chatInputHistoryIndex + (direction === "up" ? 1 : -1);
+  if (nextIndex < -1 || nextIndex >= items.length) {
     return false;
   }
-  if (state.chatInputHistoryIndex === 0) {
-    state.chatInputHistoryIndex = -1;
-    state.chatMessage = state.chatDraftBeforeHistory ?? "";
-    state.chatMentions = state.chatMentionsBeforeHistory;
-    return true;
-  }
-  state.chatInputHistoryIndex -= 1;
-  state.chatMessage = items[state.chatInputHistoryIndex] ?? state.chatMessage;
-  state.chatMentions = [];
+  state.chatInputHistoryIndex = nextIndex;
+  state.chatMessage =
+    nextIndex === -1
+      ? (state.chatDraftBeforeHistory ?? "")
+      : (items[nextIndex] ?? state.chatMessage);
+  state.chatMentions = nextIndex === -1 ? state.chatMentionsBeforeHistory : [];
   return true;
 }
 
@@ -219,11 +163,18 @@ export function handleChatInputHistoryKey(
 ): ChatInputHistoryKeyResult {
   // Programmatic draft updates can bypass handleChatDraftChange(); if the current
   // draft no longer matches the active recalled item, drop back to editing mode.
-  if (hasStaleActiveHistorySelection(state)) {
+  if (
+    state.chatInputHistoryIndex !== -1 &&
+    (state.chatInputHistorySessionKey !== state.sessionKey ||
+      state.chatInputHistoryItems?.[state.chatInputHistoryIndex] !== state.chatMessage)
+  ) {
     resetChatInputHistoryNavigation(state);
   }
   const historyNavigationActiveBefore = state.chatInputHistoryIndex !== -1;
   const baseResult = {
+    handled: false,
+    preventDefault: false,
+    restoreCaret: null,
     historyNavigationActiveBefore,
     historyNavigationActiveAfter: historyNavigationActiveBefore,
     selectionStart: input.selectionStart,
@@ -232,13 +183,7 @@ export function handleChatInputHistoryKey(
   };
 
   if (state.chatLoading) {
-    return {
-      ...baseResult,
-      handled: false,
-      preventDefault: false,
-      restoreCaret: null,
-      decision: "blocked:history-loading",
-    };
+    return { ...baseResult, decision: "blocked:history-loading" };
   }
 
   if (
@@ -249,71 +194,36 @@ export function handleChatInputHistoryKey(
     input.isComposing ||
     input.keyCode === 229
   ) {
-    return {
-      ...baseResult,
-      handled: false,
-      preventDefault: false,
-      restoreCaret: null,
-      decision: "blocked:modifier-or-composition",
-    };
+    return { ...baseResult, decision: "blocked:modifier-or-composition" };
   }
 
   if (input.selectionStart !== input.selectionEnd) {
-    return {
-      ...baseResult,
-      handled: false,
-      preventDefault: false,
-      restoreCaret: null,
-      decision: "blocked:selection-range",
-    };
+    return { ...baseResult, decision: "blocked:selection-range" };
   }
 
-  if (historyNavigationActiveBefore) {
-    const direction = input.key === "ArrowUp" ? "up" : "down";
-    const navigated = navigateChatInputHistory(state, direction);
-    const historyNavigationActiveAfter = state.chatInputHistoryIndex !== -1;
-    return {
-      ...baseResult,
-      handled: navigated,
-      preventDefault: navigated,
-      restoreCaret: navigated ? direction : null,
-      decision: navigated
-        ? direction === "up"
-          ? "handled:history-up"
-          : "handled:history-down"
-        : "blocked:history-boundary",
-      historyNavigationActiveAfter,
-    };
+  if (!historyNavigationActiveBefore) {
+    if (input.key === "ArrowDown") {
+      return { ...baseResult, decision: "blocked:arrowdown-editing-mode" };
+    }
+    if (input.selectionStart !== 0) {
+      return { ...baseResult, decision: "blocked:arrowup-not-at-start" };
+    }
   }
 
-  if (input.key === "ArrowDown") {
-    return {
-      ...baseResult,
-      handled: false,
-      preventDefault: false,
-      restoreCaret: null,
-      decision: "blocked:arrowdown-editing-mode",
-    };
-  }
-
-  if (input.selectionStart !== 0) {
-    return {
-      ...baseResult,
-      handled: false,
-      preventDefault: false,
-      restoreCaret: null,
-      decision: "blocked:arrowup-not-at-start",
-    };
-  }
-
-  const navigated = navigateChatInputHistory(state, "up");
-  const historyNavigationActiveAfter = state.chatInputHistoryIndex !== -1;
+  const direction = input.key === "ArrowUp" ? "up" : "down";
+  const navigated = navigateChatInputHistory(state, direction);
   return {
     ...baseResult,
     handled: navigated,
     preventDefault: navigated,
-    restoreCaret: navigated ? "up" : null,
-    decision: navigated ? "handled:enter-history-up" : "blocked:history-boundary",
-    historyNavigationActiveAfter,
+    restoreCaret: navigated ? direction : null,
+    decision: !navigated
+      ? "blocked:history-boundary"
+      : !historyNavigationActiveBefore
+        ? "handled:enter-history-up"
+        : direction === "up"
+          ? "handled:history-up"
+          : "handled:history-down",
+    historyNavigationActiveAfter: state.chatInputHistoryIndex !== -1,
   };
 }

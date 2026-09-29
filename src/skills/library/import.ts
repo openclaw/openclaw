@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
   SKILL_LIBRARY_MAX_FILE_BYTES,
@@ -11,14 +12,12 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { withTempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { selectResolvedUserProfileById } from "../../state/user-profiles-internal.js";
 import { installSkillFromClawHub } from "../lifecycle/clawhub.js";
 import {
   prepareSkillLibraryBundle,
@@ -33,6 +32,8 @@ import {
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
   requireSkillLibraryUpload,
+  requireSkillLibraryUploadMetadata,
+  selectSkillLibraryOwner,
   skillLibraryDb,
   type SkillLibraryAuthority,
 } from "./store.js";
@@ -122,7 +123,7 @@ export async function uploadSkillLibrary(
       if (
         activeUploads.length >= MAX_ACTIVE_UPLOADS ||
         activeUploads.filter(
-          (upload) => selectResolvedUserProfileById(db, upload.owner_profile_id)?.id === actor,
+          (upload) => selectSkillLibraryOwner(db, upload.owner_profile_id)?.id === actor,
         ).length >=
           MAX_ACTIVE_UPLOADS / 2
       ) {
@@ -211,6 +212,7 @@ export async function uploadSkillLibrary(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-library-import-" },
     async ({ dir }) => {
       const archivePath = path.join(dir, "skill.zip");
+      authority.assertFileMutationAllowed?.();
       await fs.writeFile(archivePath, bytes, { mode: 0o600, flag: "wx" });
       const result = await withExtractedArchiveRoot({
         archivePath,
@@ -230,7 +232,12 @@ export async function uploadSkillLibrary(
           receipt: await publishDirectory(
             {
               ...authority,
-              assertCurrent: readOwned,
+              assertCurrent: () =>
+                requireSkillLibraryUploadMetadata(
+                  openOpenClawStateDatabase(options).db,
+                  params.uploadId,
+                  authority,
+                ),
             },
             upload.slug,
             rootDir,

@@ -84,6 +84,34 @@ describe("terminal file upload", () => {
     );
   });
 
+  it("uses declared native CLI path syntax without treating a title as a shell", () => {
+    const shell = "claude --resume 12345678…";
+    expect(quoteTerminalUploadPath("/tmp/report.pdf", shell, "native")).toBe('"/tmp/report.pdf"');
+    expect(quoteTerminalUploadPath("/tmp/it's final.pdf", shell, "native")).toBe(
+      '"/tmp/it\'s final.pdf"',
+    );
+    expect(quoteTerminalUploadPath('/tmp/reviewer"s $notes`\\draft.pdf', shell, "native")).toBe(
+      '"/tmp/reviewer\\"s \\$notes\\`\\\\draft.pdf"',
+    );
+    for (const filePath of [
+      "C:\\Users\\O'Brien\\$cash%value!\\report final.pdf",
+      "\\\\server\\O'Brien\\report final.pdf",
+      "\\\\?\\C:\\Users\\O'Brien\\report.pdf",
+    ]) {
+      expect(quoteTerminalUploadPath(filePath, shell, "native")).toBe(`"${filePath}"`);
+    }
+    expect(() => quoteTerminalUploadPath("/tmp/report.pdf", shell)).toThrow("unsupported shell");
+  });
+
+  it.each(["relative.pdf", "/tmp/report\nnext.pdf", 'C:\\Temp\\bad"path.pdf'])(
+    "refuses an invalid native input path: %j",
+    (filePath) => {
+      expect(() => quoteTerminalUploadPath(filePath, "native CLI", "native")).toThrow(
+        "Cannot safely insert the uploaded native file path",
+      );
+    },
+  );
+
   it.each(["C:\\Users\\%USERNAME%\\report.pdf", "C:\\Users\\bang!\\report.pdf"])(
     "refuses cmd.exe expansion in the complete staged path: %s",
     (filePath) => {

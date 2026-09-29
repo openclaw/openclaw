@@ -1,27 +1,20 @@
-// Xai plugin module implements tts behavior.
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, rawDataToString } from "openclaw/plugin-sdk/realtime-voice-provider";
+import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
-  assertOkOrThrowProviderError,
-  postJsonRequest,
-  readProviderBinaryResponse,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
-import { trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import WebSocket from "ws";
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import {
   isValidXaiTtsVoice,
   normalizeXaiLanguageCode,
   normalizeXaiTtsBaseUrl,
+  type XaiSpeechResponseFormat,
 } from "./speech-provider-metadata.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
+import { WebSocket } from "./ws-runtime.js";
 
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 const XAI_TTS_VOICE_LIST_TIMEOUT_MS = 30_000;
@@ -32,6 +25,10 @@ export async function listXaiTtsVoices(params: {
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
   const baseUrl = normalizeXaiTtsBaseUrl(params.baseUrl);
+  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedOrigin } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const { response, release } = await fetchWithSsrFGuard({
     url: `${baseUrl}/tts/voices`,
     init: {
@@ -74,7 +71,17 @@ export async function listXaiTtsVoices(params: {
   }
 }
 
-type XaiTtsResponseFormat = "mp3" | "wav" | "pcm" | "mulaw" | "alaw";
+type XaiTtsRequest = {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  voiceId: string;
+  language?: string;
+  speed?: number;
+  responseFormat?: XaiSpeechResponseFormat;
+  timeoutMs: number;
+  maxBytes?: number;
+};
 
 const XAI_NATIVE_TTS_STREAM_HOST = "api.x.ai";
 
@@ -88,7 +95,7 @@ function toXaiTtsWsUrl(params: {
   baseUrl: string;
   voiceId: string;
   language: string;
-  responseFormat: XaiTtsResponseFormat;
+  responseFormat: XaiSpeechResponseFormat;
   speed?: number;
 }): string {
   assertXaiNativeTtsStreamEndpoint(params.baseUrl);
@@ -137,17 +144,7 @@ function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
   }
 }
 
-export async function xaiTTSStream(params: {
-  text: string;
-  apiKey: string;
-  baseUrl: string;
-  voiceId: string;
-  language?: string;
-  speed?: number;
-  responseFormat?: XaiTtsResponseFormat;
-  timeoutMs: number;
-  maxBytes?: number;
-}): Promise<{
+export async function xaiTTSStream(params: XaiTtsRequest): Promise<{
   audioStream: ReadableStream<Uint8Array>;
   release: () => Promise<void>;
 }> {
@@ -167,8 +164,6 @@ export async function xaiTTSStream(params: {
   if (!isValidXaiTtsVoice(voiceId)) {
     throw new Error(`Invalid voice: ${voiceId}`);
   }
-  assertXaiNativeTtsStreamEndpoint(baseUrl);
-
   const wsUrl = toXaiTtsWsUrl({
     baseUrl,
     voiceId,
@@ -180,6 +175,7 @@ export async function xaiTTSStream(params: {
   // roughly 4/3; the fixed allowance covers the event envelope and metadata.
   const maxPayload = Math.ceil(maxBytes / 3) * 4 + 1024;
 
+  // Wire the socket before the first yield; deferred imports can miss immediate transport events.
   return await new Promise((resolve, reject) => {
     let connectSettled = false;
     let released = false;
@@ -387,24 +383,14 @@ export async function xaiTTSStream(params: {
 
       try {
         for (let offset = 0; offset < text.length;) {
-          let end = Math.min(offset + XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS, text.length);
-          // Keep a surrogate pair in the same frame, even if that frame is one unit shorter.
-          if (
-            end < text.length &&
-            text.charCodeAt(end - 1) >= 0xd800 &&
-            text.charCodeAt(end - 1) <= 0xdbff &&
-            text.charCodeAt(end) >= 0xdc00 &&
-            text.charCodeAt(end) <= 0xdfff
-          ) {
-            end -= 1;
-          }
+          const delta = sliceUtf16Safe(text, offset, offset + XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS);
           ws?.send(
             JSON.stringify({
               type: "text.delta",
-              delta: text.slice(offset, end),
+              delta,
             }),
           );
-          offset = end;
+          offset += delta.length;
         }
         ws?.send(JSON.stringify({ type: "text.done" }));
       } catch (error) {
@@ -416,17 +402,7 @@ export async function xaiTTSStream(params: {
   });
 }
 
-export async function xaiTTS(params: {
-  text: string;
-  apiKey: string;
-  baseUrl: string;
-  voiceId: string;
-  language?: string;
-  speed?: number;
-  responseFormat?: "mp3" | "wav" | "pcm" | "mulaw" | "alaw";
-  timeoutMs: number;
-  maxBytes?: number;
-}): Promise<Buffer> {
+export async function xaiTTS(params: XaiTtsRequest): Promise<Buffer> {
   const {
     text,
     apiKey,
@@ -445,6 +421,10 @@ export async function xaiTTS(params: {
   }
 
   const ttsBaseUrl = normalizeXaiTtsBaseUrl(baseUrl);
+  const { assertOkOrThrowProviderError, postJsonRequest, readProviderBinaryResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { ssrfPolicyFromHttpBaseUrlAllowedOrigin } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const { response, release } = await postJsonRequest({
     url: `${ttsBaseUrl}/tts`,
     headers: new Headers({

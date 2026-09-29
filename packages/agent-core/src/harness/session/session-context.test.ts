@@ -1,5 +1,6 @@
 import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { findCutPoint } from "../compaction/compaction.js";
 import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry } from "../types.js";
 import { buildSessionContext, projectSessionEntryMessage } from "./session.js";
@@ -43,8 +44,9 @@ function bashEntry(
 function assistantEntry(
   id: string,
   parentId: string | null,
-  content: string,
+  content: string | AssistantMessage["content"],
   providerReplay?: ProviderReplayState,
+  stopReason: AssistantMessage["stopReason"] = "stop",
 ): SessionTreeEntry {
   return {
     type: "message",
@@ -54,7 +56,7 @@ function assistantEntry(
     message: {
       role: "assistant",
       api: "openai-responses",
-      content: [{ type: "text", text: content }],
+      content: typeof content === "string" ? [{ type: "text", text: content }] : content,
       provider: "test-provider",
       model: "test-model",
       usage: {
@@ -65,7 +67,7 @@ function assistantEntry(
         totalTokens: 2,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-      stopReason: "stop",
+      stopReason,
       timestamp: Date.parse(timestamp),
       ...(providerReplay ? { providerReplay } : {}),
     },
@@ -85,29 +87,13 @@ function replayState(type: string, data: string): ProviderReplayState {
 }
 
 function assistantToolEntry(id: string, parentId: string, toolCallId: string): SessionTreeEntry {
-  return {
-    type: "message",
+  return assistantEntry(
     id,
     parentId,
-    timestamp,
-    message: {
-      role: "assistant",
-      api: "openai-responses",
-      content: [{ type: "toolCall", id: toolCallId, name: "read", arguments: {} }],
-      provider: "test-provider",
-      model: "test-model",
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "toolUse",
-      timestamp: Date.parse(timestamp),
-    },
-  };
+    [{ type: "toolCall", id: toolCallId, name: "read", arguments: {} }],
+    undefined,
+    "toolUse",
+  );
 }
 
 function toolResultEntry(
@@ -132,7 +118,69 @@ function toolResultEntry(
   };
 }
 
+function resetEntry(
+  id: string,
+  parentId: string,
+  firstKeptEntryId?: string,
+  reason: "new" | "reset" = "new",
+): SessionTreeEntry {
+  return { type: "reset", id, parentId, timestamp, reason, firstKeptEntryId };
+}
+
+function compactionEntry(
+  id: string,
+  parentId: string,
+  firstKeptEntryId: string,
+  summary: string,
+  tokensBefore: number,
+): SessionTreeEntry {
+  return { type: "compaction", id, parentId, timestamp, summary, firstKeptEntryId, tokensBefore };
+}
+
 describe("buildSessionContext", () => {
+  it.each([false, true])(
+    "keeps runtime carriers with their user at compaction boundaries (carrier=%s)",
+    (runtimeContextCarrier) => {
+      const entries: SessionTreeEntry[] = [
+        userEntry("entry-0", null, "original request"),
+        {
+          type: "custom_message",
+          id: "entry-1",
+          parentId: "entry-0",
+          timestamp,
+          customType: runtimeContextCarrier ? "openclaw.runtime-context" : "extension-context",
+          content: "metadata ".repeat(100),
+          display: false,
+          details: { runtimeContextCarrier },
+        },
+        assistantEntry("entry-2", "entry-1", "done"),
+      ];
+      for (const keepRecentTokens of [100, 1, 1_000]) {
+        const cut = findCutPoint(entries, 0, entries.length, keepRecentTokens);
+        const expectedIndex =
+          keepRecentTokens === 1_000 ? 0 : keepRecentTokens === 1 || runtimeContextCarrier ? 2 : 1;
+        expect(cut).toEqual({
+          firstKeptEntryIndex: expectedIndex,
+          turnStartIndex: expectedIndex === 2 ? (runtimeContextCarrier ? 0 : 1) : -1,
+          isSplitTurn: expectedIndex === 2,
+        });
+        const firstKeptEntry = entries[cut.firstKeptEntryIndex];
+        if (!firstKeptEntry) {
+          throw new Error("Expected a retained compaction boundary");
+        }
+        const replay = buildSessionContext([
+          ...entries,
+          compactionEntry("compacted", "entry-2", firstKeptEntry.id, "Earlier conversation", 1_000),
+        ]);
+        if (runtimeContextCarrier) {
+          expect(replay.messages.some((message) => message.role === "custom")).toBe(
+            replay.messages.some((message) => message.role === "user"),
+          );
+        }
+      }
+    },
+  );
+
   it("keeps display-only custom activity out of model input", () => {
     const activity = {
       role: "custom" as const,
@@ -247,15 +295,7 @@ describe("buildSessionContext", () => {
         provider: "test-provider",
         modelId: "test-model",
       },
-      {
-        type: "compaction",
-        id: "compaction",
-        parentId: "model",
-        timestamp,
-        summary: "older context",
-        firstKeptEntryId: "kept",
-        tokensBefore: 123,
-      },
+      compactionEntry("compaction", "model", "kept", "older context", 123),
       assistantEntry(
         "post-checkpoint",
         "compaction",
@@ -303,29 +343,9 @@ describe("buildSessionContext", () => {
     const entries: SessionTreeEntry[] = [
       userEntry("discarded", null, "discarded"),
       userEntry("kept-user", "discarded", "kept question"),
-      {
-        type: "message",
-        id: "kept-tool",
-        parentId: "kept-user",
-        timestamp,
-        message: {
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "read",
-          content: [{ type: "text", text: "hidden tool result" }],
-          isError: false,
-          timestamp: Date.parse(timestamp),
-        },
-      },
+      toolResultEntry("kept-tool", "kept-user", "call-1", "hidden tool result"),
       assistantEntry("kept-assistant", "kept-tool", "kept answer", retainedCheckpoint),
-      {
-        type: "reset",
-        id: "reset",
-        parentId: "kept-assistant",
-        timestamp,
-        reason: "new",
-        firstKeptEntryId: "kept-user",
-      },
+      resetEntry("reset", "kept-assistant", "kept-user"),
       userEntry("new", "reset", "new turn"),
     ];
 
@@ -359,14 +379,7 @@ describe("buildSessionContext", () => {
       assistantToolEntry("assistant-2", "result-1", "call-1"),
       toolResultEntry("result-2", "assistant-2", "call-1", "second result"),
       toolResultEntry("orphan", "result-2", "call-1", "orphan result"),
-      {
-        type: "reset",
-        id: "reset",
-        parentId: "orphan",
-        timestamp,
-        reason: "new",
-        firstKeptEntryId: "kept",
-      },
+      resetEntry("reset", "orphan", "kept"),
       userEntry("new", "reset", "new turn"),
     ];
 
@@ -393,14 +406,7 @@ describe("buildSessionContext", () => {
       toolResultEntry("discarded-result", "kept", "call-shared", "discarded owner result"),
       assistantToolEntry("kept-assistant", "discarded-result", "call-shared"),
       toolResultEntry("kept-result", "kept-assistant", "call-shared", "kept owner result"),
-      {
-        type: "reset",
-        id: "reset",
-        parentId: "kept-result",
-        timestamp,
-        reason: "new",
-        firstKeptEntryId: "kept",
-      },
+      resetEntry("reset", "kept-result", "kept"),
       userEntry("new", "reset", "new turn"),
     ];
 
@@ -421,14 +427,7 @@ describe("buildSessionContext", () => {
       userEntry("first-user", null, "first conversation"),
       assistantToolEntry("first-assistant", "first-user", "first-call"),
       toolResultEntry("first-result", "first-assistant", "first-call", "first result"),
-      {
-        type: "reset",
-        id: "first-reset",
-        parentId: "first-result",
-        timestamp,
-        reason: "new",
-        firstKeptEntryId: "first-user",
-      },
+      resetEntry("first-reset", "first-result", "first-user"),
       assistantToolEntry("discarded-assistant", "first-reset", "discarded-call"),
       userEntry("latest-kept", "discarded-assistant", "latest conversation"),
       toolResultEntry(
@@ -446,14 +445,7 @@ describe("buildSessionContext", () => {
       },
       assistantToolEntry("latest-assistant", "thinking", "latest-call"),
       toolResultEntry("latest-result", "latest-assistant", "latest-call", "latest result"),
-      {
-        type: "reset",
-        id: "latest-reset",
-        parentId: "latest-result",
-        timestamp,
-        reason: "reset",
-        firstKeptEntryId: "latest-kept",
-      },
+      resetEntry("latest-reset", "latest-result", "latest-kept", "reset"),
       userEntry("new", "latest-reset", "new turn"),
     ];
 
@@ -477,14 +469,7 @@ describe("buildSessionContext", () => {
       assistantToolEntry("assistant-2", "assistant-1", "call-1"),
       localResult,
       toolResultEntry("ambiguous-extra", "local-result", "call-1", "ambiguous extra"),
-      {
-        type: "reset",
-        id: "reset",
-        parentId: "ambiguous-extra",
-        timestamp,
-        reason: "new",
-        firstKeptEntryId: "kept",
-      },
+      resetEntry("reset", "ambiguous-extra", "kept"),
       userEntry("new", "reset", "new turn"),
     ];
 
@@ -513,14 +498,7 @@ describe("buildSessionContext", () => {
       assistantToolEntry("assistant", "kept", "call-1"),
       userEntry("intervening-user", "assistant", "intervening"),
       displacedResult,
-      {
-        type: "reset",
-        id: "reset",
-        parentId: "displaced-result",
-        timestamp,
-        reason: "new",
-        firstKeptEntryId: "kept",
-      },
+      resetEntry("reset", "displaced-result", "kept"),
       userEntry("new", "reset", "new turn"),
     ];
 
@@ -541,23 +519,9 @@ describe("buildSessionContext", () => {
   it("lets the latest compaction shadow an earlier reset boundary", () => {
     const entries: SessionTreeEntry[] = [
       userEntry("old", null, "old"),
-      {
-        type: "reset",
-        id: "reset",
-        parentId: "old",
-        timestamp,
-        reason: "reset",
-      },
+      resetEntry("reset", "old", undefined, "reset"),
       userEntry("post-reset", "reset", "post reset"),
-      {
-        type: "compaction",
-        id: "compaction",
-        parentId: "post-reset",
-        timestamp,
-        summary: "latest summary",
-        firstKeptEntryId: "post-reset",
-        tokensBefore: 10,
-      },
+      compactionEntry("compaction", "post-reset", "post-reset", "latest summary", 10),
     ];
 
     expect(buildSessionContext(entries).messages).toMatchObject([

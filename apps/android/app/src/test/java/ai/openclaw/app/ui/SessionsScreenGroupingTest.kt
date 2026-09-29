@@ -23,11 +23,75 @@ class SessionsScreenGroupingTest {
       ) { "Main thread" },
     )
     assertEquals(
-      "Generated title",
+      "OpenClaw App · Release planning",
       sessionPresentationTitle(
-        ChatSessionEntry(key = dashboardKey, updatedAtMs = null, displayName = "Generated title"),
+        ChatSessionEntry(
+          key = dashboardKey,
+          updatedAtMs = null,
+          label = "OpenClaw App · Release planning",
+          displayName = "Generated title",
+        ),
       ) { "Main thread" },
     )
+    assertEquals(
+      "Generated title",
+      sessionPresentationTitle(
+        ChatSessionEntry(key = dashboardKey, updatedAtMs = null, displayName = "Generated title", localFallbackTitle = "Local device"),
+      ) { "Main thread" },
+    )
+    assertEquals(
+      "Generated title",
+      sessionPresentationTitle(
+        ChatSessionEntry(
+          key = "agent:main:node-1234567890ab",
+          updatedAtMs = null,
+          autoLabel = "OpenClaw App · Pixel · 1234567890ab",
+          displayName = "Generated title",
+          localFallbackTitle = "Local device",
+        ),
+      ) { "Main thread" },
+    )
+    assertEquals(
+      "OpenClaw App · Pixel · 1234567890ab",
+      sessionPresentationTitle(
+        ChatSessionEntry(
+          key = "agent:main:node-1234567890ab",
+          updatedAtMs = null,
+          autoLabel = "OpenClaw App · Pixel · 1234567890ab",
+          localFallbackTitle = "Local device",
+        ),
+      ) { "Main thread" },
+    )
+    assertEquals(
+      "Local device",
+      sessionPresentationTitle(ChatSessionEntry(key = "agent:main:node-device", updatedAtMs = null, localFallbackTitle = "  Local device  ")) { "Unnamed" },
+    )
+    assertEquals(
+      "Unnamed",
+      sessionPresentationTitle(ChatSessionEntry(key = "agent:main:node-device", updatedAtMs = null, localFallbackTitle = "  ")) { "Unnamed" },
+    )
+    val manualLabels =
+      listOf(
+        "OpenClaw App",
+        "OpenClaw App · 1234567890ab",
+        "OpenClaw App · Pixel · 1234567890ab",
+        "OpenClaw App · Release planning · 1234567890ab",
+      )
+    for (manualLabel in manualLabels) {
+      assertEquals(
+        manualLabel,
+        sessionPresentationTitle(
+          ChatSessionEntry(
+            key = "agent:main:node-1234567890ab",
+            updatedAtMs = null,
+            label = manualLabel,
+            autoLabel = "OpenClaw App · Pixel · 1234567890ab",
+            displayName = "Generated title",
+            localFallbackTitle = "Local device",
+          ),
+        ) { "Main thread" },
+      )
+    }
     assertEquals(
       "New chat",
       sessionPresentationTitle(ChatSessionEntry(key = dashboardKey, updatedAtMs = null)) { "Main thread" },
@@ -183,6 +247,53 @@ class SessionsScreenGroupingTest {
   }
 
   @Test
+  fun ordinaryNewChatsStayIndependentOfHomeAndPreviousChats() {
+    for (parent in listOf(
+      session("agent:ops:custom-home", pinned = true).copy(isMain = true),
+      session("agent:ops:node-android", pinned = true),
+      session("agent:ops:dashboard:previous", pinned = true),
+    )) {
+      val chat =
+        session("agent:ops:dashboard:new", parentSessionKey = parent.key).copy(
+          createdVia = "operator",
+          spawnDepth = 0,
+        )
+      val sections = buildSessionTreeSections(listOf(parent, chat), collapsedSessionKeys = setOf(parent.key))
+
+      assertEquals(parent.key, listOf("Pinned", "Ungrouped"), sections.map { it.title })
+      assertEquals(listOf(parent.key), sections[0].entries.map { it.session.key })
+      assertEquals(listOf(chat.key), sections[1].entries.map { it.session.key })
+      assertEquals(0, sections[1].entries.single().depth)
+      assertEquals(chat, sections[1].entries.single().session)
+    }
+  }
+
+  @Test
+  fun forksSubagentsWorktreesAndUnknownSessionsKeepTheirNesting() {
+    val home = session("agent:ops:custom-home").copy(isMain = true)
+    val chat =
+      session("agent:ops:dashboard:new", parentSessionKey = home.key).copy(
+        createdVia = "operator",
+        spawnDepth = 0,
+      )
+    val children =
+      listOf(
+        "worktree" to chat.copy(worktreeId = "worktree-1"),
+        "delegation" to chat.copy(spawnDepth = 1),
+        "spawn" to chat.copy(spawnedBy = home.key),
+        "fork" to chat.copy(forkedFromParent = true),
+        "subagent" to chat.copy(classification = "subagent"),
+        "missing provenance" to chat.copy(createdVia = null),
+        "missing depth" to chat.copy(spawnDepth = null),
+      )
+    for ((name, child) in children) {
+      val rows = buildSessionTreeSections(listOf(home, child)).single().entries
+      assertEquals(name, listOf(home.key, child.key), rows.map { it.session.key })
+      assertEquals(name, listOf(0, 1), rows.map { it.depth })
+    }
+  }
+
+  @Test
   fun collapsedParentHidesOnlyItsDescendants() {
     val entries = listOf(session("parent"), session("child", spawnedBy = "parent"), session("sibling"))
 
@@ -229,6 +340,24 @@ class SessionsScreenGroupingTest {
       "Needs attention · Thread failed · Current thread · Running · Unread",
       rows.single().descendantState.presentationLabel(),
     )
+  }
+
+  @Test
+  fun collapsedParentUsesLiveActivityInsteadOfHistoricalRunStatus() {
+    for ((status, flag, active) in listOf(
+      Triple("running", false, false),
+      Triple("done", true, false),
+      Triple("running", null, true),
+      Triple("queued", null, true),
+      Triple("queued", false, false),
+    )) {
+      val parent =
+        buildSessionTreeSections(
+          entries = listOf(session("parent"), session("child", spawnedBy = "parent", status = status, hasActiveRun = flag)),
+          collapsedSessionKeys = setOf("parent"),
+        ).single().entries.single()
+      assertEquals("status=$status flag=$flag", active, parent.descendantState.hasRunning)
+    }
   }
 
   @Test

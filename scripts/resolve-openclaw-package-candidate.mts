@@ -23,6 +23,7 @@ import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
 import { toErrorObject } from "./lib/error-format.mts";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
+import { cleanPackedOpenClawTarballs } from "./lib/packed-openclaw-tarballs.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { validatePackageSourceDir } from "./package-source-preflight.mjs";
@@ -176,7 +177,7 @@ for (const signal of Object.keys(SIGNAL_EXIT_CODES) as ForwardedSignal[]) {
   });
 }
 export const OPENCLAW_PACKAGE_SPEC_RE =
-  /^openclaw@(alpha|beta|extended-stable|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
+  /^openclaw@(beta|extended-stable|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
 function usage() {
   return `Usage: node --import tsx scripts/resolve-openclaw-package-candidate.mts --source <ref|npm|url|trusted-url|artifact> --output-dir <dir> [options]
@@ -291,9 +292,12 @@ function resolvePackedOpenClawTarballFilename(value: unknown) {
 }
 
 export function validateOpenClawPackageSpec(spec: string) {
+  if (spec === "openclaw@alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
-      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@extended-stable, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
+      `package_spec must be openclaw@beta, openclaw@extended-stable, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
     );
   }
 }
@@ -385,10 +389,10 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     if (options.capture) {
-      child.stdout?.on("data", (chunk: Buffer) => {
+      child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
         stdout = appendBoundedTail(stdout, chunk, COMMAND_STDOUT_CAPTURE_MAX_CHARS);
       });
-      child.stderr?.on("data", (chunk: Buffer) => {
+      child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
         stderr = appendBoundedTail(stderr, chunk, COMMAND_STDERR_CAPTURE_MAX_CHARS);
       });
     }
@@ -819,32 +823,6 @@ async function moveNewestPackedTarball(outputDir: string, packOutput: string, ou
 }
 
 export const moveNewestPackedTarballForTest = moveNewestPackedTarball;
-
-async function cleanPackedOpenClawTarballs(outputDir: string) {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(outputDir);
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") {
-      entries = [];
-    } else {
-      throw error;
-    }
-  }
-  await Promise.all(
-    entries
-      .filter((entry) => {
-        try {
-          return resolvePackedOpenClawTarballFilename(entry) === entry;
-        } catch {
-          return false;
-        }
-      })
-      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
-  );
-}
-
-export const cleanPackedOpenClawTarballsForTest = cleanPackedOpenClawTarballs;
 
 function normalizeUrlHostname(hostname: string): string {
   return hostname.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.+$/u, "").toLowerCase();
@@ -1612,7 +1590,7 @@ async function readPackageJson(tarball: string) {
   };
 }
 
-export async function readPackageBuildSourceSha(tarball: string) {
+async function readPackageBuildSourceSha(tarball: string) {
   const raw = await run("tar", ["-xOf", tarball, "package/dist/build-info.json"], {
     capture: true,
   }).then(

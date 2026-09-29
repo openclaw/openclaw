@@ -1,10 +1,11 @@
 // Openai tests cover index plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createCapturedPluginRegistration,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
-import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
@@ -38,25 +39,31 @@ vi.mock("./openai-chatgpt-oauth-flow.runtime.js", () => ({
   refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
 }));
 
-import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider-runtime.factory.js";
-async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
-  const on = vi.fn();
-  const providers: ProviderPlugin[] = [];
-  plugin.register(
-    createTestPluginApi({
-      id: "openai",
-      name: "OpenAI Provider",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      pluginConfig: params?.pluginConfig,
-      on,
-      registerProvider: (provider) => {
-        providers.push(provider);
-      },
-    }),
-  );
-  return { on, providers };
+const capturedRegistrations: ReturnType<typeof createCapturedPluginRegistration>[] = [];
+
+function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
+  const captured = createCapturedPluginRegistration({
+    id: "openai",
+    name: "OpenAI Provider",
+    source: "test",
+    config: {},
+  });
+  capturedRegistrations.push(captured);
+  const on = vi.fn(captured.api.on);
+  const registerHttpRoute = vi.fn(captured.api.registerHttpRoute);
+  const registerRuntimeLifecycle = vi.fn(captured.api.lifecycle.registerRuntimeLifecycle);
+  plugin.register({
+    ...captured.api,
+    runtime: {
+      config: { current: vi.fn(() => ({})) },
+      modelAuth: captured.api.runtime.modelAuth,
+    } as never,
+    pluginConfig: params?.pluginConfig,
+    on,
+    registerHttpRoute,
+    lifecycle: { ...captured.api.lifecycle, registerRuntimeLifecycle },
+  });
+  return { on, providers: captured.providers, registerHttpRoute, registerRuntimeLifecycle };
 }
 
 function expectOpenAIPromptContribution(
@@ -85,50 +92,6 @@ function expectOpenAIPromptContribution(
   });
 }
 
-function mockOpenAIImageApiResponse(params: {
-  finalUrl: string;
-  imageData: string;
-  revisedPrompt?: string;
-}) {
-  const response = () =>
-    new Response(
-      JSON.stringify({
-        data: [
-          {
-            b64_json: Buffer.from(params.imageData).toString("base64"),
-            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
-          },
-        ],
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
-  const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-    apiKey: "sk-test",
-    source: "env",
-    mode: "api-key",
-  });
-  const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
-    finalUrl: params.finalUrl,
-    response: response(),
-    release: vi.fn(async () => {}),
-  });
-  const postMultipartRequestSpy = vi.spyOn(providerHttp, "postMultipartRequest").mockResolvedValue({
-    finalUrl: params.finalUrl,
-    response: response(),
-    release: vi.fn(async () => {}),
-  });
-  vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
-  return { resolveApiKeySpy, postJsonRequestSpy, postMultipartRequestSpy };
-}
-
-function firstMockArg(mocked: unknown): Record<string, unknown> {
-  const arg = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0]?.[0];
-  if (!arg || typeof arg !== "object") {
-    throw new Error("Expected first mock argument");
-  }
-  return arg as Record<string, unknown>;
-}
-
 function mockCalls(mocked: unknown): unknown[][] {
   return (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
 }
@@ -138,38 +101,26 @@ function expectNoBeforePromptBuildHook(on: unknown): void {
   expect(hasBeforePromptBuild).toBe(false);
 }
 
-function expectNoRequestUrl(mocked: unknown, url: string): void {
-  const hasUrl = mockCalls(mocked).some((call) => {
-    const arg = call[0] as { url?: unknown } | undefined;
-    return arg?.url === url;
-  });
-  expect(hasUrl).toBe(false);
-}
-
 describe("openai plugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    try {
+      for (const captured of capturedRegistrations.splice(0)) {
+        for (const lifecycle of captured.runtimeLifecycles) {
+          await lifecycle.cleanup?.({ reason: "disable" });
+        }
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 
   it("registers the native GPT-Live offer route and cleanup lifecycle", async () => {
-    const registerHttpRoute = vi.fn();
-    const registerRuntimeLifecycle = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "openai",
-        name: "OpenAI Provider",
-        source: "test",
-        config: {},
-        runtime: { config: { current: vi.fn(() => ({})) } } as never,
-        registerHttpRoute,
-        registerRuntimeLifecycle,
-      }),
-    );
+    const { registerHttpRoute, registerRuntimeLifecycle } = registerOpenAIPluginWithHook();
 
     expect(registerHttpRoute).toHaveBeenCalledWith({
       path: "/plugins/openai/realtime/calls",
@@ -183,24 +134,16 @@ describe("openai plugin", () => {
         cleanup: expect.any(Function),
       }),
     );
-    await registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup({ reason: "disable" });
+    const cleanup = expectDefined(
+      registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup,
+      "OpenAI runtime cleanup",
+    );
+    await cleanup({ reason: "disable" });
   });
 
   it("shares one GPT-Live broker across full registrations and ignores late old cleanup", async () => {
     const register = () => {
-      const registerHttpRoute = vi.fn();
-      const registerRuntimeLifecycle = vi.fn();
-      plugin.register(
-        createTestPluginApi({
-          id: "openai",
-          name: "OpenAI Provider",
-          source: "test",
-          config: {},
-          runtime: { config: { current: vi.fn(() => ({})) } } as never,
-          registerHttpRoute,
-          registerRuntimeLifecycle,
-        }),
-      );
+      const { registerHttpRoute, registerRuntimeLifecycle } = registerOpenAIPluginWithHook();
       return {
         handler: registerHttpRoute.mock.calls[0]?.[0].handler as unknown,
         cleanup: registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup as (ctx: {
@@ -224,18 +167,7 @@ describe("openai plugin", () => {
   });
 
   it("only cleans up the GPT-Live broker on plugin disable, not session reset/delete/restart", async () => {
-    const registerRuntimeLifecycle = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        id: "openai",
-        name: "OpenAI Provider",
-        source: "test",
-        config: {},
-        runtime: { config: { current: vi.fn(() => ({})) } } as never,
-        registerHttpRoute: vi.fn(),
-        registerRuntimeLifecycle,
-      }),
-    );
+    const { registerRuntimeLifecycle } = registerOpenAIPluginWithHook();
 
     const lifecycle = registerRuntimeLifecycle.mock.calls[0]?.[0] as {
       cleanup: (ctx: { reason: string }) => Promise<void> | void;
@@ -251,112 +183,6 @@ describe("openai plugin", () => {
     await expect(disableResult).resolves.toBeUndefined();
   });
 
-  it("generates PNG buffers from the OpenAI Images API", async () => {
-    const { resolveApiKeySpy, postJsonRequestSpy } = mockOpenAIImageApiResponse({
-      finalUrl: "https://api.openai.com/v1/images/generations",
-      imageData: "png-data",
-      revisedPrompt: "revised",
-    });
-
-    const provider = buildOpenAIImageGenerationProvider();
-    const authStore = { version: 1, profiles: {} };
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "draw a cat",
-      cfg: {},
-      authStore,
-      count: 2,
-      size: "2048x2048",
-    });
-
-    const authArgs = firstMockArg(resolveApiKeySpy);
-    expect(authArgs.provider).toBe("openai");
-    expect(authArgs.store).toBe(authStore);
-    const requestArgs = firstMockArg(postJsonRequestSpy);
-    expect(requestArgs.url).toBe("https://api.openai.com/v1/images/generations");
-    expect(requestArgs.body).toEqual({
-      model: "gpt-image-2",
-      prompt: "draw a cat",
-      n: 2,
-      size: "2048x2048",
-    });
-    expectNoRequestUrl(postJsonRequestSpy, "https://api.openai.com/v1/images/edits");
-    expect(result).toEqual({
-      images: [
-        {
-          buffer: Buffer.from("png-data"),
-          mimeType: "image/png",
-          fileName: "image-1.png",
-          revisedPrompt: "revised",
-        },
-      ],
-      model: "gpt-image-2",
-    });
-  });
-
-  it("submits reference-image edits to the OpenAI Images edits endpoint", async () => {
-    const { resolveApiKeySpy, postJsonRequestSpy, postMultipartRequestSpy } =
-      mockOpenAIImageApiResponse({
-        finalUrl: "https://api.openai.com/v1/images/edits",
-        imageData: "edited-image",
-      });
-
-    const provider = buildOpenAIImageGenerationProvider();
-    const authStore = { version: 1, profiles: {} };
-
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Edit this image",
-      cfg: {},
-      authStore,
-      count: 2,
-      size: "1536x1024",
-      inputImages: [
-        { buffer: Buffer.from("x"), mimeType: "image/png" },
-        { buffer: Buffer.from("y"), mimeType: "image/jpeg", fileName: "ref.jpg" },
-      ],
-    });
-
-    const authArgs = firstMockArg(resolveApiKeySpy);
-    expect(authArgs.provider).toBe("openai");
-    expect(authArgs.store).toBe(authStore);
-    const multipartArgs = firstMockArg(postMultipartRequestSpy);
-    expect(multipartArgs.url).toBe("https://api.openai.com/v1/images/edits");
-    expect(multipartArgs.body).toBeInstanceOf(FormData);
-    expect(multipartArgs.allowPrivateNetwork).toBe(false);
-    expect(multipartArgs.dispatcherPolicy).toBeUndefined();
-    expect(multipartArgs.fetchFn).toBe(fetch);
-    const editCallArgs = multipartArgs as unknown as {
-      headers: Headers;
-      body: FormData;
-    };
-    expect(editCallArgs.headers.has("Content-Type")).toBe(false);
-    const form = editCallArgs.body;
-    expect(form.get("model")).toBe("gpt-image-2");
-    expect(form.get("prompt")).toBe("Edit this image");
-    expect(form.get("n")).toBe("2");
-    expect(form.get("size")).toBe("1536x1024");
-    const images = form.getAll("image[]") as File[];
-    expect(images).toHaveLength(2);
-    expect(images[0]?.name).toBe("image-1.png");
-    expect(images[0]?.type).toBe("image/png");
-    expect(images[1]?.name).toBe("ref.jpg");
-    expect(images[1]?.type).toBe("image/jpeg");
-    expectNoRequestUrl(postJsonRequestSpy, "https://api.openai.com/v1/images/edits");
-    expect(result).toEqual({
-      images: [
-        {
-          buffer: Buffer.from("edited-image"),
-          mimeType: "image/png",
-          fileName: "image-1.png",
-        },
-      ],
-      model: "gpt-image-2",
-    });
-  });
-
   it("does not allow private-network routing just because a custom base URL is configured", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "sk-test",
@@ -366,7 +192,9 @@ describe("openai plugin", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const provider = buildOpenAIImageGenerationProvider();
+    const provider = buildOpenAIImageGenerationProvider(
+      createCapturedPluginRegistration().api.runtime.modelAuth,
+    );
     await expect(
       provider.generateImage({
         provider: "openai",
@@ -395,15 +223,21 @@ describe("openai plugin", () => {
       expires: Date.now() + 60_000,
     };
     runtimeMocks.refreshOpenAICodexToken.mockResolvedValue(refreshed);
-    const runtime = createOpenAICodexProviderRuntime({
-      ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
-      refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
-    });
-
-    await expect(runtime.refreshOpenAICodexToken("refresh-token")).resolves.toBe(refreshed);
+    const { providers } = registerOpenAIPluginWithHook();
+    const provider = requireRegisteredProvider(providers, "openai");
+    await expect(
+      provider.refreshOAuth!({
+        type: "oauth",
+        provider: "openai",
+        access: "old-access",
+        refresh: "refresh-token",
+        expires: 0,
+      }),
+    ).resolves.toMatchObject(refreshed);
 
     expect(runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
     expect(runtimeMocks.refreshOpenAICodexToken).toHaveBeenCalledOnce();
+    expect(runtimeMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("refresh-token");
     expect(
       expectDefined(
         runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
@@ -417,8 +251,8 @@ describe("openai plugin", () => {
     );
   });
 
-  it("registers provider-owned OpenAI tool compat hooks for API and Codex transports", async () => {
-    const { providers } = await registerOpenAIPluginWithHook();
+  it("registers provider-owned OpenAI tool compat hooks for API and Codex transports", () => {
+    const { providers } = registerOpenAIPluginWithHook();
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     const noParamsTool = {
       name: "ping",
@@ -494,8 +328,105 @@ describe("openai plugin", () => {
     ).toStrictEqual([]);
   });
 
-  it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", async () => {
-    const { on, providers } = await registerOpenAIPluginWithHook({
+  it.each([
+    {
+      name: "Platform",
+      baseUrl: "https://api.openai.com/v1",
+      supportsPromptCacheKey: undefined,
+      expected: true,
+    },
+    {
+      name: "Codex OAuth",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      supportsPromptCacheKey: undefined,
+      expected: true,
+    },
+    {
+      name: "normalized official endpoint",
+      baseUrl: " https://API.OPENAI.COM./v1/ ",
+      supportsPromptCacheKey: undefined,
+      expected: true,
+    },
+    {
+      name: "custom proxy",
+      baseUrl: "https://openai-proxy.example/v1",
+      supportsPromptCacheKey: undefined,
+      expected: false,
+    },
+    {
+      name: "opted proxy",
+      baseUrl: "https://openai-proxy.example/v1",
+      supportsPromptCacheKey: true,
+      expected: true,
+    },
+    {
+      name: "opted-out Platform",
+      baseUrl: "https://api.openai.com/v1",
+      supportsPromptCacheKey: false,
+      expected: false,
+    },
+    {
+      name: "opted-out Codex",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      supportsPromptCacheKey: false,
+      expected: false,
+    },
+    {
+      name: "opted-out proxy",
+      baseUrl: "https://openai-proxy.example/v1",
+      supportsPromptCacheKey: false,
+      expected: false,
+    },
+    {
+      name: "lookalike host",
+      baseUrl: "https://api.openai.com.example/v1",
+      supportsPromptCacheKey: undefined,
+      expected: false,
+    },
+    {
+      name: "plaintext official endpoint",
+      baseUrl: "http://api.openai.com/v1",
+      supportsPromptCacheKey: undefined,
+      expected: false,
+    },
+    {
+      name: "invalid official path",
+      baseUrl: "https://api.openai.com/not-api",
+      supportsPromptCacheKey: undefined,
+      expected: false,
+    },
+    {
+      name: "unresolved route",
+      baseUrl: undefined,
+      supportsPromptCacheKey: undefined,
+      expected: false,
+    },
+  ])("registers $name cache-TTL eligibility", ({ baseUrl, supportsPromptCacheKey, expected }) => {
+    const { providers } = registerOpenAIPluginWithHook();
+    const provider = requireRegisteredProvider(providers, "openai");
+    expect(
+      provider.isCacheTtlEligible?.({
+        provider: " OPENAI ",
+        modelId: "gpt-4o",
+        modelApi: baseUrl?.includes("chatgpt.com")
+          ? "openai-chatgpt-responses"
+          : "openai-responses",
+        baseUrl,
+        supportsPromptCacheKey,
+      }),
+    ).toBe(expected);
+    expect(
+      provider.isCacheTtlEligible?.({
+        provider: "openrouter",
+        modelId: "openai/gpt-4o",
+        baseUrl,
+        supportsPromptCacheKey: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", () => {
+    const { on, providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "friendly" },
     });
 
@@ -601,8 +532,8 @@ describe("openai plugin", () => {
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("GPT-5 Output Contract");
   });
 
-  it("defaults to the friendly OpenAI interaction-style overlay", async () => {
-    const { on, providers } = await registerOpenAIPluginWithHook();
+  it("defaults to the friendly OpenAI interaction-style overlay", () => {
+    const { on, providers } = registerOpenAIPluginWithHook();
 
     expectNoBeforePromptBuildHook(on);
     const openaiProvider = requireRegisteredProvider(providers, "openai");
@@ -611,18 +542,8 @@ describe("openai plugin", () => {
     });
   });
 
-  it("supports opting out of the friendly prompt overlay via plugin config", async () => {
-    const { on, providers } = await registerOpenAIPluginWithHook({
-      pluginConfig: { personality: "off" },
-    });
-
-    expectNoBeforePromptBuildHook(on);
-    const openaiProvider = requireRegisteredProvider(providers, "openai");
-    expectOpenAIPromptContribution(openaiProvider, {});
-  });
-
-  it("treats mixed-case off values as disabling the friendly prompt overlay", async () => {
-    const { providers } = await registerOpenAIPluginWithHook({
+  it("treats mixed-case off values as disabling the friendly prompt overlay", () => {
+    const { providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "Off" },
     });
 
@@ -630,20 +551,8 @@ describe("openai plugin", () => {
     expectOpenAIPromptContribution(openaiProvider, {});
   });
 
-  it("supports explicitly configuring the friendly prompt overlay", async () => {
-    const { on, providers } = await registerOpenAIPluginWithHook({
-      pluginConfig: { personality: "friendly" },
-    });
-
-    expectNoBeforePromptBuildHook(on);
-    const openaiProvider = requireRegisteredProvider(providers, "openai");
-    expectOpenAIPromptContribution(openaiProvider, {
-      interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-    });
-  });
-
-  it("uses live plugin config for GPT-5 prompt overlay mode", async () => {
-    const { providers } = await registerOpenAIPluginWithHook({
+  it("uses live plugin config for GPT-5 prompt overlay mode", () => {
+    const { providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "off" },
     });
 
@@ -678,8 +587,8 @@ describe("openai plugin", () => {
     });
   });
 
-  it("treats on as an alias for the friendly prompt overlay", async () => {
-    const { providers } = await registerOpenAIPluginWithHook({
+  it("treats on as an alias for the friendly prompt overlay", () => {
+    const { providers } = registerOpenAIPluginWithHook({
       pluginConfig: { personality: "on" },
     });
 

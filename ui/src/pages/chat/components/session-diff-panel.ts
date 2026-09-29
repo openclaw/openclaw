@@ -38,15 +38,11 @@ import { renderSessionSplitDiff } from "./session-diff-render.ts";
 
 export type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
 export type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
+export type SessionDiffOwner = { agentId: string; sessionKey: string };
 
 type FileView = {
   file: SessionDiffFile;
   parsed: ParsedFilePatch | null;
-};
-
-type SessionDiffTaskResult = {
-  result: SessionsDiffResult;
-  views: FileView[];
 };
 
 type SessionDiffPreferences = { split: boolean; wrap: boolean };
@@ -72,28 +68,12 @@ function savePreferences(preferences: SessionDiffPreferences): void {
   }
 }
 
-function statusLabel(file: SessionDiffFile): string {
-  switch (file.status) {
-    case "added":
-      return t("chat.sessionDiff.statusAdded");
-    case "deleted":
-      return t("chat.sessionDiff.statusDeleted");
-    case "renamed":
-      return t("chat.sessionDiff.statusRenamed");
-    default:
-      return t("chat.sessionDiff.statusModified");
-  }
-}
-
-function statusLetter(file: SessionDiffFile): string {
-  return file.status === "added"
-    ? "A"
-    : file.status === "deleted"
-      ? "D"
-      : file.status === "renamed"
-        ? "R"
-        : "M";
-}
+const FILE_STATUS_LABELS = {
+  added: ["A", "chat.sessionDiff.statusAdded"],
+  deleted: ["D", "chat.sessionDiff.statusDeleted"],
+  renamed: ["R", "chat.sessionDiff.statusRenamed"],
+  modified: ["M", "chat.sessionDiff.statusModified"],
+} as const;
 
 function diffStat(file: Pick<SessionDiffFile, "additions" | "deletions">) {
   const modified = Math.min(file.additions, file.deletions);
@@ -129,27 +109,8 @@ function shellArgument(value: string): string {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function scopeParams(scope: SessionDiffScope): SessionDiffScope {
-  return scope.scope === "commit"
-    ? { scope: "commit", commit: scope.commit }
-    : { scope: scope.scope };
-}
-
-function taskResult(result: SessionsDiffResult): SessionDiffTaskResult {
-  return {
-    result,
-    views: result.files.map((file) => ({
-      file,
-      parsed: file.patch
-        ? parseSessionDiffPatch(file.patch, (count) =>
-            t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
-          )
-        : null,
-    })),
-  };
-}
-
 class SessionDiffPanel extends OpenClawLightDomElement {
+  @property({ attribute: false }) owner: SessionDiffOwner | null = null;
   @property({ attribute: false }) execNode: string | null = null;
   @property({ attribute: false }) loader: SessionDiffLoader | null = null;
   @property({ attribute: false }) loadFileText: SessionDiffFileTextLoader | null = null;
@@ -174,20 +135,26 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   }
 
   private readonly diffTask = new Task(this, {
-    args: () =>
-      [
-        this.loader,
-        this.scope.scope,
-        this.scope.scope === "commit" ? this.scope.commit : null,
-      ] as const,
-    task: async ([loader, scope, commit]): Promise<SessionDiffTaskResult | null> => {
+    args: () => [this.loader, this.owner, this.scope] as const,
+    task: async ([loader, owner, scope]) => {
       if (!loader) {
         return null;
       }
-      const params: SessionDiffScope = scope === "commit" ? { scope, commit: commit! } : { scope };
-      const result = this.prefetchedDiffResult ?? (await loader(params));
+      const result = this.prefetchedDiffResult ?? (await loader(scope));
       this.prefetchedDiffResult = null;
-      return taskResult(result);
+      return {
+        owner,
+        scope,
+        result,
+        views: result.files.map((file) => ({
+          file,
+          parsed: file.patch
+            ? parseSessionDiffPatch(file.patch, (count) =>
+                t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
+              )
+            : null,
+        })),
+      };
     },
     onComplete: (value) => {
       const currentPaths = new Set(value?.views.map((view) => view.file.path) ?? []);
@@ -199,10 +166,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
 
   private get loading(): boolean {
     return this.loader !== null && this.diffTask.status === TaskStatus.PENDING;
-  }
-
-  private refresh(): Promise<void> {
-    return this.diffTask.run();
   }
 
   private toggleFile(path: string): void {
@@ -234,7 +197,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         y: placement.startsWith("top") ? bounds.top : bounds.bottom,
       },
       trigger,
-    } as SessionDiffMenuData;
+    };
   }
 
   private handleMenuAction(action: SessionDiffMenuAction): void {
@@ -256,7 +219,10 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         savePreferences({ split: this.split, wrap: this.wrap });
         return;
       case "scope":
-        this.scope = action.value;
+        // Scope identity drives the Task, so reselecting the active scope must stay a no-op.
+        if (JSON.stringify(action.value) !== JSON.stringify(this.scope)) {
+          this.scope = action.value;
+        }
         return;
       case "open-file":
         this.openFile?.(action.path);
@@ -284,7 +250,11 @@ class SessionDiffPanel extends OpenClawLightDomElement {
           ${icons.gitBranch}
           <span class="session-diff__branch-label">${branchLabel}</span>
         </span>
-        ${renderDiffStatChips(totalDiffStat(result.files))}
+        ${
+          result.unavailableReason === "workspace_stopped"
+            ? nothing
+            : renderDiffStatChips(totalDiffStat(result.files))
+        }
         <span class="session-diff__summary-spacer"></span>
         ${
           syncCommand && result.root && result.branch
@@ -324,7 +294,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
             type="button"
             aria-label=${t("chat.sessionDiff.refresh")}
             ?disabled=${this.loading}
-            @click=${() => void this.refresh()}
+            @click=${() => void this.diffTask.run()}
           >
             ${icons.refresh}
           </button>
@@ -372,7 +342,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     const scope = this.scope;
     let freshResult: SessionsDiffResult;
     try {
-      freshResult = await loader(scopeParams(scope));
+      freshResult = await loader(scope);
     } catch {
       return;
     }
@@ -445,13 +415,19 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     </span>`;
   }
 
-  private renderFileBody(view: FileView): TemplateResult {
+  private renderFileBody(view: FileView, result: SessionsDiffResult): TemplateResult {
     const { file, parsed } = view;
     if (file.binary === true) {
       return html`<div class="session-diff__note">${t("chat.sessionDiff.binaryFile")}</div>`;
     }
     if (!parsed) {
-      return html`<div class="session-diff__note">${t("chat.sessionDiff.tooLarge")}</div>`;
+      return html`<div class="session-diff__note">
+        ${t(
+          result.unavailableReason === "workspace_stopped"
+            ? "chat.sessionDiff.workspaceStoppedFile"
+            : "chat.sessionDiff.previewUnavailable",
+        )}
+      </div>`;
     }
     const renderGap = (line: DiffLine) => this.renderGap(view, line);
     return html`
@@ -476,6 +452,8 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       ? (localEditorFilePath({ root: result.root, path: file.path }, this.execNode) ?? undefined)
       : undefined;
     const pathTitle = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+    const [statusLetter, statusLabel] =
+      FILE_STATUS_LABELS[file.status] ?? FILE_STATUS_LABELS.modified;
     return html`
       <section class="session-diff__file" data-status=${file.status}>
         <div class="session-diff__file-header">
@@ -491,8 +469,8 @@ class SessionDiffPanel extends OpenClawLightDomElement {
             </span>
             <span
               class="session-diff__status session-diff__status--${file.status}"
-              title=${statusLabel(file)}
-              >${statusLetter(file)}</span
+              title=${t(statusLabel)}
+              >${statusLetter}</span
             >
             <span class="session-diff__path">
               ${
@@ -512,7 +490,11 @@ class SessionDiffPanel extends OpenClawLightDomElement {
                 ? html`<span class="session-diff__badge">${t("chat.sessionDiff.untracked")}</span>`
                 : nothing
             }
-            ${renderDiffStatChips(diffStat(file))}
+            ${
+              result.unavailableReason === "workspace_stopped"
+                ? nothing
+                : renderDiffStatChips(diffStat(file))
+            }
           </button>
           <button
             class="btn btn--ghost btn--icon session-diff__file-menu"
@@ -540,7 +522,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
                   Math.min(12_000, (view.parsed?.lines.length ?? 2) * 19),
                 )}px`}
               >
-                ${this.renderFileBody(view)}
+                ${this.renderFileBody(view, result)}
               </div>`
         }
       </section>
@@ -584,10 +566,10 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       const error = this.diffTask.error;
       return html`<div class="callout danger">${formatUiError(error)}</div>`;
     }
-    if (this.loading) {
+    const value = this.diffTask.value;
+    if (this.loading && (!value || value.owner !== this.owner || value.scope !== this.scope)) {
       return renderPanelLoadingSkeleton("review", t("chat.sessionDiff.loading"));
     }
-    const value = this.diffTask.value;
     if (!value) {
       return nothing;
     }
@@ -600,6 +582,11 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     }
     return html`
       ${this.renderSummary(result)}
+      ${
+        result.unavailableReason === "workspace_stopped"
+          ? html`<div class="session-diff__note">${t("chat.sessionDiff.workspaceStopped")}</div>`
+          : nothing
+      }
       <button
         class="session-diff__section-title"
         type="button"
@@ -618,7 +605,9 @@ class SessionDiffPanel extends OpenClawLightDomElement {
           result.unavailableReason === "unknown_commit"
             ? html`<div class="session-diff__note">${t("chat.sessionDiff.unknownCommit")}</div>`
             : result.files.length === 0
-              ? html`<div class="session-diff__note">${t("chat.sessionDiff.empty")}</div>`
+              ? result.unavailableReason === "workspace_stopped" || result.truncated === true
+                ? nothing
+                : html`<div class="session-diff__note">${t("chat.sessionDiff.empty")}</div>`
               : views.map((view) => this.renderFile(view, result))
         }
         ${

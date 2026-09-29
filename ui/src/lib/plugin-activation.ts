@@ -1,4 +1,3 @@
-// Control UI module implements plugin activation behavior.
 import type { ConfigSnapshot } from "../api/types.ts";
 
 type PluginActivationOptions = {
@@ -51,11 +50,4 @@ export function isPluginEnabledInConfigSnapshot(
 
   const enabled = (entry as { enabled?: unknown }).enabled;
   return typeof enabled === "boolean" ? enabled : enabledByDefault;
-}
-
-/** Workboard ships disabled; an unloaded snapshot therefore reads as disabled. */
-export function isWorkboardEnabledInConfigSnapshot(
-  configSnapshot: ConfigSnapshot | null | undefined,
-): boolean {
-  return isPluginEnabledInConfigSnapshot(configSnapshot, "workboard", { enabledByDefault: false });
 }

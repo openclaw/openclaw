@@ -1,13 +1,14 @@
 /** Handles informational commands such as /help, /commands, /tools, and exports. */
 import {
   resolveEffectiveToolInventory,
-  resolveEffectiveToolInventoryRuntimeModelContextAsync,
+  acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import {
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
   resolveSkillCommandInvocation,
 } from "../../skills/discovery/chat-commands.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
@@ -42,7 +43,7 @@ async function resolveSkillCommands(
   if (params.loadSkillCommands) {
     return params.loadSkillCommands();
   }
-  return listSkillCommandsForAgents({
+  return prepareSkillCommandsForAgents({
     cfg: params.cfg,
     agentIds: [params.agentId],
     sessionEntry: params.sessionEntry,
@@ -50,13 +51,11 @@ async function resolveSkillCommands(
   });
 }
 
-/** Command handler for /help. */
 export const handleHelpCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/help", match: (body) => (body === "/help" ? true : null), silentUnauthorized: true },
   (params) => commandReply(buildHelpMessage(params.cfg)),
 );
 
-/** Command handler for /commands. */
 export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/commands",
@@ -106,7 +105,6 @@ function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams[
   return lines.join("\n");
 }
 
-/** Command handler for /skill usage help. */
 export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/skill",
@@ -130,7 +128,6 @@ export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextComma
   },
 );
 
-/** Command handler for /tools. */
 export const handleToolsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -163,7 +160,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       hasRepliedRef: undefined,
     });
-    const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
+    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
       cfg: params.cfg,
       agentId: params.agentId,
       agentDir: sessionBound ? undefined : params.agentDir,
@@ -171,41 +168,47 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       modelProvider: params.provider,
       modelId: params.model,
     });
-    const result = resolveEffectiveToolInventory({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-      agentDir: sessionBound ? undefined : params.agentDir,
-      modelProvider: params.provider,
-      modelId: params.model,
-      modelApi: runtimeModelContext.modelApi,
-      runtimeModel: runtimeModelContext.runtimeModel,
-      messageProvider: params.command.channel,
-      senderId: params.command.senderId,
-      senderName: params.ctx.SenderName,
-      senderUsername: params.ctx.SenderUsername,
-      senderE164: params.ctx.SenderE164,
-      accountId: effectiveAccountId,
-      currentChannelId: threadingContext.currentChannelId,
-      currentThreadTs:
-        typeof params.ctx.MessageThreadId === "string" ||
-        typeof params.ctx.MessageThreadId === "number"
-          ? String(params.ctx.MessageThreadId)
-          : undefined,
-      currentMessageId: threadingContext.currentMessageId,
-      groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
-      groupChannel:
-        targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
-      groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
-      replyToMode: resolveReplyToMode(
-        params.cfg,
-        params.ctx.OriginatingChannel ?? params.ctx.Provider,
-        effectiveAccountId,
-        params.ctx.ChatType,
-      ),
-    });
-    return commandReply(buildToolsMessage(result, { verbose }));
+    try {
+      return acquired.run((runtimeModelContext) => {
+        const result = resolveEffectiveToolInventory({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          agentDir: sessionBound ? undefined : params.agentDir,
+          modelProvider: params.provider,
+          modelId: params.model,
+          modelApi: runtimeModelContext.modelApi,
+          runtimeModel: runtimeModelContext.runtimeModel,
+          messageProvider: params.command.channel,
+          senderId: params.command.senderId,
+          senderName: params.ctx.SenderName,
+          senderUsername: params.ctx.SenderUsername,
+          senderE164: params.ctx.SenderE164,
+          accountId: effectiveAccountId,
+          currentChannelId: threadingContext.currentChannelId,
+          currentThreadTs:
+            typeof params.ctx.MessageThreadId === "string" ||
+            typeof params.ctx.MessageThreadId === "number"
+              ? String(params.ctx.MessageThreadId)
+              : undefined,
+          currentMessageId: threadingContext.currentMessageId,
+          groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
+          groupChannel:
+            targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+          groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
+          replyToMode: resolveReplyToMode(
+            params.cfg,
+            params.ctx.OriginatingChannel ?? params.ctx.Provider,
+            effectiveAccountId,
+            params.ctx.ChatType,
+          ),
+        });
+        return commandReply(buildToolsMessage(result, { verbose }));
+      });
+    } finally {
+      await acquired[Symbol.asyncDispose]();
+    }
   } catch {
     // Inventory resolves in-process after sender authorization; this path cannot receive
     // gateway RPC scope errors, so failures here are local discovery failures.
@@ -213,7 +216,6 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 };
 
-/** Command handler for /status. */
 export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/status",
@@ -236,38 +238,25 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
       return { shouldContinue: false, reply };
     }
     if (normalizedStatusCommand.startsWith("/status ")) {
-      return commandReply("⚠️ Unknown /status subcommand. Try /status or /status plugins.");
+      return {
+        shouldContinue: false,
+        reply: setReplyPayloadMetadata(
+          { text: "⚠️ Unknown /status subcommand. Try /status or /status plugins." },
+          { contextFreeCommand: true },
+        ),
+      };
     }
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const reply = await buildStatusReply({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      command: params.command,
+      ...params,
       sessionEntry: targetSessionEntry,
-      sessionKey: params.sessionKey,
       parentSessionKey: targetSessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
-      sessionScope: params.sessionScope,
-      storePath: params.storePath,
-      provider: params.provider,
-      model: params.model,
-      contextTokens: params.contextTokens,
-      thinkingCatalog: params.thinkingCatalog,
-      workspaceDir: params.workspaceDir,
-      resolvedThinkLevel: params.resolvedThinkLevel,
-      resolvedFastMode: params.resolvedFastMode,
-      resolvedVerboseLevel: params.resolvedVerboseLevel,
-      resolvedReasoningLevel: params.resolvedReasoningLevel,
-      resolvedElevatedLevel: params.resolvedElevatedLevel,
-      resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-      isGroup: params.isGroup,
-      defaultGroupActivation: params.defaultGroupActivation,
       mediaDecisions: params.ctx.MediaUnderstandingDecisions,
     });
     return { shouldContinue: false, reply };
   },
 );
 
-/** Command handler for /export-session. */
 export const handleExportSessionCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/export-session",
@@ -278,7 +267,6 @@ export const handleExportSessionCommand: CommandHandler = defineAuthorizedTextCo
   async (params) => ({ shouldContinue: false, reply: await buildExportSessionReply(params) }),
 );
 
-/** Command handler for /export-trajectory. */
 export const handleExportTrajectoryCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/export-trajectory",

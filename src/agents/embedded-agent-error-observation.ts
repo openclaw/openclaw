@@ -2,10 +2,10 @@ import { stableStringify } from "@openclaw/normalization-core";
 /**
  * Builds structured observations for embedded-agent API/text failures.
  */
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readLoggingConfig } from "../logging/config.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import {
   classifyProviderRuntimeFailureKind,
@@ -73,7 +73,8 @@ function redactObservationText(text: string | undefined): string | undefined {
     return text;
   }
   // Observation logs must stay redacted even when operators disable general-purpose
-  // log redaction, otherwise raw provider payloads leak back into always-on logs.
+  // log redaction, otherwise raw provider payloads leak back into always-on logs. The default
+  // policy includes its programmatic matchers, not only the configurable string sources.
   const configuredPatterns = resolveConfiguredRedactPatterns();
   return redactSensitiveText(text, {
     mode: "tools",

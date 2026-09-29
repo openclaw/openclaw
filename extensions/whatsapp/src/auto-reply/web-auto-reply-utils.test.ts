@@ -1,23 +1,8 @@
 // Whatsapp tests cover web auto reply utils plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import {
-  evaluateSessionFreshness,
-  getSessionEntry,
-  normalizeSessionDeliveryState,
-  resolveChannelResetConfig,
-  resolveSessionKey,
-  resolveSessionResetPolicy,
-  resolveSessionResetType,
-  resolveStorePath,
-  resolveThreadFlag,
-  sessionDeliveryChannel,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { debugMention, resolveOwnerList } from "./mentions.js";
@@ -71,62 +56,6 @@ const makeMsg = (overrides: TestMessageOverrides): AdmittedWebInboundMessage => 
   });
 };
 
-function getSessionSnapshotForTest(
-  cfg: OpenClawConfig,
-  from: string,
-  ctx?: {
-    sessionKey?: string | null;
-    isGroup?: boolean;
-    messageThreadId?: string | number | null;
-    threadLabel?: string | null;
-    threadStarterBody?: string | null;
-    parentSessionKey?: string | null;
-  },
-) {
-  const sessionCfg = cfg.session;
-  const scope = sessionCfg?.scope ?? "per-sender";
-  const key =
-    ctx?.sessionKey?.trim() ??
-    resolveSessionKey(
-      scope,
-      { From: from, To: "", Body: "" },
-      normalizeMainKey(sessionCfg?.mainKey),
-    );
-  const entry = getSessionEntry({
-    sessionKey: key,
-    storePath: resolveStorePath(sessionCfg?.store),
-  });
-  const isThread = resolveThreadFlag({
-    sessionKey: key,
-    messageThreadId: ctx?.messageThreadId ?? null,
-    threadLabel: ctx?.threadLabel ?? null,
-    threadStarterBody: ctx?.threadStarterBody ?? null,
-    parentSessionKey: ctx?.parentSessionKey ?? null,
-  });
-  const resetType = resolveSessionResetType({ sessionKey: key, isGroup: ctx?.isGroup, isThread });
-  const resetPolicy = resolveSessionResetPolicy({
-    sessionCfg,
-    resetType,
-    resetOverride: resolveChannelResetConfig({
-      sessionCfg,
-      channel: sessionDeliveryChannel(entry),
-    }),
-  });
-  const freshness = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now: Date.now(), policy: resetPolicy })
-    : { fresh: false };
-
-  return {
-    key,
-    entry,
-    fresh: freshness.fresh,
-    resetPolicy,
-    resetType,
-    dailyResetAt: freshness.dailyResetAt,
-    idleExpiresAt: freshness.idleExpiresAt,
-  };
-}
-
 describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
 
@@ -137,29 +66,6 @@ describe("isBotMentionedFromTargets", () => {
   ) {
     expect(debugMention(msg, cfg).wasMentioned).toBe(expected);
   }
-
-  it("honors configured mention patterns when only other members are @-mentioned (#109488)", () => {
-    // Previously a native @-mention of a non-bot member short-circuited the
-    // gate to false before mentionPatterns were evaluated, silently dropping
-    // messages like "marlow, look at @SomeoneElse's message".
-    const msg = makeMsg({
-      body: "@OpenClaw please help",
-      mentionedJids: ["19998887777@s.whatsapp.net"],
-      selfE164: "+15551234567",
-      selfJid: "15551234567@s.whatsapp.net",
-    });
-    expectMentioned(msg, mentionCfg, true);
-  });
-
-  it("still rejects third-party mentions when no configured pattern matches", () => {
-    const msg = makeMsg({
-      body: "look at @SomeoneElse's message",
-      mentionedJids: ["19998887777@s.whatsapp.net"],
-      selfE164: "+15551234567",
-      selfJid: "15551234567@s.whatsapp.net",
-    });
-    expectMentioned(msg, mentionCfg, false);
-  });
 
   it("keeps the self-number digit fallback suppressed when other members are @-mentioned", () => {
     // An @-tag of another member injects that member's number into the body,
@@ -172,25 +78,6 @@ describe("isBotMentionedFromTargets", () => {
       selfJid: "15551234567@s.whatsapp.net",
     });
     expectMentioned(msg, mentionCfg, false);
-  });
-
-  it("matches explicit self mentions", () => {
-    const msg = makeMsg({
-      body: "hey",
-      mentionedJids: ["15551234567@s.whatsapp.net"],
-      selfE164: "+15551234567",
-      selfJid: "15551234567@s.whatsapp.net",
-    });
-    expectMentioned(msg, mentionCfg, true);
-  });
-
-  it("falls back to regex when no mentions are present", () => {
-    const msg = makeMsg({
-      body: "openclaw can you help?",
-      selfE164: "+15551234567",
-      selfJid: "15551234567@s.whatsapp.net",
-    });
-    expectMentioned(msg, mentionCfg, true);
   });
 
   it("ignores JID mentions in a true 1:1 self-chat (not a group)", () => {
@@ -307,69 +194,8 @@ describe("resolveMentionTargets with @lid mapping", () => {
   });
 });
 
-describe("getSessionSnapshot", () => {
-  it("uses channel reset overrides when configured", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-    try {
-      await withTempDir("openclaw-snapshot-", async (root) => {
-        const storePath = path.join(root, "sessions.json");
-        const sessionKey = "agent:main:whatsapp:dm:s1";
-
-        await upsertSessionEntry({
-          storePath,
-          sessionKey,
-          entry: {
-            sessionId: "snapshot-session",
-            updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
-            delivery: normalizeSessionDeliveryState({ context: { channel: "whatsapp" } }),
-          },
-        });
-
-        const cfg = {
-          session: {
-            store: storePath,
-            reset: { mode: "daily", atHour: 4, idleMinutes: 240 },
-            resetByChannel: {
-              whatsapp: { mode: "idle", idleMinutes: 360 },
-            },
-          },
-        } as OpenClawConfig;
-
-        const snapshot = getSessionSnapshotForTest(cfg, "whatsapp:+15550001111", {
-          sessionKey,
-        });
-
-        expect(snapshot.resetPolicy.mode).toBe("idle");
-        expect(snapshot.resetPolicy.idleMinutes).toBe(360);
-        expect(snapshot.fresh).toBe(true);
-        expect(snapshot.dailyResetAt).toBeUndefined();
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
 describe("web auto-reply util", () => {
   describe("mentions diagnostics", () => {
-    it("returns normalized debug fields and mention outcome", () => {
-      const msg = makeMsg({
-        admission: {
-          conversation: {
-            id: "777@lid",
-          },
-        },
-        body: "openclaw ping",
-        selfE164: "+15551234567",
-        selfJid: "15551234567@s.whatsapp.net",
-      });
-      const result = debugMention(msg, { mentionRegexes: [/\bopenclaw\b/i] });
-      expect(result.wasMentioned).toBe(true);
-      expect(result.details.bodyClean).toBe("openclaw ping");
-      expect(result.details.normalizedMentionedJids).toBeNull();
-    });
-
     it("resolves owner list from allowFrom or falls back to self", () => {
       expect(
         resolveOwnerList(

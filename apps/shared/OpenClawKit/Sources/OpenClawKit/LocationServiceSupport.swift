@@ -23,11 +23,22 @@ extension LocationServiceCommon {
     }
 
     public func accuracyAuthorization() -> CLAccuracyAuthorization {
-        LocationServiceSupport.accuracyAuthorization(manager: self.locationManager)
+        self.locationManager.accuracyAuthorization
     }
 }
 
 extension ConcurrentLocationServiceCommon {
+    public func completeLocationRequests(with result: Result<CLLocation, Error>) {
+        let continuations = Array(self.locationRequestContinuations.values) + [self.locationRequestContinuation]
+            .compactMap(\.self)
+        // Drain both stores before resuming so a later result cannot complete any waiter twice.
+        self.locationRequestContinuations.removeAll()
+        self.locationRequestContinuation = nil
+        for continuation in continuations {
+            continuation.resume(with: result)
+        }
+    }
+
     public func requestLocationOnce() async throws -> CLLocation {
         // CLLocationManager coalesces requestLocation calls into one pending fix, so every
         // active waiter shares the next delegate result; cancel the platform request only last.
@@ -56,13 +67,6 @@ extension ConcurrentLocationServiceCommon {
 }
 
 enum LocationServiceSupport {
-    static func accuracyAuthorization(manager: CLLocationManager) -> CLAccuracyAuthorization {
-        if #available(iOS 14.0, macOS 11.0, *) {
-            return manager.accuracyAuthorization
-        }
-        return .fullAccuracy
-    }
-
     @MainActor
     static func requestLocation(
         manager: CLLocationManager,

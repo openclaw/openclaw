@@ -24,10 +24,7 @@ type ChannelConfigFormProps = {
   onPatch: (path: Array<string | number>, value: unknown) => void;
 };
 
-function resolveSchemaNode(
-  schema: JsonSchema | null,
-  path: Array<string | number>,
-): JsonSchema | null {
+function resolveSchemaNode(schema: JsonSchema | null, path: string[]): JsonSchema | null {
   let current = schema;
   for (const key of path) {
     if (!current) {
@@ -36,54 +33,34 @@ function resolveSchemaNode(
     const type = schemaType(current);
     if (type === "object") {
       const properties = current.properties ?? {};
-      if (typeof key === "string" && properties[key]) {
+      if (properties[key]) {
         current = properties[key];
         continue;
       }
       const additional = current.additionalProperties;
-      if (typeof key === "string" && additional && typeof additional === "object") {
+      if (additional && typeof additional === "object") {
         current = additional;
         continue;
       }
       return null;
-    }
-    if (type === "array") {
-      if (typeof key !== "number") {
-        return null;
-      }
-      const items = Array.isArray(current.items) ? current.items[0] : current.items;
-      current = items ?? null;
-      continue;
     }
     return null;
   }
   return current;
 }
 
-function resolveChannelValue(
-  config: Record<string, unknown>,
-  channelId: string,
-): Record<string, unknown> {
-  return resolveChannelConfigValue(config, channelId) ?? {};
-}
-
 const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
 
 function renderExtraChannelFields(value: Record<string, unknown>) {
-  const entries = EXTRA_CHANNEL_FIELDS.flatMap((field) => {
-    if (!(field in value)) {
-      return [];
-    }
-    return [[field, value[field]]] as Array<[string, unknown]>;
-  });
-  if (entries.length === 0) {
+  const fields = EXTRA_CHANNEL_FIELDS.filter((field) => field in value);
+  if (fields.length === 0) {
     return null;
   }
   return html`
     <div>
-      ${entries.map(
-        ([field, raw]) => html`
-          <div class="settings-row__desc">${field}: ${formatChannelExtraValue(raw)}</div>
+      ${fields.map(
+        (field) => html`
+          <div class="settings-row__desc">${field}: ${formatChannelExtraValue(value[field])}</div>
         `,
       )}
     </div>
@@ -103,7 +80,7 @@ function renderChannelConfigForm(props: ChannelConfigFormProps) {
     `;
   }
   const configValue = props.configValue ?? {};
-  const value = resolveChannelValue(configValue, props.channelId);
+  const value = resolveChannelConfigValue(configValue, props.channelId) ?? {};
   const path = ["channels", props.channelId];
   const unsupported = new Set(analysis.unsupportedPaths);
   return html`
@@ -134,34 +111,34 @@ function renderChannelConfigForm(props: ChannelConfigFormProps) {
 
 export function renderChannelConfigSection(params: { channelId: string; props: ChannelsProps }) {
   const { channelId, props } = params;
-  const disabled = props.configSaving || props.configSchemaLoading;
-  if (props.configSchemaLoading) {
+  const disabled = props.config.configSaving || props.config.configSchemaLoading;
+  if (props.config.configSchemaLoading) {
     return renderSettingsLoadingSkeleton({ label: t("channels.config.loadingSchema"), rows: 2 });
   }
   return html`
     <div class="settings-row settings-row--stacked">
       ${renderChannelConfigForm({
         channelId,
-        configValue: props.configForm,
-        schema: props.configSchema,
-        uiHints: props.configUiHints,
+        configValue: props.config.configForm,
+        schema: props.config.configSchema,
+        uiHints: props.config.configUiHints,
         disabled,
         showAdvanced: props.showAdvancedSettings,
         onShowAdvanced: props.onShowAdvancedSettings,
         onPatch: props.onConfigPatch,
       })}
       ${
-        props.configError
-          ? html`<div class="callout danger" role="alert">${props.configError}</div>`
+        props.config.lastError
+          ? html`<div class="callout danger" role="alert">${props.config.lastError}</div>`
           : null
       }
       <div class="settings-row__control">
         <button
           class="btn primary"
-          ?disabled=${disabled || !props.configFormDirty}
+          ?disabled=${disabled || !props.config.configFormDirty}
           @click=${() => props.onConfigSave()}
         >
-          ${props.configSaving ? t("common.saving") : t("common.save")}
+          ${props.config.configSaving ? t("common.saving") : t("common.save")}
         </button>
         <button class="btn" ?disabled=${disabled} @click=${() => props.onConfigReload()}>
           ${t("common.reload")}

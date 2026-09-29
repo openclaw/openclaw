@@ -105,7 +105,13 @@ function fixture(alias = "!poll") {
   commandParams.ctx = ctx;
   commandParams.sessionKey = sessionKey;
   const replyResolver = vi.fn(async () => {
-    const result = await handleCommands(commandParams);
+    const result = await handleCommands({
+      ...commandParams,
+      resolveModelLevels: async () => ({
+        resolvedThinkLevel: commandParams.resolvedThinkLevel,
+        resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
+      }),
+    });
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Completed synthetic work");
     return markCommandReplyForDelivery(result.reply);
@@ -188,11 +194,15 @@ it.each([true, undefined] as const)(
   async (supportsSettledReceipt) => {
     const f = fixture();
     const dispatcher = createDispatcher();
+    const sendFinalReply = dispatcher.sendFinalReply;
+    // A custom adapter can report aggregate delivery without tracking the caller's exact payload.
+    dispatcher.sendFinalReply = vi.fn((payload) => sendFinalReply({ ...payload }));
     dispatcher.supportsSettledReceipt = supportsSettledReceipt;
     await withReplyDispatcher({
       dispatcher,
       run: () => dispatchReplyFromConfig({ ...f, dispatcher }),
     });
+    expect(await dispatcher.waitForIdle()).toMatchObject({ anyVisibleDelivered: true });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining("Completed synthetic work") }),
     );

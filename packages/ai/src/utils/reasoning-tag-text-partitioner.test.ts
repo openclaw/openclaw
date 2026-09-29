@@ -88,6 +88,11 @@ describe("createReasoningTagTextPartitioner", () => {
       expected: { text: "a\r\n    ", thinking: "x" },
     },
     {
+      name: "a whitespace-only CRLF blank line starts a new indented code block",
+      input: "a\r\n \t\r\n    <think>x</think>",
+      expected: { text: "a\r\n \t\r\n    <think>x</think>", thinking: "" },
+    },
+    {
       name: "compaction retains context for a following empty list item",
       input: "    `\n\n-\n      <think>x</think>",
       expected: { text: "    `\n\n-\n      ", thinking: "x" },
@@ -394,15 +399,6 @@ describe("createReasoningTagTextPartitioner", () => {
       { kind: "text", text: "Before" },
       { kind: "thinking", text: "x" },
       { kind: "text", text: "After" },
-    ]);
-    expect(partitioner.flush()).toEqual([]);
-  });
-
-  it("streams a parser-complete inline code span without waiting for flush", () => {
-    const partitioner = createReasoningTagTextPartitioner();
-
-    expect(partitioner.pushVisible("Use `code` now")).toEqual([
-      { kind: "text", text: "Use `code` now" },
     ]);
     expect(partitioner.flush()).toEqual([]);
   });

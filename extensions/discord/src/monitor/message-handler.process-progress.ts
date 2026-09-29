@@ -1,6 +1,5 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
-// Discord plugin module owns progress-window state and agent-event rendering.
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
@@ -10,19 +9,6 @@ type ReplyOptions = Omit<GetReplyOptions, "onBlockReply">;
 type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
 type DraftPreview = ReturnType<typeof createDiscordDraftPreviewController>;
-
-function isFailedProgress(payload: {
-  phase?: string;
-  status?: string;
-  exitCode?: number | null;
-}): boolean {
-  return (
-    payload.phase === "error" ||
-    payload.status === "failed" ||
-    payload.status === "error" ||
-    (typeof payload.exitCode === "number" && payload.exitCode !== 0)
-  );
-}
 
 export function createDiscordMessageProgressRuntime(params: {
   ctx: DiscordMessagePreflightContext;
@@ -83,7 +69,7 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     onReasoningEnd: draftPreview.draftStream
       ? () => {
-          handleAssistantMessageBoundary();
+          draftPreview.resetReasoningProgress();
           return false;
         }
       : undefined,
@@ -94,6 +80,8 @@ export function createDiscordMessageProgressRuntime(params: {
           }
         }
       : undefined,
+    // Queued turns can finish after dispatch closeout has already cleaned up.
+    onQueuedFollowupSettled: draftPreview.draftStream ? () => draftPreview.cleanup() : undefined,
     suppressDefaultToolProgressMessages:
       (params.sourceRepliesAreToolOnly && params.reactions.statusReactionsExplicitlyEnabled) ||
       draftPreview.suppressDefaultToolProgressMessages
@@ -152,14 +140,8 @@ export function createDiscordMessageProgressRuntime(params: {
       return await draftPreview.pushToolEvent(payload);
     },
     onItemEvent: async (payload) => {
-      if (isFailedProgress(payload)) {
-        return false;
-      }
-      if (payload.kind === "preamble") {
-        if (shouldYieldDraftCommentary()) {
-          return undefined;
-        }
-        return await draftPreview.pushPreambleItemEvent(payload);
+      if (payload.kind === "preamble" && shouldYieldDraftCommentary()) {
+        return undefined;
       }
       return await draftPreview.pushItemEvent(payload);
     },
@@ -167,21 +149,13 @@ export function createDiscordMessageProgressRuntime(params: {
       if (payload.phase === "update") {
         return await draftPreview.pushPlanProgress(payload.steps, {
           explanation: payload.explanation,
+          explanationFormat: payload.explanationFormat,
         });
       }
       return false;
     },
     onApprovalEvent: async (payload) => {
       return await draftPreview.pushApprovalEvent(payload);
-    },
-    onCommandOutput: async (payload) => {
-      if (isFailedProgress(payload)) {
-        return false;
-      }
-      return await draftPreview.pushCommandOutputEvent(payload);
-    },
-    onPatchSummary: async (payload) => {
-      return await draftPreview.pushPatchEvent(payload);
     },
     onCompactionStart: async () => {
       if (!abortSignal?.aborted) {

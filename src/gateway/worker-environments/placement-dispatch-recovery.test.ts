@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createPlacementFailureActions } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchStartup } from "./placement-dispatch-startup.js";
@@ -13,37 +15,93 @@ import {
   REQUEST,
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
-import { createHarness } from "./placement-dispatch-test-harness.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+
+function createPlacementStore() {
+  return createWorkerSessionPlacementStore({
+    database: support.testState.stateDb,
+    now: () => 1_000,
+  });
+}
 
 describe("worker placement restart recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  const createRecoveryService = (
-    placements: ReturnType<typeof createWorkerSessionPlacementStore>,
-    environments: ReturnType<typeof support.createService>,
-  ) =>
-    createWorkerPlacementDispatchService({
-      placements,
-      environments,
-      runnerAvailability: { read: () => undefined, version: () => 0 },
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
-      runActivationBarrier: async ({ activate }) => activate(),
-      runMoveBarrier: async ({ begin }) => begin(),
-      resolveMoveDestination: async () => undefined,
-      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
-      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspacePath: async () => "/gateway/workspace",
-      reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
-    });
+  describe.each(["startup", "active"] as const)("%s recovery after worker retirement", (mode) => {
+    it.each(["idle", "claimed turn", "pending result", "provider loss"] as const)(
+      "reclaims only a clean idle stale-build placement: %s",
+      async (scenario) => {
+        const placements = createPlacementStore();
+        const harness = createHarness(support.testState.stateDb, placements, {
+          workspacePath: support.testState.root,
+        });
+        const active = await harness.placements.seedActive(harness.attached.ownerEpoch);
+        if (active.state !== "active") {
+          throw new Error("retirement fixture did not produce an active placement");
+        }
+        const error =
+          scenario === "provider loss" ? "provider lost worker" : STALE_WORKER_BUILD_REASON;
+        vi.mocked(harness.environments.get).mockReturnValue({
+          ...harness.attached,
+          state: "failed",
+          leaseId: null,
+          sshEndpoint: null,
+          bootstrapReceipt: null,
+          sharedHost: null,
+          tunnelStatus: "stopped",
+          lastError: error,
+          error,
+        });
+        if (scenario === "claimed turn" || scenario === "pending result") {
+          const claim = await placements.claimTurn({
+            ...REQUEST,
+            claimId: "retirement-claim",
+            runId: "retirement-run",
+            owner: {
+              kind: "worker",
+              environmentId: active.environmentId,
+              ownerEpoch: active.activeOwnerEpoch,
+            },
+          });
+          if (scenario === "pending result") {
+            placements.markWorkspaceResultPending(claim);
+            placements.handoffWorkspaceResultRecovery(claim);
+          }
+        }
+
+        if (mode === "startup") {
+          await harness.service.reconcile("startup");
+        } else {
+          await harness.service.reconcileActive();
+        }
+
+        if (scenario === "idle") {
+          expect(placements.get(REQUEST.sessionId)).toMatchObject({
+            state: "reclaimed",
+            terminalReason: null,
+            recoveryError: null,
+            turnClaim: null,
+          });
+          expect(harness.environments.destroy).not.toHaveBeenCalled();
+        } else {
+          const expectedError =
+            scenario === "claimed turn" && mode === "startup"
+              ? "Active worker turn claim cannot be proven live after gateway restart"
+              : `cloud worker disappeared: ${error}`;
+          expect(placements.get(REQUEST.sessionId)).toMatchObject({
+            state: "failed",
+            terminalReason: expectedError,
+            recoveryError: expectedError,
+            turnClaim: null,
+          });
+        }
+        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      },
+    );
+  });
 
   it.each(["startup", "active"] as const)(
     "does not report successful reclaim while provider-loss teardown is pending during %s recovery",
@@ -58,12 +116,11 @@ describe("worker placement restart recovery", () => {
       const environments = support.createService(
         support.createProvider({ inspect: async () => ({ status: "unknown" }), destroy }),
       );
-      const ready = await environments.create(
-        "development",
-        "provider-loss-cleanup",
-        undefined,
-        "remote-exec",
-      );
+      const ready = await environments.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "provider-loss-cleanup",
+        executionMode: "remote-exec",
+      });
       const attached = await environments.attachSession({
         environmentId: ready.environmentId,
         ownerEpoch: ready.ownerEpoch,
@@ -73,7 +130,7 @@ describe("worker placement restart recovery", () => {
         database: support.testState.stateDb,
         now: () => support.testState.nowMs,
       });
-      seedActivePlacement(placements, {
+      await seedActivePlacement(placements, {
         environmentId: ready.environmentId,
         ownerEpoch: attached.ownerEpoch,
         executionMode: "remote-exec",
@@ -86,20 +143,28 @@ describe("worker placement restart recovery", () => {
         await recovery.reconcileActive(ready.environmentId);
       }
 
+      expect.soft(destroy).toHaveBeenCalledOnce();
       expect(environments.get(ready.environmentId)).toMatchObject({
         state: "destroying",
         leaseId: ready.leaseId,
         destroyRequestedAtMs: support.testState.nowMs,
       });
-      await expect(recovery.reclaim(REQUEST)).rejects.toThrow("cleanup is still pending");
+      destroy.mockClear();
+      await recovery.reconcileActive(ready.environmentId);
+      expect.soft(destroy).toHaveBeenCalledOnce();
+
+      destroy.mockClear();
+      await expect(recovery.reclaim(REQUEST)).rejects.toThrow("provider deletion unavailable");
+      expect(destroy).toHaveBeenCalledOnce();
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "failed",
         environmentId: ready.environmentId,
         recoveryError: expect.stringContaining("teardown failed"),
       });
 
-      destroy.mockResolvedValue(undefined);
+      destroy.mockClear().mockResolvedValue(undefined);
       await expect(recovery.reclaim(REQUEST)).resolves.toMatchObject({ state: "local" });
+      expect(destroy).toHaveBeenCalledOnce();
       expect(environments.get(ready.environmentId)).toMatchObject({
         state: "failed",
         leaseId: null,
@@ -110,11 +175,8 @@ describe("worker placement restart recovery", () => {
   it.each(["startup", "active"] as const)(
     "fences a destroy-requested attachment during %s recovery even when physical cleanup fails",
     async (mode) => {
-      const placements = createWorkerSessionPlacementStore({
-        database: support.testState.stateDb,
-        now: () => 1_000,
-      });
-      const harness = createHarness(placements, { destroyFails: true });
+      const placements = createPlacementStore();
+      const harness = createHarness(support.testState.stateDb, placements, { destroyFails: true });
       await harness.environments.attachSession({
         environmentId: harness.ready.environmentId,
         ownerEpoch: harness.ready.ownerEpoch,
@@ -129,7 +191,7 @@ describe("worker placement restart recovery", () => {
       vi.mocked(harness.environments.stopTunnel).mockRejectedValue(
         new Error("node role revoked before stop confirmation"),
       );
-      harness.placements.seedActive(environment.ownerEpoch);
+      await harness.placements.seedActive(environment.ownerEpoch);
 
       if (mode === "startup") {
         await harness.service.reconcile("startup");
@@ -186,11 +248,8 @@ describe("worker placement restart recovery", () => {
       sweep: true,
     },
   ] as const)("fences active restart recovery when $failure", async (scenario) => {
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => 1_000,
-    });
-    const harness = createHarness(placements);
+    const placements = createPlacementStore();
+    const harness = createHarness(support.testState.stateDb, placements);
     await harness.environments.attachSession({
       environmentId: harness.ready.environmentId,
       ownerEpoch: harness.ready.ownerEpoch,
@@ -206,10 +265,10 @@ describe("worker placement restart recovery", () => {
       ...(scenario.nodeBacked ? { nodeDeviceId: "durable-node", sshEndpoint: null } : {}),
     };
     vi.mocked(harness.environments.get).mockReturnValue(environment);
-    Object.assign(harness.environments, {
-      supportsProviderExecutionMode: vi.fn(() => scenario.providerSupportsMode),
-    });
-    harness.placements.seedActive(environment.ownerEpoch, scenario.executionMode);
+    vi.mocked(harness.environments.supportsProviderExecutionMode).mockReturnValue(
+      scenario.providerSupportsMode,
+    );
+    await harness.placements.seedActive(environment.ownerEpoch, scenario.executionMode);
 
     if (scenario.sweep) {
       await harness.service.reconcileActive(environment.environmentId);
@@ -232,11 +291,8 @@ describe("worker placement restart recovery", () => {
   ] as const)(
     "adopts an exact remote-exec $transport lease from its durable provider after profile changes",
     async ({ nodeBacked }) => {
-      const placements = createWorkerSessionPlacementStore({
-        database: support.testState.stateDb,
-        now: () => 1_000,
-      });
-      const harness = createHarness(placements);
+      const placements = createPlacementStore();
+      const harness = createHarness(support.testState.stateDb, placements);
       await harness.environments.attachSession({
         environmentId: harness.ready.environmentId,
         ownerEpoch: harness.ready.ownerEpoch,
@@ -252,13 +308,10 @@ describe("worker placement restart recovery", () => {
         ...(nodeBacked ? { nodeDeviceId: "durable-node", sshEndpoint: null } : {}),
       };
       vi.mocked(harness.environments.get).mockReturnValue(environment);
-      const supportsProviderExecutionMode = vi.fn(() => true);
-      const supportsExecutionMode = vi.fn(() => false);
-      Object.assign(harness.environments, {
-        supportsExecutionMode,
-        supportsProviderExecutionMode,
-      });
-      harness.placements.seedActive(environment.ownerEpoch, "remote-exec");
+      const supportsProviderExecutionMode = vi.mocked(
+        harness.environments.supportsProviderExecutionMode,
+      );
+      await harness.placements.seedActive(environment.ownerEpoch, "remote-exec");
 
       await harness.service.reconcile();
 
@@ -267,7 +320,6 @@ describe("worker placement restart recovery", () => {
         executionMode: "remote-exec",
       });
       expect(supportsProviderExecutionMode).toHaveBeenCalledWith("durable-provider", "remote-exec");
-      expect(supportsExecutionMode).not.toHaveBeenCalled();
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       if (nodeBacked) {
         expect(harness.environments.startTunnel).not.toHaveBeenCalled();
@@ -284,21 +336,15 @@ describe("worker placement restart recovery", () => {
   ] as const)(
     "never tears down an unrelated environment returned by $creation creation (expected owner exists: $matchingEnvironmentExists)",
     async ({ creation, matchingEnvironmentExists }) => {
-      const placements = createWorkerSessionPlacementStore({
-        database: support.testState.stateDb,
-        now: () => 1_000,
-      });
-      const harness = createHarness(placements);
+      const placements = createPlacementStore();
+      const harness = createHarness(support.testState.stateDb, placements);
       const unrelatedEnvironment = {
         ...harness.attached,
         environmentId: "worker-unrelated-active",
         ownerEpoch: 91,
         attachedSessionIds: ["session-unrelated"],
       };
-      vi.mocked(harness.environments.create).mockResolvedValue(unrelatedEnvironment);
-      vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue(
-        unrelatedEnvironment,
-      );
+      vi.mocked(harness.environments.createWithRequest).mockResolvedValue(unrelatedEnvironment);
       vi.mocked(harness.environments.get).mockImplementation((environmentId) => {
         if (environmentId === unrelatedEnvironment.environmentId) {
           return unrelatedEnvironment;
@@ -319,7 +365,7 @@ describe("worker placement restart recovery", () => {
           : REQUEST;
 
       await expect(harness.service.dispatch(request)).rejects.toThrow(
-        "current execution-context contract",
+        "current worker launch contract",
       );
 
       expect(harness.placements.current()).toMatchObject({
@@ -348,12 +394,9 @@ describe("worker placement restart recovery", () => {
   );
 
   it("resumes an authoritative provisioning placement through the canonical dispatch stages", async () => {
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => 1_000,
-    });
-    const harness = createHarness(placements);
-    const provisioning = harness.placements.seedProvisioning();
+    const placements = createPlacementStore();
+    const harness = createHarness(support.testState.stateDb, placements);
+    const provisioning = await harness.placements.seedProvisioning();
     if (provisioning.state !== "provisioning") {
       throw new Error("recovery fixture did not produce a provisioning placement");
     }
@@ -370,7 +413,7 @@ describe("worker placement restart recovery", () => {
       workerBundleHash: harness.ready.bootstrapReceipt?.bundleHash,
     });
     expect(harness.placements.current()!.generation).toBeGreaterThan(provisioning.generation);
-    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.attachSession).toHaveBeenCalledOnce();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.log).toContain("recovery-barrier");
@@ -381,12 +424,9 @@ describe("worker placement restart recovery", () => {
   });
 
   it("fences provisioning recovery before attachment when its durable execution mode differs", async () => {
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => 1_000,
-    });
-    const harness = createHarness(placements);
-    const provisioning = harness.placements.seedProvisioning("remote-exec");
+    const placements = createPlacementStore();
+    const harness = createHarness(support.testState.stateDb, placements);
+    const provisioning = await harness.placements.seedProvisioning("remote-exec");
     if (provisioning.state !== "provisioning") {
       throw new Error("recovery fixture did not produce a provisioning placement");
     }
@@ -408,12 +448,9 @@ describe("worker placement restart recovery", () => {
   });
 
   it("fails a placement interrupted before its environment intent and permits redispatch", async () => {
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => 1_000,
-    });
-    const harness = createHarness(placements);
-    const provisioning = harness.placements.seedProvisioning();
+    const placements = createPlacementStore();
+    const harness = createHarness(support.testState.stateDb, placements);
+    const provisioning = await harness.placements.seedProvisioning();
     vi.mocked(harness.environments.get).mockReturnValue(undefined);
 
     await harness.service.reconcile();
@@ -430,7 +467,7 @@ describe("worker placement restart recovery", () => {
       throw new Error("restart recovery did not fail the interrupted provisioning placement");
     }
 
-    const redispatch = createHarness(placements, {
+    const redispatch = createHarness(support.testState.stateDb, placements, {
       environmentGeneration: failed.generation + 1,
     });
     const active = await redispatch.service.dispatch(REQUEST);
@@ -445,12 +482,9 @@ describe("worker placement restart recovery", () => {
   it.each(["requested", "provisioning", "bootstrapping", "ready", "idle"] as const)(
     "retains an exact replayable %s environment during provisioning recovery",
     async (state) => {
-      const placements = createWorkerSessionPlacementStore({
-        database: support.testState.stateDb,
-        now: () => 1_000,
-      });
-      const harness = createHarness(placements);
-      const provisioning = harness.placements.seedProvisioning();
+      const placements = createPlacementStore();
+      const harness = createHarness(support.testState.stateDb, placements);
+      const provisioning = await harness.placements.seedProvisioning();
       const environment =
         state === "requested" || state === "provisioning"
           ? {
@@ -495,12 +529,9 @@ describe("worker placement restart recovery", () => {
       },
     ],
   ] as const)("fails provisioning recovery for a %s environment", async (_kind, patch) => {
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => 1_000,
-    });
-    const harness = createHarness(placements);
-    harness.placements.seedProvisioning();
+    const placements = createPlacementStore();
+    const harness = createHarness(support.testState.stateDb, placements);
+    await harness.placements.seedProvisioning();
     const environment =
       "state" in patch && patch.state === "failed"
         ? {
@@ -520,19 +551,13 @@ describe("worker placement restart recovery", () => {
     expect(harness.placements.current()).toMatchObject({ state: "failed" });
   });
 
-  it.each([
-    ["session", "Session agent:main:session-1 changed before cloud worker recovery"],
-    ["runtime", "Session agent:main:session-1 runtime changed before cloud worker recovery"],
-    ["generation", "Session agent:main:session-1 placement generation changed before recovery"],
-  ] as const)("tears down provisioning when %s authority changed", async (_kind, message) => {
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => 1_000,
-    });
-    const harness = createHarness(placements, {
+  it("tears down provisioning when the recovery authority barrier rejects", async () => {
+    const message = "Session agent:main:session-1 changed before cloud worker recovery";
+    const placements = createPlacementStore();
+    const harness = createHarness(support.testState.stateDb, placements, {
       recoveryBarrierError: new Error(message),
     });
-    const provisioning = harness.placements.seedProvisioning();
+    const provisioning = await harness.placements.seedProvisioning();
     if (provisioning.state !== "provisioning") {
       throw new Error("recovery fixture did not produce a provisioning placement");
     }
@@ -561,12 +586,9 @@ describe("worker placement restart recovery", () => {
   ] as const)(
     "never tears down a newer $state $change owner when recovery fails $timing its callback",
     async ({ change, state, timing }) => {
-      const placements = createWorkerSessionPlacementStore({
-        database: support.testState.stateDb,
-        now: () => 1_000,
-      });
-      const harness = createHarness(placements);
-      const original = harness.placements.seedProvisioning();
+      const placements = createPlacementStore();
+      const harness = createHarness(support.testState.stateDb, placements);
+      const original = await harness.placements.seedProvisioning();
       if (original.state !== "provisioning" || !original.environmentId) {
         throw new Error("recovery fixture did not produce an owned provisioning placement");
       }
@@ -598,13 +620,13 @@ describe("worker placement restart recovery", () => {
             : current;
         },
       };
-      const replacePlacement = () => {
+      const replacePlacement = async () => {
         placements.fail({
           sessionId: original.sessionId,
           expectedGeneration: original.generation,
           recoveryError: "superseded placement",
         });
-        const requested = placements.startDispatch(REQUEST);
+        const requested = await placements.startDispatch(REQUEST);
         replacement = placements.transition({
           sessionId: original.sessionId,
           from: "requested",
@@ -643,9 +665,9 @@ describe("worker placement restart recovery", () => {
         }),
         runRecoveryBarrier: async ({ run }) => {
           if (timing === "after") {
-            await run("/gateway/workspace");
+            await run({ kind: "local", path: "/gateway/workspace" });
           }
-          replacePlacement();
+          await replacePlacement();
           throw new Error("stale recovery lifecycle was replaced");
         },
         runActivationBarrier: async ({ activate }) => activate(),
@@ -663,12 +685,9 @@ describe("worker placement restart recovery", () => {
   it.each(["attach", "tunnel:attached", "sync"] as const)(
     "tears down only its exact owned placement when recovery fails during %s",
     async (failAt) => {
-      const placements = createWorkerSessionPlacementStore({
-        database: support.testState.stateDb,
-        now: () => 1_000,
-      });
-      const harness = createHarness(placements, { failAt });
-      const provisioning = harness.placements.seedProvisioning();
+      const placements = createPlacementStore();
+      const harness = createHarness(support.testState.stateDb, placements, { failAt });
+      const provisioning = await harness.placements.seedProvisioning();
       if (provisioning.state !== "provisioning") {
         throw new Error("recovery fixture did not produce a provisioning placement");
       }
@@ -685,16 +704,13 @@ describe("worker placement restart recovery", () => {
   );
 
   it("does not recover a pending result through a worker with the legacy launch dialect", async () => {
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => 1_000,
-    });
-    const originalHarness = createHarness(placements);
-    const active = originalHarness.placements.seedActive(2);
+    const placements = createPlacementStore();
+    const originalHarness = createHarness(support.testState.stateDb, placements);
+    const active = await originalHarness.placements.seedActive(2);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -712,7 +728,7 @@ describe("worker placement restart recovery", () => {
       database: support.testState.stateDb,
       now: () => 2_000,
     });
-    const restartedHarness = createHarness(restartedStore);
+    const restartedHarness = createHarness(support.testState.stateDb, restartedStore);
     restartedHarness.markEnvironmentOwnerEpoch(2);
     restartedHarness.markEnvironmentProtocolFeatures([WORKER_LAUNCH_V2_PROTOCOL_FEATURE]);
 
@@ -726,12 +742,36 @@ describe("worker placement restart recovery", () => {
     expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
+  it("does not adopt an active worker missing exec-authority launch support", async () => {
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => 1_000,
+    });
+    const harness = createHarness(support.testState.stateDb, placements);
+    await harness.environments.attachSession({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: "session-1",
+    });
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentProtocolFeatures([WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE]);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed" });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
   it.each(["bundle", "provider"] as const)(
     "keeps stale pending recovery fenced when %s recovery is unavailable",
     async (failure) => {
       const currentReceipt: WorkerAdmissionHandshake = {
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       };
       let currentBundle: WorkerInstallationArtifact = {
         ...support.BUNDLE_ARTIFACT,
@@ -765,8 +805,8 @@ describe("worker placement restart recovery", () => {
       });
       const recovery = createRecoveryService(placements, workerService);
       const environmentId = "worker-stale-recovery";
-      const bootstrapping = support.seedBootstrapping(environmentId);
-      support.testState.store.transition({
+      const bootstrapping = await support.seedBootstrapping(environmentId);
+      await support.testState.store.transition({
         environmentId,
         from: bootstrapping.state,
         to: "ready",
@@ -777,14 +817,14 @@ describe("worker placement restart recovery", () => {
         ownerEpoch: 1,
         sessionId: "session-1",
       });
-      const active = seedActivePlacement(placements, {
+      const active = await seedActivePlacement(placements, {
         environmentId,
         ownerEpoch: attached.ownerEpoch,
       });
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         sessionId: active.sessionId,
         sessionKey: active.sessionKey,
         agentId: active.agentId,

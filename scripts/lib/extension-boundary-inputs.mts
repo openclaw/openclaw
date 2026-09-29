@@ -7,7 +7,8 @@ import {
   type ArtifactRecord,
 } from "./build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
-import { resolveRepoToolBinPath } from "./local-check-runtime.mts";
+import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
+import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
 
 export const LOCAL_SDK_ROOT = "packages/plugin-sdk/dist";
 export const BOUNDARY_CACHE_ROOT = ".artifacts/extension-package-boundary";
@@ -28,7 +29,14 @@ const GENERATOR_INPUTS = [
   // Pnpm's manifest carries machine-local store metadata. Native membership,
   // installed topology, and input bytes own dependency invalidation here.
   "scripts/lib/extension-boundary-inputs.mts",
+  "scripts/lib/native-declaration-emitter.mts",
+  "scripts/lib/native-declaration-filesystem.mts",
+  "scripts/lib/native-typescript.mts",
+  "scripts/lib/native-typescript-config.mts",
+  "scripts/lib/native-typescript-diagnostics.mts",
+  "scripts/lib/native-typescript-toolchain.mts",
   "scripts/lib/compiler-input-snapshot.mts",
+  "scripts/lib/tsdown-declaration-boundary.mts",
   "scripts/lib/build-artifact-cache.mts",
   "scripts/lib/bounded-output-tail.mjs",
   "scripts/lib/local-check-runtime.mts",
@@ -43,59 +51,65 @@ const GENERATOR_INPUTS = [
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/prepare-extension-package-boundary-artifacts.mts",
+  "scripts/compile-extension-boundary.mts",
   "scripts/check-extension-package-tsc-boundary.mts",
-  "scripts/run-tsgo.mjs",
+  "scripts/lib/extension-boundary-projects.mts",
+  "scripts/lib/bundled-plugin-build-entries.mjs",
+  "src/plugins/package-entrypoints.ts",
   "scripts/run-tsgo.mts",
 ];
-const require = createRequire(import.meta.url);
-const nativeRequire = createRequire(resolveRepoToolBinPath("tsgo"));
-const nativePackage = nativeRequire.resolve("@typescript/native-preview/package.json");
-const nativeBinary: string = nativeRequire(
-  path.join(path.dirname(nativePackage), "lib/getExePath.js"),
-).default();
-const libraryRoot = path.dirname(fs.realpathSync(nativeBinary));
-const toolchainFiles = [
-  nativePackage,
-  nativeBinary,
-  path.join(path.dirname(nativePackage), "lib/tsgo.js"),
-  path.join(path.dirname(nativePackage), "lib/getExePath.js"),
-  require.resolve("typescript"),
-  require.resolve("typescript/package.json"),
-];
-
-/** Native build-info adapts successful membership to the shared snapshot policy. */
+/** Successful bounded compiler membership feeds the shared snapshot policy. */
 export class BoundaryInputSnapshot extends CompilerInputSnapshot {
-  constructor(rootDir: string) {
-    super(rootDir, { toolchainFiles, generatorInputs: GENERATOR_INPUTS });
+  private readonly boundary: ReturnType<typeof createDeclarationInputBoundary>;
+
+  constructor(rootDir: string, generatorInputs: string[] = []) {
+    const boundary = createDeclarationInputBoundary(rootDir);
+    const assertInput = (file: string) => boundary.assert(file);
+    // Bind compiler identity to this checkout, never ambient cwd.
+    const require = createRequire(path.join(boundary.root, "package.json"));
+    const nativePackage = assertInput(require.resolve("typescript/package.json"));
+    super(boundary.root, {
+      toolchainFiles: nativeTypeScriptToolchainFiles(nativePackage, assertInput),
+      generatorInputs: [...GENERATOR_INPUTS, ...generatorInputs],
+      assertInput,
+    });
+    this.boundary = boundary;
   }
 
   record(
     config: string,
     args: string[],
-    buildInfo: string,
+    inputReceipt: string,
     outputs: string[],
     before: BoundaryInputSnapshot,
     startedAt: number,
     outputRoot?: string,
   ): ArtifactRecord {
-    const info: { fileNames: string[]; fileInfos: unknown[]; packageJsons?: string[] } = JSON.parse(
-      fs.readFileSync(path.resolve(this.rootDir, buildInfo), "utf8"),
-    );
-    const directory = path.dirname(path.resolve(this.rootDir, buildInfo));
-    const inputs = [
-      ...new Set([
-        ...info.fileNames
-          .slice(0, info.fileInfos.length)
-          .map((file) =>
-            path.resolve(
-              file.startsWith("lib.") && !file.includes("/") ? libraryRoot : directory,
-              file,
-            ),
-          ),
-        ...(info.packageJsons ?? []).map((file) => path.resolve(directory, file)),
-      ]),
-    ]
-      .map((file) => portableRelativePath(this.rootDir, file))
+    const receipt = this.boundary.assert(inputReceipt);
+    const info: unknown = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    if (
+      !info ||
+      typeof info !== "object" ||
+      Array.isArray(info) ||
+      Object.keys(info).length !== 1 ||
+      !("inputs" in info) ||
+      !Array.isArray(info.inputs) ||
+      info.inputs.length === 0 ||
+      !info.inputs.every(
+        (file): file is string =>
+          typeof file === "string" && file.length > 0 && !path.isAbsolute(file),
+      )
+    ) {
+      throw new Error(`Invalid bounded compiler input receipt: ${receipt}`);
+    }
+    const inputs = [...new Set(info.inputs)]
+      .map((file) => {
+        const normalized = portableRelativePath(this.rootDir, this.boundary.assert(file));
+        if (normalized !== file) {
+          throw new Error(`Invalid bounded compiler input path: ${file}`);
+        }
+        return normalized;
+      })
       .toSorted();
     return {
       version: ARTIFACT_CACHE_VERSION,

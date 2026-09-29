@@ -1,40 +1,10 @@
 // Nvidia plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applyNvidiaConfig, NVIDIA_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyNvidiaConnectionConfig, NVIDIA_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import {
-  buildLiveNvidiaProvider,
-  buildSelectableNvidiaProvider,
-  buildSelectableLiveNvidiaProvider,
-} from "./provider-catalog.js";
+import { buildLiveNvidiaProvider, buildSelectableNvidiaProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "nvidia";
-
-function hasNvidiaApiToken(ctx: {
-  env: NodeJS.ProcessEnv;
-  resolveProviderApiKey?: (providerId?: string) => { apiKey: string | undefined };
-}) {
-  return Boolean(
-    ctx.resolveProviderApiKey?.(PROVIDER_ID).apiKey?.trim() || ctx.env.NVIDIA_API_KEY?.trim(),
-  );
-}
-
-async function buildNvidiaCatalogModels(ctx: {
-  env: NodeJS.ProcessEnv;
-  resolveProviderApiKey?: (providerId?: string) => { apiKey: string | undefined };
-}) {
-  const provider = hasNvidiaApiToken(ctx)
-    ? await buildLiveNvidiaProvider()
-    : buildSelectableNvidiaProvider();
-  return provider.models.map((model) => ({
-    provider: PROVIDER_ID,
-    id: model.id,
-    name: model.name ?? model.id,
-    contextWindow: model.contextWindow,
-    reasoning: model.reasoning,
-    input: model.input,
-  }));
-}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -47,13 +17,13 @@ export default defineSingleProviderPluginEntry({
     preserveLiteralProviderPrefix: true,
     manifestAuth: {
       defaultModel: NVIDIA_DEFAULT_MODEL_REF,
-      applyConfig: applyNvidiaConfig,
+      applyConfig: applyNvidiaConnectionConfig,
     },
     catalog: {
-      buildProvider: buildSelectableLiveNvidiaProvider,
+      discoveryMode: "strict",
+      buildProvider: buildLiveNvidiaProvider,
       buildStaticProvider: buildSelectableNvidiaProvider,
     },
-    augmentModelCatalog: buildNvidiaCatalogModels,
     wizard: {
       setup: {
         choiceId: "nvidia-api-key",

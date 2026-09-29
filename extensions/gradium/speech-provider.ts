@@ -1,5 +1,3 @@
-// Gradium provider module implements model/runtime integration.
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -8,9 +6,11 @@ import type {
   SpeechSynthesisRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech";
-import { trimToUndefined } from "openclaw/plugin-sdk/speech";
-import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
+import {
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_GRADIUM_VOICE_ID, GRADIUM_VOICES, normalizeGradiumBaseUrl } from "./shared.js";
 import { gradiumTTS } from "./tts.js";
 
@@ -34,12 +34,9 @@ function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): Gra
 }
 
 function readGradiumProviderConfig(config: SpeechProviderConfig): GradiumProviderConfig {
-  const defaults = normalizeGradiumProviderConfig({});
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeGradiumBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
-    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
-  };
+  return normalizeGradiumProviderConfig({
+    gradium: { ...config, apiKey: trimToUndefined(config.apiKey) },
+  });
 }
 
 function resolveGradiumApiKey(configApiKey: unknown): string | undefined {
@@ -55,6 +52,8 @@ async function synthesizeGradium(
   if (!apiKey) {
     throw new Error("Gradium API key missing");
   }
+  const { resolveGeneratedMediaMaxBytes } =
+    await import("openclaw/plugin-sdk/media-generation-runtime");
   return await gradiumTTS({
     text: req.text,
     apiKey,
@@ -124,11 +123,10 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
         voiceCompatible: wantsVoiceNote,
       };
     },
-    synthesizeTelephony: async (req) => {
-      const outputFormat = "ulaw_8000";
-      const sampleRate = 8_000;
-      const audioBuffer = await synthesizeGradium(req, outputFormat);
-      return { audioBuffer, outputFormat, sampleRate };
-    },
+    synthesizeTelephony: async (req) => ({
+      audioBuffer: await synthesizeGradium(req, "ulaw_8000"),
+      outputFormat: "ulaw_8000",
+      sampleRate: 8_000,
+    }),
   };
 }

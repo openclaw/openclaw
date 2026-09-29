@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
   createSessionManagementE2eSuite,
@@ -7,16 +8,13 @@ import {
   requireRecord,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
   it("searches Sessions through the Gateway, appends matches, and retires failed or replaced queries", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const rows = Array.from({ length: 51 }, (_, index) =>
       sessionRow(`agent:main:match-${index}`, `Match ${index}`, 1000 - index),
@@ -119,11 +117,7 @@ suite.define(() => {
   it.each(["Archived", "All"] as const)(
     "clears the visible %s sidebar error after its failed roster recovers or retires",
     async (statusFilter) => {
-      const context = await suite.browser.newContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const updatedAt = Date.parse("2026-07-01T16:00:00.000Z");
       const main = sessionRow("agent:main:main", "Main", updatedAt);
@@ -141,10 +135,8 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const selectFilter = async (label: "Archived" | "All" | "Active") => {
           await page.getByRole("button", { name: "Filter & sort" }).click();
-          await page
-            .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitemradio", { name: label, exact: true })
-            .click();
+          await chooseSidebarMenuOption(page, "Status", label);
+          await closeSidebarMenu(page);
         };
         await selectFilter(statusFilter);
         await page.getByText("Archived planning", { exact: true }).first().waitFor();

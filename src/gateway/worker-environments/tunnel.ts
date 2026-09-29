@@ -4,6 +4,7 @@ import type { DesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import { prepareWorkerSsh, type PreparedWorkerSsh, type WorkerSshIdentityResolver } from "./ssh.js";
 import {
+  joinWorkerTunnelStops,
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTunnelHandle,
   type WorkerTunnelRequest,
@@ -111,6 +112,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
 
   async function start(request: WorkerTunnelStartRequest): Promise<WorkerTunnelHandle> {
     validateStartRequest(request);
+    request.authorize?.();
     const claimedEpoch = claimedOwnerEpochs.get(request.environmentId);
     if (claimedEpoch !== undefined && request.ownerEpoch < claimedEpoch) {
       throw new Error("Worker tunnel owner epoch is stale");
@@ -118,7 +120,10 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     claimedOwnerEpochs.set(request.environmentId, request.ownerEpoch);
     const current = entries.get(request.environmentId);
     if (current?.ownerEpoch === request.ownerEpoch) {
-      return await current.initialization;
+      const handle = await current.initialization;
+      // A joining caller cannot retire a tunnel owned by another operation.
+      request.authorize?.();
+      return handle;
     }
 
     const previous = [...owners].filter((owner) => owner.environmentId === request.environmentId);
@@ -139,20 +144,22 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     entries.set(request.environmentId, entry);
     void (async () => {
       await Promise.all(previous.map(stopEntry));
-      if (!isCurrent(entry)) {
-        throw new WorkerTunnelOwnerDisconnectedError();
-      }
+      const assertCurrent = () => {
+        request.authorize?.();
+        if (!isCurrent(entry)) {
+          throw new WorkerTunnelOwnerDisconnectedError();
+        }
+      };
+      assertCurrent();
       const prepared = await prepareWorkerSsh({
+        assertCurrent,
         ssh: request.ssh,
         pinnedHostKey: request.ssh.hostKey,
         resolveIdentity: request.resolveIdentity,
         temporaryDirectoryPrefix: "openclaw-worker-workspace-",
       });
-      if (!isCurrent(entry)) {
-        await prepared.dispose();
-        throw new WorkerTunnelOwnerDisconnectedError();
-      }
       entry.prepared = prepared;
+      assertCurrent();
       entry.status = "connected";
       return createHandle(entry);
     })().then(initializing.resolve, initializing.reject);
@@ -178,7 +185,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   }
 
   async function stopAll(): Promise<void> {
-    await Promise.all([...[...owners].map(stopEntry), desktop.stopAll()]);
+    await joinWorkerTunnelStops([...[...owners].map(stopEntry), desktop.stopAll()]);
   }
 
   return {

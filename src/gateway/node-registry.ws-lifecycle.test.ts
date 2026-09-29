@@ -2,8 +2,12 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer, type RawData } from "ws";
-import { setActiveNodeContext } from "../infra/active-node-context.js";
+import type { RawData } from "../../packages/gateway-client/src/websocket.js";
+import {
+  WebSocket,
+  WebSocketServer,
+} from "../../packages/gateway-client/src/websocket.test-support.js";
+import { setActiveNodeContexts } from "../infra/active-node-context.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -36,7 +40,7 @@ function createNodeClient(socket: WebSocket): GatewayWsClient {
 
 describe("NodeRegistry real WebSocket lifecycle", () => {
   afterEach(() => {
-    setActiveNodeContext(null);
+    setActiveNodeContexts([]);
   });
 
   it("rejects event and invoke delivery after a real socket leaves OPEN", async () => {
@@ -73,7 +77,6 @@ describe("NodeRegistry real WebSocket lifecycle", () => {
         timeoutMs: 0,
         onDispatchReady,
       });
-      const invokeErrorCode = invoke.ok ? null : invoke.error?.code;
 
       expect(closingState).toBe(WebSocket.CLOSING);
       expect(normalAccepted).toBe(false);
@@ -84,20 +87,6 @@ describe("NodeRegistry real WebSocket lifecycle", () => {
       });
       expect(onDispatchReady).not.toHaveBeenCalled();
       expect(frames).toHaveLength(frameCountAtClose);
-
-      console.log(
-        "[behavior-evidence] node-ws-open-admission",
-        JSON.stringify({
-          openState: WebSocket.OPEN,
-          closingState,
-          openFrameCount: frameCountAtClose,
-          closingNormalAccepted: normalAccepted,
-          closingRawAccepted: rawAccepted,
-          invokeErrorCode,
-          invokeDispatchReady: onDispatchReady.mock.calls.length,
-          framesAfterClosingAttempts: frames.length - frameCountAtClose,
-        }),
-      );
     } finally {
       registry.unregister("runtime-proof-conn");
       peer.terminate();

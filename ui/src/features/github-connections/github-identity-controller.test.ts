@@ -236,7 +236,7 @@ describe("GitHubIdentityController", () => {
   it.each([
     { mode: "managed" as const, expectedProfileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
     { mode: "inherit" as const, expectedProfileId: undefined },
-  ])("flushes a pending config draft before $mode and refreshes both edits", async (action) => {
+  ])("config.set drains drafts before $mode and refreshes both edits", async (action) => {
     vi.useFakeTimers();
     const order: string[] = [];
     let hashCounter = 1;
@@ -259,7 +259,7 @@ describe("GitHubIdentityController", () => {
       if (method === "config.set") {
         storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
         hashCounter += 1;
-        return { hash: `hash-${hashCounter}` };
+        return { config: storedConfig, hash: `hash-${hashCounter}` };
       }
       if (method === "secrets.store.set" || method === "secrets.store.delete") {
         return { ok: true };

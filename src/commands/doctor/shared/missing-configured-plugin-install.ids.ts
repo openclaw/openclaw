@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
+import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
 import {
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
@@ -16,7 +17,7 @@ import {
 } from "../../../plugins/web-search-install-catalog.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
-import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
+import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-owners.js";
 
 function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
@@ -25,12 +26,6 @@ function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   const pluginId = value.trim();
   if (pluginId) {
     ids.add(pluginId);
-  }
-}
-
-function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
-  for (const runtime of collectConfiguredRuntimePluginIds(cfg)) {
-    addConfiguredPluginId(ids, runtime);
   }
 }
 
@@ -103,25 +98,29 @@ export function collectConfiguredPluginIds(
   }
   const entries = asNullableRecord(plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (asNullableRecord(entry)?.enabled === false) {
+    if (
+      asNullableRecord(entry)?.enabled === false ||
+      isNativeSessionCatalogOptOutOnly(pluginId, entry)
+    ) {
       continue;
     }
     addConfiguredPluginId(ids, pluginId);
   }
-  const searchProvider = cfg.tools?.web?.search?.provider;
-  if (cfg.tools?.web?.search?.enabled !== false && typeof searchProvider === "string") {
+  const searchProvider = normalizeOptionalLowercaseString(cfg.tools?.web?.search?.provider);
+  if (cfg.tools?.web?.search?.enabled !== false && searchProvider) {
     const installEntry = resolveWebSearchInstallCatalogEntry({ providerId: searchProvider });
     if (installEntry?.pluginId) {
       ids.add(installEntry.pluginId);
     }
-  }
-  if (cfg.tools?.web?.search?.enabled !== false) {
-    // Env-only web providers are valid auto-detect inputs and need their manifest installed first.
+  } else if (cfg.tools?.web?.search?.enabled !== false) {
+    // Only auto-detect from environment credentials when no provider was selected.
     for (const entry of resolveWebSearchInstallCatalogEntriesForEnv(env ?? process.env)) {
       ids.add(entry.pluginId);
     }
   }
-  addConfiguredAgentRuntimePluginIds(ids, cfg);
+  for (const pluginId of collectConfiguredRuntimePluginIds(cfg, { env })) {
+    ids.add(pluginId);
+  }
   for (const pluginId of collectConfiguredProviderPluginIds({ cfg, env })) {
     ids.add(pluginId);
   }

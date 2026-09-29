@@ -1,5 +1,7 @@
 package ai.openclaw.app.ui.design
 
+import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.ui.localizedUppercase
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -28,10 +31,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
 
-/**
- * Stable bottom-navigation destination descriptor.
- */
 @Immutable
 internal data class ClawNavItem(
   val key: String,
@@ -39,9 +41,6 @@ internal data class ClawNavItem(
   val icon: ImageVector,
 )
 
-/**
- * Compact app bar that keeps title, optional subtitle, navigation, and actions aligned.
- */
 @Composable
 internal fun ClawTopBar(
   title: String,
@@ -81,9 +80,6 @@ internal fun ClawTopBar(
   }
 }
 
-/**
- * Bottom navigation shell that applies navigation-bar insets before laying out destinations.
- */
 @Composable
 internal fun ClawBottomNav(
   items: List<ClawNavItem>,
@@ -154,9 +150,6 @@ private fun ClawBottomNavItem(
   }
 }
 
-/**
- * Two-character identity mark for users, agents, or nodes in compact UI rows.
- */
 @Composable
 internal fun ClawAvatarMark(
   text: String,
@@ -169,8 +162,15 @@ internal fun ClawAvatarMark(
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Box(contentAlignment = Alignment.Center) {
-      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label)
+    Box(modifier = Modifier.padding(4.dp), contentAlignment = Alignment.Center) {
+      val label = ClawTheme.type.label
+      // A fixed sp line height would still clip when autosizing shrinks the initials.
+      Text(
+        text = localizedUppercase(text.take(2), currentAppLanguage().languageTag),
+        style = label.copy(lineHeight = (label.lineHeight.value / label.fontSize.value).em),
+        maxLines = 1,
+        autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = label.fontSize),
+      )
     }
   }
 }

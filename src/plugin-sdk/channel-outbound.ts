@@ -8,7 +8,13 @@ import {
   resolveChannelProgressDraftConfig as readProgressDraftConfig,
   type StreamingCompatEntry as ProgressDraftCompatEntry,
 } from "../channels/streaming.js";
+import { classifyGatewayStaleInstall } from "../gateway/stale-install.js";
+import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
+import { preserveReplyPayloadMediaSelectionCore } from "../infra/outbound/reply-media-entries.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { ReplyPayload } from "./reply-payload.js";
+
+export { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 
 type ChannelDurableDeliveryModule = typeof import("../channels/turn/durable-delivery.js");
 // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
@@ -77,8 +83,20 @@ export {
 } from "./channel-lifecycle.core.js";
 export {
   createOutboundPayloadPlan,
+  createStructuredOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "../infra/outbound/payloads.js";
+export { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
+
+/** Keep the current operation media selection when recovering other reply fields. */
+export function preserveReplyPayloadMediaSelection(
+  source: ReplyPayload,
+  recovered: ReplyPayload,
+): ReplyPayload {
+  return preserveReplyPayloadMediaSelectionCore(source, recovered);
+}
+
+export type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 export type { OutboundSessionContext } from "../infra/outbound/session-context.js";
 export type { OutboundDeliveryFormattingOptions } from "../infra/outbound/formatting.js";
@@ -99,8 +117,10 @@ export {
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
-  isPotentialTruncatedFinal,
   formatPlanChecklistLines,
+  selectPlanChecklistSteps,
+  compactChannelProgressDraftLine,
+  isChannelProgressAttentionLine,
   mergeChannelProgressDraftLine,
   normalizeAgentPlanSteps,
   normalizeChannelProgressDraftLineIdentity,
@@ -117,8 +137,6 @@ export {
   resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingProgressNarration,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
-  resolveTranscriptBackedChannelFinalText,
-  selectLongerFinalText,
 } from "../channels/streaming.js";
 export type {
   AgentPlanStep,
@@ -135,6 +153,7 @@ export {
   createChannelProgressDraftCompositor,
   createChannelProgressWorkCounter,
 } from "../channels/progress-draft-compositor.js";
+export { formatChannelProgressDraftDiffStat } from "../channels/progress-draft-diffstat.js";
 
 /** @deprecated The streaming.progress.render key was retired (#122927). */
 export type ChannelProgressDraftRenderMode = "rich" | "text";
@@ -171,10 +190,12 @@ export {
   verifyDurableFinalCapabilityProofs,
 } from "../channels/message/contracts.js";
 export {
+  createLivePreviewLifecycle,
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
 } from "../channels/message/live.js";
+export type { LivePreviewDeliveryResult, LivePreviewLifecycle } from "../channels/message/live.js";
 export {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
@@ -209,11 +230,29 @@ export type {
   MessageReceiptSourceResult,
 } from "../channels/message/types.js";
 
+async function loadChannelDurableDeliveryModule(): Promise<ChannelDurableDeliveryModule> {
+  return await import("../channels/turn/durable-delivery.js").catch((error: unknown) => {
+    const staleInstall = classifyGatewayStaleInstall(error);
+    // Only import failure proves no send: errors from the delivery runtime may be ambiguous.
+    throw new PlatformMessageNotDispatchedError(
+      staleInstall?.error.message ?? "Reply delivery runtime could not load before dispatch",
+      { cause: error },
+    );
+  });
+}
+
 /** Lazily forwards inbound reply delivery through the channel turn durable-delivery module. */
 export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContextCore"] =
   async (...args) => {
-    const mod = await import("../channels/turn/durable-delivery.js");
+    const mod = await loadChannelDurableDeliveryModule();
     return await mod.deliverInboundReplyWithMessageSendContextCore(...args);
+  };
+
+/** Delivers a producer's prepared plan without reparsing literal text. */
+export const deliverStructuredInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverStructuredInboundReplyWithMessageSendContextCore"] =
+  async (...args) => {
+    const mod = await loadChannelDurableDeliveryModule();
+    return await mod.deliverStructuredInboundReplyWithMessageSendContextCore(...args);
   };
 
 /** Sends a durable message batch without eager-loading channel message runtime internals. */
@@ -241,3 +280,9 @@ export async function withDurableMessageSendContext<T>(
   const mod = await loadChannelMessageRuntimeModule();
   return await mod.withDurableMessageSendContextCore(params, run);
 }
+
+export {
+  isPotentialTruncatedFinal,
+  resolveTranscriptBackedChannelFinalText,
+  selectLongerFinalText,
+} from "../channels/streaming-final-text.js";

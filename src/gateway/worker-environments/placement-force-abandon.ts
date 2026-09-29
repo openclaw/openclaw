@@ -1,5 +1,9 @@
-import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR, placementTurnOwner } from "./placement-record.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  placementTurnOwner,
+  type WorkerSessionPlacementIdentity,
+} from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
@@ -20,16 +24,12 @@ export function reportWorkerAbandonmentCleanupError(
   }
 }
 
-export async function forceAbandonWorkerEnvironment(params: {
-  placements: WorkerDispatchPlacementStore;
-  environmentId: string;
-  resolveWorkspacePath: (placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<string>;
-  onCleanupError?: (error: unknown) => void;
-}): Promise<void> {
+export async function forceAbandonWorkerEnvironment(
+  params: Pick<PlacementRecoveryDeps, "placements" | "resolveWorkspace"> & {
+    environmentId: string;
+    onCleanupError?: (error: unknown) => void;
+  },
+): Promise<void> {
   const { environmentId, placements } = params;
   const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
   const journalOwners = params.placements
@@ -37,7 +37,7 @@ export async function forceAbandonWorkerEnvironment(params: {
     .filter((owner) => owner.environmentId === environmentId);
   const journalCleanups: Array<{
     owner: (typeof journalOwners)[number];
-    placement: { sessionId: string; sessionKey: string; agentId: string };
+    placement: WorkerSessionPlacementIdentity;
     journal: NonNullable<ReturnType<typeof placements.loadWorkspaceReconciliation>>;
   }> = [];
   const retainedJournalSessions = new Set<string>();
@@ -71,8 +71,9 @@ export async function forceAbandonWorkerEnvironment(params: {
     }
   }
   const stagedResultCleanups: Array<{
-    placement: { sessionId: string; sessionKey: string; agentId: string };
+    placement: WorkerSessionPlacementIdentity;
     refs: string[];
+    repositoryWorkspaceId?: string;
   }> = [];
   for (const pending of placements.listPendingWorkspaceResults()) {
     if (pending.environmentId === environmentId) {
@@ -82,6 +83,7 @@ export async function forceAbandonWorkerEnvironment(params: {
         stagedResultCleanups.push({
           placement,
           refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
+          repositoryWorkspaceId: pending.repositoryWorkspaceId,
         });
         const claim = placement.turnClaim;
         if (claim && claim.claimId === pending.claimId && claim.runId === pending.runId) {
@@ -130,7 +132,7 @@ export async function forceAbandonWorkerEnvironment(params: {
         forceLocalClaim: true,
       });
     }
-    if (current && current.state !== "failed") {
+    if (current && (current.state !== "failed" || current.recoveryError !== recoveryError)) {
       placements.fail({
         sessionId: current.sessionId,
         expectedGeneration: current.generation,
@@ -146,8 +148,14 @@ export async function forceAbandonWorkerEnvironment(params: {
       continue;
     }
     try {
-      const root = await params.resolveWorkspacePath(cleanup.placement);
-      await recoverWorkerWorkspaceReconciliation({ root, journal: cleanup.journal });
+      const workspace = await params.resolveWorkspace(cleanup.placement);
+      if (workspace.kind !== "local") {
+        throw new Error("Repository workspace cannot own a local rollback journal");
+      }
+      await recoverWorkerWorkspaceReconciliation({
+        root: workspace.path,
+        journal: cleanup.journal,
+      });
     } catch (error) {
       reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
       retainedJournalSessions.add(cleanup.owner.sessionId);
@@ -163,7 +171,16 @@ export async function forceAbandonWorkerEnvironment(params: {
   }
   for (const cleanup of stagedResultCleanups) {
     try {
-      const root = await params.resolveWorkspacePath(cleanup.placement);
+      // Repository refs remain the durable session data even when the operator
+      // abandons a worker; only the repository workspace deletion owns them.
+      if (cleanup.repositoryWorkspaceId) {
+        continue;
+      }
+      const workspace = await params.resolveWorkspace(cleanup.placement);
+      if (workspace.kind === "repository") {
+        continue;
+      }
+      const root = workspace.path;
       for (const stagedResultRef of cleanup.refs) {
         if (await hasWorkerWorkspaceResultRef({ root, stagedResultRef })) {
           await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });

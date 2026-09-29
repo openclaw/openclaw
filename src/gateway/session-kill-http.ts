@@ -3,14 +3,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
 } from "./http-common.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   resolveTrustedHttpOperatorScopes,
@@ -43,14 +42,9 @@ function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-  },
+  opts: GatewayHttpRequestAuthOptions,
 ): Promise<boolean> {
-  const cfg = getRuntimeConfig();
+  const cfg = opts.cfg ?? getRuntimeConfig();
   const url = new URL(req.url ?? "/", "http://localhost");
   const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
   if (!sessionKeyResolution.matched) {
@@ -68,12 +62,12 @@ export async function handleSessionKillHttpRequest(
   }
 
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
+    cfg,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
   });
   if (!requestAuth) {
     return true;
@@ -111,11 +105,14 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
-  const result = await killSubagentRunAdmin({
-    cfg,
-    sessionKey: canonicalKey,
-    agentId: requestedAgent.agentId,
-  });
+  const result = await killSubagentRunAdmin(
+    {
+      cfg,
+      sessionKey: canonicalKey,
+      agentId: requestedAgent.agentId,
+    },
+    { assertCurrent: requestAuth.assertCurrent },
+  );
 
   if (result.found && result.error) {
     sendJson(res, 503, {

@@ -1,4 +1,4 @@
-import { fork, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +15,7 @@ import {
   type IndexRepairJournalMode,
   type ReliabilityReport,
 } from "./sqlite-reliability-contract.js";
+import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
 
 type IndexRepairProof = ReliabilityReport["indexRepairInterruptionProof"]["rollbackJournal"];
 
@@ -22,8 +23,6 @@ type IndexRepairState = {
   rows: number;
   sha256: string;
 };
-
-type WorkerExit = IndexRepairProof["exit"];
 
 const INDEX_REPAIR_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-index-repair-worker.ts", import.meta.url),
@@ -112,57 +111,6 @@ function prepareIndexRepairDatabase(
   }
 }
 
-async function waitForWorkerMessage(params: {
-  action?: () => void;
-  child: ChildProcess;
-  kind: "crash-point" | "ready";
-  readStderr: () => string;
-}): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite index repair worker did not report ${params.kind}.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    }, INDEX_REPAIR_TIMEOUT_MS);
-    const onMessage = (message: unknown) => {
-      if (
-        !message ||
-        typeof message !== "object" ||
-        (message as { kind?: unknown }).kind !== params.kind
-      ) {
-        return;
-      }
-      cleanup();
-      resolve();
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `SQLite index repair worker exited before ${params.kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      params.child.off("message", onMessage);
-      params.child.off("error", onError);
-      params.child.off("exit", onExit);
-    };
-    params.child.on("message", onMessage);
-    params.child.on("error", onError);
-    params.child.on("exit", onExit);
-    params.action?.();
-  });
-}
-
 async function waitForActiveTransaction(params: {
   child: ChildProcess;
   databasePath: string;
@@ -187,50 +135,6 @@ async function waitForActiveTransaction(params: {
   throw new Error(
     `SQLite index repair did not produce active ${params.journalMode} evidence within 30 seconds.`,
   );
-}
-
-async function waitForChildExit(child: ChildProcess): Promise<WorkerExit> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode };
-  }
-  return await new Promise<WorkerExit>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("SQLite index repair worker did not exit after forced termination."));
-    }, INDEX_REPAIR_TIMEOUT_MS);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      resolve({ code, signal });
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("exit", onExit);
-      child.off("error", onError);
-    };
-    child.on("exit", onExit);
-    child.on("error", onError);
-  });
-}
-
-function assertForcedExit(exit: WorkerExit): void {
-  if (exit.code === 0) {
-    throw new Error("SQLite index repair worker exited cleanly before forced termination.");
-  }
-  if (process.platform === "win32") {
-    if (exit.code === null && exit.signal === null) {
-      throw new Error("SQLite index repair worker reported no forced Windows exit.");
-    }
-    return;
-  }
-  if (exit.signal !== "SIGKILL") {
-    throw new Error(
-      `SQLite index repair worker exited without SIGKILL: code=${String(exit.code)} signal=${String(exit.signal)}`,
-    );
-  }
 }
 
 function recoverAndRepair(databasePath: string, expectedState: IndexRepairState): string[] {
@@ -275,40 +179,27 @@ async function runJournalModeProof(params: {
   journalMode: IndexRepairJournalMode;
 }): Promise<IndexRepairProof> {
   const expectedState = prepareIndexRepairDatabase(params.databasePath, params.journalMode);
-  let stderr = "";
-  const child = fork(INDEX_REPAIR_WORKER_PATH, [params.databasePath, params.journalMode], {
-    execArgv: ["--import", "tsx"],
-    serialization: "json",
-    stdio: ["ignore", "ignore", "pipe", "ipc"],
-  });
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
+  const worker = startReliabilityCrashWorker(
+    INDEX_REPAIR_WORKER_PATH,
+    [params.databasePath, params.journalMode],
+    {
+      label: "SQLite index repair worker",
+    },
+  );
+  const { child, readStderr } = worker;
 
   try {
-    await waitForWorkerMessage({
-      child,
-      kind: "ready",
-      readStderr: () => stderr,
-    });
-    await waitForWorkerMessage({
-      action: () => child.send?.({ kind: "start" }),
-      child,
-      kind: "crash-point",
-      readStderr: () => stderr,
-    });
+    await worker.waitForReady("report ready");
+    await worker.waitForCrashPoint(undefined, INDEX_REPAIR_TIMEOUT_MS, () =>
+      child.send?.({ kind: "start" }),
+    );
     const observed = await waitForActiveTransaction({
       child,
       databasePath: params.databasePath,
       journalMode: params.journalMode,
-      readStderr: () => stderr,
+      readStderr,
     });
-    if (!child.kill("SIGKILL")) {
-      throw new Error("SQLite index repair worker exited before the crash signal was delivered.");
-    }
-    const exit = await waitForChildExit(child);
-    assertForcedExit(exit);
+    const exit = await worker.crash();
     const repairedIndexes = recoverAndRepair(params.databasePath, expectedState);
     return {
       exit,
@@ -319,10 +210,7 @@ async function runJournalModeProof(params: {
       walBytesObserved: observed.walBytes,
     };
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-      await waitForChildExit(child).catch(() => undefined);
-    }
+    await worker.stop();
   }
 }
 

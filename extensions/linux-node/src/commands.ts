@@ -218,6 +218,7 @@ export function createLinuxNodeCommands(
   return [
     {
       command: "system.notify",
+      hasActiveWork: () => false,
       isAvailable: isAvailable("notify", "notify-send"),
       handle: async (paramsJSON) => {
         const notifySend = resolveTool(
@@ -247,6 +248,7 @@ export function createLinuxNodeCommands(
     },
     {
       command: "camera.list",
+      hasActiveWork: () => false,
       cap: "camera",
       isAvailable: isAvailable("camera", "ffmpeg"),
       handle: async () => {
@@ -256,6 +258,7 @@ export function createLinuxNodeCommands(
     },
     {
       command: "camera.snap",
+      hasActiveWork: () => false,
       cap: "camera",
       dangerous: true,
       isAvailable: isAvailable("camera", "ffmpeg"),
@@ -316,6 +319,7 @@ export function createLinuxNodeCommands(
     },
     {
       command: "camera.clip",
+      hasActiveWork: () => false,
       cap: "camera",
       dangerous: true,
       isAvailable: isAvailable("camera", "ffmpeg"),

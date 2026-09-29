@@ -8,13 +8,14 @@ extension OpenClawChatSQLiteTranscriptCache {
     /// attachment bodies and ordinary tool arguments are never cache data.
     static func cacheableMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         messages.suffix(maxCachedMessagesPerSession).map { message in
-            OpenClawChatMessage(
+            var cached = OpenClawChatMessage(
                 id: message.id,
                 role: message.role,
                 content: message.content.map { item in
                     OpenClawChatMessageContent(
                         type: item.type,
                         text: item.text,
+                        textSignature: item.textSignature,
                         thinking: item.thinking,
                         thinkingSignature: nil,
                         mimeType: item.mimeType,
@@ -42,12 +43,21 @@ extension OpenClawChatSQLiteTranscriptCache {
                 toolCallId: message.toolCallId,
                 toolName: message.toolName,
                 usage: message.usage,
+                model: message.model,
                 stopReason: message.stopReason,
                 errorMessage: message.errorMessage,
                 details: self.cacheableDetails(message.details),
                 isError: message.isError,
                 provenance: message.provenance,
-                historyMarker: message.historyMarker)
+                historyMarker: message.historyMarker,
+                phase: message.phase,
+                turnBoundary: message.turnBoundary,
+                steerTargetRunID: message.steerTargetRunID,
+                streamFallback: message.streamFallback)
+            cached.sourceMetadata = message.sourceMetadata
+            cached.senderLabel = message.senderLabel
+            cached.senderSession = message.senderSession
+            return cached
         }
     }
 
@@ -78,21 +88,13 @@ extension OpenClawChatSQLiteTranscriptCache {
     private static func cacheableText(_ value: String) -> String {
         let limit = 64000
         let truncationMarker = "\n...(truncated)..."
-        return if value.utf16.count > limit {
-            self.utf16Prefix(value, limit: limit - truncationMarker.utf16.count) + truncationMarker
-        } else {
-            value
-        }
-    }
-
-    private static func utf16Prefix(_ value: String, limit: Int) -> String {
         let units = value.utf16
         guard units.count > limit else { return value }
-        var end = units.index(units.startIndex, offsetBy: limit)
+        var end = units.index(units.startIndex, offsetBy: limit - truncationMarker.utf16.count)
         if String.Index(end, within: value) == nil {
             end = units.index(before: end)
         }
-        guard let stringEnd = String.Index(end, within: value) else { return "" }
-        return String(value[..<stringEnd])
+        guard let stringEnd = String.Index(end, within: value) else { return truncationMarker }
+        return String(value[..<stringEnd]) + truncationMarker
     }
 }

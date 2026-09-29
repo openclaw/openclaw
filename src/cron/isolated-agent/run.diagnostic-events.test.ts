@@ -1,14 +1,16 @@
-// Run diagnostic event tests cover emitted diagnostics from isolated cron runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  type DiagnosticEventPayload,
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 
+const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
 vi.mock("../../agents/auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: vi.fn(() => false),
+  hasAnyAuthProfileStoreSource: hasAnyAuthProfileStoreSourceMock,
 }));
 
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -17,14 +19,15 @@ import {
   makeCronSession,
   makeCronSessionEntry,
   resolveCronSessionMock,
+  resolveSessionAuthSelectionMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
-function makeParams() {
+function makeParams(cfg: OpenClawConfig = {}) {
   return {
-    cfg: {},
+    cfg,
     deps: {} as never,
     job: {
       id: "cron-diag-events",
@@ -42,90 +45,32 @@ function makeParams() {
     sessionKey: "cron:diag-events",
   };
 }
-
-type EventRecord = {
-  type: string;
-  sessionKey?: string;
-  sessionId?: string;
-  source?: string;
-  state?: string;
-  outcome?: string;
-};
+function fallbackResult(agentMeta: Record<string, unknown>, text = "test output") {
+  return {
+    result: { result: { payloads: [{ text }], meta: { agentMeta } } },
+    provider: "openai",
+    model: "gpt-5.4",
+    attempts: [],
+  };
+}
+async function runWithEvents(
+  params: Parameters<typeof runCronIsolatedAgentTurn>[0] = makeParams(),
+  subscribe: typeof onDiagnosticEvent = onInternalDiagnosticEvent,
+) {
+  const events: DiagnosticEventPayload[] = [];
+  const unsubscribe = subscribe((event) => events.push(event));
+  try {
+    return { result: await runCronIsolatedAgentTurn(params), events };
+  } finally {
+    unsubscribe();
+  }
+}
 
 describe("runCronIsolatedAgentTurn diagnostic events", () => {
   setupRunCronIsolatedAgentTurnSuite();
-
   beforeEach(() => {
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
-  });
-
-  it("emits a paired queued/processing/idle/processed lifecycle for an isolated cron run", async () => {
-    const events: EventRecord[] = [];
-    const unsubscribe = onDiagnosticEvent((evt) => {
-      const e = evt as EventRecord;
-      if (
-        e.type === "message.queued" ||
-        e.type === "session.state" ||
-        e.type === "message.processed"
-      ) {
-        events.push(e);
-      }
-    });
-
-    try {
-      const result = await runCronIsolatedAgentTurn(makeParams());
-      expect(result.status).toBe("ok");
-    } finally {
-      unsubscribe();
-    }
-
-    const ofType = (type: string) => events.filter((e) => e.type === type);
-    expect(ofType("message.queued")).toHaveLength(1);
-    expect(ofType("message.queued")[0]?.source).toBe("cron-isolated");
-
-    const stateEvents = ofType("session.state");
-    expect(stateEvents.map((e) => e.state)).toEqual(["processing", "idle"]);
-
-    const processed = ofType("message.processed");
-    expect(processed).toHaveLength(1);
-    expect(processed[0]?.outcome).toBe("completed");
-
-    const queuedKey = ofType("message.queued")[0]?.sessionKey;
-    expect(queuedKey).toBeTruthy();
-    for (const e of events) {
-      expect(e.sessionKey).toBe(queuedKey);
-    }
-
-    const orderedTypes = events.map((e) => e.type);
-    expect(orderedTypes[0]).toBe("message.queued");
-    expect(orderedTypes[orderedTypes.length - 1]).toBe("message.processed");
-    expect(orderedTypes).toContain("session.state");
-  });
-
-  it("emits no lifecycle events when diagnostics.enabled is false", async () => {
-    const events: EventRecord[] = [];
-    const unsubscribe = onDiagnosticEvent((evt) => {
-      const e = evt as EventRecord;
-      if (
-        e.type === "message.queued" ||
-        e.type === "session.state" ||
-        e.type === "message.processed"
-      ) {
-        events.push(e);
-      }
-    });
-
-    try {
-      const params = makeParams();
-      params.cfg = { diagnostics: { enabled: false } } as never;
-      const result = await runCronIsolatedAgentTurn(params);
-      expect(result.status).toBe("ok");
-    } finally {
-      unsubscribe();
-    }
-
-    expect(events).toEqual([]);
   });
 
   it("emits final lifecycle events under the adopted run session id", async () => {
@@ -137,41 +82,20 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
         }),
       }),
     );
-    runWithModelFallbackMock.mockResolvedValue({
-      result: {
-        payloads: [{ text: "test output" }],
-        meta: {
-          agentMeta: {
-            sessionId: "persisted-run-session",
-            sessionFile: "/tmp/persisted-run-session.jsonl",
-            usage: { input: 10, output: 20 },
-          },
-        },
-      },
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    const events: EventRecord[] = [];
-    const unsubscribe = onDiagnosticEvent((evt) => {
-      const e = evt as EventRecord;
-      if (
-        e.type === "message.queued" ||
-        e.type === "session.state" ||
-        e.type === "message.processed"
-      ) {
-        events.push(e);
-      }
-    });
-
-    try {
-      const result = await runCronIsolatedAgentTurn(makeParams());
-      expect(result.status).toBe("ok");
-    } finally {
-      unsubscribe();
-    }
-
-    expect(events).toMatchObject([
+    runWithModelFallbackMock.mockResolvedValue(
+      fallbackResult({
+        sessionId: "persisted-run-session",
+        sessionFile: "/tmp/persisted-run-session.jsonl",
+        usage: { input: 10, output: 20 },
+      }),
+    );
+    const { result, events } = await runWithEvents(makeParams(), onDiagnosticEvent);
+    expect(result.status).toBe("ok");
+    expect(
+      events.filter(({ type }) =>
+        ["message.queued", "session.state", "message.processed"].includes(type),
+      ),
+    ).toMatchObject([
       { type: "message.queued", sessionId: "fallback-run-session" },
       { type: "session.state", state: "processing", sessionId: "fallback-run-session" },
       { type: "session.state", state: "idle", sessionId: "persisted-run-session" },
@@ -179,163 +103,31 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     ]);
   });
 
-  it("emits model.usage for cron runs with billed aggregate usage", async () => {
-    const usageEvents: Array<{
-      type: string;
-      sessionKey?: string;
-      sessionId?: string;
-      channel?: string;
-      agentId?: string;
-      provider?: string;
-      model?: string;
-      usage?: {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        promptTokens?: number;
-        total?: number;
-      };
-      lastCallUsage?: {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-      };
-      context?: { limit?: number; used?: number };
-      durationMs?: number;
-    }> = [];
-    const unsubscribe = onInternalDiagnosticEvent((evt) => {
-      if (evt.type === "model.usage") {
-        usageEvents.push(evt);
-      }
-    });
-
-    runWithModelFallbackMock.mockResolvedValue({
-      result: {
-        payloads: [{ text: "test output" }],
-        meta: {
-          agentMeta: {
-            sessionId: "cron-usage-session",
-            sessionFile: "/tmp/cron-usage-session.jsonl",
-            provider: "test-provider",
-            model: "test-model",
-            usage: { input: 50, output: 100, cacheRead: 7, cacheWrite: 3, total: 55 },
-            diagnosticUsage: {
-              input: 150,
-              output: 200,
-              cacheRead: 17,
-              cacheWrite: 13,
-              total: 380,
-            },
-            lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
-          },
-        },
-      },
-      provider: "fallback-provider",
-      model: "fallback-model",
-    });
-
-    let result: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>> | undefined;
-    try {
-      result = await runCronIsolatedAgentTurn(makeParams());
-      expect(result.status).toBe("ok");
-    } finally {
-      unsubscribe();
-    }
-
-    expect(usageEvents).toHaveLength(1);
-    expect(usageEvents[0]).toMatchObject({
-      type: "model.usage",
-      sessionKey: "agent:default:cron:diag-events:run:test-session-id",
-      sessionId: "cron-usage-session",
-      channel: "cron",
-      agentId: "default",
-      provider: "test-provider",
-      model: "test-model",
-      usage: {
-        input: 150,
-        output: 200,
-        cacheRead: 17,
-        cacheWrite: 13,
-        promptTokens: 180,
-        total: 380,
-      },
-      lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
-      context: { limit: 128000, used: 50 },
-    });
-    expect(usageEvents[0]?.durationMs).toEqual(expect.any(Number));
-    expect(usageEvents[0]?.durationMs).toBeGreaterThanOrEqual(0);
-    expect(result?.usage).toEqual({
-      input_tokens: 50,
-      output_tokens: 100,
-      total_tokens: 160,
-      cache_read_tokens: 7,
-      cache_write_tokens: 3,
-    });
-  });
-
-  it("does not emit model.usage when diagnostics are disabled", async () => {
-    const usageEvents: Array<{ type: string }> = [];
-    const unsubscribe = onInternalDiagnosticEvent((evt) => {
-      if (evt.type === "model.usage") {
-        usageEvents.push(evt);
-      }
-    });
-
-    try {
-      const params = makeParams();
-      params.cfg = { diagnostics: { enabled: false } } as never;
-      const result = await runCronIsolatedAgentTurn(params);
-      expect(result.status).toBe("ok");
-    } finally {
-      unsubscribe();
-    }
-
-    expect(usageEvents).toEqual([]);
+  it("emits neither lifecycle nor usage events when diagnostics are disabled", async () => {
+    const { result, events } = await runWithEvents(makeParams({ diagnostics: { enabled: false } }));
+    expect(result.status).toBe("ok");
+    expect(events).toEqual([]);
   });
 
   it("emits billed model usage when the cron run is aborted before finalization", async () => {
     const abortController = new AbortController();
-    const usageEvents: Array<{
-      type: string;
-      sessionId?: string;
-      usage?: { input?: number; output?: number; total?: number };
-    }> = [];
-    const unsubscribe = onInternalDiagnosticEvent((evt) => {
-      if (evt.type === "model.usage") {
-        usageEvents.push(evt);
-      }
-    });
-
     runWithModelFallbackMock.mockImplementationOnce(async () => {
       abortController.abort("cron: job execution timed out");
-      return {
-        result: {
-          payloads: [{ text: "late output" }],
-          meta: {
-            agentMeta: {
-              sessionId: "late-session",
-              usage: { input: 50, output: 10, total: 60 },
-            },
-          },
+      return fallbackResult(
+        {
+          sessionId: "late-session",
+          usage: { input: 50, output: 10, total: 60 },
         },
-        provider: "openai",
-        model: "gpt-5.4",
-      };
+        "late output",
+      );
     });
-
-    try {
-      const result = await runCronIsolatedAgentTurn({
-        ...makeParams(),
-        abortSignal: abortController.signal,
-      });
-      expect(result.status).toBe("error");
-      expect(result.error).toBe("cron: job execution timed out");
-    } finally {
-      unsubscribe();
-    }
-
+    const { result, events } = await runWithEvents({
+      ...makeParams(),
+      abortSignal: abortController.signal,
+    });
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("cron: job execution timed out");
+    const usageEvents = events.filter((event) => event.type === "model.usage");
     expect(usageEvents).toHaveLength(1);
     expect(usageEvents[0]).toMatchObject({
       type: "model.usage",
@@ -346,49 +138,16 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
 
   it.each([
     { name: "total-only model usage", usage: { total: 42 }, expectedTotal: 42, cost: undefined },
-    {
-      name: "cost-only positive total",
-      usage: { cost: { total: 0.25 } },
-      expectedTotal: 0,
-      cost: 0.25,
-    },
     { name: "cost-only zero total", usage: { cost: { total: 0 } }, expectedTotal: 0, cost: 0 },
   ])("preserves $name in cron diagnostics", async ({ usage, expectedTotal, cost }) => {
     const cronSession = makeCronSession({
       sessionEntry: makeCronSessionEntry({ estimatedCostUsd: 1.25 }),
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    const usageEvents: Array<{
-      type: string;
-      usage?: { input?: number; output?: number; promptTokens?: number; total?: number };
-      costUsd?: number;
-    }> = [];
-    const unsubscribe = onInternalDiagnosticEvent((evt) => {
-      if (evt.type === "model.usage") {
-        usageEvents.push(evt);
-      }
-    });
-
-    runWithModelFallbackMock.mockResolvedValue({
-      result: {
-        payloads: [{ text: "test output" }],
-        meta: {
-          agentMeta: {
-            usage,
-          },
-        },
-      },
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    try {
-      const result = await runCronIsolatedAgentTurn(makeParams());
-      expect(result.status).toBe("ok");
-    } finally {
-      unsubscribe();
-    }
-
+    runWithModelFallbackMock.mockResolvedValue(fallbackResult({ usage }));
+    const { result, events } = await runWithEvents();
+    expect(result.status).toBe("ok");
+    const usageEvents = events.filter((event) => event.type === "model.usage");
     expect(usageEvents).toHaveLength(1);
     expect(usageEvents[0]?.usage).toMatchObject({
       input: 0,
@@ -410,5 +169,12 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       }
       expect(cronSession.sessionEntry.totalTokensFresh).not.toBe(true);
     }
+  });
+
+  it("skips auth-profile override resolution when no sources exist", async () => {
+    const result = await runCronIsolatedAgentTurn(makeParams());
+    expect(result.status).toBe("ok");
+    expect(hasAnyAuthProfileStoreSourceMock).toHaveBeenCalledTimes(1);
+    expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
   });
 });

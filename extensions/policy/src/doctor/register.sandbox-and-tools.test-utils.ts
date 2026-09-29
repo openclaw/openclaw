@@ -359,16 +359,14 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
-  it("uses explicit agent sandbox scope before inherited legacy perSession", async () => {
-    // `perSession` is retired runtime config but remains raw doctor input so policy evidence can
-    // verify that an explicit modern scope wins over the legacy field.
+  it("uses explicit agent sandbox scope before inherited shared scope", async () => {
     const cfg = rawCfgWithPolicy({
       agents: {
         defaults: {
           sandbox: {
             mode: "all",
             backend: "docker",
-            perSession: false,
+            scope: "shared",
             docker: {
               network: "none",
             },
@@ -1085,7 +1083,17 @@ describe("registerPolicyDoctorChecks", () => {
   it("accepts omitted exec defaults and individual denies for required deny groups", async () => {
     const cfg = cfgWithPolicyOverrides({
       tools: {
-        deny: ["exec", "process", "code_execution", "read", "write", "edit", "apply_patch"],
+        deny: [
+          "exec",
+          "process",
+          "code_execution",
+          "secrets",
+          "ls",
+          "read",
+          "write",
+          "edit",
+          "apply_patch",
+        ],
       },
     });
     const configPath = await writePolicyFixture({

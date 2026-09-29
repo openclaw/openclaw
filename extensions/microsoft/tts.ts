@@ -1,8 +1,6 @@
-// Microsoft plugin module implements tts behavior.
 import { statSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type EdgeTTSClient = Pick<import("node-edge-tts").EdgeTTS, "ttsPromise">;
@@ -47,6 +45,7 @@ export async function edgeTTS(
   if (text.trim().length === 0) {
     throw new Error("Microsoft TTS text cannot be empty");
   }
+  const { writeExternalFileWithinRoot } = await import("openclaw/plugin-sdk/security-runtime");
 
   const tts =
     ttsOverride ??

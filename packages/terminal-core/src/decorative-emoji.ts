@@ -1,4 +1,3 @@
-// Terminal Core module implements decorative emoji behavior.
 import { splitGraphemes } from "./ansi.js";
 
 // Decorative emoji helpers that degrade cleanly on terminals without reliable emoji support.
@@ -55,13 +54,7 @@ export function supportsDecorativeEmoji(options: DecorativeEmojiOptions = {}): b
   if (!hasUtf8Locale(env)) {
     return false;
   }
-  if (isKnownEmojiTerminal(env)) {
-    return true;
-  }
-  if (platform === "darwin") {
-    return true;
-  }
-  return false;
+  return isKnownEmojiTerminal(env) || platform === "darwin";
 }
 
 /** Return the emoji only when decorative emoji output is supported. */

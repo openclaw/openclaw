@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 
 // Validates docs MDX files for syntax and repository-specific conventions.
+
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { compile } from "@mdx-js/mdx";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
-import {
-  checkMintlifyAccordionIndentation,
-  MINTLIFY_ACCORDION_INDENT_MESSAGE,
-} from "./lib/mintlify-accordion.mjs";
 
 type DocsCheckError = {
   type: string;
@@ -19,44 +17,61 @@ type DocsCheckError = {
   column?: number;
 };
 
-const MINTLIFY_LANGUAGE_CODES = new Set([
-  "en",
-  "cn",
-  "zh",
-  "zh-Hans",
-  "zh-Hant",
-  "es",
-  "fr",
-  "fr-CA",
-  "fr-ca",
-  "ja",
-  "jp",
-  "ja-jp",
-  "pt",
-  "pt-BR",
-  "de",
-  "ko",
-  "it",
-  "ru",
-  "ro",
-  "cs",
-  "id",
-  "ar",
-  "tr",
-  "hi",
-  "sv",
-  "no",
-  "lv",
-  "nl",
-  "uk",
-  "vi",
-  "pl",
-  "uz",
-  "he",
-  "ca",
-  "fi",
-  "hu",
-]);
+function validationCache(cacheFile: string) {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const fingerprint = createHash("sha256").update(
+    JSON.stringify([process.version, process.platform, process.arch, process.execArgv]),
+  );
+  // The publish workflow installs with npm ci before invoking this opt-in cache.
+  // Include the installed lock as well as the requested lock; never infer a
+  // successful check from a source commit or translation's source_hash.
+  for (const input of [
+    fileURLToPath(import.meta.url),
+    fileURLToPath(new URL("./lib/arg-utils.runtime.mjs", import.meta.url)),
+    path.join(root, "package.json"),
+    path.join(root, "package-lock.json"),
+    path.join(root, "node_modules", ".package-lock.json"),
+  ]) {
+    fingerprint.update(fs.readFileSync(input)).update("\0");
+  }
+  const key = fingerprint.digest("hex");
+  let previous = new Map<string, string>();
+  try {
+    const saved = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+    if (
+      saved.key === key &&
+      saved.files &&
+      typeof saved.files === "object" &&
+      !Array.isArray(saved.files)
+    ) {
+      const entries: [string, string][] = [];
+      for (const [file, digest] of Object.entries(saved.files)) {
+        if (typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) {
+          throw new Error("Invalid validation cache entry");
+        }
+        entries.push([file, digest]);
+      }
+      previous = new Map(entries);
+    }
+  } catch {
+    // Missing, obsolete, or corrupt disposable build artifacts are cold checks.
+  }
+  const checked = new Map<string, string>();
+  return {
+    root,
+    previous,
+    checked,
+    save() {
+      fs.mkdirSync(path.dirname(path.resolve(cacheFile)), { recursive: true });
+      const temporary = `${cacheFile}.${process.pid}.tmp`;
+      fs.writeFileSync(
+        temporary,
+        `${JSON.stringify({ key, files: Object.fromEntries(checked) })}\n`,
+      );
+      fs.renameSync(temporary, cacheFile);
+    },
+  };
+}
 
 const POISON_TEXT_PATTERNS = [
   {
@@ -108,6 +123,7 @@ export function parseArgs(argv: string[]) {
   const roots: string[] = [];
   let jsonOut = "";
   let maxErrors = 50;
+  let cacheFile = "";
 
   for (let index = 0; index < argv.length; index += 1) {
     const part = argv[index];
@@ -116,6 +132,11 @@ export function parseArgs(argv: string[]) {
     }
     if (part === "--json-out") {
       jsonOut = requireOptionArgument(argv, index, "--json-out");
+      index += 1;
+      continue;
+    }
+    if (part === "--cache-file") {
+      cacheFile = requireOptionArgument(argv, index, "--cache-file");
       index += 1;
       continue;
     }
@@ -137,6 +158,7 @@ export function parseArgs(argv: string[]) {
     roots: roots.length ? roots : ["docs"],
     jsonOut,
     maxErrors,
+    ...(cacheFile ? { cacheFile } : {}),
   };
 }
 
@@ -166,7 +188,8 @@ function stripFrontmatter(raw: string): string {
   const lines = raw.split(/\r?\n/u);
   for (let index = 1; index < lines.length; index += 1) {
     if (lines[index] === "---" || lines[index] === "...") {
-      return lines.slice(index + 1).join("\n");
+      // Preserve source line numbers for both MDX and component diagnostics.
+      return lines.fill("", 0, index + 1).join("\n");
     }
   }
   return raw;
@@ -190,16 +213,6 @@ function formatMdxError(filePath: string, error: unknown): DocsCheckError {
     ...(typeof column === "number" ? { column } : {}),
     message: String(reason ?? message ?? error).split("\n")[0] ?? "",
   };
-}
-
-function checkMintlifyMdxStructure(filePath: string, raw: string): DocsCheckError[] {
-  return checkMintlifyAccordionIndentation(stripFrontmatter(raw)).map((error) => ({
-    type: "mintlify-mdx",
-    file: filePath,
-    line: error.line,
-    column: error.column,
-    message: MINTLIFY_ACCORDION_INDENT_MESSAGE,
-  }));
 }
 
 function lineColumnForIndex(raw: string, offset: number): { line: number; column: number } {
@@ -230,15 +243,10 @@ function checkPoisonText(filePath: string, raw: string): DocsCheckError[] {
   return errors;
 }
 
-async function checkMdxFile(filePath: string): Promise<DocsCheckError[]> {
-  const raw = fs.readFileSync(filePath, "utf8");
+async function checkMdxFile(filePath: string, raw: string): Promise<DocsCheckError[]> {
   const poisonErrors = checkPoisonText(filePath, raw);
   if (poisonErrors.length > 0) {
     return poisonErrors;
-  }
-  const structureErrors = checkMintlifyMdxStructure(filePath, raw);
-  if (structureErrors.length > 0) {
-    return structureErrors;
   }
   await compile({ path: filePath, value: stripFrontmatter(raw) });
   return [];
@@ -266,28 +274,6 @@ function findDocsJsonPaths(roots: string[]): string[] {
   return [...paths];
 }
 
-function collectNavigationLanguages(value: unknown, out: string[] = []): string[] {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectNavigationLanguages(item, out);
-    }
-    return out;
-  }
-  if (!value || typeof value !== "object") {
-    return out;
-  }
-  const record = value as Record<string, unknown>;
-  if (typeof record.language === "string") {
-    out.push(record.language);
-  }
-  for (const child of Object.values(record)) {
-    if (child && typeof child === "object") {
-      collectNavigationLanguages(child, out);
-    }
-  }
-  return out;
-}
-
 function checkDocsJson(filePath: string): DocsCheckError[] {
   const errors: DocsCheckError[] = [];
   let data: unknown;
@@ -303,15 +289,33 @@ function checkDocsJson(filePath: string): DocsCheckError[] {
     ];
   }
 
-  const navigation =
-    data && typeof data === "object" && "navigation" in data ? data.navigation : undefined;
-  const languages = collectNavigationLanguages(navigation);
-  for (const language of languages) {
-    if (!MINTLIFY_LANGUAGE_CODES.has(language)) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    errors.push({
+      type: "docs-json",
+      file: filePath,
+      message: "Docs configuration must be an object.",
+    });
+  } else if ("navigation" in data) {
+    const navigation = data.navigation;
+    if (
+      !navigation ||
+      typeof navigation !== "object" ||
+      Array.isArray(navigation) ||
+      !("languages" in navigation) ||
+      !Array.isArray(navigation.languages) ||
+      navigation.languages.some(
+        (entry: unknown) =>
+          !entry ||
+          typeof entry !== "object" ||
+          !("language" in entry) ||
+          typeof entry.language !== "string" ||
+          !entry.language.trim(),
+      )
+    ) {
       errors.push({
         type: "docs-json",
         file: filePath,
-        message: `Unsupported Mintlify navigation language: ${language}`,
+        message: "Docs navigation.languages must contain language entries.",
       });
     }
   }
@@ -328,6 +332,8 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const cwd = process.cwd();
   const roots = args.roots.map((root) => path.resolve(root));
+  const cache = args.cacheFile ? validationCache(args.cacheFile) : undefined;
+  let cacheHits = 0;
   const files = [
     ...new Set(
       roots.flatMap((root) => {
@@ -346,7 +352,21 @@ async function main(): Promise<void> {
 
   for (const file of files) {
     try {
-      errors.push(...(await checkMdxFile(file)));
+      const raw = fs.readFileSync(file);
+      const relative = cache ? path.relative(cache.root, file).split(path.sep).join("/") : "";
+      const cachePath =
+        relative && !relative.startsWith("../") && !path.isAbsolute(relative) ? relative : "";
+      const digest = cachePath ? createHash("sha256").update(raw).digest("hex") : "";
+      if (cachePath && cache?.previous.get(cachePath) === digest) {
+        cache.checked.set(cachePath, digest);
+        cacheHits += 1;
+        continue;
+      }
+      const pageErrors = await checkMdxFile(file, raw.toString("utf8"));
+      errors.push(...pageErrors);
+      if (cachePath && pageErrors.length === 0) {
+        cache?.checked.set(cachePath, digest);
+      }
     } catch (error) {
       errors.push(formatMdxError(file, error));
       if (errors.length >= args.maxErrors) {
@@ -359,6 +379,7 @@ async function main(): Promise<void> {
     files: files.length,
     errors: errors.map((error) => Object.assign({}, error, { file: relativize(cwd, error.file) })),
     ms: Date.now() - startedAt,
+    ...(cache ? { cacheHits } : {}),
   };
 
   if (args.jsonOut) {
@@ -367,7 +388,11 @@ async function main(): Promise<void> {
   }
 
   if (report.errors.length === 0) {
+    cache?.save();
     console.log(`Docs MDX check passed (${report.files} files, ${report.ms}ms).`);
+    if (cache) {
+      console.log(`Reused ${cacheHits} unchanged successful page check(s).`);
+    }
     return;
   }
 

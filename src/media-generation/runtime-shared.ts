@@ -1,4 +1,3 @@
-// Shares media-generation runtime polling and response helpers across providers.
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCapabilityModelRefForProviders } from "../../packages/media-generation-core/src/capability-model-ref.js";
@@ -13,11 +12,9 @@ import {
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import { isProviderApiKeyConfigured } from "../plugin-sdk/provider-auth.js";
-import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { isProviderApiKeyConfigured } from "../plugins/provider-auth-availability.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 
-// Shared media-generation runtime helpers for provider fallback, request
-// timeout normalization, model selection, and capability value normalization.
 export { hasMediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 
 type ParsedProviderModelRef = {
@@ -25,21 +22,75 @@ type ParsedProviderModelRef = {
   model: string;
 };
 
-/** Records one provider/model failure in the common fallback-attempt shape. */
-export function recordCapabilityCandidateFailure(params: {
-  attempts: FallbackAttempt[];
-  provider: string;
-  model: string;
-  error: unknown;
-}): void {
-  const described = isFailoverError(params.error) ? describeFailoverError(params.error) : undefined;
-  params.attempts.push({
-    provider: params.provider,
-    model: params.model,
-    error: described?.message ?? formatErrorMessage(params.error),
+function buildCapabilityCandidateFailure(
+  candidate: ParsedProviderModelRef,
+  error: unknown,
+): FallbackAttempt {
+  const described = isFailoverError(error) ? describeFailoverError(error) : undefined;
+  return {
+    provider: candidate.provider,
+    model: candidate.model,
+    error: described?.message ?? formatErrorMessage(error),
     reason: described?.reason,
     status: described?.status,
     code: described?.code,
+  };
+}
+
+type PreparedMediaGenerationCandidate<TResult> =
+  | string
+  | ((attempts: FallbackAttempt[]) => Promise<TResult>);
+
+/** Keeps provider lookup and capability preflight outside the generation fallback catch. */
+export async function runMediaGenerationCandidates<TProvider extends object, TResult>(params: {
+  candidates: readonly ParsedProviderModelRef[];
+  capability: "image" | "music" | "video";
+  getProvider: (providerId: string) => TProvider | undefined;
+  prepareCandidate: (
+    candidate: ParsedProviderModelRef,
+    provider: TProvider,
+  ) =>
+    | PreparedMediaGenerationCandidate<TResult>
+    | Promise<PreparedMediaGenerationCandidate<TResult>>;
+  /** Image/music skip records retain optional failure fields; video skip records do not. */
+  includeSkipFailureDetails?: boolean;
+  onMissingProvider?: (attempt: FallbackAttempt) => void;
+  onFailure?: (attempt: FallbackAttempt) => void;
+}): Promise<TResult> {
+  const attempts: FallbackAttempt[] = [];
+  let lastError: unknown;
+  for (const candidate of params.candidates) {
+    const provider = params.getProvider(candidate.provider);
+    const preparation = provider
+      ? params.prepareCandidate(candidate, provider)
+      : `No ${params.capability}-generation provider registered for ${candidate.provider}`;
+    // Image/music preflight is synchronous; only video's capability overlay yields.
+    const prepared = preparation instanceof Promise ? await preparation : preparation;
+    if (typeof prepared === "string") {
+      const attempt =
+        provider && params.includeSkipFailureDetails
+          ? buildCapabilityCandidateFailure(candidate, prepared)
+          : { provider: candidate.provider, model: candidate.model, error: prepared };
+      attempts.push(attempt);
+      lastError = new Error(prepared);
+      if (!provider) {
+        params.onMissingProvider?.(attempt);
+      }
+      continue;
+    }
+    try {
+      return await prepared(attempts);
+    } catch (error) {
+      lastError = error;
+      const attempt = buildCapabilityCandidateFailure(candidate, error);
+      attempts.push(attempt);
+      params.onFailure?.(attempt);
+    }
+  }
+  return throwCapabilityGenerationFailure({
+    capabilityLabel: `${params.capability} generation`,
+    attempts,
+    lastError,
   });
 }
 
@@ -223,9 +274,7 @@ export function resolveCapabilityModelCandidates(params: {
     candidates.push(candidate);
   };
 
-  const override = (() => {
-    return resolveCandidate(params.modelOverride, { useProviderMetadata: true });
-  })();
+  const override = resolveCandidate(params.modelOverride, { useProviderMetadata: true });
   if (override) {
     // Explicit model overrides are authoritative and should not be expanded into
     // auto provider fallback candidates.
@@ -625,12 +674,7 @@ function formatCapabilityAttemptRef(attempt: FallbackAttempt): string {
 
 function isAbortLikeFallbackAttempt(attempt: FallbackAttempt): boolean {
   const message = attempt.error.trim().toLowerCase();
-  return (
-    message === "this operation was aborted" ||
-    message === "operation was aborted" ||
-    message.includes("operation was aborted") ||
-    message.includes("request was aborted")
-  );
+  return message.includes("operation was aborted") || message.includes("request was aborted");
 }
 
 /** Formats setup guidance when no model is configured for a media capability. */
@@ -639,9 +683,9 @@ export function buildNoCapabilityModelConfiguredMessage(params: {
   modelConfigKey: string;
   providers: Array<{ id: string; defaultModel?: string | null }>;
   fallbackSampleRef?: string;
-  getProviderEnvVars?: typeof getDefaultProviderEnvVars;
+  getProviderEnvVars?: typeof getProviderEnvVarsCore;
 }): string {
-  const getProviderEnvVars = params.getProviderEnvVars ?? getDefaultProviderEnvVars;
+  const getProviderEnvVars = params.getProviderEnvVars ?? getProviderEnvVarsCore;
   const sampleModel = params.providers.find(
     (provider) =>
       normalizeOptionalString(provider.id) && normalizeOptionalString(provider.defaultModel),

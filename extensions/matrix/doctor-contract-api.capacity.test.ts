@@ -1,4 +1,4 @@
-// Matrix tests cover plugin-wide capacity during inbound dedupe migration.
+// Matrix tests cover completion storage failures during inbound dedupe migration.
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -12,7 +12,6 @@ import {
   getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -62,7 +61,7 @@ function writeLegacyDedupeSource(stateDir: string, now: number, withMetadata = f
     "accounts",
     "home",
     "matrix.example.org__bot",
-    "token-a",
+    "0123456789abcdef",
   );
   fs.mkdirSync(root, { recursive: true });
   const jsonPath = path.join(root, "inbound-dedupe.json");
@@ -90,52 +89,14 @@ describe("matrix inbound dedupe migration capacity", () => {
   });
 
   afterEach(() => {
-    setMaxPluginStateEntriesPerPluginForTests(undefined);
     resetPluginStateStoreForTests();
   });
 
-  it("keeps sources when completion capacity cannot be reserved", async () => {
-    const stateDir = tempDirs.make("openclaw-matrix-capacity-");
-    const jsonPath = writeLegacyDedupeSource(stateDir, Date.now());
-    const params = createMigrationParams(stateDir);
-    setMaxPluginStateEntriesPerPluginForTests(3);
-    const dedupeStore = params.context.openPluginStateKeyedStore<PersistentDedupeEntry>({
-      namespace: resolveMatrixInboundDedupeStateNamespace(),
-      maxEntries: 20_000,
-      defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
-      env: params.env,
-    });
-    const canonicalEntry = createPersistentDedupeImportEntry({
-      key: "ops\0!room:example.org\0$runtime",
-      seenAt: Date.now(),
-    });
-    await dedupeStore.register(canonicalEntry.key, canonicalEntry.value);
-    const siblingStore = params.context.openPluginStateKeyedStore<{ value: number }>({
-      namespace: "capacity-sibling",
-      maxEntries: 10,
-      env: params.env,
-    });
-    await siblingStore.register("one", { value: 1 });
-    await siblingStore.register("two", { value: 2 });
-
-    const result = await getMigration().migrateLegacyState(params);
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining("Failed reserving Matrix inbound dedupe migration completion:"),
-    ]);
-    expect(fs.existsSync(jsonPath)).toBe(true);
-    expect(fs.existsSync(`${jsonPath}.migrated`)).toBe(false);
-    await expect(dedupeStore.lookup(canonicalEntry.key)).resolves.toEqual(canonicalEntry.value);
-    await expect(siblingStore.entries()).resolves.toHaveLength(2);
-  });
-
-  it("reserves completion capacity before bounded import", async () => {
+  it("keeps sources when the completion namespace is full and imports them after capacity frees", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-capacity-");
     const now = Date.now();
     const jsonPath = writeLegacyDedupeSource(stateDir, now, true);
     const params = createMigrationParams(stateDir);
-    setMaxPluginStateEntriesPerPluginForTests(5);
     const dedupeStore = params.context.openPluginStateKeyedStore<PersistentDedupeEntry>({
       namespace: resolveMatrixInboundDedupeStateNamespace(),
       maxEntries: 20_000,
@@ -147,13 +108,29 @@ describe("matrix inbound dedupe migration capacity", () => {
       seenAt: now,
     });
     await dedupeStore.register(canonicalEntry.key, canonicalEntry.value);
-    const siblingStore = params.context.openPluginStateKeyedStore<{ value: number }>({
-      namespace: "capacity-sibling",
-      maxEntries: 10,
+    const completionStore = params.context.openPluginStateKeyedStore<{ value: number }>({
+      namespace: "inbound-dedupe-migration-state",
+      maxEntries: 4,
+      overflowPolicy: "reject-new",
       env: params.env,
     });
-    await siblingStore.register("one", { value: 1 });
-    await siblingStore.register("two", { value: 2 });
+    for (let index = 0; index < 4; index++) {
+      await completionStore.register(`other-migration-${index}`, { value: index });
+    }
+
+    const result = await getMigration().migrateLegacyState(params);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Failed reserving Matrix inbound dedupe migration completion:"),
+    ]);
+    expect(fs.existsSync(jsonPath)).toBe(true);
+    expect(fs.existsSync(`${jsonPath}.migrated`)).toBe(false);
+    await expect(dedupeStore.lookup(canonicalEntry.key)).resolves.toEqual(canonicalEntry.value);
+    await expect(completionStore.entries()).resolves.toHaveLength(4);
+    await expect(getMigration().detectLegacyState(params)).resolves.not.toBeNull();
+
+    await completionStore.delete("other-migration-0");
 
     await expect(getMigration().migrateLegacyState(params)).resolves.toEqual({
       changes: [
@@ -170,8 +147,8 @@ describe("matrix inbound dedupe migration capacity", () => {
     });
     await expect(dedupeStore.lookup(legacyEntry.key)).resolves.toEqual(legacyEntry.value);
     expect(getPluginStateCapacityForTests("matrix", params.env)).toEqual({
-      liveEntries: 5,
-      maxEntries: 5,
+      liveEntries: 6,
+      maxEntries: Number.POSITIVE_INFINITY,
     });
     await expect(getMigration().detectLegacyState(params)).resolves.toBeNull();
   });

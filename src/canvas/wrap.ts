@@ -1,30 +1,7 @@
+import { WIDGET_CDN_ORIGINS } from "../plugin-sdk/widget-html.js";
 import { escapeHtml } from "../shared/html-escape.js";
-
-const WIDGET_THEME_TOKENS = [
-  "surface",
-  "card",
-  "elevated",
-  "text",
-  "text-strong",
-  "muted",
-  "border",
-  "border-strong",
-  "accent",
-  "accent-fill",
-  "accent-fg",
-  "ok",
-  "warn",
-  "danger",
-  "info",
-  "radius",
-  "radius-full",
-  "scrollbar-size",
-  "scrollbar-thumb-inset",
-  "scrollbar-thumb",
-  "scrollbar-thumb-hover",
-  "font-body",
-  "font-mono",
-] as const;
+import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
+import { WIDGET_THEME_MESSAGE_TYPE, WIDGET_THEME_TOKENS } from "../shared/widget-theme.js";
 
 // Baked palettes mirror the host claw theme (ui/src/styles/base.css) so
 // fallback renders match Control UI renders, where the theme bridge pushes the
@@ -93,7 +70,7 @@ export function buildWidgetDocument(
 ): string {
   const isSvg = /^<svg/i.test(widgetCode);
   const bodyClass = isSvg ? ' class="svg-widget"' : "";
-  // Inline scripts may drive the widget; CSP blocks resource loads, while preview metadata
+  // CSP admits public CDN assets but keeps data connections separate; preview metadata
   // prevents the iframe from inheriting same-origin access to the parent application.
   // The embedding bridge lets a host fit the iframe to its content. A board
   // host also receives only the vertical scroll remainder that the widget
@@ -213,6 +190,22 @@ export function buildWidgetDocument(
     "window.sendPrompt=text=>{void sendPrompt(text);};" +
     'define(window,"sendPrompt",{value:window.sendPrompt,writable:false,configurable:false});' +
     'post({type:"openclaw:widget-bridge-ready"},"*");})();</script>';
+  const errorBridge =
+    "<script>(()=>{if(!window.parent||window.parent===window)return;" +
+    "const post=window.parent.postMessage.bind(window.parent);const listen=window.addEventListener.bind(window);" +
+    "const stringify=String;const slice=Function.prototype.call.bind(String.prototype.slice);" +
+    "const replace=Function.prototype.call.bind(String.prototype.replace);const integer=Number.isInteger;" +
+    "const seen=new Set();const has=seen.has.bind(seen);const add=seen.add.bind(seen);let count=0;" +
+    "const report=(event,rejection)=>{try{if(count>=3)return;" +
+    'if(!rejection&&typeof event.message!=="string"&&!event.error)return;' +
+    "const reason=rejection?event.reason:undefined;" +
+    "const message=slice(stringify(rejection?(reason?.message??reason):(event.error?.message??event.message)),0,500);" +
+    "if(has(message))return;" +
+    'const data={type:"openclaw:widget-runtime-error",message};' +
+    'if(typeof event.filename==="string"){const source=slice(replace(replace(event.filename,/[?#].*$/,""),/^.*[\\\\/]/,""),0,200);if(source)data.source=source;}' +
+    "if(integer(event.lineno))data.line=event.lineno;if(integer(event.colno))data.column=event.colno;" +
+    'add(message);count++;post(data,"*");}catch{}};' +
+    'listen("error",event=>report(event,false),true);listen("unhandledrejection",event=>report(event,true),true);})();</script>';
   /*
    * The host may push a new theme after every theme change. Each message is a
    * full snapshot: omitted or invalid tokens are removed so a theme switch
@@ -226,7 +219,7 @@ export function buildWidgetDocument(
     "const rm=root.style.removeProperty.bind(root.style);" +
     `const keys=${JSON.stringify(WIDGET_THEME_TOKENS)};` +
     'addEventListener("message",event=>{if(event.source!==window.parent)return;' +
-    'const data=event.data;if(!data||data.type!=="openclaw:widget-theme"||' +
+    `const data=event.data;if(!data||data.type!==${JSON.stringify(WIDGET_THEME_MESSAGE_TYPE)}||` +
     'typeof data.tokens!=="object"||data.tokens===null)return;' +
     "for(const key of keys){const raw=data.tokens[key];" +
     'const value=typeof raw==="string"?raw.trim():"";' +
@@ -297,7 +290,8 @@ export function buildWidgetDocument(
   const connectSources = options.connectOrigins?.length
     ? options.connectOrigins.join(" ")
     : "'none'";
-  const scriptSources = options.scriptOrigins?.length ? ` ${options.scriptOrigins.join(" ")}` : "";
+  const cdnSources = WIDGET_CDN_ORIGINS.join(" ");
+  const scriptSources = [...WIDGET_CDN_ORIGINS, ...(options.scriptOrigins ?? [])].join(" ");
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${cdnSources}; script-src 'unsafe-inline' ${scriptSources}; font-src data: ${cdnSources}; img-src data:; media-src data: ${WIDGET_MEDIA_SOURCES.join(" ")}; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${errorBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
 }

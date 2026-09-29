@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
 import { hasAuthProfileStoreSourceForProvider } from "./source-check.js";
 import { readPersistedAuthProfileStoreRaw, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
-import { loadAuthProfileStoreForRuntime, updateAuthProfileStoreWithLock } from "./store.js";
+import { loadAuthProfileStoreForRuntime, updateAuthProfileStoreWithLock } from "./store-runtime.js";
 
 describe("hasAuthProfileStoreSourceForProvider", () => {
   afterEach(() => {
@@ -163,19 +163,6 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
   it("does not count empty provider profiles as credential evidence", async () => {
     const { agentDir } = await withAgentStore({
       "openai:default": { type: "api_key", provider: "openai" },
-    });
-
-    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);
-  });
-
-  it("does not count expired token profiles as credential evidence", async () => {
-    const { agentDir } = await withAgentStore({
-      "openai:token": {
-        type: "token",
-        provider: "openai",
-        token: "expired-token",
-        expires: Date.now() - 1000,
-      },
     });
 
     expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);

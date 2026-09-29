@@ -640,6 +640,9 @@ describe("sendMessage", () => {
 
       expect(result.deliveryStatus).toBe("suppressed");
       expect(result).toMatchObject({ suppressionReason: reason });
+      expect(result.sentBeforeError).toBe(
+        reason === "adapter_returned_no_identity" ? true : undefined,
+      );
       expect(result.payloadOutcomes).toEqual([
         {
           index: 0,

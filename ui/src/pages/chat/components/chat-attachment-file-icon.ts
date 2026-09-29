@@ -269,32 +269,31 @@ export function renderAttachmentFileIcon(options: {
   mimeType?: string;
   mode: AttachmentFileVisualMode;
   unavailable?: boolean;
+  loading?: boolean;
 }) {
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
   const large = options.mode === "large-placeholder";
   const size = large ? "44px" : "20px";
-  const light = large
-    ? fileIconAssetPath("large/shell-light")
-    : resolved.compact
-      ? fileIconAssetPath(`compact/light/${resolved.compact}`)
-      : fileIconAssetPath("compact/unknown-light");
-  const dark = large
-    ? fileIconAssetPath("large/shell-dark")
-    : resolved.compact
-      ? fileIconAssetPath(`compact/dark/${resolved.compact}`)
-      : fileIconAssetPath("compact/unknown-dark");
+  const assetPath = (theme: "light" | "dark") =>
+    fileIconAssetPath(
+      large
+        ? `large/shell-${theme}`
+        : resolved.compact
+          ? `compact/${theme}/${resolved.compact}`
+          : `compact/unknown-${theme}`,
+    );
   return html`<span
     class="chat-attachment-file-icon ${
       options.unavailable ? "chat-attachment-file-icon--unavailable" : ""
-    }"
+    } ${options.loading ? "skeleton" : ""}"
     data-family=${resolved.family}
     data-mode=${options.mode}
     aria-hidden="true"
     style=${styleMap({
       width: size,
       height: size,
-      "--chat-file-icon-light": `url("${light}")`,
-      "--chat-file-icon-dark": `url("${dark}")`,
+      "--chat-file-icon-light": `url("${assetPath("light")}")`,
+      "--chat-file-icon-dark": `url("${assetPath("dark")}")`,
       "--chat-file-icon-overlay": `url("${fileIconAssetPath(`overlays/${resolved.family}`)}")`,
       "--chat-file-icon-accent": resolved.accent,
     })}

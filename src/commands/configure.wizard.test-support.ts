@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { committedConfigFiles } from "./committed-config.test-support.js";
 
 const wizardTestMocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn();
@@ -24,6 +25,7 @@ const wizardTestMocks = vi.hoisted(() => {
       }) => {
         params.writeOptions?.assertConfigPathForWrite?.();
         await writeConfigFile(params.nextConfig);
+        return committedConfigFiles.write(params.nextConfig as OpenClawConfig);
       },
     ),
     resolveGatewayPort: vi.fn(),
@@ -107,7 +109,11 @@ vi.mock("../config/config.js", () => ({
           writeOptions: params.writeOptions,
           afterWrite: { mode: "auto" },
         });
-        return { nextConfig: committed.config };
+        return {
+          ...committedConfigFiles.write(committed.config),
+          result: transformed.result,
+          attempts: attempt + 1,
+        };
       } catch (error) {
         if (
           !(error instanceof Error) ||
@@ -165,7 +171,8 @@ vi.mock("./health-format.js", () => ({
   formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure,
 }));
 
-vi.mock("./configure.gateway.js", () => ({
+vi.mock("./configure.gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./configure.gateway.js")>()),
   promptGatewayConfig: wizardTestMocks.promptGatewayConfig,
 }));
 
@@ -189,7 +196,8 @@ vi.mock("./onboard-skills.js", () => ({
   setupSkills: vi.fn(),
 }));
 
-vi.mock("./onboard-channels.js", () => ({
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
   setupChannels: wizardTestMocks.setupChannels,
 }));
 
@@ -211,6 +219,7 @@ const { runConfigureWizard } = await import("./configure.wizard.js");
 export { runConfigureWizard, wizardTestMocks };
 
 export function setupWizardTestDefaults() {
+  committedConfigFiles.clear();
   wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});
   wizardTestMocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
   wizardTestMocks.resolveSearchProviderOptions.mockReturnValue([

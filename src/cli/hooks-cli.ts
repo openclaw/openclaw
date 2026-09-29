@@ -1,10 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { decorativePrefix } from "../../packages/terminal-core/src/decorative-emoji.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentWorkspaceDir,
@@ -12,7 +12,7 @@ import {
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { getRuntimeConfig, transformConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildWorkspaceHookStatus,
@@ -23,7 +23,7 @@ import { resolveHookEntries } from "../hooks/policy.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadGatewayStartupPluginPlanWithMetadata } from "../plugins/channel-plugin-ids.js";
-import { buildPluginDiagnosticsReport } from "../plugins/status.js";
+import { withPluginDiagnosticsReport } from "../plugins/status.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { summarizeStringEntries } from "../shared/string-sample.js";
@@ -31,6 +31,7 @@ import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { ExpectedCliError, rethrowExpectedCliError } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import {
   formatHookInfo,
   formatHookMissingSummary,
@@ -42,8 +43,6 @@ import {
 } from "./hooks-cli.format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
-import { runPluginInstallCommand } from "./plugins-install-command.js";
-import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
 type HooksUpdateOptions = {
   acknowledgeInstallPolicyWarning?: boolean;
@@ -76,8 +75,6 @@ function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): 
   }
   const agentId =
     requestedAgentId ??
-    // Status reporting narrows to one workspace, so it keeps demanding an explicit
-    // choice rather than adopting the system agent and hiding the other agents' hooks.
     tryResolveLegacyCompatibilityAgentId(config) ??
     resolveDefaultAgentId(config, {
       surface: "hooks status reporting",
@@ -86,7 +83,11 @@ function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): 
   return { agentId, workspaceDir: resolveAgentWorkspaceDir(config, agentId) };
 }
 
-function buildHooksReport(config: OpenClawConfig, target: HooksReportTarget): HookStatusReport {
+async function withHooksReport<T>(
+  config: OpenClawConfig,
+  target: HooksReportTarget,
+  consume: (report: HookStatusReport) => T,
+): Promise<T> {
   // Plugin-managed and workspace hooks share one resolved policy view for status/actions.
   const workspaceDir = target.workspaceDir;
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
@@ -97,23 +98,31 @@ function buildHooksReport(config: OpenClawConfig, target: HooksReportTarget): Ho
     workspaceDir,
     env: process.env,
   });
-  const pluginReport = buildPluginDiagnosticsReport({
-    config,
-    workspaceDir,
-    onlyPluginIds: startup.plan.pluginIds,
-    metadataSnapshot: startup.metadataSnapshot,
-  });
-  const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
-  const entries = resolveHookEntries([...pluginEntries, ...workspaceEntries]);
-  return buildWorkspaceHookStatus(workspaceDir, { config, entries });
+  return withPluginDiagnosticsReport(
+    {
+      config,
+      workspaceDir,
+      onlyPluginIds: startup.plan.pluginIds,
+      metadataSnapshot: startup.metadataSnapshot,
+    },
+    (pluginReport) => {
+      const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
+      const entries = resolveHookEntries([...pluginEntries, ...workspaceEntries]);
+      return consume(buildWorkspaceHookStatus(workspaceDir, { config, entries }));
+    },
+  );
 }
 
-async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
+async function loadHooksReport<T>(
+  agentId: string | undefined,
+  consume: (report: HookStatusReport) => T,
+): Promise<T> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const target = resolveHooksReportTarget(config, agentId);
   const { callGateway } = await import("../gateway/call.js");
+  let report: HookStatusReport;
   try {
-    return await callGateway<HookStatusReport>({
+    report = await callGateway<HookStatusReport>({
       config,
       method: "hooks.status",
       params: { agentId: target.agentId },
@@ -133,12 +142,9 @@ async function loadHooksReport(agentId?: string): Promise<HookStatusReport> {
       throw error;
     }
     // Only implicit local Gateways may use offline or older-Gateway discovery.
-    return buildHooksReport(config, target);
+    return withHooksReport(config, target, consume);
   }
-}
-
-function resolveHooksAgentOption(command: Command | undefined): string | undefined {
-  return resolveOptionFromCommand<string>(command, "agent");
+  return consume(report);
 }
 
 function resolveHookSelection(
@@ -190,58 +196,55 @@ async function runOneShotHooksCliAction(
   requestExitAfterOneShotOutput(defaultRuntime, exitCode);
 }
 async function setHookEnabled(hookName: string, enabled: boolean, agentId?: string): Promise<void> {
-  const snapshot = await readConfigFileSnapshot();
-  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const hook = resolveHookSelection(
-    buildHooksReport(config, resolveHooksReportTarget(config, agentId)),
-    hookName,
-  );
-  if (!hook) {
-    throw new Error(
-      `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
-    );
-  }
-  if (hook.managedByPlugin) {
-    throw new Error(
-      `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
-    );
-  }
-  if (enabled && !hook.requirementsSatisfied) {
-    const missing = formatHookMissingSummary(hook, 3);
-    const installHint = hook.install.length
-      ? ` Install options: ${summarizeStringEntries({
-          entries: hook.install.map((option) => option.label),
-          limit: 3,
-        })}.`
-      : "";
-    throw new Error(
-      `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
-    );
-  }
-  const entries = { ...config.hooks?.internal?.entries };
-  entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
-  const nextConfig: OpenClawConfig = {
-    ...config,
-    hooks: {
-      ...config.hooks,
-      internal: {
-        ...config.hooks?.internal,
-        ...(enabled ? { enabled: true } : {}),
-        entries,
-      },
-    },
-  };
-
-  await replaceConfigFile({
-    nextConfig,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+  const committed = await transformConfigFile({
+    transform: (config) =>
+      withHooksReport(config, resolveHooksReportTarget(config, agentId), (report) => {
+        const hook = resolveHookSelection(report, hookName);
+        if (!hook) {
+          throw new Error(
+            `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
+          );
+        }
+        if (hook.managedByPlugin) {
+          throw new Error(
+            `Hook "${hookName}" is managed by plugin "${hook.pluginId ?? "unknown"}" and cannot be enabled/disabled.`,
+          );
+        }
+        if (enabled && !hook.requirementsSatisfied) {
+          const missing = formatHookMissingSummary(hook, 3);
+          const installHint = hook.install.length
+            ? ` Install options: ${summarizeStringEntries({
+                entries: hook.install.map((option) => option.label),
+                limit: 3,
+              })}.`
+            : "";
+          throw new Error(
+            `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
+          );
+        }
+        const entries = { ...config.hooks?.internal?.entries };
+        entries[hook.hookKey] = { ...entries[hook.hookKey], enabled };
+        const nextConfig: OpenClawConfig = {
+          ...config,
+          hooks: {
+            ...config.hooks,
+            internal: {
+              ...config.hooks?.internal,
+              ...(enabled ? { enabled: true } : {}),
+              entries,
+            },
+          },
+        };
+        return { nextConfig, result: { name: hook.name, emoji: hook.emoji } };
+      }),
   });
+  const selectedHook = expectDefined(committed.result, "hook mutation result");
   const prefix = enabled
     ? `${theme.success("✓")} Enabled hook:`
     : theme.warn(decorativePrefix("⏸", "Disabled hook:"));
-  const name = hook.emoji
-    ? `${hook.emoji} ${theme.command(hook.name)}`
-    : decorativePrefix("🔗", theme.command(hook.name));
+  const name = selectedHook.emoji
+    ? `${selectedHook.emoji} ${theme.command(selectedHook.name)}`
+    : decorativePrefix("🔗", theme.command(selectedHook.name));
   defaultRuntime.log(`${prefix} ${name}`);
 }
 
@@ -251,11 +254,7 @@ export function registerHooksCli(program: Command): void {
     .description("Manage internal agent hooks")
     .option("--agent <id>", "Agent id to inspect")
     .option("--json", "Output as JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.openclaw.ai/cli/hooks")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/hooks"));
   const hasJsonOutput = (opts: { json?: boolean } | undefined): boolean =>
     Boolean(opts?.json || hooks.opts<{ json?: boolean }>().json);
   hooks.hook("preAction", (_thisCommand, actionCommand) => {
@@ -274,6 +273,16 @@ export function registerHooksCli(program: Command): void {
     }
   });
 
+  const runHooksList = (opts: HooksListOptions, command: Command) =>
+    runOneShotHooksCliAction(async () => {
+      const json = hasJsonOutput(opts);
+      const output = await loadHooksReport(
+        resolveOptionFromCommand<string>(command, "agent"),
+        (report) => formatHooksList(report, { ...opts, json }),
+      );
+      writeHooksOutput(output, json);
+    }, "root");
+
   hooks
     .command("list")
     .description("List all hooks")
@@ -281,13 +290,7 @@ export function registerHooksCli(program: Command): void {
     .option("--eligible", "Show only eligible hooks", false)
     .option("--json", "Output as JSON", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
-    .action(async (opts: HooksListOptions, command: Command) =>
-      runOneShotHooksCliAction(async () => {
-        const report = await loadHooksReport(resolveHooksAgentOption(command));
-        const json = hasJsonOutput(opts);
-        writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
-      }, "root"),
-    );
+    .action(runHooksList);
 
   hooks
     .command("info <name>")
@@ -296,11 +299,19 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (name, opts: HookInfoOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
-        const hook = resolveHookSelection(report, name);
-        writeHooksOutput(formatHookInfo(hook, name, { ...opts, json }), json);
-        return hook ? 0 : 1;
+        const result = await loadHooksReport(
+          resolveOptionFromCommand<string>(command, "agent"),
+          (report) => {
+            const hook = resolveHookSelection(report, name);
+            return {
+              output: formatHookInfo(hook, name, { ...opts, json }),
+              exitCode: hook ? 0 : 1,
+            };
+          },
+        );
+        writeHooksOutput(result.output, json);
+        return result.exitCode;
       }, "root"),
     );
 
@@ -311,31 +322,26 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (opts: HooksCheckOptions, command: Command) =>
       runOneShotHooksCliAction(async () => {
-        const report = await loadHooksReport(resolveHooksAgentOption(command));
         const json = hasJsonOutput(opts);
-        writeHooksOutput(formatHooksCheck(report, { ...opts, json }), json);
+        const output = await loadHooksReport(
+          resolveOptionFromCommand<string>(command, "agent"),
+          (report) => formatHooksCheck(report, { ...opts, json }),
+        );
+        writeHooksOutput(output, json);
       }, "root"),
     );
 
-  hooks
-    .command("enable <name>")
-    .description("Enable a hook")
-    .option("--agent <id>", "Agent id whose workspace to inspect")
-    .action(async (name, _opts: { agent?: string }, command: Command) =>
-      runOneShotHooksCliAction(async () => {
-        await setHookEnabled(name, true, resolveHooksAgentOption(command));
-      }),
-    );
-
-  hooks
-    .command("disable <name>")
-    .description("Disable a hook")
-    .option("--agent <id>", "Agent id whose workspace to inspect")
-    .action(async (name, _opts: { agent?: string }, command: Command) =>
-      runOneShotHooksCliAction(async () => {
-        await setHookEnabled(name, false, resolveHooksAgentOption(command));
-      }),
-    );
+  for (const enabled of [true, false]) {
+    hooks
+      .command(`${enabled ? "enable" : "disable"} <name>`)
+      .description(enabled ? "Enable a hook" : "Disable a hook")
+      .option("--agent <id>", "Agent id whose workspace to inspect")
+      .action(async (name, _opts: { agent?: string }, command: Command) =>
+        runOneShotHooksCliAction(() =>
+          setHookEnabled(name, enabled, resolveOptionFromCommand<string>(command, "agent")),
+        ),
+      );
+  }
 
   hooks
     .command("relay", { hidden: true })
@@ -367,6 +373,7 @@ export function registerHooksCli(program: Command): void {
       false,
     )
     .action(async (raw: string, opts: HooksInstallOptions) => {
+      const { runPluginInstallCommand } = await import("./plugins-install-command.js");
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
       );
@@ -390,17 +397,12 @@ export function registerHooksCli(program: Command): void {
       false,
     )
     .action(async (id: string | undefined, opts: HooksUpdateOptions) => {
+      const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
       defaultRuntime.log(
         theme.warn("`openclaw hooks update` is deprecated; use `openclaw plugins update`."),
       );
-      await runPluginUpdateCommand({ id, opts });
+      await runPluginUpdateCommand({ ids: id ? [id] : [], opts });
     });
 
-  hooks.action(async (opts: HooksListOptions, command: Command) =>
-    runOneShotHooksCliAction(async () => {
-      const report = await loadHooksReport(resolveHooksAgentOption(command));
-      const json = hasJsonOutput(opts);
-      writeHooksOutput(formatHooksList(report, { ...opts, json }), json);
-    }, "root"),
-  );
+  hooks.action(runHooksList);
 }

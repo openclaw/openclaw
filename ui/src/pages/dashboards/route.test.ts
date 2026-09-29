@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { page } from "./route.ts";
@@ -23,49 +23,59 @@ async function loadDashboards(
 }
 
 describe("dashboards route", () => {
-  it("seeds the exact managed dashboard query without calling the raw list API", async () => {
-    const result = {
-      ts: 1,
-      path: "",
-      count: 0,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [],
-    };
-    let snapshot = {
-      result: null as typeof result | null,
-      agentId: null,
-      loading: false,
-      error: null,
-    };
-    const list = vi.fn();
-    const listSnapshot = vi.fn(() => snapshot);
-    const refreshList = vi.fn(async () => {
-      snapshot = { ...snapshot, result };
-    });
-    const context = {
-      basePath: "",
-      sessions: { list, listSnapshot, refreshList },
-      agentSelection: { state: { selectedId: "main", scopeId: null } },
-      agents: { state: { agentsList: null } },
-      gateway: { snapshot: { hello: null } },
-    } as unknown as ApplicationContext;
-    if (!page.loader) {
-      throw new Error("dashboards route has no loader");
-    }
+  it.each([undefined, "global", "per-sender"] as const)(
+    "seeds the managed query and configured scope %s",
+    async (scope) => {
+      const result = {
+        ts: 1,
+        path: "",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+      let snapshot = {
+        result: null as typeof result | null,
+        agentId: null,
+        loading: false,
+        error: null,
+      };
+      const list = vi.fn();
+      const listSnapshot = vi.fn(() => snapshot);
+      const refreshList = vi.fn(async () => {
+        snapshot = { ...snapshot, result };
+      });
+      const context = {
+        basePath: "",
+        sessions: { list, listSnapshot, refreshList },
+        agentSelection: { state: { selectedId: "main", scopeId: null } },
+        agents: {
+          state: { agentsList: scope ? { defaultId: "main", mainKey: "main", scope } : null },
+        },
+        gateway: { snapshot: { hello: null } },
+      } as unknown as ApplicationContext;
+      if (!page.loader) {
+        throw new Error("dashboards route has no loader");
+      }
 
-    await loadDashboards(context, loaderOptions);
+      const data = await loadDashboards(context, loaderOptions);
+      assert(
+        !("type" in data),
+        "Dashboards should load data without redirecting or returning not found",
+      );
+      expect(data.globalScope).toBe(scope === "global");
 
-    expect(refreshList).toHaveBeenCalledWith({
-      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      hasBoard: true,
-      archivedFilter: "all",
-      force: true,
-    });
-    expect(listSnapshot).toHaveBeenLastCalledWith({
-      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      hasBoard: true,
-      archivedFilter: "all",
-    });
-    expect(list).not.toHaveBeenCalled();
-  });
+      expect(refreshList).toHaveBeenCalledWith({
+        limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        hasBoard: true,
+        archivedFilter: "all",
+        force: true,
+      });
+      expect(listSnapshot).toHaveBeenLastCalledWith({
+        limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        hasBoard: true,
+        archivedFilter: "all",
+      });
+      expect(list).not.toHaveBeenCalled();
+    },
+  );
 });

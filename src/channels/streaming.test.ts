@@ -4,10 +4,12 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
+  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
   isChannelProgressDraftWorkToolName,
+  isChannelProgressPriorityLine,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockCoalesce,
@@ -20,10 +22,112 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
+  it.each([
+    ["exec", "command"],
+    ["read", "tool"],
+    ["custom_command_runner", "tool"],
+  ] as const)("lets failed %s items scroll out", (name, itemKind) => {
+    const line = buildChannelProgressDraftLine({
+      event: "item",
+      itemKind,
+      name,
+      status: "failed",
+    });
+    expect(line).toBeDefined();
+    expect(isChannelProgressPriorityLine(line!)).toBe(false);
+    expect(isChannelProgressPriorityLine({ ...line!, status: "blocked" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, status: "error" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, kind: "approval" })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, toolName: undefined })).toBe(true);
+    expect(isChannelProgressPriorityLine({ ...line!, kind: "tool" })).toBe(true);
+  });
+
+  it("keeps prepared titles and failure outcomes when detail text is unchanged", () => {
+    const input = {
+      event: "item" as const,
+      itemKind: "tool",
+      itemId: "task",
+      name: "process",
+      title: "Check sample results",
+      progressText: "sample job",
+    };
+    const running = formatChannelProgressDraftLineForEntry(undefined, {
+      ...input,
+      status: "running",
+    });
+    const failed = formatChannelProgressDraftLineForEntry(undefined, {
+      ...input,
+      status: "failed",
+    });
+    expect(running).toContain("Check sample results");
+    expect(failed).toContain("Check sample results");
+    expect(failed).toContain("failed");
+    expect(failed).toContain("sample job");
+    expect(failed).not.toBe(running);
+  });
+
+  it("keeps non-zero exits in the legacy quiet summary", () => {
+    expect(
+      formatChannelProgressDraftText({
+        presentation: "summary",
+        entry: { streaming: { mode: "progress", progress: { label: false } } },
+        lines: [
+          {
+            kind: "command-output",
+            label: "Exec",
+            text: "🛠️ exit 1",
+            status: "exit 1",
+          },
+        ],
+      }),
+    ).toBe("Exec — exit 1");
+  });
+
   it("suppresses status tools from generic work-tool progress", () => {
     expect(isChannelProgressDraftWorkToolName("progress_card")).toBe(false);
     expect(isChannelProgressDraftWorkToolName("update_plan")).toBe(false);
   });
+
+  it.each(["progress_card", "update_plan"])(
+    "keeps %s arguments out of generic tool and item rows",
+    (name) => {
+      const args = {
+        markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
+        plan: [{ step: "Inspect", status: "in_progress" }],
+      };
+      expect(buildChannelProgressDraftLine({ event: "tool", name, args })).toBeUndefined();
+      expect(
+        buildChannelProgressDraftLine({
+          event: "item",
+          itemKind: "tool",
+          name,
+          meta: args.markdown,
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["failed", "blocked"])(
+    "keeps %s plan-tool attention without raw argument metadata",
+    (status) => {
+      expect(
+        buildChannelProgressDraftLine({
+          event: "item",
+          itemId: "plan-failed",
+          itemKind: "tool",
+          name: "progress_card",
+          status,
+          meta: '<progress aria-label="private" value="1" max="2"></progress>',
+        }),
+      ).toMatchObject({
+        id: "plan-failed",
+        kind: "item",
+        label: "Progress Card",
+        status,
+        text: "🗺️ Progress Card",
+      });
+    },
+  );
 
   it("omits generic completed status from successful command output with title", () => {
     const line = buildChannelProgressDraftLine(
@@ -220,6 +324,23 @@ describe("backend tool-name casing", () => {
 });
 
 describe("mergeChannelProgressDraftLine", () => {
+  it("preserves SDK default retention of non-zero exits over newer activity", () => {
+    const exit = {
+      id: "command-1",
+      kind: "command-output" as const,
+      label: "Exec",
+      text: "🛠️ exit 1",
+      status: "exit 1",
+    };
+    const lines = mergeChannelProgressDraftLine(
+      [exit, { id: "read-1", kind: "tool", label: "Read", text: "Read first file" }],
+      { id: "read-2", kind: "tool", label: "Read", text: "Read second file" },
+      { maxLines: 2 },
+    );
+
+    expect(lines.map((line) => line.text)).toEqual(["🛠️ exit 1", "Read second file"]);
+  });
+
   it("keeps identical visible lines distinct when their stable ids differ", () => {
     const first = { id: "tool-1", kind: "tool" as const, text: "bash", label: "bash" };
     const second = { id: "tool-2", kind: "tool" as const, text: "bash", label: "bash" };
@@ -339,6 +460,44 @@ describe("streaming config resolution", () => {
 });
 
 describe("progress narration", () => {
+  it.each([undefined, "summary"] as const)(
+    "preserves SDK default exit priority over a full plan (presentation=%s)",
+    (presentation) => {
+      const text = formatChannelProgressDraftText({
+        presentation,
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: true, label: false, maxLines: 3 },
+          },
+        },
+        lines: [{ kind: "command-output", label: "Exec", text: "🛠️ exit 1", status: "exit 1" }],
+        plan: [
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ],
+      });
+
+      expect(text).toContain("exit 1");
+      expect(text).toContain("Repair");
+      expect(text.split("\n").filter(Boolean)).toHaveLength(3);
+    },
+  );
+
+  it("preserves the shipped plain checklist option", () => {
+    expect(
+      formatPlanChecklistLines(
+        [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ],
+        { maxLines: 3, maxLineChars: 80, plain: true },
+      ),
+    ).toEqual(["Completed: Inspect", "In progress: Patch", "Pending: Verify"]);
+  });
+
   it("renders plan markers and keeps the checklist under narration", () => {
     const plan = [
       { step: "Inspect", status: "completed" as const },
@@ -373,6 +532,19 @@ describe("progress narration", () => {
         { maxLines: 3, maxLineChars: 80 },
       ),
     ).toEqual(["✅ 2/4 done", "▸ Three", "▢ Four"]);
+  });
+
+  it("uses only a summary when the checklist has one line available", () => {
+    expect(
+      formatPlanChecklistLines(
+        [
+          { step: "Done", status: "completed" },
+          { step: "Active", status: "in_progress" },
+          { step: "Next", status: "pending" },
+        ],
+        { maxLines: 1, maxLineChars: 80 },
+      ),
+    ).toEqual(["✅ 1/3 done"]);
   });
 
   it("keeps the active step when later pending work fills the checklist", () => {
@@ -420,16 +592,6 @@ describe("progress narration", () => {
     ).toBe("▸ Active\n▢ Next");
   });
 
-  it("omits the implicit progress label when narration is available", () => {
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress" } },
-      lines: ["🛠️ Exec"],
-      narration: "Counting lines in the workspace files.",
-    });
-
-    expect(text).toBe("Counting lines in the workspace files.\n\n🛠️ Exec");
-  });
-
   it("keeps an explicitly configured automatic label above narration", () => {
     const text = formatChannelProgressDraftText({
       entry: {
@@ -443,26 +605,6 @@ describe("progress narration", () => {
     });
 
     expect(text).toBe("Clawing\n\nCounting lines in the workspace files.\n\n🛠️ Exec");
-  });
-
-  it("keeps tool lines visible under the narration headline", () => {
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      lines: ["🛠️ Exec", "🛠️ Wc"],
-      narration: "Counting lines in the workspace files.",
-    });
-
-    expect(text).toBe("Shelling\n\nCounting lines in the workspace files.\n\n🛠️ Exec\n🛠️ Wc");
-  });
-
-  it("renders the narration headline alone when no work lines exist yet", () => {
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress", progress: { label: false } } },
-      lines: [],
-      narration: "Counting lines in the workspace files.",
-    });
-
-    expect(text).toBe("Counting lines in the workspace files.");
   });
 
   it("compacts narration at a word boundary instead of line width", () => {

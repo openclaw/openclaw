@@ -1,15 +1,13 @@
-// Maintains interactive plugin registry entries discovered from manifests.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
-  normalizePluginInteractiveNamespace,
   resolvePluginInteractiveMatch,
   toPluginInteractiveRegistryKey,
   validatePluginInteractiveNamespace,
 } from "./interactive-shared.js";
 import { clearPluginInteractiveHandlersState } from "./interactive-state.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
-  getActivePluginChannelRegistry,
   getPluginRegistrationContext,
   requireActivePluginChannelRegistry,
   resolveDirectPluginRegistrationOwner,
@@ -23,38 +21,11 @@ export type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration 
   pluginRoot?: string;
 };
 
-const getInteractiveHandlers = () => getActivePluginChannelRegistry()?.interactiveHandlers ?? [];
-
 /** Registration result for plugin interactive namespace handlers. */
 type InteractiveRegistrationResult = {
   ok: boolean;
   error?: string;
 };
-
-function requireInteractiveRegistrationRegistry(): PluginRegistry {
-  return getPluginRegistrationContext()?.registry ?? requireActivePluginChannelRegistry();
-}
-
-function asInteractiveHandlerLookup(registrations: readonly RegisteredInteractiveHandler[]) {
-  return {
-    get: (key: string) =>
-      registrations.find(
-        (entry) => toPluginInteractiveRegistryKey(entry.channel, entry.namespace) === key,
-      ),
-  };
-}
-
-/** Resolves a channel payload to a registered plugin interactive namespace handler. */
-export function resolvePluginInteractiveNamespaceMatch(
-  channel: string,
-  data: string,
-): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
-  return resolvePluginInteractiveMatch({
-    interactiveHandlers: asInteractiveHandlerLookup(getInteractiveHandlers()),
-    channel,
-    data,
-  });
-}
 
 /** Resolves a handler from registry-owned registrations without changing global state. */
 export function resolvePluginInteractiveRegistrationsMatch(
@@ -63,20 +34,26 @@ export function resolvePluginInteractiveRegistrationsMatch(
   data: string,
 ): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
   return resolvePluginInteractiveMatch({
-    interactiveHandlers: asInteractiveHandlerLookup(registrations),
+    interactiveHandlers: {
+      get: (key) =>
+        registrations.find(
+          (entry) => toPluginInteractiveRegistryKey(entry.channel, entry.namespace) === key,
+        ),
+    },
     channel,
     data,
   });
 }
 
-/** Registers one plugin interactive namespace for a channel. */
-function registerPluginInteractiveHandlerWithOptions(
-  registrations: PluginRegistry["interactiveHandlers"],
+/** Registers one handler whose lifetime follows its owning plugin registry. */
+export function registerPluginInteractiveHandlerInRegistry(
+  registry: PluginRegistry,
   pluginId: string,
   registration: PluginInteractiveHandlerRegistration,
   opts?: { pluginName?: string; pluginRoot?: string },
 ): InteractiveRegistrationResult {
-  const namespace = normalizePluginInteractiveNamespace(registration.namespace);
+  const registrations = registry.interactiveHandlers;
+  const namespace = registration.namespace.trim();
   const validationError = validatePluginInteractiveNamespace(namespace);
   if (validationError) {
     return { ok: false, error: validationError };
@@ -92,7 +69,7 @@ function registerPluginInteractiveHandlerWithOptions(
     };
   }
   registrations.push({
-    ...registration,
+    ...wrapCurrentPluginInstance(registration),
     namespace,
     channel: normalizeOptionalLowercaseString(registration.channel) ?? "",
     pluginId,
@@ -108,37 +85,8 @@ export function registerPluginInteractiveHandler(
   registration: PluginInteractiveHandlerRegistration,
   opts?: { pluginName?: string; pluginRoot?: string },
 ): InteractiveRegistrationResult {
-  return registerPluginInteractiveHandlerWithOptions(
-    requireInteractiveRegistrationRegistry().interactiveHandlers,
-    resolveDirectPluginRegistrationOwner(pluginId) ?? pluginId,
-    registration,
-    opts,
-  );
-}
-
-/** Registers one handler whose lifetime follows its owning plugin registry. */
-export function registerPluginInteractiveHandlerInRegistry(
-  registry: PluginRegistry,
-  pluginId: string,
-  registration: PluginInteractiveHandlerRegistration,
-  opts?: { pluginName?: string; pluginRoot?: string },
-): InteractiveRegistrationResult {
-  return registerPluginInteractiveHandlerWithOptions(
-    registry.interactiveHandlers,
-    pluginId,
-    registration,
-    opts,
-  );
-}
-
-/** Registers one compatibility handler in the currently selected channel registry. */
-export function registerRegistryPluginInteractiveHandler(
-  pluginId: string,
-  registration: PluginInteractiveHandlerRegistration,
-  opts?: { pluginName?: string; pluginRoot?: string },
-): InteractiveRegistrationResult {
-  return registerPluginInteractiveHandlerWithOptions(
-    requireInteractiveRegistrationRegistry().interactiveHandlers,
+  return registerPluginInteractiveHandlerInRegistry(
+    getPluginRegistrationContext()?.registry ?? requireActivePluginChannelRegistry(),
     resolveDirectPluginRegistrationOwner(pluginId) ?? pluginId,
     registration,
     opts,

@@ -16,6 +16,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import {
+  createWorkspaceMediaTestPlugin,
   resetMessageActionMediaMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
@@ -100,36 +101,7 @@ async function expectSandboxMediaRewrite(params: {
   );
 }
 
-const workspacePlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "workspace",
-    label: "Workspace",
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: (cfg) => cfg.channels?.workspace ?? {},
-      isConfigured: async (account) =>
-        typeof (account as { botToken?: unknown }).botToken === "string" &&
-        (account as { botToken?: string }).botToken!.trim() !== "" &&
-        typeof (account as { appToken?: unknown }).appToken === "string" &&
-        (account as { appToken?: string }).appToken!.trim() !== "",
-    },
-  }),
-  outbound: {
-    deliveryMode: "direct",
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim() ?? "";
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: new Error("missing target for workspace"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
-    sendText: async () => ({ channel: "workspace", messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: "workspace", messageId: "msg-test" }),
-  },
-};
+const workspacePlugin = createWorkspaceMediaTestPlugin();
 
 describe("runMessageAction media behavior", () => {
   beforeEach(async () => {

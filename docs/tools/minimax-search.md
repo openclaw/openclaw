@@ -72,13 +72,13 @@ MiniMax Search uses these endpoints:
 - Global: `https://api.minimax.io/v1/coding_plan/search`
 - CN: `https://api.minimaxi.com/v1/coding_plan/search`
 
-If `plugins.entries.minimax.config.webSearch.region` is unset, OpenClaw resolves
-the region in this order:
+OpenClaw resolves the region in this order:
 
-1. Plugin-owned `webSearch.region`
-2. `MINIMAX_API_HOST`
-3. `models.providers.minimax.baseUrl`
-4. `models.providers.minimax-portal.baseUrl`
+1. Plugin-owned `plugins.entries.minimax.config.webSearch.region`, when set.
+2. `MINIMAX_API_HOST`, when it points at a `minimaxi.com` host.
+3. `models.providers.minimax.baseUrl` or `models.providers.minimax-portal.baseUrl`, when either points at a `minimaxi.com` host.
+
+Steps 2 and 3 only detect the CN host; anything else resolves to `global`.
 
 That means CN onboarding or `MINIMAX_API_HOST=https://api.minimaxi.com/...`
 automatically keeps MiniMax Search on the CN host too.

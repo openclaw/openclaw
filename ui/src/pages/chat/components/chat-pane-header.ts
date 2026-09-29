@@ -1,12 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
-import type {
-  NativeGatewaysCapability,
-  NativeGatewaysSnapshot,
-  NativeGateway,
-} from "../../../app/native-gateways.runtime.ts";
-import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
@@ -22,7 +15,6 @@ import {
 import { renderSessionColorDot } from "../../../components/session-color.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
-import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
 import { t } from "../../../i18n/index.ts";
@@ -69,19 +61,11 @@ type ChatPaneHeaderProps = {
   actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
   panelLayoutActions: TemplateResult | typeof nothing;
-  discussionAction: TemplateResult | typeof nothing;
-  diffAction: TemplateResult | typeof nothing;
-  backgroundTasksAction: TemplateResult | typeof nothing;
-  sessionRailAction: TemplateResult | typeof nothing;
-  workspaceAction: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
-  faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
+  publicAccessIndicator?: TemplateResult | typeof nothing;
   placementControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
-  nativeGateways?: NativeGatewaysCapability | null;
-  gatewaysSnapshot?: NativeGatewaysSnapshot | null;
-  onboarding?: boolean;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -122,12 +106,6 @@ export function resolveChatPaneParentSession(
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
 }
 
-/**
- * Header identity trail: which project, then which session inside it. Segments
- * and separators are rendered from one list so a further segment — the parent
- * session of a nested thread, yielding project / parent / child — slots in
- * without moving the project chip or the title.
- */
 function renderIdentityCrumbs(
   props: ChatPaneHeaderProps,
   copied: boolean,
@@ -183,6 +161,9 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
       @input=${(event: InputEvent) =>
         props.onRenameInput((event.currentTarget as HTMLInputElement).value)}
       @keydown=${(event: KeyboardEvent) => {
+        if (event.isComposing || event.keyCode === 229) {
+          return;
+        }
         if (event.key === "Enter") {
           event.preventDefault();
           props.onCommitRename();
@@ -294,100 +275,6 @@ export function canRevealSessionWorkspace(params: {
   );
 }
 
-function gatewayHealthLabel(gateway: NativeGateway): string {
-  if (gateway.health === "ok") {
-    return t("chat.sessionHeader.gatewayPicker.connected");
-  }
-  if (gateway.health === "error") {
-    return t("chat.sessionHeader.gatewayPicker.unreachable");
-  }
-  return t("chat.sessionHeader.gatewayPicker.unknown");
-}
-
-function renderGatewayPicker(props: ChatPaneHeaderProps) {
-  const capability = props.nativeGateways;
-  const snapshot = props.gatewaysSnapshot;
-  if (
-    !capability ||
-    !snapshot ||
-    snapshot.gateways.length <= 1 ||
-    props.onboarding ||
-    !isNativeWebChromeHost()
-  ) {
-    return nothing;
-  }
-  const current = snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId);
-  if (!current) {
-    return nothing;
-  }
-  const setPrimaryDisabled = current.isPrimary || !current.canPromote;
-  return html`
-    <wa-dropdown class="chat-pane__gateway-menu" placement="bottom-start">
-      <button
-        slot="trigger"
-        class="chat-pane__gateway-chip"
-        type="button"
-        aria-label=${t("chat.sessionHeader.gatewayPicker.menuLabel", { gateway: current.name })}
-      >
-        <span class="chat-pane__gateway-health" data-health=${current.health}></span>
-        <span class="chat-pane__gateway-name">${current.name}</span>
-        <span class="chat-pane__gateway-chevron">${icons.chevronUp}</span>
-      </button>
-      ${snapshot.gateways.map((gateway) => {
-        const selected = gateway.id === snapshot.currentId;
-        return html`<wa-dropdown-item
-          class="chat-pane__gateway-menu-item chat-pane__gateway-item"
-          role="menuitemradio"
-          aria-checked=${String(selected)}
-          ${ref((element) => syncDropdownItemRadio(element, selected))}
-          @click=${(event: MouseEvent) => {
-            if (event.altKey) {
-              capability.openWindow(gateway.id);
-            } else if (!selected) {
-              capability.select(gateway.id);
-            }
-          }}
-        >
-          <span
-            slot="icon"
-            class="chat-pane__gateway-health"
-            data-health=${gateway.health}
-            role="img"
-            aria-label=${gatewayHealthLabel(gateway)}
-          ></span>
-          <span>${gateway.name}</span>
-          <span slot="details" class="chat-pane__gateway-details">
-            ${
-              gateway.isPrimary
-                ? html`<span class="chat-pane__gateway-primary"
-                    >${t("chat.sessionHeader.gatewayPicker.primaryTag")}</span
-                  >`
-                : nothing
-            }
-            ${
-              selected
-                ? html`<span class="chat-pane__gateway-check">${icons.check}</span>`
-                : nothing
-            }
-          </span>
-        </wa-dropdown-item>`;
-      })}
-      <div class="chat-pane__gateway-divider" role="separator"></div>
-      <wa-dropdown-item
-        class="chat-pane__gateway-menu-item"
-        ?disabled=${setPrimaryDisabled}
-        @click=${() => !setPrimaryDisabled && capability.setPrimary(current.id)}
-        >${t("chat.sessionHeader.gatewayPicker.setPrimary")}</wa-dropdown-item
-      >
-      <wa-dropdown-item
-        class="chat-pane__gateway-menu-item"
-        @click=${() => capability.openSettings()}
-        >${t("chat.sessionHeader.gatewayPicker.openSettings")}</wa-dropdown-item
-      >
-    </wa-dropdown>
-  `;
-}
-
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const copyPathLabel =
     props.copiedAction === "copy-path"
@@ -400,12 +287,14 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
   const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
-  const hasFaceControl = props.faceControl !== undefined && props.faceControl !== nothing;
   const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
 
   return html`
     <div
-      class="chat-pane__header ${hasFaceControl ? "chat-pane__header--centered" : ""}"
+      class="chat-pane__header "
+      role="group"
+      aria-label=${props.title}
+      tabindex="-1"
       @mousedown=${beginNativeWindowDrag}
     >
       <div class="chat-pane__header-leading">
@@ -442,6 +331,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
+        ${props.publicAccessIndicator ?? nothing}
         ${
           hasSharingControl
             ? props.sharingControl
@@ -477,11 +367,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         }
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
-      ${
-        hasFaceControl
-          ? html`<div class="chat-pane__header-center">${props.faceControl}</div>`
-          : nothing
-      }
       <div class="chat-pane__header-trailing">
         ${
           !props.catalog && props.branches.length > 1
@@ -552,88 +437,65 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               `
             : nothing
         }
-        ${renderGatewayPicker(props)}
-        <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
-          ${compactSessionActions ? nothing : props.panelActions} ${props.panelLayoutActions}
-          ${compactSessionActions ? nothing : props.discussionAction}
-          ${
-            props.catalog || compactSessionActions
-              ? nothing
-              : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
-                ${props.sessionRailAction}`
-          }
-          ${
-            props.onOpenSplitView && !compactSessionActions
-              ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
-                  <button
-                    class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
-                    type="button"
-                    aria-label=${t("chat.splitView.open")}
-                    @click=${props.onOpenSplitView}
-                  >
-                    ${icons.columns2}
-                  </button>
-                </openclaw-tooltip>`
-              : nothing
-          }
-          ${
-            !props.narrow && props.onSplitDown
-              ? html`<openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                  <button
-                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitDown")}
-                    @click=${() => props.onSplitDown?.(props.paneId)}
-                  >
-                    ${icons.panelBottomOpen}
-                  </button>
-                </openclaw-tooltip>`
-              : nothing
-          }
-          ${
-            !props.narrow && props.onSplitRight
-              ? html`<openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                  <button
-                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitRight")}
-                    @click=${() => props.onSplitRight?.(props.paneId)}
-                  >
-                    ${icons.panelRightOpen}
-                  </button>
-                </openclaw-tooltip>`
-              : nothing
-          }
-          ${
-            props.onClosePane
-              ? html`<openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-                  <button
-                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane"
-                    type="button"
-                    aria-label=${t("chat.splitView.closePane")}
-                    @click=${() => props.onClosePane?.(props.paneId)}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>`
-              : nothing
-          }
-          ${
-            props.mergedChrome && !compactSessionActions
-              ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
-                  <button
-                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"
-                    type="button"
-                    aria-label=${t("chat.openCommandPalette")}
-                    @click=${() => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
-                  >
-                    ${icons.search}
-                  </button>
-                </openclaw-tooltip>`
-              : nothing
-          }
-          ${props.sessionMenuAction}
-        </fieldset>
+        <div class="chat-pane__actions">
+          ${props.panelLayoutActions}
+          <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
+            ${compactSessionActions ? nothing : props.panelActions}
+            ${(
+              [
+                [
+                  props.onOpenSplitView && !compactSessionActions,
+                  "chat-open-split-view",
+                  "chat.splitView.open",
+                  icons.columns2,
+                  props.onOpenSplitView,
+                ],
+                [
+                  !props.narrow && props.onSplitDown,
+                  "chat-pane__split-down",
+                  "chat.splitView.splitDown",
+                  icons.panelBottomOpen,
+                  () => props.onSplitDown?.(props.paneId),
+                ],
+                [
+                  !props.narrow && props.onSplitRight,
+                  "chat-pane__split-right",
+                  "chat.splitView.splitRight",
+                  icons.panelRightOpen,
+                  () => props.onSplitRight?.(props.paneId),
+                ],
+                [
+                  props.onClosePane,
+                  "chat-pane__close-pane",
+                  "chat.splitView.closePane",
+                  icons.x,
+                  () => props.onClosePane?.(props.paneId),
+                ],
+                [
+                  props.mergedChrome && !compactSessionActions,
+                  "chat-pane__palette-open",
+                  "chat.openCommandPalette",
+                  icons.search,
+                  () => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT)),
+                ],
+              ] as const
+            ).map(([visible, className, label, icon, onClick]) =>
+              visible
+                ? html`<openclaw-tooltip .content=${t(label)}>
+                    <button
+                      class=${`btn btn--ghost btn--icon chat-icon-btn ${className}`}
+                      type="button"
+                      aria-label=${t(label)}
+                      @click=${onClick}
+                    >
+                      ${icon}
+                    </button>
+                  </openclaw-tooltip>`
+                : nothing,
+            )}
+            ${props.sessionMenuAction}
+          </fieldset>
+        </div>
       </div>
     </div>
   `;

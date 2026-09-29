@@ -142,7 +142,7 @@ function resolveManagedCodexPackageRootForCommand(
   command: string,
   platform: NodeJS.Platform,
 ): string | undefined {
-  const pathApi = pathForPlatform(platform);
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
   const commandPaths = [command];
   try {
     commandPaths.unshift(realpathSync(command));
@@ -214,17 +214,18 @@ function resolveManagedCodexAppServerCommandCandidates(
 ): string[] {
   const packageCommand = resolveManagedCodexPackageEntrypoint(pluginRoot);
   const packageCommandPaths = packageCommand ? [packageCommand] : [];
+  if (managedCommandOrder === "package-only") {
+    return packageCommandPaths;
+  }
   const desktopCommandPaths = resolveMacOSDesktopCodexAppServerCommandCandidates(platform);
   // Ordinary turns must honor the pinned package version. Computer Use opts
   // into the desktop app owner because its macOS TCC permissions live there.
-  const orderedCommandPaths =
-    managedCommandOrder === "desktop-first"
-      ? [...desktopCommandPaths, ...packageCommandPaths]
-      : [...packageCommandPaths, ...desktopCommandPaths];
-  return orderedCommandPaths;
+  return managedCommandOrder === "desktop-first"
+    ? [...desktopCommandPaths, ...packageCommandPaths]
+    : [...packageCommandPaths, ...desktopCommandPaths];
 }
 
-function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string | undefined {
+export function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string | undefined {
   try {
     // Use the pinned package's official launcher on every OS. It owns platform
     // selection, manager environment markers, signal forwarding, and exit status.
@@ -234,10 +235,6 @@ function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string | unde
   } catch {
     return undefined;
   }
-}
-
-function pathForPlatform(platform: NodeJS.Platform): typeof path {
-  return platform === "win32" ? path.win32 : path.posix;
 }
 
 async function findManagedCodexAppServerCommandPaths(params: {

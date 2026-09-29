@@ -5,11 +5,11 @@
 /* The route host must hand the bounded shell height to the fill-height
    workspace; otherwise a populated stream expands the main page and defeats
    its own scroll/auto-follow owner. */
-.content:has(openclaw-activity-page) {
+main.content:where(.content--activity-page) {
   overflow: hidden;
 }
 
-.content:has(openclaw-activity-page) > openclaw-router-outlet {
+main.content:where(.content--activity-page) > openclaw-router-outlet {
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -22,7 +22,7 @@ openclaw-activity-page {
   display: contents;
 }
 
-.content:has(openclaw-activity-page) .content-header {
+main.content:where(.content--activity-page) .content-header {
   flex: 0 0 auto;
 }
 
@@ -54,6 +54,63 @@ openclaw-activity-page {
   min-height: 0;
 }
 
+.activity-current-work {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  max-height: min(240px, 35vh);
+  margin-bottom: var(--space-3);
+}
+
+.activity-current-work__rows {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.activity-current-work__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  color: var(--text);
+}
+
+.activity-current-work__row + .activity-current-work__row {
+  border-top: 1px solid var(--border);
+}
+
+a.activity-current-work__row:hover {
+  background: var(--bg-hover);
+}
+
+.activity-current-work__copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.activity-current-work__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-current-work__agent,
+.activity-current-work__feedback {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.activity-current-work__feedback {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
 .activity-feed {
   display: flex;
   flex-direction: column;
@@ -69,6 +126,24 @@ openclaw-activity-page {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
+}
+
+/* Reserve feedback outside the scroll content so errors and retries never shift results. */
+.activity-feed__feedback {
+  display: flex;
+  flex: 0 0 var(--settings-control-height);
+  min-height: var(--settings-control-height);
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 var(--space-4);
+}
+
+.activity-feed__feedback > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .activity-feed__search {
@@ -128,7 +203,10 @@ openclaw-activity-page {
   padding: 0;
   margin-left: -1px;
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  font-size: var(--control-ui-text-lg);
+}
+
+.activity-feed__people-clear svg {
+  stroke-width: 2;
 }
 
 .activity-feed__people-trigger:focus-visible,
@@ -176,6 +254,14 @@ openclaw-activity-page {
   background: var(--ok);
 }
 
+.activity-feed__presence-dot[data-presence-activity="idle"] {
+  background: var(--presence-idle);
+}
+
+.activity-feed__presence-dot[data-presence-activity="unknown"] {
+  background: var(--muted);
+}
+
 .activity-feed__unknown-avatar {
   flex: none;
 }
@@ -215,18 +301,13 @@ openclaw-activity-page {
   gap: 4px;
 }
 
-.activity-feed__people-name,
-.activity-feed__last-active {
+.activity-feed__people-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.activity-feed__people-name {
   color: var(--text-strong);
 }
 
-.activity-feed__last-active,
 .activity-feed__people-count,
 .activity-feed__people-group-label {
   color: var(--muted);
@@ -253,15 +334,6 @@ openclaw-activity-page {
   padding: var(--space-5);
 }
 
-.activity-feed__summary {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: var(--space-5);
-}
-
-.activity-feed__summary h2,
 .activity-feed__identity h2,
 .activity-feed__identity h3,
 .activity-feed__not-found h2 {
@@ -269,13 +341,92 @@ openclaw-activity-page {
   color: var(--text-strong);
 }
 
-.activity-feed__summary h2 {
-  font-size: var(--control-ui-text-xl);
+.activity-feed__footer {
+  margin: var(--space-4) 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
 }
 
-.activity-feed__summary span {
+.activity-pulse {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-elevated) 54%, transparent);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
+}
+
+.activity-pulse--loading {
+  height: 108px;
+}
+
+.activity-pulse__header,
+.activity-pulse__heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  line-height: 20px;
+}
+
+.activity-pulse__header {
+  justify-content: space-between;
+}
+
+.activity-pulse__heading svg {
+  width: 16px;
+  height: 16px;
+}
+
+.activity-pulse__heading strong,
+.activity-pulse__stats b {
+  color: var(--text-strong);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-pulse__stats > span {
+  white-space: nowrap;
+}
+
+.activity-pulse__running {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: var(--space-1);
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.activity-pulse__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 34px;
+  margin-top: var(--space-2);
+}
+
+.activity-pulse__bar {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  background: var(--border);
+}
+
+.activity-pulse__bar[data-hour="past"] {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.activity-pulse__bar[data-hour="current"] {
+  background: var(--accent);
+}
+
+.activity-pulse__axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-1);
+  font-size: var(--control-ui-text-xs);
+  line-height: 16px;
 }
 
 .activity-feed__day + .activity-feed__day {
@@ -306,11 +457,164 @@ openclaw-activity-page {
   min-height: 54px;
   padding: var(--space-3) var(--space-4);
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-feed__session-row {
   position: relative;
+}
+
+.activity-feed__recap {
+  min-width: 0;
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 28px + var(--space-3));
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.activity-feed__recap-text {
+  max-width: 88ch;
+  margin: 0;
+}
+
+.activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
+  background: linear-gradient(90deg, var(--text) 35%, var(--muted) 50%, var(--text) 65%);
+  background-size: 200% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: text-shimmer 2.4s ease-in-out infinite;
+}
+
+.activity-feed__recap-skeleton {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 88ch;
+}
+
+.activity-feed__loading-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+.activity-feed__loading-meta {
+  width: 30%;
+  height: 11px;
+  margin-top: var(--space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
+    animation: none;
+    background: none;
+    color: var(--text);
+  }
+}
+
+.activity-feed__note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__note-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--muted);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+  cursor: var(--cursor-action);
+}
+
+.activity-feed__note-action:hover,
+.activity-feed__note-action:focus-visible {
+  color: var(--text);
+}
+
+.activity-feed__note-action:disabled {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.activity-feed__git {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 28px + var(--space-3));
+  font-size: var(--control-ui-text-xs);
+}
+
+.activity-feed__pr,
+.activity-feed__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--bg-elevated);
+  line-height: 1.4;
+}
+
+.activity-feed__pr:hover,
+.activity-feed__pr:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
+.activity-feed__git-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed__git-icon,
+.activity-feed__git-stale {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.activity-feed__git-icon svg,
+.activity-feed__git-stale svg {
+  width: 14px;
+  height: 14px;
+}
+
+.activity-feed__pr[data-state="open"] .activity-feed__git-icon,
+.activity-feed__additions {
+  color: var(--ok);
+}
+
+.activity-feed__pr[data-state="merged"] .activity-feed__git-icon {
+  color: var(--pr-merged);
+}
+
+.activity-feed__pr[data-state="closed"] .activity-feed__git-icon,
+.activity-feed__deletions {
+  color: var(--danger);
+}
+
+.activity-feed__additions,
+.activity-feed__deletions {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-feed__git-stale {
+  color: var(--warn);
 }
 
 .activity-feed__session-row + .activity-feed__session-row,
@@ -329,7 +633,8 @@ openclaw-activity-page {
   cursor: var(--cursor-action);
 }
 
-.activity-feed__automation-group:focus-visible {
+.activity-feed__automation-group:focus-visible,
+.activity-feed__session:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
 }
@@ -356,12 +661,11 @@ openclaw-activity-page {
   transform: rotate(90deg);
 }
 
-.activity-feed__session:hover,
-.activity-feed__session:focus-visible,
-.activity-feed__session-row:hover .activity-feed__session,
-.activity-feed__session-row:focus-within .activity-feed__session {
+/* The whole row is the hover surface: recap, git chips and media highlight
+   together with the header link. Rows without a navigation target stay flat. */
+.activity-feed__session-row--link:hover,
+.activity-feed__session-row:focus-within {
   background: var(--bg-hover);
-  text-decoration: none;
 }
 
 .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
@@ -381,7 +685,6 @@ openclaw-activity-page {
   background: var(--bg-elevated);
   font-size: var(--control-ui-text-xs);
   line-height: 1;
-  text-decoration: none;
   pointer-events: none;
   translate: 0 -50%;
   transition: opacity var(--duration-fast) ease;
@@ -397,7 +700,6 @@ openclaw-activity-page {
 .activity-feed__inspect-run:focus-visible {
   border-color: var(--border-strong);
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-feed__session .viewer-avatar {
@@ -449,6 +751,10 @@ openclaw-activity-page {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.activity-feed__session-meta .agent-row-chip {
+  font: inherit;
 }
 
 .activity-feed__session-source {
@@ -570,7 +876,6 @@ openclaw-activity-page {
   height: 16px;
   flex: 0 0 auto;
   color: var(--muted);
-  text-decoration: none;
 }
 
 .activity-feed__device-attribution svg {
@@ -792,13 +1097,11 @@ openclaw-activity-page {
   margin-bottom: var(--space-3);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  text-decoration: none;
 }
 
 .activity-run-inspector-back:hover,
 .activity-run-inspector-back:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-run-inspector-back svg {
@@ -878,15 +1181,6 @@ openclaw-activity-page {
     margin-left: auto;
   }
 
-  .activity-feed__time-filter .settings-segmented__btn {
-    font-size: 0;
-  }
-
-  .activity-feed__time-filter .settings-segmented__btn::after {
-    content: attr(data-compact-label);
-    font-size: var(--control-ui-text-sm);
-  }
-
   .activity-feed__main {
     overflow: visible;
     padding: var(--space-4);
@@ -932,11 +1226,11 @@ openclaw-activity-page {
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .content:has(openclaw-activity-page) {
+  main.content:where(.content--activity-page) {
     overflow-y: auto;
   }
 
-  .content:has(openclaw-activity-page) > openclaw-router-outlet {
+  main.content:where(.content--activity-page) > openclaw-router-outlet {
     display: block;
     width: auto;
     height: auto;

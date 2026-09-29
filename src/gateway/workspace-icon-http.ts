@@ -4,14 +4,9 @@ import { close } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import {
-  openRootFileFollowingParents,
-  readFileDescriptorBounded,
-} from "../infra/boundary-file-read.js";
+import { openRootFile, readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
@@ -22,6 +17,7 @@ import {
   sendHttpImageResponse,
   type HttpImageRepresentation,
 } from "./http-image-response.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiSessionOwnerReadRequestOrReply } from "./http-utils.js";
 
 /**
@@ -85,10 +81,11 @@ async function readWorkspaceIconCandidate(
   workspaceRoot: string,
   relativePath: string,
 ): Promise<WorkspaceIcon | undefined> {
-  const opened = await openRootFileFollowingParents({
+  const opened = await openRootFile({
     absolutePath: path.join(workspaceRoot, relativePath),
     rootPath: workspaceRoot,
     boundaryLabel: "workspace root",
+    symlinks: "follow-parents-within-root",
     maxBytes: WORKSPACE_ICON_MAX_BYTES,
   });
   if (!opened.ok) {
@@ -180,12 +177,8 @@ function readPreparedSessionWorkspaceIcon(
 export async function handleWorkspaceIconHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
+  opts: GatewayHttpRequestAuthOptions & {
     basePath?: string;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
   const pathname = req.url ? new URL(req.url, "http://localhost").pathname : undefined;
@@ -199,16 +192,14 @@ export async function handleWorkspaceIconHttpRequest(
     return true;
   }
   const requestAuth = await authorizeControlUiSessionOwnerReadRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
   });
   if (!requestAuth) {
     return true;
   }
+  requestAuth.assertCurrent();
 
   if (!parsed.value) {
     res.setHeader("cache-control", "no-store");
@@ -226,6 +217,7 @@ export async function handleWorkspaceIconHttpRequest(
     return true;
   }
   const icon = await prepared;
+  requestAuth.assertCurrent();
   if (!icon) {
     res.setHeader("cache-control", "no-store");
     respondNotFound(res);

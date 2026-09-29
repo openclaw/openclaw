@@ -2,27 +2,32 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../acp/runtime/session-meta-store.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
-import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
+import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { setMinimalAcpCommandRegistryForTests } from "./commands-acp.channels.test-support.js";
+import {
+  createAcpTestSessionBinding as createSessionBinding,
+  type AcpTestSessionBinding as FakeBinding,
+} from "./test-fixtures/acp-runtime.js";
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
+  const cleanupFailedAcpSpawnMock = vi.fn();
+  const closeRuntimeOnFailureMock = vi.fn();
   const requireAcpRuntimeBackendMock = vi.fn();
   const getAcpRuntimeBackendMock = vi.fn();
   const listAcpSessionEntriesMock = vi.fn();
   const readAcpSessionEntryMock = vi.fn();
+  const readAcpSessionEntryAsyncMock = vi.fn<
+    typeof import("../../acp/runtime/session-meta.js").readAcpSessionEntryAsync
+  >(async (input) => readAcpSessionEntryMock(input));
   const upsertAcpSessionMetaMock = vi.fn();
   const resolveSessionStorePathForAcpMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
@@ -44,10 +49,13 @@ const hoisted = vi.hoisted(() => {
   const doctorMock = vi.fn();
   return {
     callGatewayMock,
+    cleanupFailedAcpSpawnMock,
+    closeRuntimeOnFailureMock,
     requireAcpRuntimeBackendMock,
     getAcpRuntimeBackendMock,
     listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
+    readAcpSessionEntryAsyncMock,
     upsertAcpSessionMetaMock,
     resolveSessionStorePathForAcpMock,
     loadSessionStoreMock,
@@ -71,26 +79,29 @@ const hoisted = vi.hoisted(() => {
 });
 
 function createAcpCommandSessionBindingService() {
-  const forward =
-    <A extends unknown[], T>(fn: (...args: A) => T) =>
-    (...args: A) =>
-      fn(...args);
   return {
     bind: (input: unknown) => hoisted.sessionBindingBindMock(input),
-    getCapabilities: forward((params: unknown) => hoisted.sessionBindingCapabilitiesMock(params)),
-    inspectByConversation: (
+    getCapabilities: (params: unknown) => hoisted.sessionBindingCapabilitiesMock(params),
+    inspectByConversationAsync: async (
       ref: unknown,
-    ): { status: "available"; binding: SessionBindingRecord | null } => ({
+    ): Promise<{ status: "available"; binding: SessionBindingRecord | null }> => ({
       status: "available",
       binding: hoisted.sessionBindingResolveByConversationMock(ref),
     }),
     listBySession: (targetSessionKey: string) =>
       hoisted.sessionBindingListBySessionMock(targetSessionKey),
     resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
+    resolveByConversationAsync: async (ref: unknown) =>
+      hoisted.sessionBindingResolveByConversationMock(ref),
     touch: vi.fn(),
+    touchAsync: vi.fn(async () => {}),
     unbind: (input: unknown) => hoisted.sessionBindingUnbindMock(input),
   };
 }
+
+vi.mock("../../acp/control-plane/spawn.js", () => ({
+  cleanupFailedAcpSpawn: (args: unknown) => hoisted.cleanupFailedAcpSpawnMock(args),
+}));
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (args: unknown) => hoisted.callGatewayMock(args),
@@ -101,9 +112,11 @@ vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: (id?: string) => hoisted.getAcpRuntimeBackendMock(id),
 }));
 
-vi.mock("../../acp/runtime/session-meta.js", () => ({
+vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../acp/runtime/session-meta.js")>()),
   listAcpSessionEntries: (args: unknown) => hoisted.listAcpSessionEntriesMock(args),
   readAcpSessionEntry: (args: unknown) => hoisted.readAcpSessionEntryMock(args),
+  readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsyncMock,
   upsertAcpSessionMeta: (args: unknown) => hoisted.upsertAcpSessionMetaMock(args),
   resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
 }));
@@ -132,11 +145,10 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   const actual = await vi.importActual<
     typeof import("../../infra/outbound/session-binding-service.js")
   >("../../infra/outbound/session-binding-service.js");
-  const patched = { ...actual } as typeof actual & {
-    getSessionBindingService: () => ReturnType<typeof createAcpCommandSessionBindingService>;
-  };
-  patched.getSessionBindingService = () => createAcpCommandSessionBindingService();
-  return patched;
+  return {
+    ...actual,
+    getSessionBindingService: createAcpCommandSessionBindingService,
+  } satisfies typeof actual;
 });
 
 const { handleAcpCommand } = await import("./commands-acp.js");
@@ -144,352 +156,6 @@ const { buildCommandTestParams } = await import("./commands-spawn.test-harness.j
 const { AcpSessionManager, testing: acpManagerTesting } =
   await import("../../acp/control-plane/manager.js");
 const { resolveEffectiveResetTargetSessionKey } = await import("./acp-reset-target.js");
-const { createTaskRecord } = await import("../../tasks/task-registry.js");
-const { resetTaskRegistryForTests } = await import("../../tasks/task-runtime.test-helpers.js");
-const { configureTaskRegistryRuntime } = await import("../../tasks/task-registry.store.js");
-const { failTaskRunByRunIdCore } = await import("../../tasks/task-executor.js");
-
-function configureInMemoryTaskRegistryStoreForTests(): void {
-  configureTaskRegistryRuntime({
-    store: {
-      loadSnapshot: () => ({
-        tasks: new Map(),
-        deliveryStates: new Map(),
-      }),
-      saveSnapshot: () => {},
-      upsertTaskWithDeliveryState: () => {},
-      upsertTask: () => {},
-      deleteTaskWithDeliveryState: () => {},
-      deleteTask: () => {},
-      upsertDeliveryState: () => {},
-      deleteDeliveryState: () => {},
-      close: () => {},
-    },
-  });
-}
-
-function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
-  const trimmed = raw?.trim().replace(/^telegram:/i, "");
-  if (!trimmed) {
-    return undefined;
-  }
-  const topicMatch = /^(.*):topic:\d+$/i.exec(trimmed);
-  return (topicMatch?.[1] ?? trimmed).trim() || undefined;
-}
-
-function parseDiscordConversationIdForTest(
-  targets: Array<string | undefined | null>,
-): string | undefined {
-  for (const rawTarget of targets) {
-    const target = rawTarget?.trim();
-    if (!target) {
-      continue;
-    }
-    const mentionMatch = /^<#(\d+)>$/.exec(target);
-    if (mentionMatch?.[1]) {
-      return mentionMatch[1];
-    }
-    if (/^channel:/i.test(target)) {
-      return target;
-    }
-  }
-  return undefined;
-}
-
-function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): string | undefined {
-  const sessionKey = raw?.trim().toLowerCase() ?? "";
-  const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
-  return match?.[1] ? `channel:${match[1]}` : undefined;
-}
-
-function resolveFirstConversationTargetForTest(params: {
-  channel?: string;
-  commandTo?: string;
-  fallbackTo?: string;
-  originatingTo?: string;
-}): string | null {
-  for (const rawTarget of [params.originatingTo, params.commandTo, params.fallbackTo]) {
-    const target = rawTarget?.trim();
-    if (!target) {
-      continue;
-    }
-    return params.channel && target.toLowerCase().startsWith(`${params.channel}:`)
-      ? target.slice(params.channel.length + 1)
-      : target;
-  }
-  return null;
-}
-
-function parsePrefixedConversationIdForTest(
-  raw: string | undefined | null,
-  channel: "imessage",
-): string | undefined {
-  const trimmed = raw
-    ?.trim()
-    .replace(new RegExp(`^${channel}:`, "i"), "")
-    .replace(/^chat_guid:/i, "");
-  return trimmed || undefined;
-}
-
-function resolvePrefixedConversationIdForTest(
-  targets: Array<string | undefined | null>,
-  channel: "imessage",
-): string | undefined {
-  return targets.map((target) => parsePrefixedConversationIdForTest(target, channel)).find(Boolean);
-}
-
-function setMinimalAcpCommandRegistryForTests(): void {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-          conversationBindings: {
-            defaultTopLevelPlacement: "current",
-            buildBoundReplyPayload: ({
-              operation,
-              conversation,
-            }: {
-              operation: "acp-spawn";
-              conversation: { conversationId: string };
-            }) =>
-              operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
-                ? { delivery: { pin: { enabled: true } } }
-                : null,
-          },
-          bindings: {
-            resolveCommandConversation: ({
-              threadId,
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              threadId?: string;
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const chatId = [originatingTo, commandTo, fallbackTo]
-                .map((candidate) => parseTelegramChatIdForTest(candidate))
-                .find(Boolean);
-              if (!chatId) {
-                return null;
-              }
-              if (threadId) {
-                return {
-                  conversationId: `${chatId}:topic:${threadId}`,
-                  parentConversationId: chatId,
-                };
-              }
-              if (chatId.startsWith("-")) {
-                return null;
-              }
-              return { conversationId: chatId, parentConversationId: chatId };
-            },
-          },
-        },
-      },
-      {
-        pluginId: "discord",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
-          conversationBindings: {
-            defaultTopLevelPlacement: "child",
-          },
-          bindings: {
-            resolveCommandConversation: ({
-              threadId,
-              threadParentId,
-              parentSessionKey,
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              threadId?: string;
-              threadParentId?: string;
-              parentSessionKey?: string;
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              if (threadId) {
-                const parentConversationId =
-                  (threadParentId?.trim()
-                    ? `channel:${threadParentId.trim().replace(/^channel:/i, "")}`
-                    : undefined) ??
-                  parseDiscordParentChannelFromSessionKeyForTest(parentSessionKey) ??
-                  parseDiscordConversationIdForTest([originatingTo, commandTo, fallbackTo]);
-                return {
-                  conversationId: threadId,
-                  ...(parentConversationId && parentConversationId !== threadId
-                    ? { parentConversationId }
-                    : {}),
-                };
-              }
-              const conversationId = parseDiscordConversationIdForTest([
-                originatingTo,
-                commandTo,
-                fallbackTo,
-              ]);
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      },
-      {
-        pluginId: "imessage",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
-          bindings: {
-            resolveCommandConversation: ({
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const conversationId = resolvePrefixedConversationIdForTest(
-                [originatingTo, commandTo, fallbackTo],
-                "imessage",
-              );
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      },
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
-          bindings: {
-            resolveCommandConversation: ({
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const conversationId = [originatingTo, commandTo, fallbackTo]
-                .map((candidate) => candidate?.trim())
-                .find((candidate) => candidate && candidate.length > 0);
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      },
-      {
-        pluginId: "matrix",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-          conversationBindings: {
-            defaultTopLevelPlacement: "child",
-          },
-          bindings: {
-            resolveCommandConversation: ({
-              threadId,
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              threadId?: string;
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const roomId = [originatingTo, commandTo, fallbackTo]
-                .map((candidate) => candidate?.trim().replace(/^room:/i, ""))
-                .find((candidate) => candidate && candidate.length > 0);
-              if (!threadId || !roomId) {
-                return null;
-              }
-              return {
-                conversationId: threadId,
-                parentConversationId: roomId,
-              };
-            },
-          },
-        },
-      },
-      ...(["feishu", "line"] as const).map((channelId) => ({
-        pluginId: channelId,
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: channelId, label: channelId }),
-          bindings: {
-            resolveCommandConversation: ({
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const conversationId = resolveFirstConversationTargetForTest({
-                channel: channelId,
-                originatingTo,
-                commandTo,
-                fallbackTo,
-              });
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      })),
-    ]),
-  );
-}
-
-type FakeBinding = {
-  bindingId: string;
-  targetSessionKey: string;
-  targetKind: "subagent" | "session";
-  conversation: {
-    channel: string;
-    accountId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  };
-  status: "active";
-  boundAt: number;
-  metadata?: {
-    agentId?: string;
-    label?: string;
-    boundBy?: string;
-    webhookId?: string;
-  };
-};
-
-function createSessionBinding(overrides?: Partial<FakeBinding>): FakeBinding {
-  return {
-    bindingId: "default:thread-created",
-    targetSessionKey: "agent:codex:acp:s1",
-    targetKind: "session",
-    conversation: {
-      channel: "discord",
-      accountId: "default",
-      conversationId: "thread-created",
-      parentConversationId: "parent-1",
-    },
-    status: "active",
-    boundAt: Date.now(),
-    metadata: {
-      agentId: "codex",
-      boundBy: "user-1",
-    },
-    ...overrides,
-  };
-}
 
 const baseCfg = {
   acp: {
@@ -682,10 +348,6 @@ function gatewayRequests(): Array<Record<string, unknown>> {
   return hoisted.callGatewayMock.mock.calls.map((call) => call[0] as Record<string, unknown>);
 }
 
-function expectGatewayMethodCalled(method: string): void {
-  expect(gatewayRequests().some((request) => request.method === method)).toBe(true);
-}
-
 function expectGatewayMethodNotCalled(method: string): void {
   expect(gatewayRequests().some((request) => request.method === method)).toBe(false);
 }
@@ -838,50 +500,6 @@ async function runMatrixThreadAcpCommand(commandBody: string, cfg: OpenClawConfi
   return handleAcpCommand(createMatrixThreadParams(commandBody, cfg), true);
 }
 
-async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(
-    createConversationParams(
-      commandBody,
-      {
-        channel: "feishu",
-        originatingTo: "user:ou_sender_1",
-        senderId: "ou_sender_1",
-      },
-      cfg,
-    ),
-    true,
-  );
-}
-
-async function runLineDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(
-    createConversationParams(
-      commandBody,
-      {
-        channel: "line",
-        originatingTo: "U1234567890abcdef1234567890abcdef",
-        senderId: "U1234567890abcdef1234567890abcdef",
-      },
-      cfg,
-    ),
-    true,
-  );
-}
-
-async function runIMessageDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(
-    createConversationParams(
-      commandBody,
-      {
-        channel: "imessage",
-        originatingTo: "imessage:+15555550123",
-      },
-      cfg,
-    ),
-    true,
-  );
-}
-
 async function runInternalAcpCommand(params: {
   commandBody: string;
   scopes: string[];
@@ -903,11 +521,14 @@ describe("/acp command", () => {
   beforeEach(() => {
     setMinimalAcpCommandRegistryForTests();
     acpManagerTesting.resetAcpSessionManagerForTests();
-    resetTaskRegistryForTests({ persist: false });
-    configureInMemoryTaskRegistryStoreForTests();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.callGatewayMock.mockReset().mockResolvedValue({ ok: true });
+    hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
+    hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);
+    hoisted.readAcpSessionEntryAsyncMock
+      .mockReset()
+      .mockImplementation(async (input) => hoisted.readAcpSessionEntryMock(input));
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue({
       sessionId: "session-1",
       updatedAt: Date.now(),
@@ -1024,11 +645,13 @@ describe("/acp command", () => {
               }
             : {}),
         };
-        await hoisted.upsertAcpSessionMetaMock({
+        const sessionEntry = await hoisted.upsertAcpSessionMetaMock({
           sessionKey: input.sessionKey,
           mutate: () => meta,
         });
         return {
+          sessionEntry,
+          closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
           runtime: backend.runtime,
           handle: {
             backend: meta.backend,
@@ -1037,7 +660,7 @@ describe("/acp command", () => {
           meta,
         };
       },
-      resolveSession: (input: { sessionKey: string }) => {
+      resolveSessionAsync: async (input: { sessionKey: string }) => {
         const entry = hoisted.readAcpSessionEntryMock({
           sessionKey: input.sessionKey,
         }) as { acp?: Record<string, unknown> } | null;
@@ -1101,8 +724,8 @@ describe("/acp command", () => {
         }
       },
       setSessionRuntimeMode: async (input: { sessionKey: string; runtimeMode: string }) => {
-        await hoisted.setModeMock(input);
-        return { mode: input.runtimeMode };
+        const options = await hoisted.setModeMock(input);
+        return options ?? { runtimeMode: input.runtimeMode };
       },
       setSessionConfigOption: async (input: { key: string; value: string }) => {
         const options = await hoisted.setConfigOptionMock(input);
@@ -1126,10 +749,6 @@ describe("/acp command", () => {
         };
       },
     });
-  });
-
-  afterEach(() => {
-    resetTaskRegistryForTests({ persist: false });
   });
 
   it("returns null when the message is not /acp", async () => {
@@ -1166,15 +785,6 @@ describe("/acp command", () => {
       shouldContinue: false,
       reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
     });
-  });
-
-  it("keeps read-only /acp actions available to authorized non-owners", async () => {
-    const params = createDiscordParams("/acp sessions");
-    params.command.senderIsOwner = false;
-
-    const result = await handleAcpCommand(params, true);
-
-    expect(result?.reply?.text).toContain("ACP sessions:");
   });
 
   it("spawns an ACP session and binds a Discord thread", async () => {
@@ -1365,34 +975,6 @@ describe("/acp command", () => {
     });
   });
 
-  it("binds iMessage DMs with --bind here", async () => {
-    const result = await runIMessageDmAcpCommand("/acp spawn codex --bind here");
-
-    expect(result?.reply?.text).toContain("Bound this conversation to");
-    expectBindingBindCall({
-      placement: "current",
-      conversation: {
-        channel: "imessage",
-        accountId: "default",
-        conversationId: "+15555550123",
-      },
-    });
-  });
-
-  it("binds Slack DMs with --bind here through the generic conversation path", async () => {
-    const result = await runSlackDmAcpCommand("/acp spawn codex --bind here");
-
-    expect(result?.reply?.text).toContain("Bound this conversation to");
-    expectBindingBindCall({
-      placement: "current",
-      conversation: {
-        channel: "slack",
-        accountId: "default",
-        conversationId: "user:U123",
-      },
-    });
-  });
-
   it("keeps freshly spawned Slack-bound ACP metadata readable for the immediate follow-up", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-bound-followup-"));
     const databasePath = path.join(directory, "state", "openclaw.sqlite");
@@ -1405,13 +987,17 @@ describe("/acp command", () => {
     );
     const { createTestAdmittedRunContext } =
       await import("../../agents/admitted-run-context.test-support.js");
-    const { closeOpenClawStateDatabaseByPath } = await import("../../state/openclaw-state-db.js");
+    const { closeOpenClawStateDatabaseByPathAsync } =
+      await import("../../state/openclaw-state-db-cache.js");
 
     hoisted.upsertAcpSessionMetaMock.mockImplementation((input) =>
       sessionMeta.upsertAcpSessionMeta({ ...input, cfg, databasePath, now: () => 1 }),
     );
     hoisted.readAcpSessionEntryMock.mockImplementation((input) =>
       sessionMeta.readAcpSessionEntry({ ...input, cfg, databasePath }),
+    );
+    hoisted.readAcpSessionEntryAsyncMock.mockImplementation((input) =>
+      sessionMeta.readAcpSessionEntryAsync({ ...input, cfg, databasePath }),
     );
     const manager = new AcpSessionManager();
     acpManagerTesting.setAcpSessionManagerForTests(manager);
@@ -1447,7 +1033,9 @@ describe("/acp command", () => {
       expect(hoisted.runTurnMock).toHaveBeenCalledTimes(1);
     } finally {
       acpManagerTesting.resetAcpSessionManagerForTests();
-      expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+      const { closeOpenClawAgentDatabasesAsync } = await import("../../state/openclaw-agent-db.js");
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
       await fs.rm(directory, { recursive: true, force: true });
     }
   });
@@ -1563,36 +1151,6 @@ describe("/acp command", () => {
     });
   });
 
-  it("binds Feishu DM ACP spawns to the current DM conversation", async () => {
-    const result = await runFeishuDmAcpCommand("/acp spawn codex --thread here");
-
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
-    expect(result?.reply?.text).toContain("Bound this conversation to");
-    expectBindingBindCall({
-      placement: "current",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "user:ou_sender_1",
-      },
-    });
-  });
-
-  it("binds LINE DM ACP spawns to the current conversation", async () => {
-    const result = await runLineDmAcpCommand("/acp spawn codex --thread here");
-
-    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
-    expect(result?.reply?.text).toContain("Bound this conversation to");
-    expectBindingBindCall({
-      placement: "current",
-      conversation: {
-        channel: "line",
-        accountId: "default",
-        conversationId: "U1234567890abcdef1234567890abcdef",
-      },
-    });
-  });
-
   it("requires explicit ACP target when acp.defaultAgent is not configured", async () => {
     const result = await runDiscordAcpCommand("/acp spawn");
 
@@ -1622,8 +1180,14 @@ describe("/acp command", () => {
     const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
     expect(result?.reply?.text).toContain("spawnSessions=true");
-    expect(hoisted.closeMock).toHaveBeenCalledTimes(2);
-    expectGatewayMethodCalled("sessions.delete");
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledExactlyOnceWith({
+      cfg,
+      sessionKey: expect.stringContaining("agent:codex:acp:"),
+      agentId: "codex",
+      sessionEntry: expect.objectContaining({ sessionId: "session-1" }),
+      deleteTranscript: false,
+      closeRuntimeOnFailure: hoisted.closeRuntimeOnFailureMock,
+    });
     expectGatewayMethodNotCalled("sessions.patch");
   });
 
@@ -1706,33 +1270,9 @@ describe("/acp command", () => {
     });
   });
 
-  it("sends steer instructions via ACP runtime", async () => {
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "sessions.resolve") {
-        return { key: defaultAcpSessionKey };
-      }
-      return { ok: true };
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
-    hoisted.runTurnMock.mockImplementation(async function* () {
-      yield { type: "text_delta", text: "Applied steering." };
-      yield { type: "done" };
-    });
-
-    const result = await runDiscordAcpCommand(
-      `/acp steer --session ${defaultAcpSessionKey} tighten logging`,
-    );
-
-    expectMockCallFields(hoisted.runTurnMock, {
-      mode: "steer",
-      text: "tighten logging",
-    });
-    expect(result?.reply?.text).toContain("Applied steering.");
-  });
-
   it("admits ACP steer with the original channel participant", async () => {
     const captured: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
     const clearSink = configureExecutionIdentityAdmissionSink((work) => {
       captured.push(work);
       return true;
@@ -1757,6 +1297,7 @@ describe("/acp command", () => {
         cfg,
       );
       bindTestChannelParticipantAdmissionEvidence({
+        audit,
         context: params.ctx,
         channelId: "discord",
         accountId: "default",
@@ -1776,7 +1317,7 @@ describe("/acp command", () => {
       ]);
     } finally {
       clearSink();
-      clearCollection();
+      audit.close();
     }
   });
 
@@ -1798,6 +1339,7 @@ describe("/acp command", () => {
       `/acp steer --session ${defaultAcpSessionKey} tighten logging`,
     );
 
+    expectMockCallFields(hoisted.runTurnMock, { mode: "steer", text: "tighten logging" });
     expect(result?.reply?.text).toContain(`\n${prefix}…`);
     expect(result?.reply?.text).not.toContain("😀");
   });
@@ -1835,7 +1377,7 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Viewed diver package.");
   });
 
-  it("resolves ACP reset targets through the configured default account when AccountId is omitted", () => {
+  it("resolves ACP reset targets through the configured default account when AccountId is omitted", async () => {
     const cfg = {
       ...baseCfg,
       channels: {
@@ -1867,7 +1409,7 @@ describe("/acp command", () => {
           : null,
     );
 
-    const result = resolveEffectiveResetTargetSessionKey({
+    const result = await resolveEffectiveResetTargetSessionKey({
       cfg,
       channel: "discord",
       conversationId: defaultThreadId,
@@ -2141,24 +1683,12 @@ describe("/acp command", () => {
         lastUpdatedAt: Date.now(),
       },
     });
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: defaultAcpSessionKey,
-      runId: "acp-run-1",
-      task: "Inspect ACP backlog",
-      status: "running",
-      progressSummary: "Fetching the latest runtime state",
-    });
     const result = await runThreadAcpCommand("/acp status", baseCfg);
 
     expect(result?.reply?.text).toContain("ACP status:");
     expect(result?.reply?.text).toContain(`session: ${defaultAcpSessionKey}`);
     expect(result?.reply?.text).toContain("agent session id: codex-sid-1");
     expect(result?.reply?.text).toContain("acpx session id: acpx-sid-1");
-    expect(result?.reply?.text).toContain("taskStatus: running");
-    expect(result?.reply?.text).toContain("taskProgress: Fetching the latest runtime state");
     expect(result?.reply?.text).toContain("capabilities:");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
   });
@@ -2171,16 +1701,6 @@ describe("/acp command", () => {
         ...createAcpSessionEntry().acp,
         lastActivityAt: 8_700_000_000_000_000,
       },
-    });
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: defaultAcpSessionKey,
-      runId: "acp-run-1",
-      task: "Inspect ACP backlog",
-      status: "running",
-      lastEventAt: 8_700_000_000_000_000,
     });
 
     const result = await runThreadAcpCommand("/acp status", baseCfg);
@@ -2246,32 +1766,10 @@ describe("/acp command", () => {
         ].join("\n"),
       },
     });
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: defaultAcpSessionKey,
-      runId: "acp-run-1",
-      task: "Inspect ACP backlog",
-      status: "running",
-    });
-    failTaskRunByRunIdCore({
-      runId: "acp-run-1",
-      endedAt: Date.now(),
-      error: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
-      terminalSummary: "Needs approval to continue.",
-    });
 
     const result = await runThreadAcpCommand("/acp status", baseCfg);
 
     expect(result?.reply?.text).toContain("ACP status:");
-    expect(result?.reply?.text).toContain("taskSummary: Needs approval to continue.");
     expect(result?.reply?.text).not.toContain("OpenClaw runtime context (internal):");
     expect(result?.reply?.text).not.toContain("Internal task completion event");
   });
@@ -2370,6 +1868,14 @@ describe("/acp command", () => {
 
   it.each([
     {
+      action: "set-mode",
+      command: "/acp set-mode plan",
+      effectiveOptions: { runtimeMode: "plan" },
+      managerMock: hoisted.setModeMock,
+      managerInput: { runtimeMode: "plan" },
+      expectedText: `✅ Updated ACP runtime mode for ${defaultAcpSessionKey}: plan. Effective options: runtimeMode=plan`,
+    },
+    {
       action: "cwd",
       command: "/acp cwd /tmp/worktree",
       effectiveOptions: { cwd: "/tmp/worktree" },
@@ -2414,19 +1920,27 @@ describe("/acp command", () => {
       ...testCase.managerInput,
     });
     expect(
-      hoisted.setConfigOptionMock.mock.calls.length +
+      hoisted.setModeMock.mock.calls.length +
+        hoisted.setConfigOptionMock.mock.calls.length +
         hoisted.updateSessionRuntimeOptionsMock.mock.calls.length,
     ).toBe(1);
   });
 
-  it("preserves the dedicated runtime-option failure boundary", async () => {
+  it.each([
+    {
+      command: "/acp model openai/gpt-5.5",
+      label: "model",
+      managerMock: hoisted.setConfigOptionMock,
+    },
+    { command: "/acp set-mode plan", label: "runtime mode", managerMock: hoisted.setModeMock },
+  ])("preserves the $label failure boundary", async ({ command, label, managerMock }) => {
     mockBoundThreadSession();
-    hoisted.setConfigOptionMock.mockRejectedValueOnce("backend failure");
+    managerMock.mockRejectedValueOnce("backend failure");
 
-    const result = await runThreadAcpCommand("/acp model openai/gpt-5.5", baseCfg);
+    const result = await runThreadAcpCommand(command, baseCfg);
 
     expect(result?.reply?.text).toBe(
-      "ACP error (ACP_TURN_FAILED): Could not update ACP model.\nnext: Retry, or use `/acp cancel` and send the message again.",
+      `ACP error (ACP_TURN_FAILED): Could not update ACP ${label}.\nnext: Retry, or use \`/acp cancel\` and send the message again.`,
     );
   });
 

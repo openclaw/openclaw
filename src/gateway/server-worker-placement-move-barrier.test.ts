@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 
 // Install the shared module mocks before any source imports can load the runtime.
 const { runtimeFactoryMocks } = getWorkerPlacementStartupMocks();
 
+import { getRuntimeConfig } from "../config/config.js";
+import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
@@ -57,6 +61,59 @@ function createMoveBarrierBeginFixture(sessionId: string, sessionKey: string) {
 }
 
 describe("worker placement move destination", () => {
+  it("joins an accepted keyed store write before completing a reconciled move", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionId = "session-move-source";
+      const sessionKey = "agent:main:move-source";
+      const target = resolveGatewaySessionStoreTargetWithStore({ cfg: {}, key: sessionKey });
+      const releaseWriter = createDeferred();
+      const claimsReleased = createDeferred();
+      const order: string[] = [];
+      const writer = runExclusiveSessionStoreWrite(
+        target.storePath,
+        async () => {
+          await releaseWriter.promise;
+          order.push("write settled");
+        },
+        { identities: [sessionKey] },
+      );
+      const barrier = createGatewayWorkerPlacementMoveBarrier({
+        placements: {
+          waitForTurnClaimRelease: async () => {
+            claimsReleased.resolve();
+          },
+        },
+        awaitTurnClaimRelease: async (_sessionId, wait) => await wait(),
+        loadSessionRuntime: async () => ({
+          managedWorktrees: { findLiveByOwner: () => undefined },
+          resolveCanonicalSessionEntryFromStoreKeys,
+          resolveGatewaySessionStoreTargetWithStore,
+        }),
+        revokeSessionAuthority: () => {},
+      });
+      vi.useFakeTimers();
+      const move = barrier({
+        sessionId,
+        sessionKey,
+        agentId: "main",
+        sourceDisposition: "reconcile",
+        begin: async () => createMoveBarrierBeginFixture(sessionId, sessionKey),
+      }).then(() => order.push("move settled"));
+      try {
+        await claimsReleased.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(order).toEqual([]);
+        releaseWriter.resolve();
+        await Promise.all([writer, move]);
+        expect(order).toEqual(["write settled", "move settled"]);
+      } finally {
+        releaseWriter.resolve();
+        await Promise.allSettled([writer, move]);
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it.each([
     { name: "persists the claimed partial", claimRunId: "worker-run", outcome: "success" },
     {
@@ -97,7 +154,9 @@ describe("worker placement move destination", () => {
         scope: target.storePath,
         identities,
         assertAllowed: () => undefined,
-        onInterrupt: () => observed.push("interrupt"),
+        onInterrupt: () => {
+          observed.push("interrupt");
+        },
       });
       let sourceChanged = false;
       const persistAbandonedPartial = vi.fn(async () => {
@@ -110,6 +169,7 @@ describe("worker placement move destination", () => {
       const revokeSessionAuthority = vi.fn(() => observed.push("revoke"));
       const barrier = createGatewayWorkerPlacementMoveBarrier({
         placements: { waitForTurnClaimRelease: vi.fn() },
+        awaitTurnClaimRelease: (_sessionId, wait) => wait(),
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
@@ -264,6 +324,8 @@ describe("worker placement move destination", () => {
           reconcileActive: vi.fn(),
         });
         createGatewayWorkerPlacementRuntime({
+          scheduler: createTestGatewayScheduler(),
+          getCommittedRuntimeConfig: getRuntimeConfig,
           cancelSessionWork: vi.fn(async () => {}),
           placements: {
             workspaceResultInstanceId: () => "gateway-test",

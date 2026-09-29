@@ -2,27 +2,8 @@
 import type {
   Agent,
   AgentSideConnection,
-  AuthenticateRequest,
-  AuthenticateResponse,
-  CancelNotification,
-  CloseSessionRequest,
-  CloseSessionResponse,
   InitializeRequest,
   InitializeResponse,
-  ListSessionsRequest,
-  ListSessionsResponse,
-  LoadSessionRequest,
-  LoadSessionResponse,
-  NewSessionRequest,
-  NewSessionResponse,
-  PromptRequest,
-  PromptResponse,
-  ResumeSessionRequest,
-  ResumeSessionResponse,
-  SetSessionConfigOptionRequest,
-  SetSessionConfigOptionResponse,
-  SetSessionModeRequest,
-  SetSessionModeResponse,
 } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
@@ -31,7 +12,7 @@ import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createFixedWindowBudget } from "../infra/fixed-window-rate-limit.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { createInMemoryAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
+import type { AcpEventLedger } from "./event-ledger.js";
 import type { AcpPendingApprovalRelay } from "./translator.prompt-state.js";
 import { AcpTranslatorPromptStream } from "./translator.prompt-stream.js";
 import { AcpTranslatorSessionLifecycle } from "./translator.session-lifecycle.js";
@@ -45,7 +26,7 @@ const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
-  eventLedger?: AcpEventLedger;
+  eventLedger: AcpEventLedger;
   sessionStore?: AcpSessionStore;
 };
 
@@ -53,7 +34,16 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
 export class AcpGatewayAgent implements Agent {
   private readonly sessionUpdates: AcpTranslatorSessionUpdates;
   private readonly promptStream: AcpTranslatorPromptStream;
-  private readonly sessionLifecycle: AcpTranslatorSessionLifecycle;
+  readonly newSession: AcpTranslatorSessionLifecycle["newSession"];
+  readonly loadSession: AcpTranslatorSessionLifecycle["loadSession"];
+  readonly listSessions: AcpTranslatorSessionLifecycle["listSessions"];
+  readonly resumeSession: AcpTranslatorSessionLifecycle["resumeSession"];
+  readonly closeSession: AcpTranslatorSessionLifecycle["closeSession"];
+  readonly authenticate: AcpTranslatorSessionLifecycle["authenticate"];
+  readonly setSessionMode: AcpTranslatorSessionLifecycle["setSessionMode"];
+  readonly setSessionConfigOption: AcpTranslatorSessionLifecycle["setSessionConfigOption"];
+  readonly prompt: AcpTranslatorPromptStream["prompt"];
+  readonly cancel: AcpTranslatorPromptStream["cancel"];
   private readonly ownedSessionStore: ReturnType<typeof createInMemorySessionStore> | undefined;
   private readonly approvalRelays = new Map<string, AcpPendingApprovalRelay>();
   private readonly log: (msg: string) => void;
@@ -61,7 +51,7 @@ export class AcpGatewayAgent implements Agent {
   constructor(
     connection: AgentSideConnection,
     gateway: GatewayClient,
-    opts: AcpGatewayAgentOptions = {},
+    opts: AcpGatewayAgentOptions,
   ) {
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     // Injected stores remain caller-owned; only the agent-created registry follows shutdown.
@@ -75,7 +65,7 @@ export class AcpGatewayAgent implements Agent {
     }
     this.sessionUpdates = new AcpTranslatorSessionUpdates({
       connection,
-      eventLedger: opts.eventLedger ?? createInMemoryAcpEventLedger(),
+      eventLedger: opts.eventLedger,
       log: this.log,
     });
     const sessionState = new AcpTranslatorSessionState(gateway, this.sessionUpdates, this.log);
@@ -101,7 +91,7 @@ export class AcpGatewayAgent implements Agent {
         { min: 1_000 },
       ),
     });
-    this.sessionLifecycle = new AcpTranslatorSessionLifecycle(
+    const sessionLifecycle = new AcpTranslatorSessionLifecycle(
       gateway,
       opts,
       sessionStore,
@@ -111,6 +101,16 @@ export class AcpGatewayAgent implements Agent {
       (session) => this.promptStream.cancelSessionWork(session),
       this.log,
     );
+    this.newSession = sessionLifecycle.newSession.bind(sessionLifecycle);
+    this.loadSession = sessionLifecycle.loadSession.bind(sessionLifecycle);
+    this.listSessions = sessionLifecycle.listSessions.bind(sessionLifecycle);
+    this.resumeSession = sessionLifecycle.resumeSession.bind(sessionLifecycle);
+    this.closeSession = sessionLifecycle.closeSession.bind(sessionLifecycle);
+    this.authenticate = sessionLifecycle.authenticate.bind(sessionLifecycle);
+    this.setSessionMode = sessionLifecycle.setSessionMode.bind(sessionLifecycle);
+    this.setSessionConfigOption = sessionLifecycle.setSessionConfigOption.bind(sessionLifecycle);
+    this.prompt = this.promptStream.prompt.bind(this.promptStream);
+    this.cancel = this.promptStream.cancel.bind(this.promptStream);
   }
 
   start(): void {
@@ -161,47 +161,5 @@ export class AcpGatewayAgent implements Agent {
       agentInfo: ACP_AGENT_INFO,
       authMethods: [],
     };
-  }
-
-  async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
-    return await this.sessionLifecycle.newSession(params);
-  }
-
-  async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
-    return await this.sessionLifecycle.loadSession(params);
-  }
-
-  async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
-    return await this.sessionLifecycle.listSessions(params);
-  }
-
-  async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
-    return await this.sessionLifecycle.resumeSession(params);
-  }
-
-  async closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
-    return await this.sessionLifecycle.closeSession(params);
-  }
-
-  async authenticate(params: AuthenticateRequest): Promise<AuthenticateResponse> {
-    return await this.sessionLifecycle.authenticate(params);
-  }
-
-  async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
-    return await this.sessionLifecycle.setSessionMode(params);
-  }
-
-  async setSessionConfigOption(
-    params: SetSessionConfigOptionRequest,
-  ): Promise<SetSessionConfigOptionResponse> {
-    return await this.sessionLifecycle.setSessionConfigOption(params);
-  }
-
-  async prompt(params: PromptRequest): Promise<PromptResponse> {
-    return await this.promptStream.prompt(params);
-  }
-
-  async cancel(params: CancelNotification): Promise<void> {
-    await this.promptStream.cancel(params);
   }
 }

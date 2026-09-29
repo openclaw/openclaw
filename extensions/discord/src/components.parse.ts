@@ -1,8 +1,8 @@
-// Discord plugin module implements components.parse behavior.
 import { ButtonStyle, TextInputStyle } from "discord-api-types/v10";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   DiscordComponentBlock,
@@ -35,19 +35,16 @@ function requireObject(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function readRequiredString(
-  value: unknown,
-  label: string,
-  opts?: { allowEmpty?: boolean },
-): string {
+// Body whitespace carries Markdown; control labels still use trimmed values.
+function readRequiredString(value: unknown, label: string, trim = true): string {
   if (typeof value !== "string") {
     throw new Error(`${label} must be a string`);
   }
   const trimmed = value.trim();
-  if (!opts?.allowEmpty && !trimmed) {
+  if (!trimmed) {
     throw new Error(`${label} cannot be empty`);
   }
-  return opts?.allowEmpty ? value : trimmed;
+  return trim ? trimmed : value;
 }
 
 function readOptionalCallbackDataKind(
@@ -117,30 +114,20 @@ export function normalizeModalFieldName(value: string | undefined, index: number
   return `field_${index + 1}`;
 }
 
-function normalizeAttachmentRef(value: string, label: string): `attachment://${string}` {
+function readAttachmentName(value: string, label: string, filenameLabel = "a filename"): string {
   const trimmed = value.trim();
   if (!trimmed.startsWith(DISCORD_COMPONENT_ATTACHMENT_PREFIX)) {
     throw new Error(`${label} must start with "${DISCORD_COMPONENT_ATTACHMENT_PREFIX}"`);
   }
   const attachmentName = trimmed.slice(DISCORD_COMPONENT_ATTACHMENT_PREFIX.length).trim();
   if (!attachmentName) {
-    throw new Error(`${label} must include an attachment filename`);
+    throw new Error(`${label} must include ${filenameLabel}`);
   }
-  return `${DISCORD_COMPONENT_ATTACHMENT_PREFIX}${attachmentName}`;
+  return attachmentName;
 }
 
 export function resolveDiscordComponentAttachmentName(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith(DISCORD_COMPONENT_ATTACHMENT_PREFIX)) {
-    throw new Error(
-      `Attachment reference must start with "${DISCORD_COMPONENT_ATTACHMENT_PREFIX}"`,
-    );
-  }
-  const attachmentName = trimmed.slice(DISCORD_COMPONENT_ATTACHMENT_PREFIX.length).trim();
-  if (!attachmentName) {
-    throw new Error("Attachment reference must include a filename");
-  }
-  return attachmentName;
+  return readAttachmentName(value, "Attachment reference");
 }
 
 export function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
@@ -160,11 +147,6 @@ export function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle
 
 export function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {
   return style === "paragraph" ? TextInputStyle.Paragraph : TextInputStyle.Short;
-}
-
-function normalizeBlockType(raw: string) {
-  const lowered = normalizeLowercaseStringOrEmpty(raw);
-  return BLOCK_ALIASES.get(lowered) ?? (lowered as DiscordComponentBlock["type"]);
 }
 
 function parseSelectOptions(
@@ -290,18 +272,18 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
 function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock {
   const obj = requireObject(raw, label);
   const typeRaw = normalizeLowercaseStringOrEmpty(readRequiredString(obj.type, `${label}.type`));
-  const type = normalizeBlockType(typeRaw);
+  const type = BLOCK_ALIASES.get(typeRaw) ?? typeRaw;
   switch (type) {
     case "text":
       return {
         type: "text",
-        text: readRequiredString(obj.text, `${label}.text`),
+        text: readRequiredString(obj.text, `${label}.text`, false),
       };
     case "section": {
-      const text = normalizeOptionalString(obj.text);
+      const text = readNonBlankString(obj.text);
       const textsRaw = obj.texts;
       const texts = Array.isArray(textsRaw)
-        ? textsRaw.map((entry, idx) => readRequiredString(entry, `${label}.texts[${idx}]`))
+        ? textsRaw.map((entry, idx) => readRequiredString(entry, `${label}.texts[${idx}]`, false))
         : undefined;
       if (!text && (!texts || texts.length === 0)) {
         throw new Error(`${label}.text or ${label}.texts is required for section blocks`);
@@ -390,7 +372,7 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       const file = readRequiredString(obj.file, `${label}.file`);
       return {
         type: "file",
-        file: normalizeAttachmentRef(file, `${label}.file`),
+        file: `${DISCORD_COMPONENT_ATTACHMENT_PREFIX}${readAttachmentName(file, `${label}.file`, "an attachment filename")}`,
         spoiler: typeof obj.spoiler === "boolean" ? obj.spoiler : undefined,
       };
     }
@@ -443,7 +425,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     };
   }
   return {
-    text: normalizeOptionalString(obj.text),
+    text: readNonBlankString(obj.text),
     reusable: typeof obj.reusable === "boolean" ? obj.reusable : undefined,
     container:
       typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)

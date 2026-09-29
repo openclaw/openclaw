@@ -47,6 +47,7 @@ export function createMockReplyOperation(
     startedAtMs: Date.now(),
     lastActivityAtMs: Date.now(),
     hasOwnedSessionId: vi.fn((candidate: string) => candidate === sessionId),
+    captureOwnedSessionIds: vi.fn(() => new Set([sessionId])),
     recordActivity: vi.fn(),
     setPhase: vi.fn(),
     markWaitingForDeferredMaintenance: vi.fn(),
@@ -79,6 +80,7 @@ export function createMockReplyOperation(
         return undefined;
       }
     }),
+    setAutomaticFallbackRoute: vi.fn(),
     bindToolAuthorityRoute: vi.fn((route) => {
       if (replyOperation.result || !toolAuthoritySnapshot) {
         throw new Error("Reply operation has no active tool authority snapshot");

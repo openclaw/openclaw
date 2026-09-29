@@ -7,11 +7,13 @@ import { clearAuthProfileMigrationDiagnostics } from "../agents/auth-profiles/le
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -82,6 +84,90 @@ afterEach(async () => {
 });
 
 describe("Doctor auth migration source ownership", () => {
+  it.each([
+    "shared-wal",
+    "shared-shm",
+    "shared-journal",
+    "dangling-shared",
+    "adjacent-database",
+    "adjacent-sidecar",
+    "configured-database",
+    "configured-partition-sidecar",
+    "configured-agent-directory",
+    "missing-journal",
+  ])("preserves credentials with unknown SQLite history: %s", async (kind) => {
+    const { selected } = await createOwners();
+    const source = writeSource(
+      selected.agentDir(),
+      "auth-profiles.json",
+      sourceValue("auth-profiles.json", `fake-held-${randomUUID()}`, 20),
+    );
+    const cfg: OpenClawConfig = {};
+    const sharedPath = resolveOpenClawStateSqlitePath(selected.env);
+    const sharedDatabase =
+      kind === "missing-journal" ? openOpenClawStateDatabase({ env: selected.env }) : undefined;
+    let artifact: string | undefined;
+    if (kind.startsWith("shared-")) {
+      artifact = `${sharedPath}-${kind.slice("shared-".length)}`;
+    } else if (kind === "dangling-shared") {
+      const target = path.join(selected.root, "missing-shared-target");
+      fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
+      fs.mkdirSync(target);
+      fs.symlinkSync(target, sharedPath, "junction");
+      fs.rmdirSync(target);
+    } else if (kind.startsWith("adjacent-")) {
+      artifact = path.join(
+        selected.agentDir(),
+        kind === "adjacent-database" ? "history.db" : "history.sqlite-wal",
+      );
+    } else if (kind === "configured-agent-directory") {
+      const external = path.join(selected.root, "external-agent");
+      cfg.agents = { entries: { main: { default: true }, other: { agentDir: external } } };
+      artifact = path.join(external, "openclaw-agent.sqlite");
+    } else if (kind.startsWith("configured-")) {
+      const external = path.join(selected.root, "external");
+      cfg.session = { store: path.join(external, "history.json") };
+      artifact = path.join(
+        external,
+        kind === "configured-database" ? "history.sqlite" : "history.main.sqlite-wal",
+      );
+    } else if (sharedDatabase) {
+      sharedDatabase.db.exec("DROP TABLE agent_deletion_journal");
+    }
+    const artifactBytes = "unverified SQLite family bytes\n";
+    if (artifact) {
+      fs.mkdirSync(path.dirname(artifact), { recursive: true });
+      fs.writeFileSync(artifact, artifactBytes);
+    }
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      env: selected.env,
+      prompter: { confirmAutoFix: async () => true },
+    });
+
+    expect(result.detected).toEqual([]);
+    expect(result.changes).toEqual([]);
+    expect(fs.readFileSync(source.sourcePath, "utf8")).toBe(source.bytes);
+    expect(archivesFor(source.sourcePath)).toEqual([]);
+    expect(fs.existsSync(path.join(selected.agentDir(), "openclaw-agent.sqlite"))).toBe(false);
+    if (artifact) {
+      expect(fs.readFileSync(artifact, "utf8")).toBe(artifactBytes);
+    }
+    if (sharedDatabase) {
+      expect(
+        sharedDatabase.db
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
+          .get(),
+      ).toBeUndefined();
+    } else {
+      expect(fs.existsSync(sharedPath)).toBe(false);
+      if (kind === "dangling-shared") {
+        expect(fs.lstatSync(sharedPath).isSymbolicLink()).toBe(true);
+      }
+    }
+  });
+
   it("detects all three legacy siblings only in the explicitly selected state root", async () => {
     const { selected, ambient } = await createOwners();
     const selectedSources = sourceNames.map((name) =>
@@ -100,7 +186,8 @@ describe("Doctor auth migration source ownership", () => {
     expect.soft(result).toEqual({
       detected: selectedSources.map(({ sourcePath }) => sourcePath),
       changes: [],
-      configOwnerMigrationApplied: false,
+      migratedProfileIds: new Set<string>(),
+      blockedProfileIds: new Set<string>(),
       warnings: [],
     });
     for (const source of [...selectedSources, ...ambientSources]) {

@@ -6,6 +6,7 @@ import path from "node:path";
 import { type Mock, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as webMedia from "../../media/web-media.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as preparedModelRuntime from "../prepared-model-runtime.js";
@@ -19,6 +20,7 @@ type StubPreparedRuntimeSnapshot = {
   agentDir: string;
   config: OpenClawConfig;
   workspaceDir?: string;
+  pluginRegistry?: PluginRegistry;
   createStores: () => { authStorage: unknown; modelRegistry: unknown };
 };
 
@@ -29,6 +31,7 @@ export function withPreparedRuntimeFacts(snapshot: StubPreparedRuntimeSnapshot) 
     ...snapshot,
     metadataSnapshot: createEmptyPluginMetadataSnapshot(snapshot.workspaceDir),
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
   };
 }
@@ -68,10 +71,10 @@ export const FAKE_PDF_MEDIA = {
 // `complete` mock into the model registry, and vi.mock handles are file-scoped
 // — a plain export would capture the wrong (or no) mock.
 export function createPdfToolInfraStub(completeMock: Mock) {
-  function createPdfModelRegistry(find: () => unknown) {
+  function createPdfModelRegistry(find: (provider: string, modelId: string) => unknown) {
     const modelRegistry = { find };
     initializeModelRegistryRuntime(modelRegistry);
-    getModelRegistryRuntime(modelRegistry).llmRuntime.complete = completeMock;
+    getModelRegistryRuntime(modelRegistry).llmRuntime.completeSimple = completeMock;
     return modelRegistry;
   }
 
@@ -83,8 +86,12 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       input?: string[];
       api?: string;
       modelFound?: boolean;
+      pluginRegistry?: PluginRegistry;
     },
   ) {
+    if (params?.provider === "openai") {
+      vi.stubEnv("OPENAI_API_KEY", "test-key");
+    }
     // Keep PDF tool tests focused on orchestration; provider discovery, auth, and
     // remote media loading are replaced with narrow spies at the module boundary.
     const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw");
@@ -97,21 +104,20 @@ export function createPdfToolInfraStub(completeMock: Mock) {
     const find =
       params?.modelFound === false
         ? () => null
-        : () =>
+        : (_provider: string, id: string) =>
             ({
+              id,
+              name: id,
+              baseUrl: "https://pdf-fixture.invalid/v1",
               provider: params?.provider ?? "anthropic",
               api:
                 params?.api ??
-                (params?.provider === "openai"
-                  ? "openai-chatgpt-responses"
-                  : params?.provider === "openai"
-                    ? "openai-responses"
-                    : "anthropic-messages"),
+                (params?.provider === "openai" ? "openai-responses" : "anthropic-messages"),
               maxTokens: 8192,
               input: params?.input ?? ["text", "document"],
             }) as never;
     const modelRegistry = createPdfModelRegistry(find);
-    const release = vi.fn();
+    const release = vi.fn(async () => {});
     vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
       async (input) =>
         ({
@@ -119,9 +125,10 @@ export function createPdfToolInfraStub(completeMock: Mock) {
             agentDir: input.agentDir,
             config: input.config,
             workspaceDir: input.workspaceDir,
+            pluginRegistry: params?.pluginRegistry,
             createStores: () => ({ authStorage, modelRegistry }),
           }),
-          release,
+          [Symbol.asyncDispose]: release,
         }) as never,
     );
 
@@ -130,7 +137,11 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       wrote: false,
     });
 
-    vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({ apiKey: "test-key" } as never);
+    vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({
+      apiKey: "test-key",
+      mode: "api-key",
+      source: "fixture",
+    });
     vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
     return { loadSpy, release, setRuntimeApiKey };

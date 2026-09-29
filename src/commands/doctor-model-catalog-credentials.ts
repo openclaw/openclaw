@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   loadPersistedAuthProfileStore,
@@ -14,7 +14,7 @@ import {
 } from "../agents/auth-profiles/persisted.js";
 import { removeRuntimeExternalProfileReferences } from "../agents/auth-profiles/runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveProviderConfigSecretInput } from "../agents/model-auth-provider-config.js";
@@ -24,9 +24,11 @@ import {
   loadPersistedPluginModelCatalogsReadOnly,
 } from "../agents/plugin-model-catalog.js";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listAgentModelsJsonPaths } from "../secrets/storage-scan.js";
+import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -292,15 +294,21 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
   const mainAgentDir = resolveSharedMainAuthAgentDir(env);
-  const discoveredAgentDirs = listAgentModelsJsonPaths(params.cfg, stateDir, env).map(
-    (modelsPath) => path.dirname(modelsPath),
+  const isRetained = createRetainedAgentDatabaseMatcher(
+    env,
+    () =>
+      listAgentIds(params.cfg).map((agentId) => ({
+        agentId,
+        path: resolveAgentDir(params.cfg, agentId, env),
+      })),
+    {
+      kind: "agent-directory",
+      readDatabasePaths: () => resolveConfiguredAgentDatabaseCandidatePaths(params.cfg, { env }),
+    },
   );
-  const agentIds = listAgentIds(params.cfg);
-  const configuredAgentDirs =
-    agentIds.length > 0
-      ? agentIds.map((agentId) => resolveAgentDir(params.cfg, agentId, env))
-      : [resolveDefaultAgentDir(params.cfg, env)];
-  const agentDirs = [...new Set([mainAgentDir, ...configuredAgentDirs, ...discoveredAgentDirs])];
+  const agentDirs = listAgentModelsJsonPaths(params.cfg, stateDir, env)
+    .map((modelsPath) => path.dirname(modelsPath))
+    .filter((agentDir) => !isRetained(agentDir));
   const mainStore = loadPersistedSharedAuthProfileStore(env) ?? emptyStore();
   const catalogs = agentDirs.map((agentDir) => collectAgentCatalogs(agentDir, warnings));
   const effectiveStores = catalogs.map(({ localStore }) =>

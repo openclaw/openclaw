@@ -1,11 +1,16 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveThreadBindingSpawnPolicy } from "../../../channels/thread-bindings-policy.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { SubagentSpawnPreparation } from "../../../context-engine/types.js";
+import type { ContextEngine, SubagentSpawnPreparation } from "../../../context-engine/types.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
-import { resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
+import {
+  ensureContextEnginesInitialized,
+  forkSessionEntryFromParent,
+  resolveContextEngine,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentContextMode } from "./subagent-spawn.types.js";
 
 type PreparedSpawnContext =
@@ -27,6 +32,7 @@ type PreparedSpawnContext =
   | { status: "error"; error: string };
 
 export async function prepareSubagentSessionContext(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   contextMode: SpawnSubagentContextMode;
   requesterAgentId: string;
@@ -37,15 +43,17 @@ export async function prepareSubagentSessionContext(params: {
   if (params.contextMode === "isolated") {
     return { status: "ok", mode: "isolated" };
   }
-  const childTarget = resolveGatewaySessionStoreTarget({
+  const childTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: params.childSessionKey,
     agentId: params.targetAgentId,
+    assertActive: params.assertActive,
   });
-  const parentTarget = resolveGatewaySessionStoreTarget({
+  const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: params.requesterInternalKey,
     agentId: params.requesterAgentId,
+    assertActive: params.assertActive,
   });
 
   try {
@@ -55,8 +63,10 @@ export async function prepareSubagentSessionContext(params: {
       );
     }
 
-    const forkedResult = await getSubagentSpawnDeps().forkSessionEntryFromParent({
-      storePath: childTarget.storePath,
+    params.assertActive?.();
+    const forkedResult = await forkSessionEntryFromParent({
+      commitGuard: params.assertActive,
+      storePath: childTarget.readSource?.path ?? childTarget.storePath,
       parentSessionKey: parentTarget.canonicalKey,
       parentStoreKeys: parentTarget.storeKeys,
       sessionKey: childTarget.canonicalKey,
@@ -100,19 +110,40 @@ export async function prepareSubagentSessionContext(params: {
   }
 }
 
+export type PreparedContextEngineSubagentSpawn = SubagentSpawnPreparation & {
+  dispose(): Promise<void>;
+};
+
 export async function prepareContextEngineSubagentSpawn(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   context: PreparedSpawnContext & { status: "ok" };
   requesterInternalKey: string;
   childSessionKey: string;
   runTimeoutSeconds: number;
 }): Promise<
-  { status: "ok"; preparation?: SubagentSpawnPreparation } | { status: "error"; error: string }
+  | { status: "ok"; preparation: PreparedContextEngineSubagentSpawn }
+  | { status: "error"; error: string }
 > {
+  let engine: ContextEngine | undefined;
+  let disposal: Promise<void> | undefined;
+  const dispose = () =>
+    (disposal ??= (async () => {
+      try {
+        await engine?.dispose?.();
+      } catch (error) {
+        console.warn(
+          `[context-engine] Failed subagent preparation cleanup: ${sanitizeForLog(String(error))}`,
+        );
+        throw error;
+      }
+    })());
   try {
-    const deps = getSubagentSpawnDeps();
-    deps.ensureContextEnginesInitialized();
-    const engine = await deps.resolveContextEngine(params.cfg);
+    ensureContextEnginesInitialized();
+    engine = await resolveContextEngine(params.cfg);
+    // Resolution may outlive the caller. Returned preparation must still reach
+    // the pipeline rollback owner before its next authority check.
+    params.assertActive?.();
     const preparation = await engine.prepareSubagentSpawn?.({
       parentSessionKey: params.requesterInternalKey,
       childSessionKey: params.childSessionKey,
@@ -126,8 +157,27 @@ export async function prepareContextEngineSubagentSpawn(params: {
         floorSeconds: true,
       }),
     });
-    return { status: "ok", preparation };
+    let rollback: Promise<void> | undefined;
+    return {
+      status: "ok",
+      preparation: {
+        rollback: () =>
+          (rollback ??= (async () => {
+            try {
+              await preparation?.rollback();
+            } finally {
+              await dispose();
+            }
+          })()),
+        async dispose() {
+          // Cancellation may already be rolling back while its caller unwinds.
+          await rollback?.catch(() => {});
+          await dispose();
+        },
+      },
+    };
   } catch (err) {
+    await dispose().catch(() => {});
     return {
       status: "error",
       error: `Context engine subagent preparation failed: ${summarizeSpawnError(err)}`,

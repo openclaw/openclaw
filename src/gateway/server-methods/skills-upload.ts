@@ -3,7 +3,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type ErrorShape,
   type ProtocolValidator,
   validateSkillsUploadBeginParams,
@@ -15,20 +14,17 @@ import {
   areUploadedSkillArchivesEnabled,
   UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE,
 } from "../../skills/lifecycle/upload-install.js";
-import {
-  defaultSkillUploadStore,
-  SkillUploadRequestError,
-} from "../../skills/lifecycle/upload-store.js";
+import { SkillUploadRequestError } from "../../skills/lifecycle/upload-store-error.js";
+import { defaultSkillUploadStore } from "../../skills/lifecycle/upload-store.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-function uploadErrorShape(
-  prefix: string,
-  errors: Parameters<typeof formatValidationErrors>[0],
-): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `${prefix}: ${formatValidationErrors(errors)}`);
-}
+import { assertValidParams } from "./validation.js";
 
 function mapUploadError(err: unknown): ErrorShape {
+  if (err instanceof SessionMutationAuthorizationChangedError) {
+    return err.error;
+  }
   if (err instanceof SkillUploadRequestError) {
     return errorShape(ErrorCodes.INVALID_REQUEST, err.message);
   }
@@ -40,17 +36,17 @@ export const skillsUploadHandlers: GatewayRequestHandlers = {
   "skills.upload.begin": makeUploadHandler(
     "skills.upload.begin",
     validateSkillsUploadBeginParams,
-    (params) => defaultSkillUploadStore.begin(params),
+    (params, guard) => defaultSkillUploadStore.begin(params, guard),
   ),
   "skills.upload.chunk": makeUploadHandler(
     "skills.upload.chunk",
     validateSkillsUploadChunkParams,
-    (params) => defaultSkillUploadStore.chunk(params),
+    (params, guard) => defaultSkillUploadStore.chunk(params, guard),
   ),
   "skills.upload.commit": makeUploadHandler(
     "skills.upload.commit",
     validateSkillsUploadCommitParams,
-    (params) => defaultSkillUploadStore.commit(params),
+    (params, guard) => defaultSkillUploadStore.commit(params, guard),
   ),
 };
 
@@ -58,9 +54,9 @@ export const skillsUploadHandlers: GatewayRequestHandlers = {
 function makeUploadHandler<P, R>(
   name: string,
   validator: ProtocolValidator<P>,
-  action: (params: P) => Promise<R>,
+  action: (params: P, assertCommitAllowed?: () => void) => Promise<R>,
 ): GatewayRequestHandlers[string] {
-  return async ({ params, respond, context }) => {
+  return async ({ params, respond, context, client }) => {
     if (!areUploadedSkillArchivesEnabled(context.getRuntimeConfig())) {
       respond(
         false,
@@ -69,12 +65,17 @@ function makeUploadHandler<P, R>(
       );
       return;
     }
-    if (!validator(params)) {
-      respond(false, undefined, uploadErrorShape(`invalid ${name} params`, validator.errors));
+    if (!assertValidParams(params, validator, name, respond)) {
       return;
     }
     try {
-      respond(true, await action(params), undefined);
+      const guard = captureGatewayClientUploadCommitGuard({
+        method: name,
+        requestParams: params,
+        client,
+        context,
+      });
+      respond(true, await action(params, guard), undefined);
     } catch (err) {
       respond(false, undefined, mapUploadError(err));
     }

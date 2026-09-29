@@ -26,6 +26,7 @@ type PluginRuntimeLoadContextOptions = {
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
   preferBuiltPluginArtifacts?: boolean;
+  expectedSourceDigests?: PluginRuntimeLoadContext["expectedSourceDigests"];
 };
 
 /** Resolves config, manifests, install records, and auto-enable state for runtime loads. */
@@ -39,32 +40,23 @@ export function resolvePluginRuntimeLoadContext(
     env,
     workspaceDir: options?.workspaceDir,
   }).workspaceDir;
-  const resolveMetadataSnapshot = (params: {
-    config: OpenClawConfig;
-    index?: PluginMetadataSnapshot["index"];
-  }): PluginMetadataSnapshot => {
-    if (options?.workspaceDir === undefined) {
-      return projectPluginMetadataSnapshot(
-        resolveConfigWidePluginMetadataSnapshot({ config: params.config, env }),
-        options?.onlyPluginIds,
-      );
-    }
-    const snapshot = resolvePluginMetadataSnapshot({
-      config: params.config,
-      env,
-      workspaceDir: rawWorkspaceDir,
-      allowWorkspaceScopedCurrent: true,
-      ...(params.index ? { index: params.index } : {}),
-      ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
-    });
-    return snapshot;
-  };
-  const initialMetadataSnapshot =
+  const metadataSnapshot =
     options?.metadataSnapshot ??
-    (options?.manifestRegistry === undefined
-      ? resolveMetadataSnapshot({ config: rawConfig })
-      : undefined);
-  const manifestRegistry = options?.manifestRegistry ?? initialMetadataSnapshot?.manifestRegistry;
+    (options?.manifestRegistry !== undefined
+      ? undefined
+      : options?.workspaceDir === undefined
+        ? projectPluginMetadataSnapshot(
+            resolveConfigWidePluginMetadataSnapshot({ config: rawConfig, env }),
+            options?.onlyPluginIds,
+          )
+        : resolvePluginMetadataSnapshot({
+            config: rawConfig,
+            env,
+            workspaceDir: rawWorkspaceDir,
+            allowWorkspaceScopedCurrent: true,
+            ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
+          }));
+  const manifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
@@ -73,7 +65,7 @@ export function resolvePluginRuntimeLoadContext(
     config: rawConfig,
     env,
     manifestRegistry,
-    discovery: initialMetadataSnapshot?.discovery,
+    discovery: metadataSnapshot?.discovery,
   });
   const config = autoEnabled.config;
   const workspaceDir = resolvePluginControlPlaneWorkspace({
@@ -81,8 +73,6 @@ export function resolvePluginRuntimeLoadContext(
     env,
     workspaceDir: options?.workspaceDir,
   }).workspaceDir;
-  const metadataSnapshot = initialMetadataSnapshot;
-  const finalManifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
     : undefined;
@@ -94,9 +84,10 @@ export function resolvePluginRuntimeLoadContext(
     workspaceDir,
     env,
     logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
-    ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
+    ...(manifestRegistry ? { manifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
     preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts,
+    expectedSourceDigests: options?.expectedSourceDigests,
   };
 }

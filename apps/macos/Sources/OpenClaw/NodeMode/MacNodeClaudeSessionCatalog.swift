@@ -70,19 +70,11 @@ enum MacNodeClaudeSessionCatalog {
                 "archived": false,
             ]
             value["name"] = self.name ?? NSNull()
-            if let cwd {
-                value["cwd"] = cwd
-            }
-            if let createdAt {
-                value["createdAt"] = createdAt
-            }
-            if let updatedAt {
-                value["updatedAt"] = updatedAt
-                value["recencyAt"] = updatedAt
-            }
-            if let gitBranch {
-                value["gitBranch"] = gitBranch
-            }
+            value["cwd"] = self.cwd
+            value["createdAt"] = self.createdAt
+            value["updatedAt"] = self.updatedAt
+            value["recencyAt"] = self.updatedAt
+            value["gitBranch"] = self.gitBranch
             return value
         }
     }
@@ -234,15 +226,11 @@ enum MacNodeClaudeSessionCatalog {
         private var observer: (@Sendable (String) -> Void)?
 
         func set(_ observer: (@Sendable (String) -> Void)?) {
-            self.lock.lock()
-            self.observer = observer
-            self.lock.unlock()
+            self.lock.withLock { self.observer = observer }
         }
 
         func notify(rootPath: String) {
-            self.lock.lock()
-            let observer = self.observer
-            self.lock.unlock()
+            let observer = self.lock.withLock { self.observer }
             observer?(rootPath)
         }
     }
@@ -294,19 +282,10 @@ enum MacNodeClaudeSessionCatalog {
             isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
-    static func list(paramsJSON: String?) throws -> String {
-        try self.list(
-            paramsJSON: paramsJSON,
-            homeURL: FileManager.default.homeDirectoryForCurrentUser)
-    }
-
-    static func read(paramsJSON: String?) throws -> String {
-        try self.read(
-            paramsJSON: paramsJSON,
-            homeURL: FileManager.default.homeDirectoryForCurrentUser)
-    }
-
-    static func list(paramsJSON: String?, homeURL: URL) throws -> String {
+    static func list(
+        paramsJSON: String?,
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> String
+    {
         try Task.checkCancellation()
         let params = try decodeListParams(paramsJSON)
         let offset = try decodeCursor(params.cursor, label: "catalog")
@@ -329,7 +308,10 @@ enum MacNodeClaudeSessionCatalog {
         return try encode(response, maxBytes: self.maxTranscriptPageBytes)
     }
 
-    static func read(paramsJSON: String?, homeURL: URL) throws -> String {
+    static func read(
+        paramsJSON: String?,
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> String
+    {
         try Task.checkCancellation()
         let params = try decodeReadParams(paramsJSON)
         let cursor = try params.cursor.map(self.decodeTranscriptCursor)
@@ -818,6 +800,7 @@ extension MacNodeClaudeSessionCatalog {
         }
         guard self.isCLIEntrypoint(row["entrypoint"]),
               row["type"] as? String == "user",
+              row["isMeta"] as? Bool != true,
               let message = row["message"] as? [String: Any],
               message["role"] as? String == "user",
               let content = message["content"]

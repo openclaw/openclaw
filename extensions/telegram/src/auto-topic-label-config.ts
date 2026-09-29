@@ -1,4 +1,3 @@
-// Telegram helper module supports auto topic label config behavior.
 import type {
   TelegramAccountConfig,
   TelegramDirectConfig,

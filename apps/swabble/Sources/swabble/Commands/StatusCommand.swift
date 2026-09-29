@@ -3,7 +3,7 @@ import Foundation
 import Swabble
 
 @MainActor
-struct StatusCommand: ParsableCommand {
+struct StatusCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "status", abstract: "Show daemon state")
     }
@@ -13,7 +13,7 @@ struct StatusCommand: ParsableCommand {
     init() {}
     init(parsed: ParsedValues) {
         self.init()
-        if let cfg = parsed.options["config"]?.last { self.configPath = cfg }
+        if let cfg = parsed.options["configPath"]?.last { self.configPath = cfg }
     }
 
     mutating func run() async throws {

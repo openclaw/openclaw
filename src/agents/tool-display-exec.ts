@@ -5,6 +5,7 @@
  */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import {
@@ -24,6 +25,14 @@ import {
   trimLeadingEnv,
   unwrapShellWrapper,
 } from "./tool-display-exec-shell.js";
+
+const FILE_COMMAND_LABELS = new Map<string, readonly [prefix: string, fallback: string]>([
+  ["ls", ["list files in", "list files"]],
+  ["cat", ["show", "show output"]],
+  ["rm", ["remove", "remove files"]],
+  ["mkdir", ["create folder", "create folder"]],
+  ["touch", ["create file", "create file"]],
+]);
 
 function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]): string {
   if (words.length === 0) {
@@ -53,15 +62,6 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
       if (token === "--") {
         sub = firstPositional(words, i + 1);
         break;
-      }
-      if (token.startsWith("--")) {
-        if (token.includes("=")) {
-          continue;
-        }
-        if (globalWithValue.has(token)) {
-          i += 1;
-        }
-        continue;
       }
       if (token.startsWith("-")) {
         if (globalWithValue.has(token)) {
@@ -192,9 +192,11 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
     return name ? `find files named "${name}" in ${path}` : `find files in ${path}`;
   }
 
-  if (bin === "ls") {
+  const fileCommand = FILE_COMMAND_LABELS.get(bin);
+  if (fileCommand) {
+    const [prefix, fallback] = fileCommand;
     const target = firstPositional(words, 1);
-    return target ? `list files in ${target}` : "list files";
+    return target ? `${prefix} ${target}` : fallback;
   }
 
   if (bin === "head" || bin === "tail") {
@@ -221,11 +223,6 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
       return `show ${target}`;
     }
     return `show ${bin} output`;
-  }
-
-  if (bin === "cat") {
-    const target = firstPositional(words, 1);
-    return target ? `show ${target}` : "show output";
   }
 
   if (bin === "sed") {
@@ -267,21 +264,6 @@ function summarizeKnownExec(words: string[], hereInput?: ShellWords["hereInput"]
       return `${action} ${src}`;
     }
     return `${action} files`;
-  }
-
-  if (bin === "rm") {
-    const target = firstPositional(words, 1);
-    return target ? `remove ${target}` : "remove files";
-  }
-
-  if (bin === "mkdir") {
-    const target = firstPositional(words, 1);
-    return target ? `create folder ${target}` : "create folder";
-  }
-
-  if (bin === "touch") {
-    const target = firstPositional(words, 1);
-    return target ? `create file ${target}` : "create file";
   }
 
   if (bin === "curl" || bin === "wget") {
@@ -513,31 +495,19 @@ type ExecSummary = {
   allGeneric?: boolean;
 };
 
-function normalizePathForDisplay(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
-}
-
 function classifyWorkspacePath(
   path: string,
 ): "agent" | "repo" | "sandbox" | "workspace" | undefined {
-  const normalized = normalizePathForDisplay(path);
-  const segments = normalized.split("/").filter(Boolean);
-  if (segments.length === 0) {
-    return undefined;
-  }
+  const segments = path.split(/[\\/]/).filter(Boolean);
 
-  for (let index = 0; index < segments.length; index += 1) {
-    const segment = segments[index];
-    if (!segment) {
-      continue;
-    }
+  for (const [index, segment] of segments.entries()) {
     if (segment === ".openclaw" && segments[index + 1] === "workspace") {
       return "agent";
     }
     if (segment === ".openclaw" && segments[index + 1] === "sandboxes") {
       return "sandbox";
     }
-    if (/[-_]workspace$/i.test(segment) && segment.toLowerCase() !== "workspace") {
+    if (/[-_]workspace$/i.test(segment)) {
       return "agent";
     }
     if (/^workspace[-_]/i.test(segment)) {
@@ -592,41 +562,10 @@ function summarizeExecCommand(command: string): ExecSummary | undefined {
 }
 
 const KNOWN_SUMMARY_PREFIXES = [
-  "check git",
-  "view git",
-  "show git",
-  "list git",
-  "switch git",
-  "create git",
-  "pull git",
-  "push git",
-  "fetch git",
-  "merge git",
-  "rebase git",
-  "stage git",
-  "restore git",
-  "reset git",
-  "stash git",
-  "search ",
-  "find files",
-  "list files",
-  "show first",
-  "show last",
-  "print line",
-  "print text",
-  "copy ",
-  "move ",
-  "remove ",
-  "create folder",
-  "create file",
-  "fetch http",
-  "install dependencies",
   "run tests",
   "run build",
-  "start app",
   "run lint",
   "run openclaw",
-  "run node script",
   "run node ",
   "run python",
   "run ruby",
@@ -637,7 +576,6 @@ const KNOWN_SUMMARY_PREFIXES = [
   "run pnpm ",
   "run yarn ",
   "run bun ",
-  "check js syntax",
 ];
 
 function isGenericSummary(summary: string): boolean {
@@ -666,6 +604,27 @@ function compactRawCommand(raw: string, maxLength = 120): string {
 
 export type ToolDetailMode = "explain" | "raw";
 
+/** Treat agent-authored titles as bounded, redacted display text, never an outcome. */
+export function resolveExecTitle(args: unknown): string | undefined {
+  const title = asRecord(args)?.title;
+  if (typeof title !== "string") {
+    return undefined;
+  }
+  const text = sanitizeTerminalText(title.replace(/\s+/gu, " ")).trim();
+  return sliceUtf16Safe(redactToolPayloadText(text), 0, 120) || undefined;
+}
+
+/** Native Codex cells retain their freeform source under input. */
+export function resolveExecCode(args: unknown): string | undefined {
+  const record = asRecord(args);
+  for (const value of [record?.code, record?.input]) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 export function resolveExecDetail(
   args: unknown,
   options?: { detailMode?: ToolDetailMode },
@@ -673,6 +632,19 @@ export function resolveExecDetail(
   const record = asRecord(args);
   if (!record) {
     return undefined;
+  }
+
+  const title = options?.detailMode === "raw" ? undefined : resolveExecTitle(record);
+  if (title) {
+    return title;
+  }
+  const code = resolveExecCode(record);
+  if (code) {
+    return options?.detailMode === "raw"
+      ? compactRawCommand(code)
+      : record.language === "typescript"
+        ? "run TypeScript"
+        : "run JavaScript";
   }
 
   const raw = typeof record.command === "string" ? record.command.trim() : undefined;
@@ -693,7 +665,7 @@ export function resolveExecDetail(
       : typeof record.cwd === "string"
         ? record.cwd
         : undefined;
-  const nodeFragment = nodeName ? ` · node: ${nodeName}` : "";
+  const nodeFragment = nodeName ? `, node: ${nodeName}` : "";
   if (hasShellCompoundCommand(unwrapped)) {
     const cwdSuffix = cwdRaw?.trim() ? formatCwdSuffix(cwdRaw.trim()) : undefined;
     return `${cwdSuffix ? `${compact} ${cwdSuffix}` : compact}${nodeFragment}`;
@@ -718,7 +690,7 @@ export function resolveExecDetail(
     compact !== displaySummary &&
     compact !== summary
   ) {
-    return `${displaySummary}${nodeFragment} · ${formatInlineCodeSpan(compact)}`;
+    return `${displaySummary}${nodeFragment}, ${formatInlineCodeSpan(compact)}`;
   }
 
   return `${displaySummary}${nodeFragment}`;

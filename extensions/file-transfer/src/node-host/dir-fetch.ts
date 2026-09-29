@@ -1,9 +1,17 @@
-// File Transfer plugin module implements dir fetch behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ArchiveLimitError } from "openclaw/plugin-sdk/archive";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { inspectDirFetchArchive } from "../shared/dir-fetch-archive.js";
+import {
+  DIR_FETCH_DEFAULT_MAX_BYTES,
+  DIR_FETCH_HARD_MAX_BYTES,
+  DIR_FETCH_MAX_ENTRIES,
+} from "../shared/dir-fetch-limits.js";
 import {
   matchesFileIdentity,
   type FileIdentity,
@@ -16,9 +24,6 @@ import {
   resolveBoundReadDirectory,
   statRequiredDirectory,
 } from "./path-errors.js";
-
-const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
 type DirFetchParams = {
   path?: unknown;
@@ -59,13 +64,6 @@ type DirFetchErr = {
 
 type DirFetchResult = DirFetchOk | DirFetchErr;
 
-function clampMaxBytes(input: unknown): number {
-  if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
-    return DIR_FETCH_DEFAULT_MAX_BYTES;
-  }
-  return Math.min(Math.floor(input), DIR_FETCH_HARD_MAX_BYTES);
-}
-
 function classifyFsError(err: unknown): DirFetchErrCode {
   const safeCode = classifyFsSafeReadError(err);
   if (safeCode) {
@@ -95,34 +93,6 @@ async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> 
   return match ? Number.parseInt(match[0], 10) <= heuristicKb : true;
 }
 
-async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
-  const result = await runCommandBuffered(["tar", "-tzf", "-"], {
-    discardOutput: { stderr: true },
-    input: tarBuffer,
-    maxOutputBytes: { stdout: 32 * 1024 * 1024, stderr: 64 * 1024 },
-    timeoutMs: 10_000,
-  }).catch(() => null);
-  if (!result || result.termination !== "exit" || result.code !== 0) {
-    return null;
-  }
-  const entries: string[] = [];
-  const output = result.stdout.toString("utf8");
-  let start = 0;
-  while (start <= output.length) {
-    const end = output.indexOf("\n", start);
-    const rawLine = output.slice(start, end === -1 ? output.length : end);
-    const line = rawLine.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, "");
-    if (line.length > 0) {
-      entries.push(line);
-    }
-    if (end === -1) {
-      break;
-    }
-    start = end + 1;
-  }
-  return entries.toSorted((left, right) => left.localeCompare(right));
-}
-
 async function listTreeEntries(
   root: string,
   maxEntries: number,
@@ -136,19 +106,19 @@ async function listTreeEntries(
       code: "CANONICAL_PATH_CHANGED",
     });
   }
+  // Root.walk is core-only; plugins enumerate through the rooted list contract.
   async function visit(relativeDir: string): Promise<boolean> {
     const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
-      results.push(rel);
+    for (const entry of entries.toSorted(
+      (left, right) => left.name.localeCompare(right.name) || (left.name < right.name ? -1 : 1),
+    )) {
+      const relativePath = path.posix.join(relativeDir, entry.name);
+      results.push(relativePath);
       if (results.length > maxEntries) {
         return false;
       }
-      if (entry.isDirectory) {
-        const ok = await visit(rel);
-        if (!ok) {
-          return false;
-        }
+      if (entry.isDirectory && !(await visit(relativePath))) {
+        return false;
       }
     }
     return true;
@@ -162,7 +132,10 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     return requestedPath;
   }
 
-  const maxBytes = clampMaxBytes(params.maxBytes);
+  const maxBytes = Math.min(
+    Math.floor(asPositiveFiniteNumber(params.maxBytes) ?? DIR_FETCH_DEFAULT_MAX_BYTES),
+    DIR_FETCH_HARD_MAX_BYTES,
+  );
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 
@@ -183,7 +156,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   if (preflightOnly) {
     let entries: string[] | "TOO_MANY";
     try {
-      entries = await listTreeEntries(canonical, 5000, identity);
+      entries = await listTreeEntries(canonical, DIR_FETCH_MAX_ENTRIES, identity);
     } catch (err) {
       const errorCode = err && typeof err === "object" && "code" in err ? err.code : undefined;
       const code =
@@ -281,12 +254,14 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   const sha256 = crypto.createHash("sha256").update(tarBuffer).digest("hex");
   const tarBase64 = tarBuffer.toString("base64");
   const tarBytes = tarBuffer.byteLength;
-  const entries = await listTarEntries(tarBuffer);
-  if (entries === null) {
+  let entries: string[];
+  try {
+    entries = await inspectDirFetchArchive(tarBuffer, 10_000);
+  } catch (error) {
     return {
       ok: false,
-      code: "READ_ERROR",
-      message: "tar entry listing failed",
+      code: error instanceof ArchiveLimitError ? "TREE_TOO_LARGE" : "READ_ERROR",
+      message: `archive inspection failed: ${formatErrorMessage(error)}`,
       canonicalPath: canonical,
     };
   }

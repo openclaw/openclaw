@@ -1,4 +1,3 @@
-// Resolves command executables and wrapper policy paths for exec approvals.
 import crypto from "node:crypto";
 import path from "node:path";
 import { safeRealpathSync } from "@openclaw/fs-safe/path";
@@ -55,11 +54,13 @@ function buildExecutableResolution(
   params: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
+    useCache?: boolean;
   },
 ): ExecutableResolution {
   const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
     cwd: params.cwd,
     env: params.env,
+    useCache: params.useCache,
   });
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
@@ -77,6 +78,7 @@ function buildCommandResolution(params: {
   policyRawExecutable?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  useCache?: boolean;
   effectiveArgv: string[];
   wrapperChain: string[];
   policyBlocked: boolean;
@@ -86,7 +88,7 @@ function buildCommandResolution(params: {
   const policy = params.policyRawExecutable
     ? buildExecutableResolution(params.policyRawExecutable, params)
     : execution;
-  const resolution: CommandResolution = {
+  return {
     kind: "command",
     execution,
     policy,
@@ -95,7 +97,6 @@ function buildCommandResolution(params: {
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
   };
-  return resolution;
 }
 
 export function resolveCommandResolution(
@@ -122,6 +123,7 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
+  options?: { useCache?: boolean },
 ): CommandResolution | null {
   const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
   const effectiveArgv = plan.argv;
@@ -136,6 +138,7 @@ export function resolveCommandResolutionFromArgv(
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
+    useCache: options?.useCache,
     cwd,
     env,
   });
@@ -246,19 +249,9 @@ export function resolveApprovalAuditTrustPath(
 }
 
 /** @deprecated Use resolveExecutionTargetCandidatePath. */
-export function resolveAllowlistCandidatePath(
-  resolution: CommandResolution | ExecutableResolution | null,
-  cwd?: string,
-): string | undefined {
-  return resolveExecutionTargetCandidatePath(resolution, cwd);
-}
+export const resolveAllowlistCandidatePath = resolveExecutionTargetCandidatePath;
 
-export function resolvePolicyAllowlistCandidatePath(
-  resolution: CommandResolution | ExecutableResolution | null,
-  cwd?: string,
-): string | undefined {
-  return resolvePolicyTargetCandidatePath(resolution, cwd);
-}
+export const resolvePolicyAllowlistCandidatePath = resolvePolicyTargetCandidatePath;
 
 const LEGACY_HASHED_ARG_PATTERN_PREFIX = "sha256:argv:";
 const CWD_BOUND_HASHED_ARG_PATTERN_PREFIX = "sha256:cwd-argv:v1:";
@@ -273,6 +266,28 @@ export function isGeneratedHashedArgPattern(value: string | null | undefined): b
 
 export function isCwdBoundHashedArgPattern(value: string | null | undefined): boolean {
   return typeof value === "string" && value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX);
+}
+
+export type ExecAllowlistScope = "command text" | "argv+cwd" | "argv" | "any args" | "inactive";
+
+export function classifyExecAllowlistScope(
+  entry: Pick<ExecAllowlistEntry, "pattern" | "source" | "argPattern">,
+): ExecAllowlistScope {
+  const pattern = entry.pattern.trim();
+  const generated = entry.source === "allow-always";
+  // Reserved command markers require generated source; manual patterns remain executable globs.
+  if (generated && (pattern.startsWith("=command:") || pattern.startsWith("=node-command:"))) {
+    return "command text";
+  }
+  // Legacy hashes never match, including on manual entries that Doctor must retain.
+  const legacyHashed = entry.argPattern?.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX) === true;
+  if (legacyHashed || (generated && !isCwdBoundHashedArgPattern(entry.argPattern))) {
+    return "inactive";
+  }
+  if (isCwdBoundHashedArgPattern(entry.argPattern)) {
+    return "argv+cwd";
+  }
+  return entry.argPattern ? "argv" : "any args";
 }
 
 function renderGeneratedArgPatternSubject(argv: string[]): string {
@@ -304,15 +319,7 @@ export function buildCwdBoundHashedArgPattern(
   return `${CWD_BOUND_HASHED_ARG_PATTERN_PREFIX}${digest}`;
 }
 
-function matchArgPattern(
-  argPattern: string,
-  argv: string[],
-  cwd: string | undefined,
-  platform?: string | null,
-): boolean {
-  if (argPattern.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX)) {
-    return cwd !== undefined && argPattern === buildCwdBoundHashedArgPattern(argv, cwd, platform);
-  }
+function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
   if (argPattern.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX)) {
     return false;
   }
@@ -406,6 +413,7 @@ export function matchAllowlist(
     return null;
   }
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
+  let cwdBoundHash: string | undefined;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
     if (!pattern) {
@@ -428,11 +436,21 @@ export function matchAllowlist(
       }
       continue;
     }
-    // Entry has argPattern — check argv match.
-    if (entry.source === "allow-always" && !isCwdBoundHashedArgPattern(entry.argPattern)) {
+    if (!argv) {
       continue;
     }
-    if (argv && matchArgPattern(entry.argPattern, argv, cwd, platform)) {
+    if (isCwdBoundHashedArgPattern(entry.argPattern)) {
+      if (cwd === undefined) {
+        continue;
+      }
+      cwdBoundHash ??= buildCwdBoundHashedArgPattern(argv, cwd, platform);
+      if (entry.argPattern === cwdBoundHash) {
+        return entry;
+      }
+    } else if (
+      entry.source !== "allow-always" &&
+      matchArgPattern(entry.argPattern, argv, platform)
+    ) {
       return entry;
     }
   }

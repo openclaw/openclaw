@@ -53,17 +53,9 @@ export function buildOpenAICompatibleReplayPolicy(
         }
       : {}),
     ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
-    ...(modelApi === "openai-completions"
-      ? {
-          applyAssistantFirstOrderingFix: true,
-          validateGeminiTurns: true,
-          validateAnthropicTurns: true,
-        }
-      : {
-          applyAssistantFirstOrderingFix: false,
-          validateGeminiTurns: false,
-          validateAnthropicTurns: false,
-        }),
+    applyAssistantFirstOrderingFix: modelApi === "openai-completions",
+    validateGeminiTurns: modelApi === "openai-completions",
+    validateAnthropicTurns: modelApi === "openai-completions",
     ...(modelApi === "openai-completions" && dropReasoningFromHistory
       ? { dropReasoningFromHistory: true }
       : {}),
@@ -176,6 +168,8 @@ function markGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState):
 /** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
   return {
+    // Managed explicit caching projects the current volatile system suffix here.
+    appendOnlyRuntimeContext: false,
     sanitizeMode: "full",
     sanitizeToolCallIds: true,
     toolCallIdMode: "strict",

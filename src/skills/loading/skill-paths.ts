@@ -1,12 +1,25 @@
-// Skill path helpers keep prompt and diagnostic paths compact without changing their meaning.
 import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { resolveConfigDir } from "../../utils.js";
+import {
+  hasActivePluginInstallRoots,
+  resolveActivePluginInstallRoots,
+} from "../../plugins/install-root-context.js";
+import { CONFIG_DIR, resolveConfigDir } from "../../utils.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import type { Skill } from "./skill-contract.js";
 import { tryRealpath } from "./symlink-targets.js";
+
+export function resolvePluginSkillsDir(): string {
+  // Generated links follow the active state scope; managed skill reads keep their source root.
+  const stateDir = hasActivePluginInstallRoots()
+    ? resolveActivePluginInstallRoots().stateDir
+    : CONFIG_DIR;
+  return path.join(stateDir, "plugin-skills");
+}
 
 /** Workspace sync excludes repository internals and installed dependencies at every depth. */
 export function shouldSyncSkillPath(filePath: string): boolean {
@@ -41,12 +54,15 @@ function resolveCompactHomePrefixes(): string[] {
 }
 
 /** Compact prompt-facing skill paths while preserving managed paths that `~` cannot reach. */
-export function compactPromptSkills(skills: Skill[]): Skill[] {
+export function compactPromptSkills(
+  skills: Skill[],
+  options: { config?: OpenClawConfig; agentId?: string } = {},
+): Skill[] {
   const prefixes = resolveCompactHomePrefixes();
   if (prefixes.length === 0) {
     return skills;
   }
-  const preservedRoots = resolvePreservedPromptSkillPathRoots();
+  const preservedRoots = resolvePreservedPromptSkillPathRoots(options);
   const tildeRoots = resolvePromptTildeRoots();
   return skills.map((skill) => ({
     ...skill,
@@ -56,9 +72,15 @@ export function compactPromptSkills(skills: Skill[]): Skill[] {
   }));
 }
 
-function resolvePreservedPromptSkillPathRoots(): string[] {
+function resolvePreservedPromptSkillPathRoots(options: {
+  config?: OpenClawConfig;
+  agentId?: string;
+}): string[] {
   const configDir = resolveConfigDir();
   const promptSkillDirs = [
+    ...(options.config && options.agentId
+      ? [resolveWorkshopSkillsDir(options.config, options.agentId)]
+      : []),
     path.resolve(configDir, "skills"),
     path.resolve(configDir, "plugin-skills"),
   ];
@@ -95,21 +117,18 @@ function shouldPreservePromptSkillPath(
   tildeRoots: readonly string[],
 ): boolean {
   const resolvedFilePath = path.resolve(filePath);
-  const isManagedPromptSkillPath = roots.some(
-    (root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath),
-  );
+  const isManagedPromptSkillPath = roots.some((root) => isPathInside(root, resolvedFilePath));
   if (!isManagedPromptSkillPath) {
     return false;
   }
-  return !tildeRoots.some(
-    (root) => resolvedFilePath === root || isPathInside(root, resolvedFilePath),
-  );
+  return !tildeRoots.some((root) => isPathInside(root, resolvedFilePath));
 }
 
 function compactHomePath(filePath: string, prefixes: readonly string[]): string {
   for (const prefix of prefixes) {
     if (filePath.startsWith(prefix)) {
-      return "~/" + normalizeCompactedSkillPath(filePath.slice(prefix.length), prefix);
+      const relative = filePath.slice(prefix.length);
+      return "~/" + (prefix.includes("\\") ? relative.replace(/\\/g, "/") : relative);
     }
   }
   return filePath;
@@ -121,10 +140,6 @@ function compactHomePrefixesForHome(home: string): string[] {
     prefixes.push(home + "\\");
   }
   return prefixes;
-}
-
-function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string): string {
-  return matchedHomePrefix.includes("\\") ? filePath.replace(/\\/g, "/") : filePath;
 }
 
 /** Compact a skill path for console diagnostics. */

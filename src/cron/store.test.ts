@@ -1,23 +1,28 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 // Cron store tests cover persisted scheduled job state and run metadata.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadLegacyCronQuarantineForMigration } from "../commands/doctor/cron/legacy-quarantine-migration.js";
 import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertCronJobsStoreUnchanged,
   CronJobsStoreChangedError,
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
-  loadCronJobsStoreSync,
   loadCronQuarantinedJobs,
   loadCronStore,
   resolveCronStorePath,
@@ -25,6 +30,8 @@ import {
   saveCronQuarantinedJobs,
   saveCronStore,
 } from "./store.js";
+import { cronStoreKey } from "./store/key.js";
+import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
 import type { CronStoreFile } from "./types.js";
 
 let fixtureRoot = "";
@@ -133,6 +140,40 @@ describe("resolveCronStorePath", () => {
 });
 
 describe("cron store", () => {
+  it("reads an absent cron table without touching source WAL artifacts", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-cron-readonly-wal-" }, async (state) => {
+      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const writer = new DatabaseSync(databasePath);
+      writer.exec(
+        "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed');",
+      );
+      const files = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+      const hashes = () =>
+        Promise.all(
+          files.map(async (file) =>
+            createHash("sha256")
+              .update(await fs.readFile(file))
+              .digest("hex"),
+          ),
+        );
+      const before = await hashes();
+      try {
+        const loaded = await withArtifactPreservingStateReads(() =>
+          loadCronJobsStoreWithConfigJobsReadOnly(
+            path.join(state.stateDir, "cron", "jobs.json"),
+            state.env,
+          ),
+        );
+        expect(loaded.store).toEqual({ version: 1, jobs: [] });
+        expect(await hashes()).toEqual(before);
+        expect(writer.prepare("SELECT value FROM marker").all()).toEqual([{ value: "committed" }]);
+      } finally {
+        writer.close();
+      }
+    });
+  });
+
   it("returns empty store when file does not exist", async () => {
     const store = await makeStorePath();
     const loaded = await loadCronStore(store.storePath);
@@ -272,13 +313,13 @@ describe("cron store", () => {
     expect(loaded.jobs[1]?.enabled).toBe(false);
   });
 
-  it("does not load legacy top-level array stores synchronously from core", async () => {
+  it("does not load legacy top-level array stores from core", async () => {
     const store = await makeStorePath();
-    const job = makeStore("legacy-array-sync", true).jobs[0];
+    const job = makeStore("legacy-array-core", true).jobs[0];
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify([job], null, 2), "utf-8");
 
-    const loaded = loadCronJobsStoreSync(store.storePath);
+    const loaded = await loadCronStore(store.storePath);
 
     expect(loaded.jobs).toHaveLength(0);
   });
@@ -377,9 +418,9 @@ describe("cron store", () => {
     await expectPathMissing(`${store.storePath}.migrated`);
   });
 
-  it("does not synchronously import legacy files from core reads", async () => {
+  it("does not import legacy files from core reads", async () => {
     const store = await makeStorePath();
-    const valid = makeStore("job-valid-sync-unarchived", true).jobs[0];
+    const valid = makeStore("job-valid-core-unarchived", true).jobs[0];
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(
       store.storePath,
@@ -387,7 +428,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = loadCronJobsStoreSync(store.storePath);
+    const loaded = await loadCronStore(store.storePath);
 
     expect(loaded.jobs.map((job) => job.id)).toEqual([]);
     expect(await fs.stat(store.storePath)).toBeTruthy();
@@ -432,7 +473,7 @@ describe("cron store", () => {
     await saveCronStore(storePath, store);
     const database = openOpenClawStateDatabase().db;
     database.exec(
-      "CREATE TEMP TRIGGER fail_cron_quarantine_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
+      "CREATE TRIGGER fail_cron_quarantine_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
     );
     try {
       await expect(
@@ -464,7 +505,7 @@ describe("cron store", () => {
     saveCronQuarantinedJobs({ storePath, nowMs: 123, entries: [entry] });
     const database = openOpenClawStateDatabase().db;
     database.exec(
-      "CREATE TEMP TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
+      "CREATE TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
     );
     try {
       await expect(
@@ -534,18 +575,6 @@ describe("cron store", () => {
         job: expect.objectContaining({ id: malformed.id }),
       }),
     ]);
-  });
-
-  it("loads split cron state synchronously for task reconciliation", async () => {
-    const { storePath } = await makeStorePath();
-    await saveCronStore(storePath, makeStore("job-sync", true));
-
-    const loaded = loadCronJobsStoreSync(storePath);
-
-    expect(loaded.jobs).toHaveLength(1);
-    expect(loaded.jobs[0]?.id).toBe("job-sync");
-    expect(loaded.jobs[0]?.state).toStrictEqual({});
-    expect(loaded.jobs[0]?.updatedAtMs).toBeTypeOf("number");
   });
 
   it("loads split cron state for legacy jobId rows during doctor migration", async () => {
@@ -664,8 +693,19 @@ describe("cron store", () => {
     const first = makeStore("job-1", true);
     const second = makeStore("job-2", false);
 
+    expectDefined(first.jobs[0], "prior job").description = "x".repeat(128 * 1024);
     await saveCronStore(store.storePath, first);
-    await saveCronStore(store.storePath, second);
+    const counter = trackSqliteStatementExecutions(
+      openOpenClawStateDatabase().db,
+      ["priorRows"],
+      (sql) => (/^select\b/i.test(sql) && sql.includes('"cron_jobs"') ? "priorRows" : null),
+    );
+    try {
+      await saveCronStore(store.storePath, second);
+      expect(counter.textBytes.priorRows).toBeLessThan(1024);
+    } finally {
+      counter.restore();
+    }
 
     const loaded = await loadCronStore(store.storePath);
     expect(loaded.jobs.map((job) => job.id)).toEqual(["job-2"]);
@@ -1448,9 +1488,9 @@ describe("cron store", () => {
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
   });
 
-  it("does not synchronously import stale split runtime nextRunAtMs from legacy files", async () => {
+  it("does not import stale split runtime nextRunAtMs from legacy files", async () => {
     const { storePath } = await makeStorePath();
-    const payload = makeStore("job-sync-restart-drift", true);
+    const payload = makeStore("job-core-restart-drift", true);
     const staleNextRunAtMs =
       expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").createdAtMs + 3_600_000;
     expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").schedule = {
@@ -1480,7 +1520,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = loadCronJobsStoreSync(storePath);
+    const loaded = await loadCronStore(storePath);
 
     expect(loaded.jobs).toEqual([]);
   });
@@ -1782,6 +1822,76 @@ describe("saveCronStore", () => {
   });
 });
 describe("cron jobs fingerprint guard", () => {
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "fingerprints one raw definition snapshot independently of %s storage",
+    async (encoding) => {
+      await withOpenClawTestState({ label: "cron-fingerprint" }, async (state) => {
+        const databasePath = resolveOpenClawStateSqlitePath(state.env);
+        await fs.mkdir(path.dirname(databasePath), { recursive: true });
+        const initial = new DatabaseSync(databasePath);
+        try {
+          // SQLite fixes file encoding at the first schema write, even after that table is removed.
+          initial.exec(
+            `PRAGMA encoding = '${encoding}'; CREATE TABLE fixture(id); DROP TABLE fixture;`,
+          );
+        } finally {
+          initial.close();
+        }
+        const storePath = state.statePath("cron", "jobs.json");
+        const jobs = ["z", "\u{10000}", "\ue000", "malformed"].map((id) =>
+          expectDefined(makeStore(id, true).jobs[0], "fingerprint fixture"),
+        );
+        await saveCronStore(storePath, { version: 1, jobs });
+        const db = openOpenClawStateDatabase().db;
+        expect(db.prepare("PRAGMA encoding").get()).toEqual({ encoding });
+        const storeKey = cronStoreKey(storePath);
+        db.prepare(
+          "UPDATE cron_jobs SET job_json = '{malformed' WHERE store_key = ? AND job_id = ?",
+        ).run(storeKey, "malformed");
+        const raw = db
+          .prepare(
+            "SELECT job_id, job_json, sort_order FROM cron_jobs WHERE store_key = ? ORDER BY job_id",
+          )
+          .all(storeKey);
+        const expectedOrder = ["malformed", "z", "\ue000", "\u{10000}"].map((id) =>
+          expectDefined(
+            raw.find((row) => row.job_id === id),
+            "raw fingerprint row",
+          ),
+        );
+        const fingerprint = createHash("sha256")
+          .update(JSON.stringify(expectedOrder))
+          .digest("hex");
+        const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+        const reads = trackSqliteStatementExecutions(db, ["jobs"], (sql) =>
+          sql.startsWith("select ") && sql.includes('from "cron_jobs"') ? "jobs" : null,
+        );
+        try {
+          expect(loadCronStoreFromDatabase(db, storeKey).store).toEqual(loaded.store);
+          expect(loaded.jobsFingerprint).toBe(fingerprint);
+          expect(loaded.store.jobs.map((job) => job.id)).toEqual(["z", "\u{10000}", "\ue000"]);
+          expect(loaded.invalidConfigRows).toHaveLength(1);
+          expect(reads.rowCounts.jobs).toBe(4);
+          expect(reads.counts.jobs).toBe(1);
+        } finally {
+          reads.restore();
+        }
+        db.prepare("UPDATE cron_jobs SET state_json = ? WHERE store_key = ? AND job_id = ?").run(
+          '{"lastRunAtMs":42}',
+          storeKey,
+          "z",
+        );
+        expect(() => assertCronJobsStoreUnchanged(db, storePath, fingerprint)).not.toThrow();
+        db.prepare(
+          "UPDATE cron_jobs SET sort_order = sort_order + 1 WHERE store_key = ? AND job_id = ?",
+        ).run(storeKey, "z");
+        expect(() => assertCronJobsStoreUnchanged(db, storePath, fingerprint)).toThrow(
+          CronJobsStoreChangedError,
+        );
+      });
+    },
+  );
+
   it("refuses a replace after a concurrent order change and accepts a fresh snapshot", async () => {
     const { storePath } = await makeStorePath();
     const jobA = expectDefined(makeStore("job-a", true).jobs[0], "job-a fixture");

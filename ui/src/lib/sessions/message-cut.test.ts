@@ -1,46 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
-import { createSessionCapability } from "./index.ts";
-
-function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot: {
-    client: GatewayBrowserClient | null;
-    phase: "connected" | "reconnecting";
-    sessionKey: string;
-    assistantAgentId: string | null;
-    hello: GatewayHelloOk | null;
-  } = {
-    client,
-    phase: "connected",
-    sessionKey: "agent:main:main",
-    assistantAgentId: "main",
-    hello: null,
-  };
-  const listeners = new Set<(next: typeof snapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
-  return {
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe(listener: (next: typeof snapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
-    },
-    publish: (connected: boolean) => {
-      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-  };
-}
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "./session-capability.test-support.ts";
 
 describe("session capability message cuts", () => {
   it("returns a committed rewind result after the connection is replaced", async () => {
@@ -56,7 +20,7 @@ describe("session capability message cuts", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const harness = createGatewayHarness(client);
-    const sessions = createSessionCapability(harness.gateway);
+    const sessions = createTestSessionCapability(harness.gateway);
 
     const pending = sessions.rewind("agent:main:main", "user-entry");
     harness.publish(false);
@@ -92,7 +56,7 @@ describe("session capability message cuts", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.forkAtMessage("agent:main:main", "user-entry")).resolves.toEqual({
       sessionKey: "agent:main:dashboard:forked",
@@ -127,7 +91,7 @@ describe("session capability message cuts", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.listBranches("agent:main:main")).resolves.toEqual([branch]);
     await expect(sessions.switchBranch("agent:main:main", "branch-b")).resolves.toEqual({});

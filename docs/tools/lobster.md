@@ -7,10 +7,8 @@ read_when:
 ---
 
 Lobster runs multi-step tool pipelines as one deterministic tool call, with
-explicit approval checkpoints and resume tokens. It sits one layer above
-detached background work: for orchestrating flows across many detached tasks,
-see [Task Flow](/automation/taskflow) (`openclaw tasks flow`); for the task
-activity ledger, see [Background Tasks](/automation/tasks).
+explicit approval checkpoints and resume tokens. Approval checkpoints belong
+to the Lobster runner, not a separate orchestration registry.
 
 ## Why
 
@@ -68,16 +66,25 @@ With Lobster, the same job is one call that halts for approval and resumes:
 
 ## How it works
 
-OpenClaw runs Lobster workflows **in-process** using the bundled
-`@clawdbot/lobster` package as an embedded runner. No external `lobster`
-subprocess is spawned; the tool call returns a JSON envelope directly. If the
-pipeline halts for approval, the envelope carries a resume token (or a short
-approval ID) so you can continue later.
+The separately installed official `@openclaw/lobster` plugin runs Lobster
+workflows **in-process** using its embedded `@clawdbot/lobster` runtime. No
+external `lobster` subprocess is spawned; the tool call returns a JSON envelope
+directly. If the pipeline halts for approval, the envelope carries a resume
+token (or a short approval ID) so you can continue later.
 
 ## Enable
 
-Lobster is an **optional** plugin tool, not enabled by default. It ships
-bundled, so no separate install step is required - just allow the tool:
+Lobster is an **optional** plugin tool, not installed or enabled by default.
+Install the official plugin:
+
+```bash
+openclaw plugins install @openclaw/lobster
+```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
+Then allow the tool globally:
 
 ```json
 {
@@ -178,7 +185,7 @@ For a **structured LLM step** inside a workflow, enable the optional
 
 ### Important limitation: embedded Lobster vs `openclaw.invoke`
 
-The bundled Lobster plugin runs workflows **in-process** inside the gateway.
+The installed Lobster plugin runs workflows **in-process** inside the gateway.
 In that embedded mode, `openclaw.invoke` does **not** automatically inherit a
 gateway URL/auth context for nested OpenClaw CLI tool calls.
 
@@ -191,6 +198,16 @@ openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
 Use the example below only when running the **standalone Lobster CLI** in an
 environment where `openclaw.invoke` is already configured with the correct
 gateway/auth context.
+
+For `openclaw.invoke` and `clawd.invoke`, ambient `OPENCLAW_TOKEN` or
+`CLAWD_TOKEN` credentials are accepted only for `localhost`, `127.0.0.1`, or
+`[::1]` destinations. To send credentials to another HTTP(S) endpoint, pass
+`--token` explicitly. This rule also applies to embedded workflows that
+explicitly configure a remote connection. This command argument is the remote
+Gateway credential, not the Lobster tool's approval-resume `token` parameter.
+If an invocation times out or fails after dispatch,
+Lobster does not retry it automatically, because the Gateway may already have
+performed the action.
 
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
@@ -314,17 +331,6 @@ Run a workflow file with args:
 or `approvalId` (the short id from the same object) - use whichever the halted
 run returned. `approve` is required.
 
-### Managed Task Flow mode
-
-Passing `flowControllerId` and `flowGoal` on `run` (or `flowId` and
-`flowExpectedRevision` on `resume`) drives the call through the plugin
-runtime's managed [Task Flow](/automation/taskflow) API instead of returning
-a bare envelope: OpenClaw creates or resumes a durable flow record, applies the
-Lobster envelope to it (`waiting` on approval, `succeeded`/`failed`/`cancelled` on
-completion), and returns `{ ok, envelope, flow, mutation }`. This mode requires
-a bound Task Flow runtime and is intended for plugin/controller code that needs
-durable flow state across gateway restarts, not typical ad hoc agent use.
-
 ## Output envelope
 
 Lobster returns a JSON envelope with one of three statuses:
@@ -391,3 +397,4 @@ not.
 
 - [Automation](/automation) - all automation mechanisms
 - [Tools Overview](/tools) - all available agent tools
+- [Lobster plugin reference](/plugins/reference/lobster) - manifest, config, and tool reference for the plugin

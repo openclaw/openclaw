@@ -1,6 +1,5 @@
-// Memory Wiki plugin module implements source sync behavior.
 import type { OpenClawConfig } from "../api.js";
-import { syncMemoryWikiBridgeSources, type BridgeMemoryWikiResult } from "./bridge.js";
+import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import {
   refreshMemoryWikiIndexesAfterImport,
   type RefreshMemoryWikiIndexesResult,
@@ -10,7 +9,9 @@ import {
   resolveMemoryWikiVaultMutationKey,
   withMemoryWikiVaultMutation,
 } from "./mutation-coordinator.js";
+import { emptySourceImportResult, type BridgeMemoryWikiResult } from "./source-import.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
+import { initializeMemoryWikiVault } from "./vault.js";
 
 export type MemoryWikiImportedSourceSyncResult = BridgeMemoryWikiResult & {
   indexesRefreshed: boolean;
@@ -58,15 +59,12 @@ async function syncMemoryWikiImportedSourcesOnce(
       ? await syncMemoryWikiUnsafeLocalSources(params.config, { signal: params.signal })
       : await syncMemoryWikiUnsafeLocalSources(params.config);
   } else {
-    syncResult = {
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-    };
+    // Local mode has no importer to activate the cache before readiness is checked.
+    await initializeMemoryWikiVault(
+      params.config,
+      params.signal ? { signal: params.signal } : undefined,
+    );
+    syncResult = emptySourceImportResult();
   }
   params.signal?.throwIfAborted();
   const refreshResult = await refreshMemoryWikiIndexesAfterImport({

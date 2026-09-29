@@ -1,9 +1,11 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { getDiscordEndpointRuntime, type DiscordEndpointRuntime } from "../endpoint-runtime.js";
 
 export const DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token";
 export const DISCORD_USER_URL = "https://discord.com/api/v10/users/@me";
 const DISCORD_HOST = "discord.com";
+const DISCORD_ACTIVITY_REQUEST_TIMEOUT_MS = 15_000;
 const JSON_MAX_BYTES = 64 * 1024;
 const INSTANCE_ID_MAX_LENGTH = 256;
 
@@ -32,15 +34,46 @@ export async function fetchDiscordJson(params: {
   url: string;
   init: RequestInit;
   auditContext: string;
+  endpointRuntime?: DiscordEndpointRuntime | null;
 }): Promise<{ ok: boolean; status: number; body?: Record<string, unknown> }> {
-  const { response, release } = await params.fetchGuard({
-    url: params.url,
-    fetchImpl: params.fetchImpl,
-    init: params.init,
-    policy: { allowedHostnames: [DISCORD_HOST] },
-    auditContext: params.auditContext,
-    timeoutMs: 15_000,
-  });
+  const endpoint = Object.hasOwn(params, "endpointRuntime")
+    ? params.endpointRuntime
+    : getDiscordEndpointRuntime();
+  const liveUrl = new URL(params.url);
+  const endpointPath =
+    liveUrl.pathname === "/api/oauth2/token"
+      ? "/oauth2/token"
+      : liveUrl.pathname.startsWith("/api/v10/")
+        ? liveUrl.pathname.slice("/api/v10".length)
+        : undefined;
+  if (endpoint && !endpointPath) {
+    throw new Error("Discord Activity request is outside the configured endpoint routes");
+  }
+  const guarded = endpoint
+    ? {
+        response: await endpoint.fetch(
+          `${endpoint.descriptor.restApiBaseUrl}${endpointPath}${liveUrl.search}`,
+          {
+            ...params.init,
+            signal: params.init.signal
+              ? AbortSignal.any([
+                  params.init.signal,
+                  AbortSignal.timeout(DISCORD_ACTIVITY_REQUEST_TIMEOUT_MS),
+                ])
+              : AbortSignal.timeout(DISCORD_ACTIVITY_REQUEST_TIMEOUT_MS),
+          },
+        ),
+        release: async () => {},
+      }
+    : await params.fetchGuard({
+        url: params.url,
+        fetchImpl: params.fetchImpl,
+        init: params.init,
+        policy: { allowedHostnames: [DISCORD_HOST] },
+        auditContext: params.auditContext,
+        timeoutMs: DISCORD_ACTIVITY_REQUEST_TIMEOUT_MS,
+      });
+  const { response, release } = guarded;
   try {
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
@@ -70,6 +103,7 @@ export async function resolveActivityInstanceChannel(params: {
   botAuth: string;
   proxyFetch?: typeof fetch;
 }): Promise<string | undefined> {
+  const endpointRuntime = getDiscordEndpointRuntime() ?? null;
   let result: Awaited<ReturnType<typeof fetchDiscordJson>>;
   try {
     result = await fetchDiscordJson({
@@ -78,6 +112,7 @@ export async function resolveActivityInstanceChannel(params: {
       url: `https://discord.com/api/v10/applications/${encodeURIComponent(params.applicationId)}/activity-instances/${encodeURIComponent(params.instanceId)}`,
       init: { headers: { Authorization: `Bot ${params.botAuth}` } },
       auditContext: "discord.activities.instance",
+      endpointRuntime,
     });
   } catch {
     return undefined;

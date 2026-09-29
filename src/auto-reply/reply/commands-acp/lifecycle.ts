@@ -3,24 +3,17 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
-import type { AcpSessionTarget } from "../../../acp/control-plane/manager.types.js";
 import { resolveAcpSessionResolutionError } from "../../../acp/control-plane/manager.utils.js";
-import {
-  cleanupFailedAcpSpawn,
-  type AcpSpawnRuntimeCloseHandle,
-} from "../../../acp/control-plane/spawn.js";
+import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import {
   isAcpEnabledByPolicy,
   resolveAcpAgentPolicyError,
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
+import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
-import {
-  closeAdmittedRunDelegatedAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../../../agents/admitted-run-context.js";
+import { closeAdmittedRunDelegatedAuthority } from "../../../agents/admitted-run-context.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import {
   resolveAcpSpawnRuntimePolicyError,
@@ -31,11 +24,15 @@ import {
   type ChannelAdmissionEvidence,
 } from "../../../channels/message-access/admission-evidence.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
-import type { SessionAcpMeta } from "../../../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  getGatewayLocalUserIngress,
+  type GatewayLocalUserIngress,
+} from "../../../gateway/local-user-ingress.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import { consumeChannelRunAdmission } from "../channel-run-admission.js";
+import { prepareChannelRunAdmission } from "../channel-run-admission.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
@@ -45,30 +42,12 @@ import {
 } from "./bindings.js";
 import {
   ACP_STEER_OUTPUT_LIMIT,
-  collectAcpErrorText,
   parseSpawnInput,
   parseSteerInput,
   resolveCommandRequestId,
   withAcpCommandErrorBoundary,
 } from "./shared.js";
 import { resolveAcpTargetSessionKey } from "./targets.js";
-async function cleanupFailedSpawn(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-  shouldDeleteSession: boolean;
-  initializedRuntime?: AcpSpawnRuntimeCloseHandle;
-}) {
-  await cleanupFailedAcpSpawn({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    shouldDeleteSession: params.shouldDeleteSession,
-    deleteTranscript: false,
-    runtimeCloseHandle: params.initializedRuntime,
-  });
-}
-
 async function persistSpawnedSessionLabel(params: {
   commandParams: HandleCommandsParams;
   sessionKey: string;
@@ -90,6 +69,7 @@ async function persistSpawnedSessionLabel(params: {
   });
 
   // Only the requester store has an in-memory snapshot to keep coherent.
+  params.commandParams.command.assertOwnerCurrent?.();
   if (params.commandParams.sessionStore && params.commandParams.storePath === storePath) {
     const existing = params.commandParams.sessionStore[params.sessionKey];
     if (existing) {
@@ -106,10 +86,10 @@ async function persistSpawnedSessionLabel(params: {
       agentId,
       sessionKey: params.sessionKey,
     },
-    () => ({
-      label,
-      updatedAt: now,
-    }),
+    () => {
+      params.commandParams.command.assertOwnerCurrent?.();
+      return { label, updatedAt: now };
+    },
   );
 }
 
@@ -138,7 +118,7 @@ export async function handleAcpSpawnAction(
   const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, spawn.agentId);
   if (agentPolicyError) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error: agentPolicyError,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "ACP target agent is not allowed by policy.",
@@ -162,7 +142,7 @@ export async function handleAcpSpawnAction(
     });
   } catch (error) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not resolve ACP session workspace.",
@@ -172,9 +152,11 @@ export async function handleAcpSpawnAction(
 
   let initializedBackend;
   let initializedMeta: SessionAcpMeta | undefined;
-  let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
+  let sessionEntry: SessionEntry;
+  let closeRuntimeOnFailure: () => Promise<void>;
   try {
     const initialized = await acpManager.initializeSession({
+      assertActive: params.command.assertOwnerCurrent,
       cfg: params.cfg,
       sessionKey,
       agentId: spawn.agentId,
@@ -182,15 +164,13 @@ export async function handleAcpSpawnAction(
       mode: spawn.mode,
       cwd: runtimeCwd,
     });
-    initializedRuntime = {
-      runtime: initialized.runtime,
-      handle: initialized.handle,
-    };
+    sessionEntry = initialized.sessionEntry;
+    closeRuntimeOnFailure = initialized.closeRuntimeOnFailure;
     initializedBackend = initialized.handle.backend || initialized.meta.backend;
     initializedMeta = initialized.meta;
   } catch (err) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error: err,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
@@ -214,12 +194,13 @@ export async function handleAcpSpawnAction(
       sessionMeta: initializedMeta,
     });
     if (!result.ok) {
-      await cleanupFailedSpawn({
+      await cleanupFailedAcpSpawn({
         cfg: params.cfg,
         sessionKey,
         agentId: spawn.agentId,
-        shouldDeleteSession: true,
-        initializedRuntime,
+        sessionEntry,
+        deleteTranscript: false,
+        closeRuntimeOnFailure,
       });
       return commandReply(`⚠️ ${result.error}`);
     }
@@ -234,12 +215,13 @@ export async function handleAcpSpawnAction(
       label: spawn.label,
     });
   } catch (err) {
-    await cleanupFailedSpawn({
+    await cleanupFailedAcpSpawn({
       cfg: params.cfg,
       sessionKey,
       agentId: spawn.agentId,
-      shouldDeleteSession: true,
-      initializedRuntime,
+      sessionEntry,
+      deleteTranscript: false,
+      closeRuntimeOnFailure,
     });
     const message = formatErrorMessage(err);
     return commandReply(`⚠️ ACP spawn failed: ${message}`);
@@ -283,21 +265,24 @@ export async function handleAcpSpawnAction(
   return commandReply(parts.join(" "));
 }
 
-function resolveAcpSessionForCommandOrStop(params: {
+async function resolveAcpSessionForCommandOrStop(params: {
   acpManager: ReturnType<typeof getAcpSessionManager>;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
-}): CommandHandlerResult | null {
-  const resolved = params.acpManager.resolveSession({
+  assertCurrent?: () => void;
+}): Promise<CommandHandlerResult | null> {
+  const resolved = await params.acpManager.resolveSessionAsync({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    assertCurrent: params.assertCurrent,
   });
+  params.assertCurrent?.();
   const error = resolveAcpSessionResolutionError(resolved);
   if (error) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: error.message,
@@ -305,21 +290,6 @@ function resolveAcpSessionForCommandOrStop(params: {
     );
   }
   return null;
-}
-
-async function resolveAcpTokenTargetSessionKeyOrStop(params: {
-  commandParams: HandleCommandsParams;
-  restTokens: string[];
-}): Promise<AcpSessionTarget | CommandHandlerResult> {
-  const token = normalizeOptionalString(params.restTokens.join(" "));
-  const target = await resolveAcpTargetSessionKey({
-    commandParams: params.commandParams,
-    token,
-  });
-  if (!target.ok) {
-    return commandReply(`⚠️ ${target.error}`);
-  }
-  return target;
 }
 
 async function withResolvedAcpSessionTarget(params: {
@@ -332,18 +302,20 @@ async function withResolvedAcpSessionTarget(params: {
   }) => Promise<CommandHandlerResult>;
 }): Promise<CommandHandlerResult> {
   const acpManager = getAcpSessionManager();
-  const target = await resolveAcpTokenTargetSessionKeyOrStop({
+  const target = await resolveAcpTargetSessionKey({
     commandParams: params.commandParams,
-    restTokens: params.restTokens,
+    token: normalizeOptionalString(params.restTokens.join(" ")),
   });
-  if (!("sessionKey" in target)) {
-    return target;
+  if (!target.ok) {
+    return commandReply(`⚠️ ${target.error}`);
   }
-  const guardFailure = resolveAcpSessionForCommandOrStop({
+  const guardFailure = await resolveAcpSessionForCommandOrStop({
     acpManager,
     cfg: params.commandParams.cfg,
     ...target,
+    assertCurrent: params.commandParams.command.assertOwnerCurrent,
   });
+  params.commandParams.command.assertOwnerCurrent?.();
   if (guardFailure) {
     return guardFailure;
   }
@@ -364,6 +336,7 @@ export async function handleAcpCancelAction(
       await withAcpCommandErrorBoundary({
         run: async () =>
           await acpManager.cancelSession({
+            assertActive: params.command.assertOwnerCurrent,
             cfg: params.cfg,
             sessionKey,
             agentId,
@@ -377,30 +350,26 @@ export async function handleAcpCancelAction(
 }
 
 async function runAcpSteer(params: {
+  assertOwnerCurrent?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
   instruction: string;
   requestId: string;
   channelAdmissionEvidence?: ChannelAdmissionEvidence;
+  gatewayLocalUserIngress?: GatewayLocalUserIngress;
 }): Promise<string> {
   const acpManager = getAcpSessionManager();
   let output = "";
-  const channelAdmission = consumeChannelRunAdmission(params.channelAdmissionEvidence);
-  const admittedRunContext = await prepareAgentRunAdmission({
+  const admittedRunContext = await prepareChannelRunAdmission({
+    assertSourceCurrent: params.assertOwnerCurrent,
     cfg: params.cfg,
-    operationalRunInstance: createOperationalRunInstanceRef(params.requestId),
-    facts: {
-      runId: params.requestId,
-      agentId: params.agentId,
-      ingress: {
-        kind: "acp",
-        boundary: "acp.command.steer",
-        state: channelAdmission.ingressState,
-      },
-      ...channelAdmission.facts,
-    },
-    onAdmitted: channelAdmission.onAdmitted,
+    runId: params.requestId,
+    agentId: params.agentId,
+    ingressKind: "acp",
+    boundary: "acp.command.steer",
+    evidence: params.channelAdmissionEvidence,
+    gatewayLocalUserIngress: params.gatewayLocalUserIngress,
   }).admit("acp");
 
   try {
@@ -441,7 +410,7 @@ export async function handleAcpSteerAction(
   const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
   if (dispatchPolicyError) {
     return commandReply(
-      collectAcpErrorText({
+      toAcpRuntimeErrorText({
         error: dispatchPolicyError,
         fallbackCode: "ACP_DISPATCH_DISABLED",
         fallbackMessage: dispatchPolicyError.message,
@@ -463,11 +432,13 @@ export async function handleAcpSteerAction(
     return commandReply(`⚠️ ${target.error}`);
   }
 
-  const guardFailure = resolveAcpSessionForCommandOrStop({
+  const guardFailure = await resolveAcpSessionForCommandOrStop({
     acpManager,
     cfg: params.cfg,
     ...target,
+    assertCurrent: params.command.assertOwnerCurrent,
   });
+  params.command.assertOwnerCurrent?.();
   if (guardFailure) {
     return guardFailure;
   }
@@ -475,11 +446,13 @@ export async function handleAcpSteerAction(
   return await withAcpCommandErrorBoundary({
     run: async () =>
       await runAcpSteer({
+        assertOwnerCurrent: params.command.assertOwnerCurrent,
         cfg: params.cfg,
         ...target,
         instruction: parsed.value.instruction,
         requestId: `${resolveCommandRequestId(params)}:steer`,
         channelAdmissionEvidence: readChannelContextAdmissionEvidence(params.rootCtx ?? params.ctx),
+        gatewayLocalUserIngress: getGatewayLocalUserIngress(params.rootCtx ?? params.ctx),
       }),
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "ACP steer failed before completion.",
@@ -503,6 +476,7 @@ export async function handleAcpCloseAction(
       let runtimeNotice;
       try {
         const closed = await acpManager.closeSession({
+          assertActive: params.command.assertOwnerCurrent,
           cfg: params.cfg,
           sessionKey,
           agentId,
@@ -513,7 +487,7 @@ export async function handleAcpCloseAction(
         runtimeNotice = closed.runtimeNotice ? ` (${closed.runtimeNotice})` : "";
       } catch (error) {
         return commandReply(
-          collectAcpErrorText({
+          toAcpRuntimeErrorText({
             error,
             fallbackCode: "ACP_TURN_FAILED",
             fallbackMessage: "ACP close failed before completion.",

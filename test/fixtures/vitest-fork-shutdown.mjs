@@ -7,6 +7,7 @@ import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.ts"
 
 const [root, rawOptions] = process.argv.slice(2);
 const { scenario, setup, fail } = JSON.parse(rawOptions);
+const unexpectedExit = scenario.startsWith("unexpected-");
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const events = path.join(root, "events.jsonl");
 const ready = path.join(root, "ready");
@@ -50,6 +51,13 @@ import { syncBuiltinESMExports } from "node:module";
 const scenario = ${JSON.stringify(scenario)};
 const ready = ${JSON.stringify(ready)};
 const record = (event) => fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify(event) + "\\n");
+// Capture the native exit before Vitest installs its process.exit interceptor.
+globalThis[Symbol.for("openclaw.fixture.nativeExit")] = process.exit.bind(process);
+if (scenario === "unexpected-start" && process.argv[1] === ${JSON.stringify(path.join(path.dirname(fileURLToPath(import.meta.resolve("vitest/package.json"))), "dist/workers/forks.js"))}) {
+  fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ pid: process.pid, threadId: 0, home: process.env.HOME }));
+  fs.writeSync(1, "unexpected-exit-tail\\n");
+  globalThis[Symbol.for("openclaw.fixture.nativeExit")](23);
+}
 const fork = childProcess.fork;
 childProcess.fork = (...args) => {
   const child = fork(...args);
@@ -190,8 +198,8 @@ if (process.send) {
       runner,
       `
 import fs from "node:fs";
-import Runner from ${JSON.stringify(pathToFileURL(path.join(repo, "test/non-isolated-runner.ts")).href)};
-export default class extends Runner {
+import { TestRunner } from "vitest";
+export default class extends TestRunner {
   constructor(config) {
     super(config);
     this.onCleanupWorkerContext(() => {
@@ -265,6 +273,12 @@ ${scenario === "hung-exit" ? `process.once("exit", () => { fs.writeFileSync(${JS
 ${scenario === "bad-exit" ? 'process.once("exit", () => { process.exitCode = 23; });' : ""}
 it("completes the test before worker shutdown", () => {
   fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ pid: process.pid, threadId, home: process.env.HOME }));
+  ${
+    unexpectedExit && scenario !== "unexpected-start"
+      ? `fs.writeSync(1, "unexpected-exit-tail\\n");
+  ${scenario === "unexpected-signal" ? 'process.kill(process.pid, "SIGKILL");' : `globalThis[Symbol.for("openclaw.fixture.nativeExit")](${scenario === "unexpected-exit-zero" ? 0 : 23});`}`
+      : ""
+  }
   ${fail ? 'expect.fail("intentional fixture failure");' : "expect(true).toBe(true);"}
 });
 `,
@@ -279,7 +293,7 @@ it("completes the test before worker shutdown", () => {
     "--configLoader",
     "native",
   ];
-  if (scenario !== "plain" && scenario !== "custom") {
+  if (scenario !== "plain" && scenario !== "custom" && !unexpectedExit) {
     // This shutdown contract covers Node's exit-time writes, not the Inspector
     // profiler's awaited cleanup. Pass native flags only to the actual worker.
     args.push(

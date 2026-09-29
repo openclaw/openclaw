@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements vault behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -9,6 +8,7 @@ import { FsSafeError, pathExists, root as fsRoot } from "openclaw/plugin-sdk/sec
 import {
   activateMemoryWikiCompiledCacheOwner,
   invalidateMemoryWikiCompiledCache,
+  isMemoryWikiCompiledCacheOwnerActive,
   reconcileMemoryWikiCompiledCacheOwner,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
@@ -157,9 +157,13 @@ export async function initializeMemoryWikiVault(
       },
     });
   }
-  await ensureMemoryWikiVaultGeneration(rootDir);
+  const vaultGeneration = await ensureMemoryWikiVaultGeneration(rootDir);
   options?.signal?.throwIfAborted();
-  await activateExistingMemoryWikiVault(config, options?.signal);
+  // Ordinary requests reuse the reconciled owner. Cold activation and explicit
+  // lifecycle refresh validate source hashes; scaffold/generation replacement retires it.
+  if (!isMemoryWikiCompiledCacheOwnerActive(config, vaultGeneration)) {
+    await activateExistingMemoryWikiVault(config, options?.signal);
+  }
 
   return {
     rootDir,

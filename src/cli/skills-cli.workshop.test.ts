@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -42,6 +43,7 @@ const mocks = vi.hoisted(() => {
     runtimeStdout,
     runtimeErrors,
     workspaceDir: "",
+    config: {},
   };
 });
 
@@ -69,29 +71,8 @@ vi.mock("../gateway/call.js", () => ({
   isImplicitLocalGatewayTarget: async () => !process.env.OPENCLAW_GATEWAY_URL,
 }));
 
-vi.mock("../infra/gateway-lock.js", () => ({
-  acquireGatewayLock: vi.fn(async () => ({
-    release: vi.fn(async () => undefined),
-  })),
-}));
-
-vi.mock("../terminal/links.js", () => ({
-  formatDocsLink: () => "docs.openclaw.ai/cli/skills",
-}));
-
-vi.mock("../terminal/theme.js", () => ({
-  theme: {
-    command: (value: string) => value,
-    error: (value: string) => value,
-    heading: (value: string) => value,
-    muted: (value: string) => value,
-    success: (value: string) => value,
-    warn: (value: string) => value,
-  },
-}));
-
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({}),
+  getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
 }));
 
@@ -130,6 +111,7 @@ describe("skills workshop cli", () => {
       prefix: "openclaw-skills-cli-workshop-state-",
     });
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-");
+    mocks.config = {};
     mocks.resolvedAgentIds.length = 0;
     stateDir = testState.stateDir;
     mocks.runtimeStdout.length = 0;
@@ -268,39 +250,93 @@ describe("skills workshop cli", () => {
     await runCommand(["skills", "workshop", "apply", proposalId!]);
     expect(mocks.runtimeStdout.at(-1)).toContain("Applied");
     await expect(
-      fs.readFile(path.join(mocks.workspaceDir, "skills", "paris-weather", "SKILL.md"), "utf8"),
+      fs.readFile(
+        path.join(resolveWorkshopSkillsDir({}, "main", testState.env), "paris-weather", "SKILL.md"),
+        "utf8",
+      ),
     ).resolves.toContain("Check current weather and alerts");
     await expect(
       fs.readFile(
-        path.join(mocks.workspaceDir, "skills", "paris-weather", "references", "weather.md"),
+        path.join(
+          resolveWorkshopSkillsDir({}, "main", testState.env),
+          "paris-weather",
+          "references",
+          "weather.md",
+        ),
         "utf8",
       ),
     ).resolves.toContain("Use current conditions");
   });
 
-  it("lists and inspects an agent proposal after its workspace changes", async () => {
-    const firstWorkspaceDir = mocks.workspaceDir;
-    const draftPath = path.join(firstWorkspaceDir, "proposal-draft.md");
-    await fs.writeFile(draftPath, "# First CLI Skill\n", "utf8");
-
+  async function proposeFile(filename: string, name: string, description: string, content: string) {
+    const draftPath = path.join(mocks.workspaceDir, filename);
+    await fs.writeFile(draftPath, content, "utf8");
     await runCommand([
       "skills",
       "workshop",
       "propose-create",
       "--name",
-      "First CLI Skill",
+      name,
       "--description",
-      "First workspace proposal",
+      description,
       "--proposal",
       draftPath,
     ]);
     const proposalId = mocks.runtimeStdout.at(-1);
+    if (!proposalId) {
+      throw new Error("CLI proposal creation did not return an id.");
+    }
+    return proposalId;
+  }
+
+  it("uses the configured agent directory for inspect, apply, and reject", async () => {
+    const agentDir = await tempDirs.make("openclaw-skills-cli-workshop-agent-dir-");
+    mocks.config = { agents: { entries: { main: { default: true, agentDir } } } };
+    const appliedProposalId = await proposeFile(
+      "configured-proposal.md",
+      "Configured CLI Skill",
+      "Use the configured Workshop directory.",
+      "# Configured CLI Skill\n\nUse the configured directory.\n",
+    );
+
+    await runCommand(["skills", "workshop", "inspect", appliedProposalId]);
+    expect(mocks.runtimeStdout.at(-1)).toContain("status: proposal");
+    await runCommand(["skills", "workshop", "apply", appliedProposalId]);
+    await expect(
+      fs.readFile(
+        path.join(
+          resolveWorkshopSkillsDir(mocks.config, "main", testState.env),
+          "configured-cli-skill",
+          "SKILL.md",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain("Use the configured directory.");
+
+    const rejectedProposalId = await proposeFile(
+      "configured-rejected-proposal.md",
+      "Configured Rejected CLI Skill",
+      "Reject from the configured Workshop directory.",
+      "# Configured Rejected CLI Skill\n",
+    );
+    await runCommand(["skills", "workshop", "reject", rejectedProposalId]);
+    expect(mocks.runtimeStdout.at(-1)).toContain(`Rejected ${rejectedProposalId}`);
+  });
+
+  it("lists and inspects an agent proposal after its workspace changes", async () => {
+    const firstWorkspaceDir = mocks.workspaceDir;
+    const proposalId = await proposeFile(
+      "proposal-draft.md",
+      "First CLI Skill",
+      "First workspace proposal",
+      "# First CLI Skill\n",
+    );
     expect(proposalId).toMatch(/^first-cli-skill-/);
 
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-second-");
     await runCommand(["skills", "workshop", "list"]);
     expect(mocks.runtimeStdout.at(-1)).toContain(`${proposalId}  pending  create`);
-    expect(mocks.runtimeStdout.at(-1)).toContain("[previous workspace]");
+    expect(mocks.runtimeStdout.at(-1)).toContain("first-cli-skill");
     await runCommand(["skills", "workshop", "inspect", proposalId!]);
     expect(mocks.runtimeStdout.at(-1)).toContain("status: proposal");
 

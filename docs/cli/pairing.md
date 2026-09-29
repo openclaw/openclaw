@@ -2,12 +2,12 @@
 summary: "CLI reference for `openclaw pairing` (approve/list pairing requests)"
 read_when:
   - You're using pairing-mode DMs and need to approve senders
-title: "Pairing"
+title: "Pairing CLI"
 ---
 
 # `openclaw pairing`
 
-Approve or inspect DM pairing requests for channels that support pairing (chat DMs only - node/device pairing uses `openclaw devices`).
+Approve or inspect DM pairing requests for channels that support pairing (chat DMs only - node/device pairing uses [`openclaw devices`](/cli/devices)).
 
 Related: [Pairing flow](/channels/pairing)
 
@@ -27,6 +27,12 @@ openclaw pairing approve <code>
 openclaw pairing approve telegram <code>
 openclaw pairing approve --channel telegram --account work <code> --notify
 ```
+
+Use `--account <accountId>` to restrict either command to one channel account.
+If you omit `--account`, `list` shows pending requests across the channel's accounts,
+and `approve` uses the account belonging to the matching request. Explicitly empty
+or whitespace-only values, such as `--account ""`, are rejected with
+`--account must not be blank`.
 
 ## `pairing list`
 
@@ -55,13 +61,14 @@ Options: `--channel <channel>`, `--account <accountId>`, `--notify` (send a conf
 
 ### Owner bootstrap
 
-If `commands.ownerAllowFrom` is empty when you approve a pairing code, the CLI also records the approved sender as the command owner, using a channel-scoped entry such as `telegram:123456789`. This only bootstraps the first owner - later pairing approvals never replace or expand `commands.ownerAllowFrom`. The Control UI presents this elevation as a separate `operator.admin`-protected checkbox instead of applying it automatically.
+If `commands.ownerAllowFrom` is empty when you approve a pairing code, the CLI also records the approved sender as the command owner. It writes a channel-scoped entry such as `telegram:123456789`. This only bootstraps the first owner - later pairing approvals never replace or expand `commands.ownerAllowFrom`. The Control UI presents this elevation as a separate `operator.admin`-protected checkbox instead of applying it automatically.
 
-The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions such as `/diagnostics`, `/export-session`, `/export-trajectory`, `/config`, and exec approvals. Pairing only lets a sender talk to the agent; it does not by itself grant owner privileges beyond this one-time bootstrap.
+The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions. Those actions include `/diagnostics`, `/export-session`, `/export-trajectory`, `/config`, and exec approvals. Pairing only lets a sender talk to the agent. It does not by itself grant owner privileges beyond this one-time bootstrap.
 
-If you approved a sender before this bootstrap existed, run `openclaw doctor`; it warns when no command owner is configured and shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
+If you approved a sender before the first-owner bootstrap shipped in 2026.4.29, run [`openclaw doctor`](/cli/doctor). It warns when no command owner is configured. It also shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
 
 ## Related
 
 - [CLI reference](/cli)
 - [Channel pairing](/channels/pairing)
+- [`openclaw qr`](/cli/qr) — mobile/device bootstrap QR and setup code, not a channel DM pairing code

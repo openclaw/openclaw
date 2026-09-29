@@ -1,21 +1,29 @@
-// Plugin npm runtime build tests validate plugin runtime package builds.
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { Worker } from "node:worker_threads";
+// Plugin npm runtime build tests validate plugin runtime package builds.
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPluginNpmRuntime,
   listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../scripts/lib/plugin-npm-runtime-build.mts";
+import { resolveRuntimeWorkerThreadExecArgv } from "../src/infra/runtime-worker-url.js";
+import { defineBundledChannelSetupEntry } from "../src/plugin-sdk/channel-entry-contract.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -36,7 +44,445 @@ function expectPluginNpmRuntimeBuildPlan(
   return plan;
 }
 
+function copyPluginBuildFixture(plugin: string) {
+  const source = path.join(repoRoot, "extensions", plugin);
+  const packageDir = path.join(tempDirs.make("openclaw-plugin-runtime-package-"), plugin);
+  // Source packages are also pnpm dependencies; never rebuild their shared dist during tests.
+  cpSync(source, packageDir, {
+    recursive: true,
+    filter: (file) => !["dist", "node_modules"].includes(path.basename(file)),
+  });
+  if (existsSync(path.join(source, "node_modules"))) {
+    symlinkSync(
+      path.join(source, "node_modules"),
+      path.join(packageDir, "node_modules"),
+      "junction",
+    );
+  }
+  const tsconfig = path.join(source, "tsconfig.json");
+  if (existsSync(tsconfig)) {
+    writeFileSync(path.join(packageDir, "tsconfig.json"), JSON.stringify({ extends: tsconfig }));
+  }
+  return packageDir;
+}
+
 describe("plugin npm runtime build planning", () => {
+  it("keeps newer compatibility bindings out of frozen source roots that predate their files or exports", async () => {
+    const frozenRoot = tempDirs.make("openclaw-plugin-runtime-frozen-root-");
+    const packageDir = path.join(frozenRoot, "extensions", "frozen-fixture");
+    const channelsDir = path.join(frozenRoot, "src", "channels");
+    mkdirSync(packageDir, { recursive: true });
+    mkdirSync(channelsDir, { recursive: true });
+    writeFileSync(
+      path.join(frozenRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "1.0.0",
+        exports: {
+          "./plugin-sdk/channel-mention-gating": "./dist/plugin-sdk/channel-mention-gating.js",
+          "./plugin-sdk/runtime-doctor-migrations":
+            "./dist/plugin-sdk/runtime-doctor-migrations.js",
+        },
+      }),
+    );
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/frozen-fixture",
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.ts"] },
+        peerDependencies: { openclaw: "*" },
+      }),
+    );
+    writeFileSync(
+      path.join(packageDir, "index.ts"),
+      [
+        'export { normalizeChannelConfigEntries } from "openclaw/plugin-sdk/runtime-doctor-migrations";',
+        'export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";',
+      ].join("\n"),
+    );
+    writeFileSync(
+      path.join(channelsDir, "mention-gating.ts"),
+      "export function resolveInboundMentionDecision() { return true; }\n",
+    );
+
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      await buildPluginNpmRuntime({ repoRoot: frozenRoot, packageDir, logLevel: "silent" }),
+    );
+    expect(readFileSync(path.join(packageDir, plan.runtimeExtensions[0]!), "utf8")).toContain(
+      "openclaw/plugin-sdk/runtime-doctor-migrations",
+    );
+    expect(readFileSync(path.join(packageDir, plan.runtimeExtensions[0]!), "utf8")).toContain(
+      "openclaw/plugin-sdk/channel-mention-gating",
+    );
+  });
+
+  it.each([
+    ["esm", "@openclaw/telegram"],
+    ["cjs", "@openclaw/telegram"],
+    ["esm", "@openclaw/old-host-fixture"],
+    ["cjs", "@openclaw/old-host-fixture"],
+  ])(
+    "bundles compatible SDK operations while retaining host ownership (%s, %s)",
+    async (runtimeFormat, packageName) => {
+      const packageDir = tempDirs.make("openclaw-plugin-runtime-old-host-");
+      writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: packageName,
+          version: "1.0.0",
+          type: "module",
+          openclaw: {
+            extensions: ["./index.ts"],
+            build: { runtimeFormat },
+          },
+        }),
+      );
+      writeFileSync(
+        path.join(packageDir, "index.ts"),
+        [
+          'export { createLegacyWebhookListenerDoctorContract, normalizeChannelConfigEntries } from "openclaw/plugin-sdk/runtime-doctor-migrations";',
+          'export { classifyGatewayProbePath, resolvePluginRoutePathContext, isProtectedPluginRoutePathFromContext, resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";',
+          'export { resolveBotThreadMentionPolicy, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";',
+          'export { createLivePreviewLifecycle, createPreviewMessageReceipt } from "openclaw/plugin-sdk/channel-outbound";',
+          'export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";',
+        ].join("\n"),
+      );
+      const hostDir = path.join(packageDir, "node_modules", "openclaw");
+      mkdirSync(hostDir, { recursive: true });
+      const hostBindings = {
+        "runtime-doctor-migrations": "normalizeChannelConfigEntries",
+        "gateway-config-runtime": "resolveGatewayPort",
+        "channel-mention-gating": "resolveInboundMentionDecision",
+        "channel-outbound": "createPreviewMessageReceipt",
+        "error-runtime": "formatErrorMessage",
+      };
+      writeFileSync(
+        path.join(hostDir, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          exports: Object.fromEntries(
+            Object.keys(hostBindings).map((name) => [`./plugin-sdk/${name}`, `./${name}.cjs`]),
+          ),
+        }),
+      );
+      for (const [name, binding] of Object.entries(hostBindings)) {
+        writeFileSync(path.join(hostDir, `${name}.cjs`), `exports.${binding} = () => 31337;\n`);
+      }
+      writeFileSync(
+        path.join(hostDir, "channel-outbound.cjs"),
+        "exports.createPreviewMessageReceipt = () => 31337;\n" +
+          "exports.createLivePreviewLifecycle = () => ({ finalStarted: false });\n",
+      );
+      writeFileSync(
+        path.join(hostDir, "error-runtime.cjs"),
+        "let calls = 0; exports.formatErrorMessage = () => { calls++; return 'host-redacted'; };\n" +
+          "exports.formatterCalls = () => calls;\n",
+      );
+
+      const plan = expectPluginNpmRuntimeBuildPlan(
+        await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" }),
+      );
+      // Native loading catches absent old-host exports without Vitest's source SDK aliases.
+      const worker = new Worker(
+        `const { parentPort, workerData } = require("node:worker_threads");
+        (async () => {
+          const symbols = new Set(Object.getOwnPropertySymbols(globalThis));
+          const entry = await import(workerData.entry);
+          const cfg = { channels: { telegram: { webhookPort: 8123 } } };
+          const migrated = entry.createLegacyWebhookListenerDoctorContract({
+            channelKey: "telegram", defaultPort: 8787,
+          }).normalizeCompatibilityConfig({ cfg });
+          let preview;
+          if (workerData.packageName === "@openclaw/telegram") {
+            const lifecycle = entry.createLivePreviewLifecycle();
+            lifecycle.beginFinalDelivery();
+            lifecycle.observeSuppression();
+            const suppressed = lifecycle.finalSuppressed;
+            lifecycle.reset();
+            const accepted = entry.createLivePreviewLifecycle({
+              onFinalStarted: () => { throw new Error("private fixture diagnostic"); },
+            });
+            let failure;
+            try {
+              await accepted.observeDelivery({ visibleReplySent: true, messageIds: ["accepted"] });
+            } catch (error) {
+              failure = { message: error.message, code: error.code,
+                acceptedIds: error.deliveryResult.messageIds };
+            }
+            preview = { suppressed, reset: !lifecycle.finalStarted,
+              accepted: accepted.finalSucceeded, failure,
+              formatterCalls: require(workerData.hostDir + "/error-runtime.cjs").formatterCalls() };
+          } else {
+            preview = { hostFactoryPreserved: entry.createLivePreviewLifecycle ===
+              require(workerData.hostDir + "/channel-outbound.cjs").createLivePreviewLifecycle };
+          }
+          parentPort.postMessage({
+            preview,
+            hostBindingsPreserved: Object.entries(workerData.hostBindings).every(
+              ([name, binding]) => entry[binding] === require(workerData.hostDir + "/" + name + ".cjs")[binding],
+            ),
+            config: migrated.config,
+            sourceUnchanged: cfg.channels.telegram.webhookPort === 8123,
+            probe: entry.classifyGatewayProbePath("/readyz"),
+            protectedPath: entry.isProtectedPluginRoutePathFromContext(
+              entry.resolvePluginRoutePathContext("/api/channels/telegram"),
+            ),
+            mention: entry.resolveBotThreadMentionPolicy({
+              isBotOwnedThread: true, requireMentionInBotThreads: false, requireMention: true,
+            }).requireMention,
+            newGlobalSymbols: Object.getOwnPropertySymbols(globalThis)
+              .filter((symbol) => !symbols.has(symbol)).map(String),
+          });
+        })().catch((error) => { throw error; });`,
+        {
+          eval: true,
+          workerData: {
+            entry: pathToFileURL(path.join(packageDir, plan.runtimeExtensions[0]!)).href,
+            hostDir,
+            hostBindings,
+            packageName,
+          },
+        },
+      );
+      try {
+        const result = await new Promise((resolve, reject) => {
+          worker.once("message", resolve);
+          worker.once("error", reject);
+          worker.once("exit", (code) =>
+            reject(new Error(`Worker exited before replying: ${code}`)),
+          );
+        });
+        expect(result).toEqual({
+          preview:
+            packageName === "@openclaw/telegram"
+              ? {
+                  suppressed: true,
+                  reset: true,
+                  accepted: true,
+                  failure: {
+                    message: "host-redacted",
+                    code: "CHANNEL_PARTIAL_DELIVERY",
+                    acceptedIds: ["accepted"],
+                  },
+                  formatterCalls: 1,
+                }
+              : { hostFactoryPreserved: true },
+          hostBindingsPreserved: true,
+          config: { channels: { telegram: { legacyWebhook: { port: 8123 } } } },
+          sourceUnchanged: true,
+          probe: "ready",
+          protectedPath: true,
+          mention: false,
+          newGlobalSymbols: [],
+        });
+      } finally {
+        await worker.terminate();
+      }
+    },
+  );
+
+  it("packages declared theme definitions and artwork outside conventional asset paths", () => {
+    const packageDir = tempDirs.make("openclaw-plugin-theme-package-");
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "theme-fixture",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.ts"] },
+      }),
+    );
+    writeFileSync(
+      path.join(packageDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "theme-fixture",
+        themes: [
+          {
+            id: "workshop",
+            name: "Workshop",
+            description: "Workshop colors",
+            source: "palettes/workshop.json",
+            hats: { beret: "art/beret.svg" },
+            critters: { ferris: { source: "visitors/ferris.svg", crossMs: 9000 } },
+          },
+        ],
+      }),
+    );
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir }),
+    );
+    expect(plan.packageFiles).toEqual(
+      expect.arrayContaining([
+        "openclaw.plugin.json",
+        "palettes/workshop.json",
+        "art/beret.svg",
+        "visitors/ferris.svg",
+      ]),
+    );
+  });
+
+  it.each([
+    "missing-directory",
+    "missing-manifest",
+    "malformed-manifest",
+    "no-extensions",
+    "javascript-only",
+  ])("reports selected package input without touching output (%s)", async (scenario) => {
+    const packageDir = path.join(tempDirs.make("openclaw-plugin-runtime-input-"), "selected");
+    const manifestPath = path.join(packageDir, "package.json");
+    const outDir = path.join(packageDir, "dist");
+    if (scenario !== "missing-directory") {
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(path.join(outDir, "sentinel.js"), "keep\n");
+    }
+    if (scenario === "malformed-manifest") {
+      writeFileSync(manifestPath, "{");
+    } else if (scenario === "no-extensions" || scenario === "javascript-only") {
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          name: "input-fixture",
+          version: "1.0.0",
+          ...(scenario === "javascript-only" ? { openclaw: { extensions: ["./index.js"] } } : {}),
+        }),
+      );
+      writeFileSync(path.join(packageDir, "index.js"), "export default {};\n");
+    }
+
+    const result = buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" });
+    if (scenario === "missing-directory" || scenario === "missing-manifest") {
+      await expect(result).rejects.toMatchObject({ code: "ENOENT", path: manifestPath });
+    } else if (scenario === "malformed-manifest") {
+      await expect(result).rejects.toBeInstanceOf(SyntaxError);
+    } else {
+      await expect(result).resolves.toBeNull();
+    }
+    if (scenario === "missing-directory") {
+      expect(existsSync(packageDir)).toBe(false);
+    } else {
+      expect(readdirSync(outDir)).toEqual(["sentinel.js"]);
+      expect(readFileSync(path.join(outDir, "sentinel.js"), "utf8")).toBe("keep\n");
+    }
+  });
+
+  it.each(["qa-lab", "qa-channel"])(
+    "builds an executable %s Gateway fixture without the tooling graph",
+    async (id) => {
+      const packageDir = path.join(tempDirs.make("openclaw-qa-gateway-package-"), id);
+      mkdirSync(packageDir);
+      writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: `@openclaw/${id}`,
+          private: true,
+          version: "2026.9.5",
+          type: "module",
+          dependencies: id === "qa-channel" ? { typebox: "1.3.32", zod: "4.6.5" } : {},
+          openclaw: {
+            extensions: ["./index.ts"],
+            build: { workerEntries: ["./tooling.worker.ts"] },
+          },
+        }),
+      );
+      writeFileSync(path.join(packageDir, "openclaw.plugin.json"), JSON.stringify({ id }));
+      for (const file of ["tooling-api.ts", "tooling.worker.ts"]) {
+        writeFileSync(path.join(packageDir, file), 'import "private-qa-tooling-not-installed";\n');
+      }
+      const protocol = 'export { parseQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";\n';
+      if (id === "qa-lab") {
+        writeFileSync(
+          path.join(packageDir, "index.ts"),
+          'import "private-qa-tooling-not-installed";\n',
+        );
+        writeFileSync(path.join(packageDir, "gateway-entry.ts"), protocol);
+      } else {
+        writeFileSync(path.join(packageDir, "index.ts"), 'export const companion = "./api.js";\n');
+        writeFileSync(path.join(packageDir, "api.ts"), protocol);
+        for (const file of ["setup-entry.ts", "setup-plugin-api.ts", "channel-plugin-api.ts"]) {
+          writeFileSync(path.join(packageDir, file), 'export const id = "qa-channel";\n');
+        }
+      }
+
+      const plan = expectPluginNpmRuntimeBuildPlan(
+        await buildPluginNpmRuntime({
+          repoRoot,
+          packageDir,
+          profile: "qa-gateway-fixture",
+          logLevel: "silent",
+        }),
+      );
+      const runtimeEntry = expectDefined(
+        plan.runtimeExtensions[0],
+        "QA Gateway fixture runtime entry",
+      );
+      const entryUrl = pathToFileURL(path.join(packageDir, runtimeEntry));
+      const entry = await import(entryUrl.href);
+      const runtime =
+        id === "qa-channel" ? await import(new URL(entry.companion, entryUrl).href) : entry;
+      expect(runtime.parseQaTarget("thread:/v1/dm/Case%2FID/Thread")).toEqual({
+        chatType: "direct",
+        conversationId: "Case/ID",
+        threadId: "Thread",
+      });
+      expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+    },
+  );
+
+  it("builds a private worker without registering it as a plugin entry", async () => {
+    const packageDir = tempDirs.make("openclaw-plugin-runtime-worker-");
+    mkdirSync(path.join(packageDir, "src"));
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/worker-fixture",
+        version: "1.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.ts"],
+          compat: { pluginApi: "1.0.0" },
+          build: { workerEntries: ["./src/store.worker.ts"] },
+        },
+      }),
+    );
+    writeFileSync(
+      path.join(packageDir, "index.ts"),
+      `import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(repoRoot, "src/infra/runtime-worker-url.ts").replaceAll("\\", "/"))};
+` +
+        `export const workerUrl = resolveRuntimeWorkerUrl({
+          currentModuleUrl: import.meta.url,
+          sourceWorkerName: "store.worker",
+          distWorkerPath: "extensions/worker-fixture/src/store.worker.js",
+          package: { name: "@openclaw/worker-fixture", distWorkerPath: "src/store.worker.js" },
+        });
+`,
+    );
+    writeFileSync(
+      path.join(packageDir, "src/store.worker.ts"),
+      'import { parentPort, isMainThread } from "node:worker_threads";\n' +
+        "const value: number = 42; parentPort!.postMessage({ value, isMainThread });\n",
+    );
+
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      await buildPluginNpmRuntime({ repoRoot, packageDir, logLevel: "silent" }),
+    );
+    expect(plan.runtimeExtensions).toEqual(["./dist/index.js"]);
+    const { workerUrl } = await import(pathToFileURL(path.join(packageDir, "dist/index.js")).href);
+    const worker = new Worker(workerUrl, {
+      execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+    });
+    try {
+      const result = await new Promise((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+        worker.once("exit", (code) => reject(new Error(`Worker exited before replying: ${code}`)));
+      });
+      expect(result).toEqual({ value: 42, isMainThread: false });
+    } finally {
+      await worker.terminate();
+    }
+  });
+
   it.each(["index.tsx", "src/index.tsx"])(
     "builds an executable %s package entry",
     async (entry) => {
@@ -120,6 +566,12 @@ describe("plugin npm runtime build planning", () => {
       expectDistRelativePaths(plan.runtimeExtensions);
       expectDistRelativePaths(plan.runtimeBuildOutputs);
       expect(plan.packageFiles).toContain("dist/**");
+      if (existsSync(path.join(plan.packageDir, "assets", "activity.svg"))) {
+        expect(plan.packageFiles).toContain("assets/activity.svg");
+      }
+      if (existsSync(path.join(plan.packageDir, "assets", "activity"))) {
+        expect(plan.packageFiles).toContain("assets/activity/*.svg");
+      }
       expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(
         plan.packageJson.openclaw?.compat?.pluginApi,
       );
@@ -128,20 +580,43 @@ describe("plugin npm runtime build planning", () => {
   });
 
   it("includes top-level public runtime surfaces", () => {
-    const diffsPlan = resolvePluginNpmRuntimeBuildPlan({
-      repoRoot,
-      packageDir: path.join(repoRoot, "extensions", "diffs"),
+    const packageDir = tempDirs.make("openclaw-plugin-runtime-public-surfaces-");
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/public-surfaces-fixture",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.ts"] },
+      }),
+    );
+    writeFileSync(path.join(packageDir, "openclaw.plugin.json"), "{}\n");
+    mkdirSync(path.join(packageDir, "assets"));
+    mkdirSync(path.join(packageDir, "skills"));
+    for (const file of [
+      "api.ts",
+      "index.ts",
+      "runtime-api.ts",
+      "README.md",
+      "assets/icon.png",
+      "assets/activity.svg",
+    ]) {
+      writeFileSync(path.join(packageDir, file), "");
+    }
+
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir }),
+    );
+    expect(plan.entry).toEqual({
+      api: path.join(packageDir, "api.ts"),
+      index: path.join(packageDir, "index.ts"),
+      "runtime-api": path.join(packageDir, "runtime-api.ts"),
     });
-    const diffsRuntimePlan = expectPluginNpmRuntimeBuildPlan(diffsPlan);
-    expect(diffsRuntimePlan.entry).toEqual({
-      api: path.join(repoRoot, "extensions", "diffs", "api.ts"),
-      index: path.join(repoRoot, "extensions", "diffs", "index.ts"),
-      "runtime-api": path.join(repoRoot, "extensions", "diffs", "runtime-api.ts"),
-    });
-    expect(diffsRuntimePlan.packageFiles).toEqual([
+    expect(plan.packageFiles).toEqual([
       "dist/**",
       "openclaw.plugin.json",
       "README.md",
+      "assets/icon.png",
+      "assets/activity.svg",
       "skills/**",
     ]);
   });
@@ -163,34 +638,10 @@ describe("plugin npm runtime build planning", () => {
     }
   });
 
-  it("plans msteams startup runtime surfaces as native CommonJS entrypoints", () => {
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "msteams"),
-      }),
-    );
-
-    expect(plan.runtimeFormat).toBe("cjs");
-    expect(plan.runtimeExtensions).toEqual(["./dist/index.cjs"]);
-    expect(plan.runtimeSetupEntry).toBe("./dist/setup-entry.cjs");
-    expect(plan.runtimeBuildOutputs).toEqual(
-      expect.arrayContaining([
-        "./dist/channel-plugin-api.cjs",
-        "./dist/doctor-contract-api.cjs",
-        "./dist/index.cjs",
-        "./dist/runtime-api.cjs",
-        "./dist/secret-contract-api.cjs",
-        "./dist/setup-entry.cjs",
-        "./dist/setup-plugin-api.cjs",
-      ]),
-    );
-  });
-
   it("builds msteams startup runtime surfaces as CommonJS files", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
-      packageDir: "extensions/msteams",
+      packageDir: copyPluginBuildFixture("msteams"),
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);
@@ -207,30 +658,57 @@ describe("plugin npm runtime build planning", () => {
       "dist/secret-contract-api.cjs",
     ];
     const missing = entrypoints.filter(
-      (relativePath) => !existsSync(path.join(repoRoot, "extensions/msteams", relativePath)),
+      (relativePath) => !existsSync(path.join(plan.packageDir, relativePath)),
     );
     expect(missing).toEqual([]);
 
     for (const relativePath of entrypoints) {
-      const text = readFileSync(path.join(repoRoot, "extensions/msteams", relativePath), "utf8");
+      const text = readFileSync(path.join(plan.packageDir, relativePath), "utf8");
       expect(text).not.toMatch(/^import\s/u);
       expect(text).toMatch(/(?:require\(|exports\.)/u);
     }
 
-    const indexText = readFileSync(
-      path.join(repoRoot, "extensions/msteams/dist/index.cjs"),
-      "utf8",
-    );
+    const indexText = readFileSync(path.join(plan.outDir, "index.cjs"), "utf8");
     expect(indexText).toContain('specifier: "./channel-plugin-api.cjs"');
     expect(indexText).toContain('specifier: "./secret-contract-api.cjs"');
     expect(indexText).toContain('specifier: "./runtime-api.cjs"');
 
-    const setupEntryText = readFileSync(
-      path.join(repoRoot, "extensions/msteams/dist/setup-entry.cjs"),
-      "utf8",
-    );
-    expect(setupEntryText).toContain('specifier: "./setup-plugin-api.cjs"');
-    expect(setupEntryText).toContain('specifier: "./secret-contract-api.cjs"');
+    const setupEntryPath = path.join(plan.outDir, "setup-entry.cjs");
+    const defineSetupEntry = vi.fn(defineBundledChannelSetupEntry);
+    const setupModule: { exports: Partial<ReturnType<typeof defineBundledChannelSetupEntry>> } = {
+      exports: {},
+    };
+    const require = createRequire(import.meta.url);
+    // Execute the emitted URL expressions and load companions through the host SDK;
+    // hashed inventory chunks are private, while the setup entry remains stable.
+    runInNewContext(readFileSync(setupEntryPath, "utf8"), {
+      __filename: setupEntryPath,
+      __dirname: plan.outDir,
+      module: setupModule,
+      exports: setupModule.exports,
+      URL,
+      require: (specifier: string) =>
+        specifier === "openclaw/plugin-sdk/channel-entry-contract"
+          ? { defineBundledChannelSetupEntry: defineSetupEntry }
+          : require(specifier),
+    });
+    expect(defineSetupEntry).toHaveBeenCalledOnce();
+    const options = defineSetupEntry.mock.calls[0]?.[0];
+    for (const reference of [options?.plugin, options?.secrets]) {
+      if (!reference) {
+        throw new Error("Missing setup companion reference");
+      }
+      expect(path.dirname(reference.specifier)).toBe(path.join(plan.outDir, ".setup"));
+      expect(path.extname(reference.specifier)).toBe(".cjs");
+      expect(existsSync(reference.specifier)).toBe(true);
+    }
+    expect(setupModule.exports).toBe(defineSetupEntry.mock.results[0]?.value);
+    expect(setupModule.exports.kind).toBe("bundled-channel-setup-entry");
+    expect(setupModule.exports.loadSetupPlugin?.()).toMatchObject({ id: "msteams" });
+    expect(setupModule.exports.loadSetupSecrets?.()).toMatchObject({
+      collectRuntimeConfigAssignments: expect.any(Function),
+      secretTargetRegistryEntries: expect.any(Array),
+    });
   });
 
   it("builds Tencent setup metadata for installed-package migrations", () => {
@@ -267,7 +745,7 @@ describe("plugin npm runtime build planning", () => {
   it("keeps published Codex runtime imports resolvable from the host package", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
-      packageDir: "extensions/codex",
+      packageDir: copyPluginBuildFixture("codex"),
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);
@@ -278,7 +756,7 @@ describe("plugin npm runtime build planning", () => {
   it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,
-      packageDir: "extensions/llama-cpp",
+      packageDir: copyPluginBuildFixture("llama-cpp"),
       logLevel: "silent",
     });
     const plan = expectPluginNpmRuntimeBuildPlan(result);
