@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginTextReplacement } from "../plugins/cli-backend.types.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { applyPluginTextReplacements } from "./plugin-text-transforms.js";
@@ -41,4 +43,28 @@ export function appendCliResultText(previous: CliOutput | null, nextText: string
     : previousText;
   const textParts = completedText ? [...previousParts, completedText] : previousParts;
   return { text, textParts, completedText };
+}
+
+/**
+ * Stores a record's message item text and returns the text that is still the
+ * final message: a later tool item ends it, like a tool_use block does.
+ */
+export function recordItemText(
+  parsed: Record<string, unknown>,
+  texts: string[],
+  finalItemText: string | undefined,
+): string | undefined {
+  const item = isRecord(parsed.item) ? parsed.item : null;
+  if (!item) {
+    return finalItemText;
+  }
+  const type = normalizeLowercaseStringOrEmpty(item.type);
+  if (!type || type.includes("message")) {
+    if (typeof item.text !== "string") {
+      return finalItemText;
+    }
+    texts.push(item.text);
+    return item.text;
+  }
+  return type.includes("reasoning") ? finalItemText : undefined;
 }

@@ -48,6 +48,9 @@ function toolStart(id = "tool-1", index?: number) {
     },
   });
 }
+function itemMessage(text: string) {
+  return { type: "item.completed", item: { type: "agent_message", text } };
+}
 function syntheticNoResponse(text = "No response requested.", model = "<synthetic>") {
   return {
     type: "assistant",
@@ -449,6 +452,41 @@ describe("createCliJsonlStreamingParser", () => {
         ...(finalText ? [messageStart, claudeTextDelta(finalText)] : []),
       );
       expect(parser.getOutput()?.rawFinalText).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "a tool call after stored item text",
+      frames: [itemMessage("Checking now."), toolStart()],
+      expected: "",
+    },
+    {
+      name: "a new message after stored item text",
+      frames: [itemMessage("Checking now."), messageStart],
+      expected: "",
+    },
+    {
+      name: "a tool item after stored item text",
+      frames: [
+        itemMessage("Checking now."),
+        { type: "item.completed", item: { type: "command_execution" } },
+      ],
+      expected: "",
+    },
+    {
+      name: "item text after an earlier boundary",
+      frames: [messageStart, toolStart(), itemMessage("All done.")],
+      expected: "All done.",
+    },
+  ])(
+    "checks message boundaries before reusing stored item text ($name)",
+    ({ frames, expected }) => {
+      const parser = createParser();
+      finishFrames(parser, init("session-items"), ...frames, result(""));
+      // rawFinalText is omitted when the final message equals the reply text.
+      const output = parser.getOutput();
+      expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
     },
   );
 
