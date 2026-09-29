@@ -265,10 +265,11 @@ export function resolveNewSessionSubmitBlock(
   if (!catalog.allowsSelectedAgent(snapshot.data, place.selectedAgent())) {
     return { gate: "agent-not-allowed", reason: t("newSession.catalogUnavailable") };
   }
-  if (kind === "session" && !place.devicePlacementReady()) {
+  const devicePlacement = kind === "session" ? place.devicePlacement() : undefined;
+  if (devicePlacement && !devicePlacement.ready) {
     return {
       gate: "device",
-      reason: place.devicePlacementDisabledReason() ?? t("newSession.nodeUnavailable"),
+      reason: devicePlacement.disabledReason ?? t("newSession.nodeUnavailable"),
     };
   }
   const deviceRuntimeUnsupportedReason = place.modelControl.devicePlacementUnsupportedReason();

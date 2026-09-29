@@ -11,6 +11,7 @@ import {
   renderRunInspectorPagination,
   renderRunInspectorRemediation,
   renderRunInspectorSafeRef,
+  renderRunInspectorValues,
   runInspectorCoverageKey,
   runInspectorCoverageLabel,
 } from "./run-inspector-evidence-view.ts";
@@ -97,16 +98,13 @@ function renderFact(fact: IdentityFact) {
       <dd>
         ${
           values.length > 0
-            ? html`<dl class="run-inspector__values">
-                ${values.map(
-                  ([labelKey, value, mono, href]) => html`
-                    <div>
-                      <dt>${t(`activity.runInspector.values.${labelKey}`)}</dt>
-                      <dd>${renderRunInspectorSafeRef(value, mono, href)}</dd>
-                    </div>
-                  `,
-                )}
-              </dl>`
+            ? renderRunInspectorValues(
+                "values",
+                values.map(([labelKey, value, mono, href]) => [
+                  labelKey,
+                  renderRunInspectorSafeRef(value, mono, href),
+                ]),
+              )
             : nothing
         }
         ${reason ? html`<p class="run-inspector__reason">${reason}</p>` : nothing}

@@ -36,18 +36,6 @@ export class ConnectMachineSetupState {
     return this.openValue;
   }
 
-  get loading(): boolean {
-    return this.loadingValue;
-  }
-
-  get error(): string | null {
-    return this.errorValue;
-  }
-
-  get setup(): DevicePairSetup | null {
-    return this.setupValue;
-  }
-
   start(): void {
     this.openValue = true;
     this.errorValue = null;
@@ -62,6 +50,21 @@ export class ConnectMachineSetupState {
     this.loadingValue = false;
     this.errorValue = null;
     this.setupValue = null;
+  }
+
+  render(enabled: boolean, onManageDevices: () => void) {
+    return renderConnectMachineDialog({
+      open: this.open && enabled,
+      loading: this.loadingValue,
+      error: this.errorValue,
+      setup: this.setupValue,
+      onRefresh: () => void this.refresh(),
+      onClose: () => {
+        this.close();
+        this.requestUpdate();
+      },
+      onManageDevices,
+    });
   }
 
   async refresh(): Promise<void> {
