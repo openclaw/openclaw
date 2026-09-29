@@ -198,11 +198,7 @@ function createQaPartitionEvidenceOwner(params: {
       const input = child.childInput(index);
       next.importChild(index, input);
       if (anchor.scenario?.kind === "instance") {
-        if (anchor.scenario.resultOccurrenceId === null) {
-          next.select(index, null);
-        } else {
-          next.select(index, anchor.scenario.resultOccurrenceId);
-        }
+        next.select(index, anchor.scenario.resultOccurrenceId);
       }
     }
     current = next.snapshot(options());
@@ -761,10 +757,6 @@ function rejectFlowOnlySuiteOptionsForUnifiedRun(runParams: QaSuiteRunParams | u
   }
 }
 
-function suitePartitionOutputDir(outputDir: string, kind: "flow" | QaTestFileExecutionKind) {
-  return path.join(outputDir, kind);
-}
-
 function partitionSharedFlowScenarios(
   scenarios: readonly QaSeedScenarioWithSource[],
   concurrency: number,
@@ -1162,10 +1154,7 @@ async function runUnifiedQaSuite(params: {
         ]
           .filter((part): part is string => Boolean(part))
           .join("-");
-        const partitionOutputDir = path.join(
-          suitePartitionOutputDir(outputDir, "flow"),
-          partitionName,
-        );
+        const partitionOutputDir = path.join(outputDir, "flow", partitionName);
         const owner = createOwner(
           partition.scenarios,
           channelGroup.channel ?? transportId,
@@ -1314,7 +1303,7 @@ async function runUnifiedQaSuite(params: {
     const owners = new Map(
       [...scenariosByKind].map(([kind, scenarios]) => [
         kind,
-        createOwner(scenarios, null, suitePartitionOutputDir(outputDir, kind)),
+        createOwner(scenarios, null, path.join(outputDir, kind)),
       ]),
     );
     return {
@@ -1338,7 +1327,7 @@ async function runUnifiedQaSuite(params: {
               ...params.runParams,
               ...owner.input(),
               adapterFactories,
-              outputDir: suitePartitionOutputDir(outputDir, kind),
+              outputDir: path.join(outputDir, kind),
               writeEvidenceFile: false,
               providerMode,
               primaryModel,

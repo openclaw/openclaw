@@ -429,8 +429,9 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         const profileId = client?.authenticatedUserProfile?.profileId;
         const recentProfileIds = profileId ? readCurrentUserProfileAliases(profileId) : undefined;
         const recents = recentProfileIds
-          ? listProjectRecents(store, recentProfileIds, registryProjects)
+          ? await listProjectRecents(store, recentProfileIds, registryProjects)
           : undefined;
+        assertCurrent();
         diagnostics?.mark("response");
         if (canWrite()) {
           respond(

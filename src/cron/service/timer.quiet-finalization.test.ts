@@ -97,7 +97,7 @@ describe("cron quiet outcome finalization", () => {
 
       if (failWrite) {
         database.exec(`
-        CREATE TEMP TRIGGER reject_quiet_terminal_row
+        CREATE TRIGGER reject_quiet_terminal_row
         BEFORE UPDATE ON cron_jobs
         WHEN NEW.job_id = 'isolated-agent-job'
           AND json_extract(OLD.state_json, '$.runningAtMs') IS NOT NULL

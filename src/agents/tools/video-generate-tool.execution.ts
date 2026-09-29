@@ -17,7 +17,6 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
-import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import { videoGenerationTaskLifecycle } from "./media-generate-background.js";
@@ -52,29 +51,6 @@ export function normalizeResolution(
     return uppercase;
   }
   return normalized;
-}
-
-// Extra roles cannot align to an asset; empty or non-string slots leave its role unset.
-export function parseRoleArray(params: {
-  raw: unknown;
-  kind: "imageRoles" | "videoRoles" | "audioRoles";
-  assetCount: number;
-}): string[] {
-  if (params.raw === undefined || params.raw === null) {
-    return [];
-  }
-  if (!Array.isArray(params.raw)) {
-    throw new ToolInputError(
-      `${params.kind} must be a JSON array of role strings, parallel to the reference list.`,
-    );
-  }
-  const roles = params.raw.map((entry) => (typeof entry === "string" ? entry.trim() : ""));
-  if (roles.length > params.assetCount) {
-    throw new ToolInputError(
-      `${params.kind} has ${roles.length} entries but only ${params.assetCount} reference ${params.kind === "imageRoles" ? "image" : params.kind === "videoRoles" ? "video" : "audio"}${params.assetCount === 1 ? "" : "s"} were provided; extra roles cannot be aligned positionally.`,
-    );
-  }
-  return roles;
 }
 
 export async function loadReferenceAssets(params: {
@@ -315,17 +291,8 @@ export async function executeVideoGenerationJob(params: {
     taskHandle: params.taskHandle,
     warning,
     details: {
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceImages,
-        singleKey: "image",
-        pluralKey: "images",
-        getResolvedInput: (entry) => entry.resolvedInput,
-      }),
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceVideos,
-        singleKey: "video",
-        pluralKey: "videos",
-        getResolvedInput: (entry) => entry.resolvedInput,
+      ...buildMediaReferenceDetails(params.loadedReferenceImages, "image"),
+      ...buildMediaReferenceDetails(params.loadedReferenceVideos, "video", {
         singleRewriteKey: "videoRewrittenFrom",
       }),
       ...(normalizedSize ||

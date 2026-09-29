@@ -281,7 +281,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/feishu/src/monitor.reaction.test.ts",
   "extensions/feishu/src/monitor.startup.test.ts",
   "extensions/feishu/src/monitor.webhook-e2e.test.ts",
-  "extensions/feishu/src/monitor.webhook-security.test.ts",
   "extensions/feishu/src/outbound-delivery.test.ts",
   "extensions/feishu/src/outbound.send-authority.test.ts",
   "extensions/google-meet/participation-runtime-registration.test.ts",

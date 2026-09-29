@@ -1,4 +1,3 @@
-import "./conversation-id-core.js";
 import { normalizeIMessageHandle } from "./targets.js";
 export {
   matchIMessageAcpConversation,

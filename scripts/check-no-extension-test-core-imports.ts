@@ -168,23 +168,6 @@ function isExtensionTestSupportFile(filePath: string): boolean {
   );
 }
 
-function collectExtensionTestFiles(rootDir: string): string[] {
-  return collectFilesSync(rootDir, {
-    includeFile: (filePath) =>
-      isExtensionTestFile(filePath) || isExtensionTestSupportFile(filePath),
-  });
-}
-
-function lineNumberForOffset(content: string, offset: number): number {
-  let line = 1;
-  for (let index = 0; index < offset; index += 1) {
-    if (content.charCodeAt(index) === 10) {
-      line += 1;
-    }
-  }
-  return line;
-}
-
 function resolvesToRepoSrc(filePath: string, specifier: string): boolean {
   if (!specifier.startsWith(".")) {
     return false;
@@ -238,7 +221,7 @@ function collectRelativeImportOffenders(
     offenders.push({
       file: filePath,
       hint,
-      line: lineNumberForOffset(content, match.index ?? 0),
+      line: content.slice(0, match.index ?? 0).split("\n").length,
       specifier,
     });
   }
@@ -249,7 +232,10 @@ function main() {
   const extensionsDir = path.join(process.cwd(), "extensions");
   const pluginHelpersDir = path.join(process.cwd(), "test/helpers/plugins");
   const retiredChannelHelpersDir = path.join(process.cwd(), "test/helpers/channels");
-  const files = collectExtensionTestFiles(extensionsDir);
+  const files = collectFilesSync(extensionsDir, {
+    includeFile: (filePath) =>
+      isExtensionTestFile(filePath) || isExtensionTestSupportFile(filePath),
+  });
   const pluginHelperFiles = collectFilesSync(pluginHelpersDir, { includeFile: isCodeFile });
   const retiredChannelHelperFiles = fs.existsSync(retiredChannelHelpersDir)
     ? collectFilesSync(retiredChannelHelpersDir, { includeFile: isCodeFile })
@@ -276,12 +262,9 @@ function main() {
 
   for (const file of files) {
     const content = fs.readFileSync(file, "utf8");
-    for (const rule of FORBIDDEN_PATTERNS) {
-      if (!rule.pattern.test(content)) {
-        continue;
-      }
+    const rule = FORBIDDEN_PATTERNS.find(({ pattern }) => pattern.test(content));
+    if (rule) {
       offenders.push({ file, hint: rule.hint });
-      break;
     }
     offenders.push(
       ...collectRelativeImportOffenders(file, content, resolvesToRepoSrc, RELATIVE_CORE_HINT),

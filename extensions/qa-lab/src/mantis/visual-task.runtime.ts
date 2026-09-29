@@ -92,7 +92,6 @@ const DEFAULT_PROVIDER = "hetzner";
 const DEFAULT_DURATION = "180s";
 const DEFAULT_SETTLE_MS = 8000;
 const DEFAULT_VISION_TIMEOUT_MS = 120000;
-const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const CRABBOX_PROVIDER_ENV = "OPENCLAW_MANTIS_CRABBOX_PROVIDER";
 const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
 
@@ -391,7 +390,6 @@ export async function runMantisVisualDriver(
   const screenshotPath = path.join(outputDir, "visual-task.png");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });
@@ -538,7 +536,6 @@ export async function runMantisVisualTask(
   const videoPath = path.join(outputDir, "visual-task.mp4");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });

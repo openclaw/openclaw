@@ -91,7 +91,7 @@ function assertApprovalCheckpointJson(params: {
   state: MantisApprovalCheckpointState;
 }) {
   assertApprovalCheckpointBaseJson(params);
-  const expectedKind = params.scenarioId === "slack-approval-exec-native" ? "exec" : "plugin";
+  const expectedKind = params.scenarioId.endsWith("-approval-exec-native") ? "exec" : "plugin";
   if (params.record.approvalKind !== expectedKind) {
     throw new Error(`${params.label} has an unexpected approval kind.`);
   }

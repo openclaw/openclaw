@@ -13,6 +13,8 @@ function isMetricsRecord(value: unknown): value is Record<string, unknown> {
 
 const KIB = 1024;
 const STARTUP_JS_BASELINE_RATCHET_BYTES = 4096;
+const BASELINE_UPDATE_COMMAND =
+  'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
   SCRIPT_DIR,
@@ -141,13 +143,7 @@ function controlUiLocaleAssetIdentity(
   return match ? { locale: match.locale, kind: match.kind } : null;
 }
 
-function collectControlUiLocaleAssetGroups(
-  assets: Array<ReturnType<typeof readAssetMetrics>>,
-): Array<{
-  locale: string;
-  base: Array<ReturnType<typeof readAssetMetrics>>;
-  configHints: Array<ReturnType<typeof readAssetMetrics>>;
-}> {
+function collectControlUiLocaleAssetGroups(assets: Array<ReturnType<typeof readAssetMetrics>>) {
   const groups = new Map<
     string,
     {
@@ -376,14 +372,9 @@ function controlUiPerformanceWarnings(
 }
 
 function formatViolation(violation: ControlUiPerformanceBudgetViolation): string {
-  const actual =
-    violation.unit === "bytes"
-      ? formatControlUiPerformanceBytes(violation.actual)
-      : String(violation.actual);
-  const limit =
-    violation.unit === "bytes"
-      ? formatControlUiPerformanceBytes(violation.limit)
-      : String(violation.limit);
+  const format = violation.unit === "bytes" ? formatControlUiPerformanceBytes : String;
+  const actual = format(violation.actual);
+  const limit = format(violation.limit);
   const exactBytes =
     violation.unit === "bytes" && actual === limit
       ? ` (${violation.actual} B vs ${violation.limit} B)`
@@ -465,7 +456,7 @@ export function formatControlUiPerformanceReport(
       startupBudgetBaseline.startupJsGzipBytes
   ) {
     lines.push(
-      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with ${baselineUpdateCommand()}`,
+      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with ${BASELINE_UPDATE_COMMAND}`,
     );
   }
   if (violations.length > 0) {
@@ -475,10 +466,6 @@ export function formatControlUiPerformanceReport(
     );
   }
   return lines.join("\n");
-}
-
-function baselineUpdateCommand(): string {
-  return 'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
 }
 
 function isIsoDate(value: string): boolean {
@@ -511,7 +498,7 @@ function readControlUiStartupBudgetBaseline(baselinePath: string): ControlUiStar
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `Cannot read Control UI startup budget baseline ${baselinePath}: ${detail}. Regenerate it with ${baselineUpdateCommand()}.`,
+      `Cannot read Control UI startup budget baseline ${baselinePath}: ${detail}. Regenerate it with ${BASELINE_UPDATE_COMMAND}.`,
       { cause: error },
     );
   }

@@ -22,6 +22,12 @@ export type CronReceiptTerminal = {
   error?: string;
 };
 
+export type CronReceiptRevisionRefusal = {
+  receiptId: string;
+  message: string;
+  reason: "revision-changed" | "owner-unavailable";
+};
+
 export type CronRuntimeMutationInputs = {
   "cron.reserveRuns": {
     storeKey: string;
@@ -58,6 +64,14 @@ export type CronRuntimeMutationInputs = {
     storeKey: string;
     terminal: CronReceiptTerminal;
   };
+  "cron.finalizeRuns": {
+    storeKey: string;
+    jobIds: string[];
+    receipts: Array<{
+      terminal: CronReceiptTerminal;
+      allowMissingJob: boolean;
+    }>;
+  };
   "cron.removeStaleFamily": {
     storeKey: string;
     family: CronJobFamilyIdentity;
@@ -87,6 +101,9 @@ export type CronRuntimeWorkerOperations = {
     input: CronRuntimeMutationInputs[Type] & { nonce: string };
     output:
       | { nonce: string }
-      | (Type extends "cron.reserveRuns" ? { nonce: string; conflict: CronRunReceipt } : never);
+      | (Type extends "cron.reserveRuns" ? { nonce: string; conflict: CronRunReceipt } : never)
+      | (Type extends "cron.finalizeRuns"
+          ? { nonce: string; receiptRevision: CronReceiptRevisionRefusal }
+          : never);
   };
 };

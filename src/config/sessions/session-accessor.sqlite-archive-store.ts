@@ -49,7 +49,7 @@ type SessionArchivePublicationStorage = {
 
 /** Publishes derived archive files after their canonical rows and deletions commit. */
 export async function publishSessionStateArchives(
-  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "ownerStorePath" | "path">,
   requested: readonly SessionLifecycleArchivedTranscript[],
   storage?: SessionArchivePublicationStorage,
 ): Promise<SessionLifecycleArchivedTranscript[]> {
