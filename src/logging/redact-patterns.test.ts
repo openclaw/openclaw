@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { AWS_SECRET_ACCESS_KEY_MATCHER } from "./redact-patterns.js";
+import { compileConfigRegex } from "../security/config-regex.js";
+import { parseRedactPatternSource } from "./redact-pattern-runtime.js";
+import {
+  AWS_SECRET_ACCESS_KEY_MATCHER,
+  DEFAULT_REDACT_STRING_PATTERNS,
+} from "./redact-patterns.js";
+
+describe("default pattern table", () => {
+  // A default pattern the safe-regex guard rejects is dropped silently at runtime, which disables
+  // that whole redaction family; fail here with the offending source instead.
+  it("compiles every default string pattern under the safe-regex guard", () => {
+    for (const raw of DEFAULT_REDACT_STRING_PATTERNS) {
+      const compiled = compileConfigRegex(...parseRedactPatternSource(raw));
+      expect(compiled?.regex, raw).not.toBeNull();
+    }
+  });
+});
 
 describe("AWS candidate prefilter", () => {
   it("agrees with the original value rule on seeded credential and noncredential text", () => {

@@ -1213,6 +1213,12 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText(`{ user: bot, pass: ${value} }`, { mode: "tools" })).toBe(
       "{ user: bot, pass: opaque…7890 }",
     );
+    expect(
+      redactSensitiveText(`accounts:\n  - pass: ${value}\n  - user: bot`, { mode: "tools" }),
+    ).toBe("accounts:\n  - pass: opaque…7890\n  - user: bot");
+    expect(redactSensitiveText(`user=bot; pass: ${value}`, { mode: "tools" })).toBe(
+      "user=bot; pass: opaque…7890",
+    );
   });
 
   it("masks common config-file secret assignments", () => {

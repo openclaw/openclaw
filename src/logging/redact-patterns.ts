@@ -75,9 +75,11 @@ const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;({\["])(?:${STAN
 const CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS = String.raw`access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|hook[-_]?token|api[-_]?(?:key|secret)|secret[-_]?key|key[-_]?material|authorization|jwt|token|secret|password|passphrase|pass|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS}`;
 const CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=\s*)|[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`;
 const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*|(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})(?:\s+=\s*|=\s+))([^\s#"'\x60<>]+)/g`;
-// Bare `pass:` is a config key only where a record starts: at the text or line start (indentation
-// allowed) or right after `{` / `,`. A mid-sentence `pass:` after a word stays prose.
-const CONFIG_BARE_PASS_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^[ \t]*|\n[ \t]*|[,{][ \t]*)pass\s*:\s*([^\s#"'\x60<>]+)/g`;
+// Bare `pass:` is a config key only where a record starts: at the text or line start (indentation and a
+// YAML `- ` sequence marker allowed) or right after `{`, `,`, or `;`. A mid-sentence `pass:` stays prose.
+// Written as flat alternatives: an optional `(?:-[ \t]+)?` after `[ \t]*` is rejected by the safe-regex
+// guard as nested repetition, which would silently drop the whole pattern.
+const CONFIG_BARE_PASS_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^[ \t]*|\n[ \t]*|[,{;][ \t]*|(?:^|\n)[ \t]*-[ \t]+)pass\s*:\s*([^\s#"'\x60<>]+)/g`;
 const CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS})=([^\s#"'\x60<>]+)/g`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9._-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
 const CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"'\x60<>]+)/g`;
