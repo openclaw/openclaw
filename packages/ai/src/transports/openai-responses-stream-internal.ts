@@ -140,9 +140,7 @@ export async function processResponsesStream<TApi extends Api>(
     }
     return undefined;
   };
-  const materializeDeferredTextSlot = (
-    slot: Extract<ResponsesOutputSlot, { type: "text" }>,
-  ): void => {
+  const materializeDeferredTextSlot = (slot: TextOutputSlot): void => {
     if (slot.block || slot.pendingText === null) {
       return;
     }
