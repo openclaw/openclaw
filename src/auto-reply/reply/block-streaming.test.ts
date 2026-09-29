@@ -19,6 +19,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
     expect(baseChunking.maxChars).toBeGreaterThanOrEqual(64);
     expect(resolved.chunking.maxChars).toBe(64);
+    expect(resolved.chunking.hardMaxChars).toBe(baseChunking.hardMaxChars);
     expect(resolved.chunking.minChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
     expect(resolved.coalescing.maxChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
     expect(resolved.coalescing.minChars).toBeLessThanOrEqual(resolved.coalescing.maxChars);
@@ -39,6 +40,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     expect(resolved.chunking).toEqual({
       minChars: 10,
       maxChars: 20,
+      hardMaxChars: 4000,
       breakPreference: "paragraph",
     });
     expect(resolved.coalescing.maxChars).toBe(20);
@@ -133,6 +135,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
     const baseChunking = resolveBlockStreamingChunking(cfg, "discord");
     expect(baseChunking.maxChars).toBeLessThan(1800);
+    expect(baseChunking.hardMaxChars).toBe(4096);
 
     const resolved = resolveEffectiveBlockStreamingConfig({
       cfg,
@@ -141,6 +144,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     });
 
     expect(resolved.chunking.maxChars).toBe(1800);
+    expect(resolved.chunking.hardMaxChars).toBe(4096);
     expect(resolved.chunking.minChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
   });
 });

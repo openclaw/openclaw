@@ -9,6 +9,12 @@ import {
   isSafeFenceBreak,
   scanFenceSpans,
 } from "../../packages/markdown-core/src/fences.js";
+import {
+  findSafeNewlineBreakIndex,
+  findSafeParagraphBreakIndex,
+  findSafeSentenceBreakIndex,
+  normalizeChunkLimits,
+} from "./embedded-agent-block-chunker.breaks.js";
 import { prepareIndentedCode } from "./embedded-agent-block-chunker.code.js";
 import {
   findTableBreakIndex,
@@ -16,10 +22,19 @@ import {
   type BreakSpan,
   type BreakSpans,
 } from "./embedded-agent-block-chunker.tables.js";
+import {
+  protectBreakIndex,
+  scanUnbreakableSpans,
+  type UnbreakableSpan,
+} from "./embedded-agent-link-spans.js";
 
 export type BlockReplyChunking = {
+  /** Preferred minimum chunk size; clamped to the absolute ceiling when provided. */
   minChars: number;
+  /** Preferred maximum chunk size; protected links may exceed it up to hardMaxChars. */
   maxChars: number;
+  /** Absolute transport ceiling. Defaults to maxChars for legacy callers. */
+  hardMaxChars?: number;
   breakPreference?: "paragraph" | "newline" | "sentence";
   /** When true, prefer \n\n paragraph boundaries once minChars has been satisfied. */
   flushOnParagraph?: boolean;
@@ -54,80 +69,6 @@ type BlockChunkDrain = {
   force: boolean;
   emit: (chunk: string, options?: BlockChunkMetadata) => void;
 };
-
-function findSafeSentenceBreakIndex(
-  text: string,
-  unsafeSpans: readonly BreakSpan[],
-  minChars: number,
-  offset = 0,
-  openFence?: FenceSpan,
-): number {
-  const matches = text.matchAll(/[.!?](?=\s|$)/g);
-  let sentenceIdx = -1;
-  for (const match of matches) {
-    const at = match.index ?? -1;
-    if (at < minChars) {
-      continue;
-    }
-    const candidate = at + 1;
-    if (
-      offset + candidate !== openFence?.end &&
-      isSafeFenceBreak(unsafeSpans, offset + candidate)
-    ) {
-      sentenceIdx = candidate;
-    }
-  }
-  return sentenceIdx >= minChars ? sentenceIdx : -1;
-}
-
-function findSafeParagraphBreakIndex(params: {
-  text: string;
-  unsafeSpans: readonly BreakSpan[];
-  minChars: number;
-  reverse: boolean;
-  offset?: number;
-}): number {
-  const { text, unsafeSpans, minChars, reverse, offset = 0 } = params;
-  let paragraphIdx = reverse ? text.lastIndexOf("\n\n") : text.indexOf("\n\n");
-  while (reverse ? paragraphIdx >= minChars : paragraphIdx !== -1) {
-    const candidates = [paragraphIdx, paragraphIdx + 1];
-    for (const candidate of candidates) {
-      if (candidate < minChars) {
-        continue;
-      }
-      if (candidate < 0 || candidate >= text.length) {
-        continue;
-      }
-      if (isSafeFenceBreak(unsafeSpans, offset + candidate)) {
-        return candidate;
-      }
-    }
-    paragraphIdx = reverse
-      ? text.lastIndexOf("\n\n", paragraphIdx - 1)
-      : text.indexOf("\n\n", paragraphIdx + 2);
-  }
-  return -1;
-}
-
-function findSafeNewlineBreakIndex(params: {
-  text: string;
-  unsafeSpans: readonly BreakSpan[];
-  minChars: number;
-  reverse: boolean;
-  offset?: number;
-}): number {
-  const { text, unsafeSpans, minChars, reverse, offset = 0 } = params;
-  let newlineIdx = reverse ? text.lastIndexOf("\n") : text.indexOf("\n");
-  while (reverse ? newlineIdx >= minChars : newlineIdx !== -1) {
-    if (newlineIdx >= minChars && isSafeFenceBreak(unsafeSpans, offset + newlineIdx)) {
-      return newlineIdx;
-    }
-    newlineIdx = reverse
-      ? text.lastIndexOf("\n", newlineIdx - 1)
-      : text.indexOf("\n", newlineIdx + 1);
-  }
-  return -1;
-}
 
 function findFenceCloseLineStart(buffer: string, fence: FenceSpan, offset = 0): number {
   const relativeFenceEnd = Math.min(buffer.length, Math.max(0, fence.end - offset));
@@ -326,8 +267,11 @@ export class EmbeddedBlockChunker {
       this.#codeContext = "";
       return;
     }
-    const minChars = Math.max(1, Math.floor(chunking?.minChars ?? 1));
-    const maxChars = Math.max(minChars, Math.floor(chunking?.maxChars ?? Infinity));
+    const { minChars, maxChars, hardMaxChars } = normalizeChunkLimits({
+      minChars: chunking?.minChars ?? 1,
+      maxChars: chunking?.maxChars ?? Infinity,
+      hardMaxChars: chunking?.hardMaxChars,
+    });
     const force = params.force || availableLength >= maxChars;
     const originalSource = this.bufferedText;
     if (originalSource.length < minChars && !force) {
@@ -394,9 +338,12 @@ export class EmbeddedBlockChunker {
       removedFenceInfoLength += removedLength;
     }
     const tables = findUnsplittableTableSpans(source, fenceSpans, maxChars, !force);
+    const unbreakableSpans = scanUnbreakableSpans(source, fenceSpans, hardMaxChars);
     const unsafe =
-      tables.length > 0
-        ? [...fenceSpans, ...tables].toSorted((left, right) => left.start - right.start)
+      tables.length > 0 || unbreakableSpans.length > 0
+        ? [...fenceSpans, ...tables, ...unbreakableSpans].toSorted(
+            (left, right) => left.start - right.start,
+          )
         : fenceSpans;
     const spans: BreakSpans = { fences: fenceSpans, tables, unsafe };
     const originalIndex = (index: number) =>
@@ -407,14 +354,16 @@ export class EmbeddedBlockChunker {
     const sourceOffset = (index: number) =>
       Math.max(0, indentedCode.toSource(originalIndex(index)) - this.#reopenPrefix.length);
     let start = 0;
+    let committedStart = 0;
     let reopenFence: FenceSplit | undefined;
-    const emitSourceChunk = (chunk: string, from: number, to: number) => {
+    let committedReopenFence: FenceSplit | undefined;
+    const emitSourceChunk = (chunk: string, from: number, to: number, custodyFrom = from) => {
       preparedSourceBreaks.push(sourceStart + sourceOffset(to));
       emit(chunk, {
-        sourceText: this.#buffer.slice(sourceOffset(from), sourceOffset(to)),
+        sourceText: this.#buffer.slice(sourceOffset(custodyFrom), sourceOffset(to)),
         sourceGeneration: this.#sourceGeneration,
         reconciledSourceBreak: reconciledSourceBreak || undefined,
-        sourceStart: this.#sourceOffset + this.#consumedLength + sourceOffset(from),
+        sourceStart: this.#sourceOffset + this.#consumedLength + sourceOffset(custodyFrom),
         sourceEnd: this.#sourceOffset + this.#consumedLength + sourceOffset(to),
         startsAtLineStart:
           Boolean(reopenFence) ||
@@ -431,6 +380,7 @@ export class EmbeddedBlockChunker {
         // A checkpoint can withdraw the remaining body while retaining its
         // source closer. Earlier chunks already carried a synthetic closer.
         start = skipLeadingNewlines(source, resumedFence.end);
+        committedStart = start;
       }
     }
 
@@ -452,7 +402,9 @@ export class EmbeddedBlockChunker {
             paragraphBreak.index + paragraphBreak.length,
           );
           if (chunk.trim().length > 0) {
-            emitSourceChunk(chunk, start, nextStart);
+            emitSourceChunk(chunk, start, nextStart, committedStart);
+            committedStart = nextStart;
+            committedReopenFence = undefined;
           }
           start = nextStart;
           reopenFence = undefined;
@@ -466,21 +418,41 @@ export class EmbeddedBlockChunker {
       const view = source.slice(start);
       const breakResult =
         force && remainingLength <= maxChars
-          ? this.#pickPreferredBreakIndex(view, unsafe, chunking, false, 1, start, openFence)
+          ? this.#pickPreferredBreakIndex(
+              view,
+              unsafe,
+              unbreakableSpans,
+              chunking,
+              true,
+              false,
+              1,
+              start,
+              openFence,
+            )
           : this.#pickBreakIndex(
               view,
               spans,
+              unbreakableSpans,
               chunking,
+              force,
               force ? 1 : undefined,
               start,
               maxChars - reopenPrefix.length,
+              hardMaxChars - reopenPrefix.length,
+              maxChars,
               openFence,
             );
       if (breakResult.index <= 0) {
         if (force) {
-          emitSourceChunk(`${reopenPrefix}${source.slice(start)}`, start, source.length);
-          start = source.length;
+          emitSourceChunk(
+            `${reopenPrefix}${source.slice(start)}`,
+            start,
+            source.length,
+            committedStart,
+          );
+          committedStart = source.length;
           reopenFence = undefined;
+          committedReopenFence = undefined;
         }
         break;
       }
@@ -509,7 +481,9 @@ export class EmbeddedBlockChunker {
         continue;
       }
       if (consumed.chunk) {
-        emitSourceChunk(consumed.chunk, start, consumed.start);
+        emitSourceChunk(consumed.chunk, start, consumed.start, committedStart);
+        committedStart = consumed.start;
+        committedReopenFence = consumed.reopenFence;
       }
       start = consumed.start;
       reopenFence = consumed.reopenFence;
@@ -523,6 +497,8 @@ export class EmbeddedBlockChunker {
         break;
       }
     }
+    start = committedStart;
+    reopenFence = committedReopenFence;
     if (!reopenFence) {
       start = skipLeadingNewlines(source, start);
     }
@@ -591,7 +567,9 @@ export class EmbeddedBlockChunker {
   #pickPreferredBreakIndex(
     buffer: string,
     unsafeSpans: readonly BreakSpan[],
+    unbreakableSpans: UnbreakableSpan[],
     chunking: BlockReplyChunking,
+    force: boolean,
     reverse: boolean,
     minCharsOverride?: number,
     offset = 0,
@@ -612,7 +590,7 @@ export class EmbeddedBlockChunker {
         offset,
       });
       if (paragraphIdx !== -1) {
-        return { index: paragraphIdx };
+        return { index: protectBreakIndex(unbreakableSpans, paragraphIdx, offset, force) };
       }
     }
 
@@ -625,7 +603,7 @@ export class EmbeddedBlockChunker {
         offset,
       });
       if (newlineIdx !== -1) {
-        return { index: newlineIdx };
+        return { index: protectBreakIndex(unbreakableSpans, newlineIdx, offset, force) };
       }
     }
 
@@ -638,7 +616,7 @@ export class EmbeddedBlockChunker {
         openFence,
       );
       if (sentenceIdx !== -1) {
-        return { index: sentenceIdx };
+        return { index: protectBreakIndex(unbreakableSpans, sentenceIdx, offset, force) };
       }
     }
 
@@ -648,63 +626,82 @@ export class EmbeddedBlockChunker {
   #pickBreakIndex(
     buffer: string,
     spans: BreakSpans,
+    unbreakableSpans: UnbreakableSpan[],
     chunking: BlockReplyChunking,
+    force: boolean,
     minCharsOverride?: number,
     offset = 0,
     maxCharsOverride?: number,
+    hardMaxCharsOverride?: number,
+    totalMaxCharsOverride?: number,
     openFence?: FenceSpan,
   ): BreakResult {
-    const minChars = Math.max(1, Math.floor(minCharsOverride ?? chunking.minChars));
-    const maxChars = Math.max(1, Math.floor(maxCharsOverride ?? chunking.maxChars));
+    const { minChars, maxChars, hardMaxChars } = normalizeChunkLimits({
+      minChars: minCharsOverride ?? chunking.minChars,
+      maxChars: maxCharsOverride ?? chunking.maxChars,
+      hardMaxChars: hardMaxCharsOverride ?? chunking.hardMaxChars,
+    });
+    const totalMaxChars = totalMaxCharsOverride ?? maxChars;
     if (buffer.length < minChars) {
       return { index: -1 };
     }
     const window = buffer.slice(0, Math.min(maxChars, buffer.length));
-
-    const preferred = this.#pickPreferredBreakIndex(
-      window,
-      spans.unsafe,
-      chunking,
-      true,
-      minChars,
-      offset,
-      openFence,
+    const oversizedSpanAtStart = unbreakableSpans.some(
+      (span) => span.start <= offset && span.end > offset + hardMaxChars,
     );
-    if (preferred.index !== -1) {
-      return preferred;
-    }
 
-    if (buffer.length < maxChars) {
-      return { index: -1 };
-    }
+    if (!oversizedSpanAtStart) {
+      const preferred = this.#pickPreferredBreakIndex(
+        window,
+        spans.unsafe,
+        unbreakableSpans,
+        chunking,
+        force,
+        true,
+        minChars,
+        offset,
+        openFence,
+      );
+      if (preferred.index !== -1) {
+        return preferred;
+      }
 
-    const tableBreak = findTableBreakIndex(buffer, offset, window.length, spans);
-    if (tableBreak !== undefined) {
-      return { index: tableBreak };
-    }
+      if (buffer.length < maxChars) {
+        return { index: -1 };
+      }
 
-    for (let i = window.length - 1; i >= minChars; i--) {
-      if (/\s/.test(window.charAt(i)) && isSafeFenceBreak(spans.unsafe, offset + i)) {
-        return { index: i };
+      const tableBreak = findTableBreakIndex(buffer, offset, window.length, spans);
+      if (tableBreak !== undefined) {
+        return { index: tableBreak };
+      }
+
+      for (let i = window.length - 1; i >= minChars; i--) {
+        if (/\s/.test(window.charAt(i)) && isSafeFenceBreak(spans.unsafe, offset + i)) {
+          return { index: protectBreakIndex(unbreakableSpans, i, offset, force) };
+        }
       }
     }
 
-    if (buffer.length >= maxChars) {
+    const forcedLimit = oversizedSpanAtStart ? hardMaxChars : maxChars;
+    if (buffer.length >= forcedLimit) {
       const firstCodePointWidth = (buffer.codePointAt(0) ?? 0) > 0xffff ? 2 : 1;
       const forcedBreakIndex = sliceUtf16Safe(
         buffer,
         0,
-        Math.max(maxChars, firstCodePointWidth),
+        Math.max(forcedLimit, firstCodePointWidth),
       ).length;
+      if (oversizedSpanAtStart) {
+        return { index: forcedBreakIndex };
+      }
       // An unfinished span ends at the buffer boundary without a source closer.
       const absoluteBreakIndex = offset + forcedBreakIndex;
       const fence =
         findFenceSpanAt(spans.fences, absoluteBreakIndex) ??
         (openFence?.end === absoluteBreakIndex ? openFence : undefined);
       if (fence) {
-        const reopenFenceLine = resolveFenceReopenLine(fence, chunking.maxChars);
+        const reopenFenceLine = resolveFenceReopenLine(fence, totalMaxChars);
         if (!reopenFenceLine) {
-          return { index: forcedBreakIndex };
+          return { index: protectBreakIndex(unbreakableSpans, forcedBreakIndex, offset, force) };
         }
         // Synthetic fence wrappers consume the same transport budget as source
         // text; reserving them here keeps every emitted payload deliverable.
@@ -715,7 +712,7 @@ export class EmbeddedBlockChunker {
           Math.max(1, maxChars - closeFenceLine.length - 1),
         ).length;
         if (fenceBreakIndex <= 0) {
-          return { index: forcedBreakIndex };
+          return { index: protectBreakIndex(unbreakableSpans, forcedBreakIndex, offset, force) };
         }
         const closeFenceStart = findFenceCloseLineStart(buffer, fence, offset);
         return {
@@ -726,7 +723,7 @@ export class EmbeddedBlockChunker {
           fenceSplit: { closeFenceLine, reopenFenceLine, fence },
         };
       }
-      return { index: forcedBreakIndex };
+      return { index: protectBreakIndex(unbreakableSpans, forcedBreakIndex, offset, force) };
     }
 
     return { index: -1 };
