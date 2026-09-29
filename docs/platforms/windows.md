@@ -213,8 +213,10 @@ During update preflight, Scheduled Task inspection uses the update's `--timeout`
 Gateway startup creates private SQLite staging directories through Windows APIs,
 without compiling C# or launching PowerShell for their permissions. The owner,
 SYSTEM, and Administrators retain full access; other inherited access is removed
-at creation. Update restart helpers also avoid runtime C# compilation and
-`Invoke-Expression`. If antivirus software still interrupts a start, include its
+at creation. Inside a Windows AppContainer, the process's own AppContainer SID is
+also granted, so the creating container can reopen its private state while other
+containers stay denied. Update restart helpers also avoid runtime C# compilation
+and `Invoke-Expression`. If antivirus software still interrupts a start, include its
 detection name and the output of `openclaw gateway status --json` in your report.
 
 Install the Gateway service:
