@@ -9,6 +9,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import "../../components/modal-dialog.ts";
+import "./tts-voice-lab.css";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -429,7 +430,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
         description=${t("ttsVoiceLab.intro")}
         @modal-cancel=${this.closeDialog}
       >
-        <section class="exec-approval-card" style="max-height:min(80dvh, 720px);overflow:auto">
+        <section class="exec-approval-card tts-voice-lab-dialog">
           <header>
             <h2>${t("ttsVoiceLab.create")}</h2>
             <p>${t("ttsVoiceLab.intro")}</p>

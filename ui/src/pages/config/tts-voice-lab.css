@@ -1,0 +1,17 @@
+/* The long recording form scrolls without shrinking native audio controls. */
+.tts-voice-lab-dialog.exec-approval-card {
+  display: block;
+  max-height: min(80dvh, 720px);
+  overflow: auto;
+}
+
+.tts-voice-lab-dialog audio {
+  display: block;
+  max-width: 100%;
+}
+
+.tts-voice-lab-dialog .settings-status {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
