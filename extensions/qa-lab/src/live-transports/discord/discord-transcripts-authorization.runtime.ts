@@ -327,8 +327,8 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
           token: runtimeEnv.sutBotToken,
           guildId: runtimeEnv.guildId,
         })
-        .catch(() => null);
-      if (voiceState?.channel_id !== voiceChannel.id) {
+        .catch(() => undefined);
+      if (voiceState !== undefined && voiceState?.channel_id !== voiceChannel.id) {
         evidence.cleanup.voiceDisconnected = true;
       } else {
         evidence.cleanup.emergencyStopAttempted = true;

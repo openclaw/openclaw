@@ -70,7 +70,6 @@ import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlit
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import {
   captureLifecycleDatabaseScope,
-  cloneSessionEntry,
   resolveSqliteAgentId,
   resolveSqliteReadScope,
   resolveSqliteStoreScope,
@@ -232,7 +231,7 @@ export async function resetSessionEntryLifecycle(
           const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
           const current = targetSnapshot[0];
           const nextEntry = await params.buildNextEntry({
-            currentEntry: current ? cloneSessionEntry(current.entry) : undefined,
+            currentEntry: current ? structuredClone(current.entry) : undefined,
             primaryKey: params.target.canonicalKey,
           });
           const shouldAppendResetBoundary =
@@ -240,8 +239,8 @@ export async function resetSessionEntryLifecycle(
             current?.entry.sessionId &&
             !sqliteSessionEntriesEqual(current.entry, nextEntry);
           const mutation: ResetSessionEntryLifecycleMutation = {
-            nextEntry: cloneSessionEntry(nextEntry),
-            ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
+            nextEntry: structuredClone(nextEntry),
+            ...(current ? { previousEntry: structuredClone(current.entry) } : {}),
             ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
           };
           const databaseIdentity = runOpenClawAgentWriteTransaction(

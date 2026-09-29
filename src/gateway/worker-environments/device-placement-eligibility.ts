@@ -4,6 +4,7 @@ import {
   resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
+import { availableWorkerSlots } from "../../shared/node-list-parse.js";
 import {
   resolveNodeCommandAllowlist,
   resolveRequiredNodeCommandAuthority,
@@ -138,7 +139,8 @@ export async function resolveDevicePlacementEligibility(params: {
       error: `paired-device command ${requiredNodeCommand.command} is not enabled or approved for ${deviceId}; enable it in gateway.nodes.commands.allow and approve the command on the node`,
     };
   }
-  if (requirement.consumesWorkerSlot && node.workerHost.capacity.available <= 0) {
+  const availableSlots = availableWorkerSlots(node.workerHost.capacity);
+  if (requirement.consumesWorkerSlot && availableSlots <= 0) {
     return {
       ok: false,
       error: deviceUnavailableText(deviceId, {
@@ -147,5 +149,5 @@ export async function resolveDevicePlacementEligibility(params: {
       }),
     };
   }
-  return { ok: true, availableSlots: node.workerHost.capacity.available, node };
+  return { ok: true, availableSlots, node };
 }

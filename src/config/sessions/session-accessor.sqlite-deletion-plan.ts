@@ -1,42 +1,52 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isAgentHarnessSessionKey,
   MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
 } from "../../sessions/agent-harness-session-key.js";
-import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  readOpenClawAgentDatabaseIdentity,
+  type OpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type { DeleteSessionEntryLifecycleParams } from "./session-accessor.sqlite-contract.js";
-import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  sqliteLifecycleTargetSnapshotsEqual,
+  type SqliteLifecycleTargetSnapshot,
+} from "./session-accessor.sqlite-entry-equality.js";
 import { readLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-store.js";
 import {
+  readSqliteSessionGenerationClaim,
+  readSqliteSessionGenerationWindows,
+} from "./session-accessor.sqlite-generation-copy.js";
+import {
   collectSessionStateIdsForEntry,
+  shouldRemoveSessionEntry,
   planSessionStateDeleteIfUnreferenced,
   readSessionGenerationIdsForKeys,
   planSessionStateAfterEntryRemoval,
   readReferencedSessionIdsAfterTargetMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type { SqliteSessionDeletionScope } from "./session-accessor.sqlite-lifecycle-types.js";
-import {
-  readValidatedSessionDeletionTarget,
-  shouldDeleteSqliteSessionEntryLifecycle,
-} from "./session-accessor.sqlite-reclamation.js";
+import { readSessionNodeArtifactFingerprint } from "./session-accessor.sqlite-node-artifacts.js";
 import { collectSessionAdmissionReferences } from "./session-history-eviction-candidates.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Transportable planning facts; live guards and native identity remain with their owners. */
-export type SessionDeletionPlanningParams = Omit<
+type SessionDeletionPlanningParams = Omit<
   DeleteSessionEntryLifecycleParams,
   "commitGuard" | "expectedDatabaseIdentity" | "descendantRunBasis"
 >;
 
-export type SessionEntryDeletionPlanInput = {
+type SessionEntryDeletionPlanInput = {
   deleteParams: SessionDeletionPlanningParams;
   archiveDirectory: string;
   admissionIdentities: readonly string[];
   allowLockedEntryRemoval: boolean;
   expectedPluginOwnerId?: string;
 };
-export type SessionEntryDeletionPlanResult =
+type SessionEntryDeletionPlanResult =
   | { kind: "missing" }
   | { kind: "expected-entry-mismatch" }
   | {
@@ -55,20 +65,20 @@ type SessionDeletionPlanningValidation = {
   preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
   scope?: SqliteSessionDeletionScope;
 };
-export type SessionHistoricalDeletionCheckInput = {
+type SessionHistoricalDeletionCheckInput = {
   validation: SessionDeletionPlanningValidation;
   sessionId: string;
   admissionIdentities: readonly string[];
 };
-export type SessionHistoricalDeletionPlanInput = SessionHistoricalDeletionCheckInput & {
+type SessionHistoricalDeletionPlanInput = SessionHistoricalDeletionCheckInput & {
   archiveDirectory: string;
   archiveTranscript: boolean;
 };
-export type SessionHistoricalDeletionPlanResult =
+type SessionHistoricalDeletionPlanResult =
   | { kind: "expected-entry-mismatch" }
   | { kind: "skip" }
   | { kind: "ready"; plan: SessionStateDeletePlan };
-export type SessionHistoricalDeletionCheckResult =
+type SessionHistoricalDeletionCheckResult =
   | { kind: "expected-entry-mismatch" }
   | { kind: "ready"; protectedSessionIds: string[] };
 
@@ -120,7 +130,7 @@ export function prepareSessionDeletionInDatabase(
 }
 
 /** Native identity is checked locally; it is never serialized into the planning input. */
-export function prepareSessionEntryDeletionInDatabase(
+function prepareSessionEntryDeletionInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionEntryDeletionPlanInput,
   expectedDatabaseIdentity?: OpenClawAgentDatabaseIdentity,
@@ -217,7 +227,7 @@ export function prepareSessionEntryDeletionInDatabase(
 }
 
 /** Preserve reference and live-admission protection before materializing one historical generation. */
-export function prepareSessionHistoricalDeletionInDatabase(
+function prepareSessionHistoricalDeletionInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionHistoricalDeletionPlanInput,
   expectedDatabaseIdentity?: OpenClawAgentDatabaseIdentity,
@@ -259,7 +269,7 @@ export function prepareSessionHistoricalDeletionInDatabase(
 }
 
 /** Recheck the same generation after archive materialization; this snapshot grants no authority. */
-export function prepareSessionHistoricalReclamationInDatabase(
+function prepareSessionHistoricalReclamationInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionHistoricalDeletionCheckInput,
   expectedDatabaseIdentity?: OpenClawAgentDatabaseIdentity,
@@ -281,4 +291,88 @@ export function prepareSessionHistoricalReclamationInDatabase(
     );
   }
   return { kind: "ready", protectedSessionIds: [...protectedSessionIds] };
+}
+
+function shouldDeleteSqliteSessionEntryLifecycle(
+  database: OpenClawAgentDatabase,
+  entry: SessionEntry | undefined,
+  params: DeleteSessionEntryLifecycleParams,
+  scope: SqliteSessionDeletionScope = { kind: "entry", phase: "plan" },
+): entry is SessionEntry {
+  if (
+    params.expectedDatabaseIdentity !== undefined &&
+    params.expectedDatabaseIdentity !== readOpenClawAgentDatabaseIdentity(database).identity
+  ) {
+    return false;
+  }
+  if (
+    !shouldRemoveSessionEntry(entry, {
+      expectedEntry: params.expectedEntry || undefined,
+      expectedSessionId: params.expectedSessionId,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      expectedUpdatedAt: params.expectedUpdatedAt,
+    })
+  ) {
+    return false;
+  }
+  if (
+    scope.kind === "entry" &&
+    params.expectedNodeArtifactFingerprint !== undefined &&
+    params.expectedNodeArtifactFingerprint !==
+      readSessionNodeArtifactFingerprint(database, params.target.canonicalKey)
+  ) {
+    return false;
+  }
+  if (params.expectedGenerations) {
+    const expected = new Map(
+      params.expectedGenerations.map((generation) => [generation.window.session_id, generation]),
+    );
+    const windows = readSqliteSessionGenerationWindows(
+      database,
+      scope.kind === "entry" ? [params.target.canonicalKey, ...params.target.storeKeys] : [],
+      scope.kind === "entry" ? collectSessionStateIdsForEntry(entry) : [scope.sessionId],
+    );
+    // Historical cleanup commits one generation at a time; already-copied removals are allowed.
+    if (
+      windows.some((window) => {
+        const generation = expected.get(window.session_id);
+        return (
+          !generation ||
+          !isDeepStrictEqual({ ...generation.window }, { ...window }) ||
+          (scope.phase === "commit" &&
+            generation.fingerprint !==
+              readSqliteSessionGenerationClaim(database, window).fingerprint)
+        );
+      })
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export type SessionDeletionValidation = {
+  deleteParams: DeleteSessionEntryLifecycleParams;
+  preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
+  scope?: SqliteSessionDeletionScope;
+};
+
+export function readValidatedSessionDeletionTarget(
+  database: OpenClawAgentDatabase,
+  validation: SessionDeletionValidation,
+) {
+  const snapshot = readLifecycleTargetSnapshot(database, validation.deleteParams.target);
+  const entry = snapshot[0]?.entry;
+  if (
+    !sqliteLifecycleTargetSnapshotsEqual(validation.preparedTargetSnapshot, snapshot) ||
+    !shouldDeleteSqliteSessionEntryLifecycle(
+      database,
+      entry,
+      validation.deleteParams,
+      validation.scope,
+    )
+  ) {
+    return undefined;
+  }
+  return { snapshot, entry };
 }

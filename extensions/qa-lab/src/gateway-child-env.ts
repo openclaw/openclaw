@@ -16,7 +16,7 @@ import {
   QA_LIVE_SETUP_TOKEN_VALUE_ENV,
 } from "./providers/live-frontier/auth.js";
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 
 const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
   // QA owns this child; parent service and test-runner markers describe a different process.

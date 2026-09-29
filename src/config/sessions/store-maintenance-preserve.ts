@@ -15,7 +15,7 @@ import type { SessionEntry } from "./types.js";
 /** Provider hook for session keys that maintenance/pruning should preserve. */
 type SessionMaintenancePreserveKeysProvider = () => Iterable<string> | undefined;
 
-export type PreparedSessionMaintenancePreserveKeys = {
+type PreparedSessionMaintenancePreserveKeys = {
   capture(): Iterable<string> | undefined;
   /** Release prepared source custody; this must not throw. */
   dispose(): void;

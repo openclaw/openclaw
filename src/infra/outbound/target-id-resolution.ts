@@ -3,16 +3,10 @@
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { maybeResolvePluginMessagingTarget } from "./target-normalization.js";
-
-/** Plugin-resolved destination for a channel target that already looks id-like. */
-export type ResolvedIdLikeTarget = {
-  to: string;
-  kind: ChannelDirectoryEntryKind | "channel";
-  display?: string;
-  source: "normalized" | "directory";
-  resolutionSource: "plugin";
-};
+import {
+  maybeResolvePluginMessagingTarget,
+  type ResolvedPluginMessagingTarget,
+} from "./target-normalization.js";
 
 /** Resolves an id-like outbound target through the channel plugin directory. */
 export async function maybeResolveIdLikeTarget(params: {
@@ -22,7 +16,7 @@ export async function maybeResolveIdLikeTarget(params: {
   accountId?: string | null;
   preferredKind?: ChannelDirectoryEntryKind | "channel";
   plugin?: ChannelPlugin;
-}): Promise<ResolvedIdLikeTarget | undefined> {
+}): Promise<ResolvedPluginMessagingTarget | undefined> {
   return maybeResolvePluginMessagingTarget({
     ...params,
     requireIdLike: true,

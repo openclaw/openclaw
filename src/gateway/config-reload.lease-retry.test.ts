@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as configJournal from "../config/config-journal-snapshot.js";
 import * as configAudit from "../config/io.audit.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   OpenClawStateLeaseAcquisitionError,
   OpenClawStateLeaseError,
@@ -65,10 +66,14 @@ it("joins an admitted reload when its Gateway scheduler stops", async () => {
   const scheduler = createTestGatewayScheduler(clock.clock);
   const started = createDeferred();
   const release = createDeferred();
+  const releaseChild = createDeferred();
+  let workSignal: AbortSignal | undefined;
   const write = makeZeroDebounceHookWrite("scheduler-close");
   const harness = createReloaderHarness(async () => write.snapshot, {
     scheduler,
     onHotReload: async () => {
+      workSignal = getAsyncWorkSignal();
+      void trackAsyncWork(() => releaseChild.promise);
       started.resolve();
       await release.promise;
       return "applied";
@@ -80,6 +85,7 @@ it("joins an admitted reload when its Gateway scheduler stops", async () => {
   let closing: Promise<void> | undefined;
   try {
     await started.promise;
+    expect(workSignal).toBeDefined();
     let closed = false;
     closing = scheduler.stop().then(() => {
       closed = true;
@@ -87,10 +93,16 @@ it("joins an admitted reload when its Gateway scheduler stops", async () => {
     await Promise.resolve();
     expect(closed).toBe(false);
     release.resolve();
-    await closing;
+    await flushReload(harness.reloader);
     expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+    expect(harness.reloader.isReloading()).toBe(false);
+    expect(closed).toBe(false);
+    releaseChild.resolve();
+    await closing;
+    expect(closed).toBe(true);
   } finally {
     release.resolve();
+    releaseChild.resolve();
     await Promise.all([waking, closing]);
     await harness.reloader.stop();
     await scheduler.stop();

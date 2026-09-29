@@ -25,6 +25,7 @@ import type {
   ChatSessionCompanionTurn,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import {
   getSessionWorkspace,
   selectSessionWorkspacePreview,
@@ -210,7 +211,7 @@ export function sidebarPanelDefinitions(
         .onDraftChange=${params.onCompanionDraftChange}
         .onAttachmentsChange=${params.onCompanionAttachmentsChange}
         .uploadConfig=${state?.uploadConfig}
-        .attachmentLimits=${state?.hello?.policy?.attachments}
+        .attachmentLimits=${resolveChatAttachmentLimits(state?.hello?.policy)}
         .onVisibilityChange=${params.onCompanionVisibilityChange}
       ></openclaw-chat-session-rail>`
     : null;

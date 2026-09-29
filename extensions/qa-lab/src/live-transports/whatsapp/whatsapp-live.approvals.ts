@@ -14,7 +14,7 @@ import type {
   WhatsAppQaGateway,
   WhatsAppQaScenarioMetadata,
 } from "./whatsapp-live.contracts.js";
-import { formatDiagnosticId } from "./whatsapp-live.operations.js";
+import { formatDiagnosticId } from "./whatsapp-live.observations.js";
 
 const WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS = 60_000;
 

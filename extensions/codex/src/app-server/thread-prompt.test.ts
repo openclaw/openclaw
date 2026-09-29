@@ -153,6 +153,15 @@ describe("buildDeveloperInstructions credential routing", () => {
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {
+  it("omits discovery and delegation guidance for an explicitly empty tool allowlist", () => {
+    const params = createParams({ toolsAllow: [] });
+    const instructions = buildDeveloperInstructions(params);
+
+    expect(instructions).not.toContain("ALL_TOOLS");
+    expect(instructions).not.toContain("spawn_agent");
+    expect(buildDeveloperInstructions({ ...params, toolsAllow: undefined })).toContain("ALL_TOOLS");
+  });
+
   it("shares the visible-session delegation policy with a canonical main session", () => {
     const instructions = buildInstructions();
 

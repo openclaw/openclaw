@@ -1,4 +1,3 @@
-// Zalouser type declarations define plugin contracts.
 import type {
   ChannelMessageSendTextContext,
   MessageReceipt,

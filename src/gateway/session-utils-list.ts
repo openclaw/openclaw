@@ -203,16 +203,20 @@ export function prepareSessionRowSelection(
     subagentRuns: residentContext.subagentRuns.atTime(now),
   };
   const keyed = prepared?.key !== undefined || prepared?.sessionIdOrKey !== undefined;
+  // Person references resolve against the full visible roster before child filtering.
+  const parentSessionKey = !keyed && !opts.involvingProfileId ? opts.spawnedBy : undefined;
+  const broad = !keyed && !parentSessionKey;
   const activeOnly = opts.activeOnly === true;
-  let selection = keyed
-    ? undefined
-    : sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly);
+  let selection = broad
+    ? sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly)
+    : undefined;
   if (!selection) {
     const rows = projection
       .selectEntries({
         agentId: selectedScope.agentId,
         key: prepared?.key,
         sessionIdOrKey: prepared?.sessionIdOrKey,
+        parentSessionKey,
         sortBy: null,
       })
       .filter(
@@ -270,7 +274,7 @@ export function prepareSessionRowSelection(
       ),
       entries,
     };
-    if (!keyed) {
+    if (broad) {
       const currentRevision = projection.state.revision;
       let scopes = sessionRowSelections.get(currentRevision);
       if (!scopes) {

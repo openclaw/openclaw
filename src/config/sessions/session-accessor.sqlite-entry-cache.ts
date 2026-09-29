@@ -150,7 +150,7 @@ function readCachedExactSessionEntries(
 export function readExactSessionEntryCandidatesInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   requests: readonly (readonly string[])[],
-  projection: SessionEntryReadScope["projection"],
+  projection: SessionEntryReadScope["projection"] | "delivery",
 ): Array<Result<ExactSessionEntry[], unknown>> {
   const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
   const keys = [...new Set(requests.flat())];
