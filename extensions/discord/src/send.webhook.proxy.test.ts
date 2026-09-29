@@ -231,7 +231,8 @@ describe("Discord webhook transport", () => {
         throw new Error("expected webhook request signal");
       }
       return new Promise<Response>((_resolve, reject) => {
-        const abort = () => reject(signal.reason);
+        const abort = () =>
+          reject(signal.reason instanceof Error ? signal.reason : new Error("request aborted"));
         if (signal.aborted) {
           abort();
         } else {

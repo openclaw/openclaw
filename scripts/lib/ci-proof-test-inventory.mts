@@ -1031,7 +1031,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/code-mode-runtime.test.ts",
   "src/agents/code-mode-swarm.lazy.test.ts",
   "src/agents/code-mode-swarm.test.ts",
-  "src/agents/code-mode.action-output.test.ts",
+  "src/agents/code-mode.auto-results.test.ts",
   "src/agents/code-mode.bridge.host-denial.test.ts",
   "src/agents/code-mode.bridge.lifecycle.test.ts",
   "src/agents/code-mode.bridge.tts-delivery.test.ts",
