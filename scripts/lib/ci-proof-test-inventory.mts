@@ -3631,7 +3631,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/skills/loading/session.test.ts",
   "src/skills/runtime/embedded-run-entries.test.ts",
   "src/skills/runtime/refresh-content-native.test.ts",
-  "src/skills/runtime/refresh.capacity.test.ts",
   "src/skills/runtime/refresh.churn.test.ts",
   "src/skills/runtime/refresh.missing-root.integration.test.ts",
   "src/skills/runtime/refresh.rescan.test.ts",
