@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
+import {
+  createDocsMarkdown,
+  parseDocsDocument,
+  parseFrontmatter,
+} from "../../scripts/lib/docs-markdown.mjs";
 
 describe("docs Markdown rendering", () => {
+  it.each([
+    {
+      name: "annotated LF delimiter",
+      source: '---\ntitle: Example\ndescription: "{"\n--- # end\n# Body\n',
+      data: { title: "Example", description: "{" },
+      content: "# Body\n",
+    },
+    {
+      name: "annotated CRLF document-end delimiter",
+      source: '---\r\ntitle: Example\r\ndescription: "{"\r\n... # end\r\n# Body\r\n',
+      data: { title: "Example", description: "{" },
+      content: "# Body\r\n",
+    },
+  ])(
+    "parses $name through the public frontmatter parser",
+    ({ source, data, content }) => {
+      expect(parseFrontmatter(source)).toEqual({ data, content });
+    },
+  );
+
   it.each([
     {
       name: "APIUsage",
