@@ -528,12 +528,7 @@ export const DEFAULT_REDACT_PATTERNS: readonly RedactPattern[] = [
   AWS_SECRET_ACCESS_KEY_MATCHER,
 ];
 
-/** Pattern text only; programmatic matchers are not user-configurable sources. */
-export const DEFAULT_REDACT_STRING_PATTERNS: readonly string[] = DEFAULT_REDACT_PATTERNS.filter(
-  (pattern): pattern is string => typeof pattern === "string",
-);
-
-export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set<RedactPattern>([
+export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set([
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
   STRUCTURED_JSON_SECRET_REDACT_PATTERN,
@@ -543,15 +538,21 @@ export const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set<RedactPattern>
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_ASSIGNMENT_REDACT_PATTERN,
-  BARE_PASS_ASSIGNMENT_MATCHER,
   CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_NAMESPACED_ASSIGNMENT_REDACT_PATTERN,
 ]);
 
+/** Programmatic counterparts of the ambiguous assignment rules: kept out of tool payloads, preserved in source. */
+export const AMBIGUOUS_ASSIGNMENT_MATCHERS: ReadonlySet<RedactPattern> = new Set([
+  BARE_PASS_ASSIGNMENT_MATCHER,
+]);
+
 // Tool output commonly contains source code. Keep key-name matching in logs, direct `.env` reads,
 // and payment JSON; other model-visible text relies on registered and recognizable secret values.
 export const TOOL_PAYLOAD_REDACT_PATTERNS: readonly RedactPattern[] =
-  DEFAULT_REDACT_PATTERNS.filter(
-    (pattern) => !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern),
+  DEFAULT_REDACT_PATTERNS.filter((pattern) =>
+    typeof pattern === "string"
+      ? !TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(pattern)
+      : !AMBIGUOUS_ASSIGNMENT_MATCHERS.has(pattern),
   );
