@@ -116,6 +116,7 @@ export function createApplicationTheme(
   let disposed = false;
   const publish = () => {
     const generation = ++presentationGeneration;
+    let preferencesPublished = false;
     setCurrentThemeBranding(themeBranding(settings, catalog?.theme(settings.theme)));
     syncThemePaletteStylesheet(settings.theme, () => {
       // A slower palette cannot overwrite a newer selection or a disposed app.
@@ -124,16 +125,10 @@ export function createApplicationTheme(
       }
       const previousMascot =
         typeof document === "undefined" ? undefined : document.documentElement.dataset.themeMascot;
-      const previousHat =
-        typeof document === "undefined"
-          ? undefined
-          : document.documentElement.dataset.themeAvatarHat;
       applyThemePresentation(settings, catalog?.theme(settings.theme));
-      if (
-        typeof document !== "undefined" &&
-        (previousMascot !== document.documentElement.dataset.themeMascot ||
-          previousHat !== document.documentElement.dataset.themeAvatarHat)
-      ) {
+      // Computed-style consumers need the applied palette, not just the new
+      // preference. Synchronous application shares the publication below.
+      if (preferencesPublished) {
         for (const listener of listeners) {
           listener();
         }
@@ -156,6 +151,7 @@ export function createApplicationTheme(
     });
     // Live preferences cannot wait for a palette download. Presentation keeps
     // its own generation fence; subscribers consume the new snapshot now.
+    preferencesPublished = true;
     for (const listener of listeners) {
       listener();
     }

@@ -8,6 +8,7 @@ import {
   type WorkerProvider,
 } from "../../plugins/types.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import { MAX_NODE_BOOTSTRAP_TIMEOUT_MS } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createDedicatedNodeLeaseAttestations } from "./dedicated-node-lease-attestations.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
@@ -106,7 +107,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       await failBootstrap(record, leaseId, provider, error, "bootstrap_failure", patch),
   });
 
-  const refreshRuntime = createWorkerRuntimeRefresher({
+  const runtimeRefresher = createWorkerRuntimeRefresher({
     ...options,
     requireCurrentOwner,
     stopOwner,
@@ -187,11 +188,16 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           `Worker provider ${provider.id} does not support ${executionMode} placement`,
         );
       }
+      // Grants are issued after allocation. Reserve the core policy's maximum now,
+      // including the connection wait that starts after the bootstrap command exits.
+      const nodeBootstrapTimeoutMs = provider.requiresNodeEnrollment
+        ? MAX_NODE_BOOTSTRAP_TIMEOUT_MS
+        : undefined;
       const providerTimeoutMs =
         options.providerCallTimeoutMs === undefined
           ? requireProviderOperationTimeoutMs(
               "provision",
-              provider.resolveProvisionTimeoutMs?.(profile),
+              provider.resolveProvisionTimeoutMs?.(profile, { nodeBootstrapTimeoutMs }),
             )
           : undefined;
       const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
@@ -271,6 +277,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         return current;
       };
       const provisionOptions = {
+        nodeBootstrapTimeoutMs,
         profileId: record.profileId,
         assertCurrent,
         ...(machineClass ? { machineClass } : {}),
@@ -449,7 +456,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       retainProviderSettlement?.(cancellation.settled);
     }
     try {
-      let installation: WorkerInstallationArtifact | undefined;
       beforeProvision?.();
       const preparedNode = await nodeProvisioning.prepare(
         record,
@@ -457,7 +463,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         signal,
         beforeProvision,
       );
-      installation = preparedNode?.installation;
+      let installation: WorkerInstallationArtifact | undefined = preparedNode?.installation;
       cancellation?.assertActive();
       if (
         record.state === "requested" &&
@@ -512,13 +518,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (record.destroyRequestedAtMs === null && inState(record, "ready", "idle", "attached")) {
       try {
         currentBundle = await options.prepareInstallation("bundle", signal);
-        if (record.bootstrapReceipt) {
-          if (sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
-            const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
-            if (record.state !== "attached" || sessionId) {
-              await ensurePendingCredential(record, sessionId ?? null);
-              record = store.get(record.environmentId) ?? record;
-            }
+        if (record.bootstrapReceipt && sameWorkerBuild(record.bootstrapReceipt, currentBundle)) {
+          const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
+          if (record.state !== "attached" || sessionId) {
+            await ensurePendingCredential(record, sessionId ?? null);
+            record = store.get(record.environmentId) ?? record;
           }
         }
       } catch {
@@ -604,14 +608,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     if (!record.sshEndpoint || record.state === "attached") {
       // Failed upgrades retain the old receipt and exact lease for recovery.
-      await refreshRuntime(record, provider, currentBundle, signal).catch(
-        async (error: unknown) => {
+      await runtimeRefresher
+        .refresh(record, provider, currentBundle, signal)
+        .catch(async (error: unknown) => {
           await saveError(requireCurrentOwner(record), error);
-        },
-      );
+        });
       return;
     }
-    if (record.state === "draining" && record.destroyRequestedAtMs === null) {
+    if (record.state === "draining") {
       // Draining without destroy intent is durable provider-loss cleanup.
       record = await stopOwner(record);
       await move(record, "orphaned", { lastError: record.lastError ?? ORPHANED_LEASE_ERROR });
@@ -730,5 +734,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     ...machineCatalog,
     providerFor,
     reconcileRecord,
+    readRuntimeRefresh: runtimeRefresher.read,
   };
 }

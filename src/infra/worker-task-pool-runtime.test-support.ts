@@ -1,5 +1,10 @@
 // Prepare native subprocesses and their worker fixtures before their execution deadlines.
 export const workerTaskPoolEntrypoints = {
+  logging: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "worker-task-pool.logging.test-support",
+    distWorkerPath: "infra/worker-task-pool.logging.test-support.js",
+  },
   nativeExchanges: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "worker-task-pool.native-exchanges.test-support",

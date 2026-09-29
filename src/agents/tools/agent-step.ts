@@ -10,7 +10,7 @@ import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
 import {
   callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
 
 export type AgentStepSession = {
@@ -18,7 +18,6 @@ export type AgentStepSession = {
   lifecycleRevision?: string;
 };
 
-type GatewayCaller = AgentToolGatewayRequestCaller;
 type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
 
 function extractAgentCommandReply(

@@ -9,6 +9,7 @@ import { prepareInternalSessionEffectsSession } from "../../agents/internal-sess
 import { ensureSessionGroupCatalog } from "../../gateway/session-group-catalog.js";
 import { ensureSessionGroupRegistered, listSessionGroups } from "../../gateway/session-groups.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
+import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -21,6 +22,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -71,12 +73,17 @@ it("creates with prepared label facts, header and atomic owner without host data
     let assertCreation: () => void = () => {
       throw new Error("Creation has not bound its owner");
     };
-    writeSessionEntry(database, "agent:main:sibling", {
-      sessionId: "sibling",
-      label: "taken",
-      updatedAt: 1,
-      skillsSnapshot: { prompt: "unrelated".repeat(1024), skills: [] },
-    });
+    runOpenClawAgentWriteTransaction(
+      (db) => {
+        writeSessionEntry(db, "agent:main:sibling", {
+          sessionId: "sibling",
+          label: "taken",
+          updatedAt: 1,
+          skillsSnapshot: { prompt: "unrelated".repeat(1024), skills: [] },
+        });
+      },
+      { agentId: database.agentId, path: database.path },
+    );
     const env = { ...process.env };
     const originalStateDir = env.OPENCLAW_STATE_DIR;
     const order: string[] = [];
@@ -278,10 +285,15 @@ it.each(["incognito", "maintenance"] as const)(
             : "agent:main:native-maintenance",
       };
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
-      const maintenance =
-        kind === "maintenance"
-          ? createOpenClawDatabaseMaintenanceScope(() => undefined)
-          : undefined;
+      const schemaLease =
+        kind === "maintenance" ? acquireStateDatabaseSchemaLease(database.path) : undefined;
+      const maintenance = schemaLease
+        ? createOpenClawDatabaseMaintenanceScope({
+            schemaMaintenance: true,
+            assertOwnerCurrent: () => schemaLease.assertCurrent(),
+            assertDatabaseAccess: schemaLease.assertDatabaseAccess,
+          })
+        : undefined;
       let followed = false;
       const create = () =>
         createSessionEntryWithTranscript(
@@ -303,7 +315,11 @@ it.each(["incognito", "maintenance"] as const)(
         expect((await (maintenance ? maintenance.run(create) : create())).ok).toBe(true);
         expect(followed).toBe(true);
       } finally {
-        await maintenance?.close();
+        try {
+          await maintenance?.close();
+        } finally {
+          schemaLease?.release();
+        }
       }
     });
   },

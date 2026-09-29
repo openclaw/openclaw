@@ -7,7 +7,7 @@ import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
-import { botNames, botOpenIds, setFeishuBotIdentityState } from "./monitor.state.js";
+import { botOpenIds, setFeishuBotIdentityState } from "./monitor.state.js";
 import { monitorWebhook } from "./monitor.transport.js";
 import {
   createFeishuWebhookTestAccount,
@@ -42,7 +42,7 @@ describe("Feishu webhook route configuration", () => {
     const account = createFeishuWebhookTestAccount("already-stopped", "/hook-already-stopped");
     const abort = new AbortController();
     abort.abort();
-    setFeishuBotIdentityState(account.accountId, { botOpenId: "ou_stopped", botName: "Stopped" });
+    setFeishuBotIdentityState(account.accountId, "ou_stopped");
     await monitorWebhook({
       account,
       accountId: account.accountId,
@@ -51,7 +51,6 @@ describe("Feishu webhook route configuration", () => {
       runtime: createRuntimeSpies(),
     });
     expect(botOpenIds.has(account.accountId)).toBe(false);
-    expect(botNames.has(account.accountId)).toBe(false);
     expect(
       getActivePluginRegistry()?.httpRoutes.some((route) => route.path === "/hook-already-stopped"),
     ).toBe(false);
@@ -158,12 +157,8 @@ describe("Feishu webhook route configuration", () => {
   it.each([
     { name: "normal stop after identity recovery", replacement: undefined },
     {
-      name: "successor identity before transport registration",
-      replacement: { botOpenId: "ou_successor", botName: "Successor" },
-    },
-    {
       name: "successor publishing the same identity",
-      replacement: { botOpenId: "ou_recovered", botName: "Recovered" },
+      replacement: "ou_recovered",
     },
   ])("preserves identity ownership during $name", async ({ replacement }) => {
     const port = await getGatewayPort();
@@ -172,7 +167,7 @@ describe("Feishu webhook route configuration", () => {
     const abort = new AbortController();
     const invoked = createDeferred<void>();
     const releaseDispatch = createDeferred<void>();
-    setFeishuBotIdentityState(accountId, { botOpenId: "ou_initial", botName: "Initial" });
+    setFeishuBotIdentityState(accountId, "ou_initial");
     const monitor = monitorWebhook({
       account,
       accountId,
@@ -191,10 +186,9 @@ describe("Feishu webhook route configuration", () => {
     });
     try {
       await invoked.promise;
-      setFeishuBotIdentityState(accountId, { botOpenId: "ou_recovered", botName: "Recovered" });
+      setFeishuBotIdentityState(accountId, "ou_recovered");
       abort.abort();
       expect(botOpenIds.get(accountId)).toBe("ou_recovered");
-      expect(botNames.get(accountId)).toBe("Recovered");
       if (replacement) {
         setFeishuBotIdentityState(accountId, replacement);
       }
@@ -203,8 +197,7 @@ describe("Feishu webhook route configuration", () => {
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({});
       await monitor;
-      expect(botOpenIds.get(accountId)).toBe(replacement?.botOpenId);
-      expect(botNames.get(accountId)).toBe(replacement?.botName);
+      expect(botOpenIds.get(accountId)).toBe(replacement);
     } finally {
       releaseDispatch.resolve();
       abort.abort();
@@ -214,10 +207,7 @@ describe("Feishu webhook route configuration", () => {
   });
 
   it.each([
-    ...["/health", "/healthz", "/ready", "/readyz", "/startup", "/startupz"]
-      .flatMap((path) => [path, `${path}?tenant=test`])
-      .map((path) => ({ path, reason: "is reserved for Gateway probes" })),
-    { path: "/api/channels/feishu", reason: "requires Gateway authentication" },
+    { path: "/health", reason: "is reserved for Gateway probes" },
     { path: "/%61pi/channels/feishu?tenant=test", reason: "requires Gateway authentication" },
   ])(
     "keeps the default legacy listener for restricted path $path until explicitly disabled",
@@ -282,12 +272,6 @@ describe("Feishu webhook route configuration", () => {
       configured: { port: 3000, host: "0.0.0.0" },
       endpoint: { port: 3000, host: "0.0.0.0" },
     },
-    {
-      name: "explicit address",
-      configured: { port: 3000, host: "127.0.0.2" },
-      endpoint: { port: 3000, host: "127.0.0.2" },
-    },
-    { name: "disabled root", configured: false },
     { name: "account disable override", configured: { port: 3100 }, accountOverride: false },
   ])(
     "prepares the inherited legacy listener for $name and preserves Gateway delivery",

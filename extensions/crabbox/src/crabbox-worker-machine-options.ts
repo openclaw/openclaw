@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asPositiveSafeInteger,
@@ -110,9 +111,7 @@ export function createCrabboxMachineOptionsResolver(
     if (!shapes) {
       shapes = loadMachineShapes(binary).catch((error: unknown) => {
         machineShapesByBinary.delete(binary);
-        dependencies.warn(
-          `Crabbox machine shapes unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        dependencies.warn(`Crabbox machine shapes unavailable: ${coerceErrorMessage(error)}`);
         return new Map();
       });
       machineShapesByBinary.set(binary, shapes);

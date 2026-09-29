@@ -12,6 +12,7 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
@@ -752,24 +753,6 @@ export function describeInsufficientTsdownHeap(
   };
 }
 
-function parseMaxOldSpaceSizeMb(value: unknown, fallbackMb: number) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallbackMb;
-  }
-  return Math.trunc(parsed);
-}
-
-function normalizeMaxOldSpaceSizeMb(value: unknown, maxOldSpaceMb: number) {
-  // Build wrappers may inherit smaller runner-level caps; tsdown needs the
-  // resolved build heap while still respecting cgroup-derived upper bounds.
-  const parsed = parseMaxOldSpaceSizeMb(value, maxOldSpaceMb);
-  if (parsed < maxOldSpaceMb) {
-    return maxOldSpaceMb;
-  }
-  return Math.min(parsed, maxOldSpaceMb);
-}
-
 function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryLimitParams = {}) {
   const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
@@ -784,16 +767,14 @@ function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryL
     const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
     if (inlineMatch) {
       foundMaxOldSpaceSize = true;
-      const value = normalizeMaxOldSpaceSizeMb(inlineMatch[1], maxOldSpaceMb);
-      normalized.push(`--max-old-space-size=${value}`);
+      normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
       continue;
     }
 
     if (part === "--max-old-space-size") {
       foundMaxOldSpaceSize = true;
       const next = parts[index + 1];
-      const value = normalizeMaxOldSpaceSizeMb(next, maxOldSpaceMb);
-      normalized.push(`--max-old-space-size=${value}`);
+      normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
       if (next !== undefined) {
         index += 1;
       }
@@ -1451,6 +1432,28 @@ export async function executeTsdownBuildPlan(
   return exitCode;
 }
 
+type LiveGatewayDistFenceFn = (
+  checkoutRoot: string,
+  deps?: { env?: NodeJS.ProcessEnv },
+) => Promise<{ refuse: true; message: string } | { refuse: false }>;
+
+async function loadDefaultLiveGatewayDistFence(): Promise<LiveGatewayDistFenceFn> {
+  try {
+    // Non-literal import: a static specifier would pull daemon service-layout into
+    // the plugin-sdk declaration generator through write-plugin-sdk-entry-dts.
+    const liveGatewayDistFenceHref = pathToFileURL(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "lib", "live-gateway-dist-fence.mts"),
+    ).href;
+    const loaded = (await import(liveGatewayDistFenceHref)) as {
+      resolveLiveManagedGatewayDistFence: LiveGatewayDistFenceFn;
+    };
+    return loaded.resolveLiveManagedGatewayDistFence;
+  } catch {
+    // Declaration fixtures and hosts without daemon sources still have to build.
+    return async () => ({ refuse: false });
+  }
+}
+
 export async function runTsdownBuild(
   argv: string[] = process.argv.slice(2),
   options: {
@@ -1462,6 +1465,14 @@ export async function runTsdownBuild(
   if (args.help) {
     console.log(tsdownBuildUsage());
     return 0;
+  }
+  // Shared destructive owner with build-all: refuse before cleanTsdownOutputRoots
+  // so a direct tsdown entry cannot wipe live managed Gateway modules either.
+  const resolveFence = await loadDefaultLiveGatewayDistFence();
+  const fence = await resolveFence(options.cwd ?? process.cwd(), { env: process.env });
+  if (fence.refuse) {
+    console.error(fence.message);
+    return 1;
   }
   let code: number;
   if (options.executeBuild) {

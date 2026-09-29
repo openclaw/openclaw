@@ -19,6 +19,7 @@ import type {
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
+  SessionTranscriptWorkerSuccess,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
@@ -36,11 +37,7 @@ async function withHistoryDatabase<T>(
   database: SessionTranscriptHistoryWorkerInput["database"],
   operationLabel: string,
   operation: () => T | Promise<T>,
-): Promise<{
-  ok: true;
-  value: T;
-  closedHistoryDatabase?: SessionTranscriptHistoryWorkerInput["database"];
-}> {
+): Promise<SessionTranscriptWorkerSuccess<T>> {
   const key = JSON.stringify(database);
   let retained = historyDatabaseScopes.get(key);
   if (!retained) {
@@ -142,6 +139,25 @@ serveOwnedWorkerTasks(
       }
     }
     try {
+      if (request.kind === "prewarm") {
+        await Promise.all([
+          import("../../gateway/session-history-worker-reader.js"),
+          import("../../gateway/server-methods/chat-history-page-kernel.js"),
+          import("../../gateway/session-history-snapshot.js"),
+        ]);
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
+            ...request.database,
+            env: cloneEnvWithPlatformSemantics(request.env),
+          });
+          if (!opened.found && opened.reason !== "database-missing") {
+            throw new Error(`Session history prewarm admission unavailable: ${opened.reason}`);
+          }
+          return { kind: "prewarm" as const };
+        });
+      }
       if (request.kind === "historical-eviction-candidates") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -183,6 +199,17 @@ serveOwnedWorkerTasks(
             pending: result.found && result.value,
           };
         });
+      }
+      if (request.kind === "session-archive-presence") {
+        const { readTranscriptArchivePresenceInWorker } =
+          await import("./session-accessor.sqlite-archive-read.js");
+        return await withHistoryDatabase(request.database, request.kind, () => ({
+          kind: "session-archive-presence" as const,
+          registered: readTranscriptArchivePresenceInWorker({
+            ...request,
+            env: cloneEnvWithPlatformSemantics(request.env),
+          }),
+        }));
       }
       if (request.kind === "session-archive-pruning") {
         const { readSessionArchivePruningInWorker } =
@@ -260,6 +287,12 @@ serveOwnedWorkerTasks(
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
         return await withHistoryDatabase(request.database, request.kind, () =>
           readSessionRowDatabaseFacts(request),
+        );
+      }
+      if (request.kind === "session-entry-current") {
+        const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");
+        return await withHistoryDatabase(request.database, request.kind, () =>
+          readSessionEntryCurrentFacts(request),
         );
       }
       if (request.kind === "session-row-backfill") {
@@ -422,6 +455,23 @@ serveOwnedWorkerTasks(
           );
           return result.found ? result.value : [];
         });
+      }
+      if (request.kind === "session-pending-input-receipts") {
+        const { listSessionPendingInputReceipts } =
+          await import("./session-accessor.sqlite-pending-input-receipts.js");
+        return await withHistoryDatabase(request.database, request.kind, () => ({
+          kind: "session-pending-input-receipts" as const,
+          receipts: listSessionPendingInputReceipts(
+            {
+              agentId: request.agentId,
+              sessionKey: request.sessionKey,
+              sessionId: request.sessionId,
+              storePath: request.database.path,
+              env: cloneEnvWithPlatformSemantics(request.env),
+            },
+            { runIds: request.runIds },
+          ),
+        }));
       }
       if (request.kind === "session-progress-card") {
         const { withOpenClawAgentDatabaseReadOnly } =

@@ -21,8 +21,6 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
-import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -33,7 +31,7 @@ import { blockSubagentCompletionDelivery } from "../completion/subagent-completi
 import {
   activateSwarmRun,
   isSwarmRunWaitingForCapacity,
-  removeQueuedSwarmRun,
+  holdQueuedSwarmRun,
   reserveSwarmRun,
 } from "../swarm/swarm-scheduler.js";
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
@@ -45,7 +43,6 @@ import {
   countActiveDescendantRuns,
   countPendingDescendantRuns,
   hasDescendantRunAwaitingSettle,
-  hasSubagentTaskOwner,
   isSubagentRunLive,
   isSubagentRunQueued,
   isSubagentSessionRunActive,
@@ -58,7 +55,9 @@ import {
   registerSubagentRun,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { addSubagentRunForTests, testing } from "./subagent-registry.test-helpers.js";
+import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 const parent = "agent:main:liveness-parent";
@@ -172,6 +171,7 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     const completeBatch = vi.fn();
     const transitionBatch = vi.fn();
     await maybeWakeRequesterAfterAllChildrenSettled({
+      isSourceCurrent: () => true,
       requesterSessionKey: parent,
       settledEntry: sibling,
       completeBatch,
@@ -235,7 +235,7 @@ it("retains an exact queued collector reservation without calling it executor-li
   expect(isSubagentRunQueued(entry)).toBe(true);
   expect(isSubagentRunQueued({ ...entry })).toBe(false);
   expect(isSubagentRunLive(entry)).toBe(false);
-  expect(findTaskByRunId(entry.runId)?.status).toBe("queued");
+  expect(resolveSubagentSessionStatus(subagentRuns.get(entry.runId))).toBe("queued");
   expect(launch).not.toHaveBeenCalled();
   // sessions.list projects compact copies for descendant accounting, while its
   // direct display lookup deliberately preserves the exact process-local row.
@@ -266,21 +266,26 @@ it("retains an exact queued collector reservation without calling it executor-li
     inMemoryRuns: [entry],
     now: olderThanCutoff,
   });
-  expect(removeQueuedSwarmRun(entry.runId)).toBe(true);
-  expect(captured.countActiveDescendantRuns(parent)).toBe(0);
-  expect(captured.countPendingDescendantRuns(parent)).toBe(0);
-  expect(captured.hasDescendantRunAwaitingSettle(parent)).toBe(false);
-  expect(isSubagentRunQueued(entry)).toBe(false);
-  expect(prepared.getExecutionObservation(prepared.runs[0]!)).toMatchObject({ state: "unknown" });
-  expect(countActiveRunsForSession(parent, { collect: true })).toBe(0);
-  expect(hasDescendantRunAwaitingSettle(parent)).toBe(false);
-  const released = buildSubagentSessionListReadIndex();
-  expect(released.countActiveDescendantRuns(parent)).toBe(0);
-  expect(released.countPendingDescendantRuns(parent)).toBe(0);
-  expect(released.hasDescendantRunAwaitingSettle(parent)).toBe(false);
-  expect(
-    projectGatewaySessionRunState({ key: parent, now: olderThanCutoff }).fields,
-  ).not.toMatchObject({ hasActiveSubagentRun: true });
+  const hold = holdQueuedSwarmRun(entry.runId);
+  try {
+    expect(hold?.withdraw()).toBe(true);
+    expect(captured.countActiveDescendantRuns(parent)).toBe(0);
+    expect(captured.countPendingDescendantRuns(parent)).toBe(0);
+    expect(captured.hasDescendantRunAwaitingSettle(parent)).toBe(false);
+    expect(isSubagentRunQueued(entry)).toBe(false);
+    expect(prepared.getExecutionObservation(prepared.runs[0]!)).toMatchObject({ state: "unknown" });
+    expect(countActiveRunsForSession(parent, { collect: true })).toBe(0);
+    expect(hasDescendantRunAwaitingSettle(parent)).toBe(false);
+    const released = buildSubagentSessionListReadIndex();
+    expect(released.countActiveDescendantRuns(parent)).toBe(0);
+    expect(released.countPendingDescendantRuns(parent)).toBe(0);
+    expect(released.hasDescendantRunAwaitingSettle(parent)).toBe(false);
+    expect(
+      projectGatewaySessionRunState({ key: parent, now: olderThanCutoff }).fields,
+    ).not.toMatchObject({ hasActiveSubagentRun: true });
+  } finally {
+    await hold?.release();
+  }
 });
 
 it("does not retain an old run after its last claim releases preserved routing metadata", async () => {
@@ -360,7 +365,7 @@ it("does not borrow a same-run-ID successor's live claim through a prepared obse
         expect(status).toMatch(/\brunning\b/i);
       }
     }
-    expect(findTaskByRunId(successor.runId)?.status).toBe("running");
+    expect(resolveSubagentSessionStatus(subagentRuns.get(successor.runId))).toBe("running");
     expect(countActiveRunsForSession(parent)).toBe(1);
     expect(countPendingDescendantRuns(parent)).toBe(1);
   } finally {
@@ -406,33 +411,40 @@ it("does not transfer read retention across replaced queue owners or copied rese
   expect(snapshot.hasDescendantRunAwaitingSettle(parent)).toBe(false);
   expect(buildSubagentSessionListReadIndex().countPendingDescendantRuns(parent)).toBe(0);
 
-  expect(removeQueuedSwarmRun(id)).toBe(true);
-  expect(reserve()).toBe(true);
-  now.mockReturnValue(start);
-  const successor = await register(id, true);
-  now.mockReturnValue(olderThanCutoff);
-  expect(isSubagentRunQueued(successor)).toBe(true);
-  expect(prepared.getExecutionObservation(prepared.runs[0]!)).toMatchObject({ state: "unknown" });
-  expect(buildSubagentSessionListReadIndex().countActiveDescendantRuns(parent)).toBe(1);
-  // A previously issued projection cannot borrow the new generation's owner.
-  expect(
-    buildSubagentRunReadIndexFromRuns({
-      runs: new Map([[id, compact]]),
-      inMemoryRuns: subagentRuns.values(),
-    }).countActiveDescendantRuns(parent),
-  ).toBe(0);
-  const current = buildSubagentSessionListReadIndex().listDescendantRunsForRequester(parent)[0]!;
-  const otherParent = "agent:main:other-parent";
-  expect(
-    buildSubagentRunReadIndexFromRuns({
-      runs: new Map([[id, { ...current, requesterSessionKey: otherParent }]]),
-      inMemoryRuns: subagentRuns.values(),
-    }).countActiveDescendantRuns(otherParent),
-  ).toBe(0);
-  expect(isSubagentRunQueued(current)).toBe(false);
-  expect(isSubagentRunQueued(structuredClone(successor))).toBe(false);
-  expect(removeQueuedSwarmRun(id)).toBe(true);
-  expect(buildSubagentSessionListReadIndex().countActiveDescendantRuns(parent)).toBe(0);
+  const originalHold = holdQueuedSwarmRun(id);
+  let successorHold: ReturnType<typeof holdQueuedSwarmRun>;
+  try {
+    expect(originalHold?.withdraw()).toBe(true);
+    expect(reserve()).toBe(true);
+    now.mockReturnValue(start);
+    const successor = await register(id, true);
+    now.mockReturnValue(olderThanCutoff);
+    expect(isSubagentRunQueued(successor)).toBe(true);
+    expect(prepared.getExecutionObservation(prepared.runs[0]!)).toMatchObject({ state: "unknown" });
+    expect(buildSubagentSessionListReadIndex().countActiveDescendantRuns(parent)).toBe(1);
+    // A previously issued projection cannot borrow the new generation's owner.
+    expect(
+      buildSubagentRunReadIndexFromRuns({
+        runs: new Map([[id, compact]]),
+        inMemoryRuns: subagentRuns.values(),
+      }).countActiveDescendantRuns(parent),
+    ).toBe(0);
+    const current = buildSubagentSessionListReadIndex().listDescendantRunsForRequester(parent)[0]!;
+    const otherParent = "agent:main:other-parent";
+    expect(
+      buildSubagentRunReadIndexFromRuns({
+        runs: new Map([[id, { ...current, requesterSessionKey: otherParent }]]),
+        inMemoryRuns: subagentRuns.values(),
+      }).countActiveDescendantRuns(otherParent),
+    ).toBe(0);
+    expect(isSubagentRunQueued(current)).toBe(false);
+    expect(isSubagentRunQueued(structuredClone(successor))).toBe(false);
+    successorHold = holdQueuedSwarmRun(id);
+    expect(successorHold?.withdraw()).toBe(true);
+    expect(buildSubagentSessionListReadIndex().countActiveDescendantRuns(parent)).toBe(0);
+  } finally {
+    await Promise.all([originalHold?.release(), successorHold?.release()]);
+  }
 });
 
 it("rejects an owned context once its Gateway lifecycle retires", async () => {
@@ -480,7 +492,7 @@ it("does not keep a recent orphan executor-live after its admitted owner closes"
   expect(getAgentRunContext(entry.runId)).toBeUndefined();
   expect(isSubagentRunLive(entry)).toBe(false);
   expect(isSubagentRunQueued(entry)).toBe(false);
-  expect(findTaskByRunId(entry.runId)?.status).toBe("running");
+  expect(resolveSubagentSessionStatus(subagentRuns.get(entry.runId))).toBe("running");
   expect.soft(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   expect(countActiveRunsForSession(parent)).toBe(1);
   expect(
@@ -502,21 +514,12 @@ it("retains durable suspended completion debt without reporting a live executor 
   };
   entry.completion = { required: true, resultText: "completed result", capturedAt: start + 1 };
   persistSubagentRunsToDiskOrThrow(subagentRuns, [entry.runId]);
-  finalizeTaskRunByRunId({
-    runId: entry.runId,
-    runtime: "subagent",
-    sessionKey: entry.childSessionKey,
-    status: "succeeded",
-    endedAt: start + 1,
-  });
   now.mockReturnValue(olderThanCutoff);
   expect(countPendingDescendantRuns(parent)).toBe(1);
   expect(hasDescendantRunAwaitingSettle(parent)).toBe(true);
-  const task = findTaskByRunId(entry.runId)!;
   expect(
-    blockSubagentCompletionDelivery({
+    await blockSubagentCompletionDelivery({
       subagent: entry,
-      taskId: task.taskId,
       reason: "delivery budget exhausted",
       suspendedReason: "expiry",
     }),
@@ -529,16 +532,14 @@ it("retains durable suspended completion debt without reporting a live executor 
   expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   expect(countActiveRunsForSession(parent)).toBe(0);
   subagentRuns.clear();
-  expect(
-    hasSubagentTaskOwner({
-      taskRunId: entry.runId,
-      childSessionKey: entry.childSessionKey,
-      requesterSessionKey: parent,
-    }),
-  ).toBe(true);
+  expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: parent,
+    execution: entry.execution,
+  });
 });
 
-it("keeps a restart-preserved task owner distinct from an executor", async () => {
+it("keeps a restart-preserved native record distinct from an executor", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
   const entry = await register("interrupted-task");
   expect(
@@ -554,13 +555,11 @@ it("keeps a restart-preserved task owner distinct from an executor", async () =>
   expect(isSubagentRunLive(entry)).toBe(false);
   expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   subagentRuns.clear();
-  expect(
-    hasSubagentTaskOwner({
-      taskRunId: entry.runId,
-      childSessionKey: entry.childSessionKey,
-      requesterSessionKey: parent,
-    }),
-  ).toBe(true);
+  expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: parent,
+    execution: entry.execution,
+  });
 });
 
 it("makes an admitted child inactive when termination is recorded", async () => {
@@ -576,7 +575,7 @@ it("makes an admitted child inactive when termination is recorded", async () => 
     try {
       expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(true);
       expect(
-        markSubagentRunTerminated({
+        await markSubagentRunTerminated({
           childSessionKey: entry.childSessionKey,
           reason: "manual kill",
         }),

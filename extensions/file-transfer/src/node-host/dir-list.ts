@@ -1,5 +1,8 @@
 import path from "node:path";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asPositiveFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
 import type { PathBinding } from "../shared/path-binding.js";
 import { listCanonicalDirectory } from "./dir-list-worker.js";
@@ -29,6 +32,7 @@ type DirListEntry = {
   size: number;
   mimeType: string;
   isDir: boolean;
+  isFile: boolean;
   mtime: number;
 };
 
@@ -60,13 +64,6 @@ type DirListErr = {
 
 type DirListResult = DirListOk | DirListErr;
 
-function clampMaxEntries(input: unknown): number {
-  if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
-    return DIR_LIST_DEFAULT_MAX_ENTRIES;
-  }
-  return Math.min(Math.floor(input), DIR_LIST_HARD_MAX_ENTRIES);
-}
-
 function parsePageOffset(input: unknown): number {
   if (typeof input !== "string") {
     return 0;
@@ -95,7 +92,10 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     return requestedPath;
   }
 
-  const maxEntries = clampMaxEntries(params.maxEntries);
+  const maxEntries = Math.min(
+    Math.floor(asPositiveFiniteNumber(params.maxEntries) ?? DIR_LIST_DEFAULT_MAX_ENTRIES),
+    DIR_LIST_HARD_MAX_ENTRIES,
+  );
   const offset = parsePageOffset(params.pageToken);
 
   const followSymlinks = params.followSymlinks === true;
@@ -167,6 +167,7 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
       size: isDir ? 0 : entry.size,
       mimeType: isDir ? "inode/directory" : mimeFromExtension(entry.name),
       isDir,
+      isFile: entry.isFile,
       mtime: entry.mtimeMs,
     });
   }

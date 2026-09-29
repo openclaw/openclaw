@@ -29,6 +29,8 @@ Long polling is the default. Webhook mode is the alternative when an HTTPS ingre
 
     Named accounts inherit the channel's `legacyWebhook` setting. An account-level `false` disables that account's legacy endpoint even when the channel config specifies an endpoint. An explicit account endpoint overrides an inherited `false`. A shared legacy socket stays open while another account still uses that endpoint.
 
+    Separately installed Telegram plugins also support the 2026.9.6 host, which predates Gateway-owned forwarding listeners. On that host, the plugin keeps one direct listener per account with the same Telegram request handler and admission guarantees. Accounts must use distinct legacy endpoints; sharing a legacy port requires a newer host. Gateway routes and `legacyWebhook: false` remain available. Doctor prints this compatibility guidance as a warning because that host does not display informational channel notes. The adapter can be removed when the plugin's declared minimum host includes Gateway-owned legacy listeners.
+
     Accounts may share a Gateway route when their webhook secrets differ. Requests matching more than one account are rejected; assign distinct secrets or paths before moving traffic to the Gateway port. Migrated legacy endpoints preserve account selection for accounts that previously shared a secret and path on separate explicit ports.
 
     Webhook mode validates request guards, the Telegram secret token, and the JSON body, then commits the update to its durable ingress queue before returning an empty `200`. Successful durable adoption includes `x-openclaw-delivery-accepted: durable`; health, routing, authentication, validation, and storage-error responses omit this header. Reverse proxies and host controllers can require the header to distinguish OpenClaw adoption from a generic empty `200` without inferring acceptance from response timing.
@@ -60,6 +62,13 @@ deduplication, not exactly-once processing. See
 [durable ingress and replay dedupe](/plugins/sdk-channel-plugins/durable-ingress#durable-ingress-and-replay-dedupe).
 
 ### Replay limits
+
+Both transports record the account's bot identity before accepting updates, even
+without a polling offset. Replacing a known bot clears its old ingress rows before
+the replacement starts. Same-bot restarts and token rotations retain queued work
+and replay protection, as do legacy queues without a known previous identity.
+If identity preparation fails, account startup stops with an error asking you to
+restart the account; an interrupted reset retains the previous identity for retry.
 
 For each Telegram account queue, completed tombstones and failed rows are
 retained for up to 30 days and capped at 1,000 entries per class. Whichever

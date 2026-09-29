@@ -52,7 +52,6 @@ function createDispatch(session: (typeof sessionCases)[number]) {
     cleanupAbortController: vi.fn(),
     io: { emitAcceptance: vi.fn(), emitFinal },
     context,
-    taskTrackingMode: "none" as const,
   };
 }
 

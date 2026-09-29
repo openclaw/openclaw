@@ -1,4 +1,3 @@
-/** Full-text search over visible session transcripts. */
 import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -19,9 +18,10 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
+import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
 import {
   resolveSessionToolTargetAgentId,
@@ -48,6 +48,12 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
   "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
+  user: Type.Optional(
+    Type.String({
+      description:
+        "The person's requester_profile.id, required when several people have steered this turn.",
+    }),
+  ),
   query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
   sessionKey: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema({
@@ -93,8 +99,6 @@ const SessionsSearchOutputSchema = Type.Union([
     { additionalProperties: false },
   ),
 ]);
-
-type GatewayCaller = AgentToolGatewayRequestCaller;
 
 type GatewaySearchHit = {
   sessionKey?: unknown;
@@ -333,7 +337,7 @@ export function createSessionsSearchTool(opts?: {
     description: describeSessionsSearchTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsSearchToolSchema,
     outputSchema: SessionsSearchOutputSchema,
-    execute: async (_toolCallId, args) => {
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const query = readToolStringParam(params, "query") ?? "";
       if (!query) {
@@ -608,6 +612,6 @@ export function createSessionsSearchTool(opts?: {
           ? { truncated: true }
           : {}),
       });
-    },
+    }),
   };
 }

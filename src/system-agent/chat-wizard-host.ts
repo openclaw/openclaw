@@ -80,6 +80,23 @@ type ActiveWizardBridge = {
 
 const log = createSubsystemLogger("system-agent/chat-wizard-host");
 const WIZARD_CANCEL_HINT = "Say `cancel` to stop this setup.";
+const HOSTED_SETUP = {
+  skills: {
+    label: "skills",
+    dependency: "runSkillsSetupWizard",
+    runtime: "runHostedSkillsSetup",
+  },
+  search: {
+    label: "web search",
+    dependency: "runSearchSetupWizard",
+    runtime: "runHostedSearchSetup",
+  },
+  gateway: {
+    label: "gateway",
+    dependency: "runGatewaySetupWizard",
+    runtime: "runHostedGatewaySetup",
+  },
+} as const;
 let hostedRuntimePromise: Promise<HostedRuntime> | undefined;
 
 function loadHostedRuntime(): Promise<HostedRuntime> {
@@ -372,44 +389,19 @@ export class ChatWizardHost {
     });
   }
 
-  async startSkills(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runSkillsSetupWizard;
-    return await this.start({
-      kind: "skills",
-      label: "skills",
-      run: async (prompter) =>
-        await (run ?? (await loadHostedRuntime()).runHostedSkillsSetup)(
-          prompter,
-          this.options.beforePersistentApply,
-        ),
-    });
-  }
-
-  async startSearch(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runSearchSetupWizard;
-    return await this.start({
-      kind: "search",
-      label: "web search",
-      run: async (prompter) =>
-        await (run ?? (await loadHostedRuntime()).runHostedSearchSetup)(
-          prompter,
-          this.options.beforePersistentApply,
-        ),
-    });
-  }
-
-  async startGateway(): Promise<ChatWizardResult> {
-    const run = this.options.dependencies?.runGatewaySetupWizard;
+  async startSetup(kind: keyof typeof HOSTED_SETUP): Promise<ChatWizardResult> {
+    const setup = HOSTED_SETUP[kind];
+    const run = this.options.dependencies?.[setup.dependency];
     const result = await this.start({
-      kind: "gateway",
-      label: "gateway",
+      kind,
+      label: setup.label,
       run: async (prompter) =>
-        await (run ?? (await loadHostedRuntime()).runHostedGatewaySetup)(
+        await (run ?? (await loadHostedRuntime())[setup.runtime])(
           prompter,
           this.options.beforePersistentApply,
         ),
     });
-    if (this.options.surface !== "gateway" || !this.bridge) {
+    if (kind !== "gateway" || this.options.surface !== "gateway" || !this.bridge) {
       return result;
     }
     const warning = [

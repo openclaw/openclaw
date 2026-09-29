@@ -52,11 +52,23 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    prewarm: reader(
+      "prewarm",
+      "prewarm acknowledgement",
+      (input) => ({ kind: "prewarm", ...input }),
+      () => undefined,
+    ),
     readPendingArchives: reader(
       "session-pending-archives",
       "pending archives",
       (input) => ({ kind: "session-pending-archives", ...input }),
       (value) => value.pending,
+    ),
+    readArchivePresence: reader(
+      "session-archive-presence",
+      "archive presence",
+      (input) => ({ kind: "session-archive-presence", ...input }),
+      (value) => value.registered,
     ),
     findTranscriptEvent: reader(
       "transcript-match",
@@ -249,6 +261,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-progress-card", ...input }),
       (value) => value.card,
     ),
+    readPendingInputReceipts: reader(
+      "session-pending-input-receipts",
+      "pending input receipts",
+      (input) => ({ kind: "session-pending-input-receipts", ...input }),
+      (value) => value.receipts,
+    ),
     readEntryResult: reader(
       "session-entry-read",
       "an entry",
@@ -257,6 +275,12 @@ export function createSessionHistoryWorkerReaders(
         value.readError
           ? err(decodeSessionTranscriptWorkerReadError(value.readError))
           : ok(value.entry),
+    ),
+    readEntryCurrent: reader(
+      "session-entry-current",
+      "entry currency facts",
+      (input) => ({ kind: "session-entry-current", ...input }),
+      (value) => value.entry,
     ),
     readDiagnosticText: reader(
       "session-diagnostic-text",

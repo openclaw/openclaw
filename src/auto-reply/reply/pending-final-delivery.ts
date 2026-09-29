@@ -97,11 +97,7 @@ function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
     payload.delivery !== undefined ||
     payload.channelData !== undefined ||
     payload.location !== undefined ||
-    payload.replyToId !== undefined ||
-    payload.replyToTag === true ||
-    payload.replyToCurrent === true ||
-    payload.audioAsVoice === true ||
-    payload.videoAsNote === true ||
+    hasUnrecoverableNormalizedDeliveryShape(payload) ||
     payload.spokenText !== undefined ||
     payload.ttsSupplement !== undefined ||
     (hasMedia && (payload.isCommentary === true || payload.isStatusNotice === true))

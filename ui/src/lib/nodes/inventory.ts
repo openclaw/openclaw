@@ -11,6 +11,7 @@ import {
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.js";
 import type {
   NodeListNode,
   NodeWorkerBundleStatus,
@@ -19,7 +20,6 @@ import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
 type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
-type NodeWorkerSlots = NonNullable<NodeListNode["workerSlots"]>;
 
 const hostStatsSchema = z
   .object({
@@ -86,28 +86,6 @@ const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
   "unapproved",
 ]);
 
-function parseWorkerSlots(value: unknown): NodeWorkerSlots | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const keys = Object.keys(value);
-  const total = value.total;
-  const available = value.available;
-  return keys.length === 2 &&
-    keys.includes("total") &&
-    keys.includes("available") &&
-    typeof total === "number" &&
-    typeof available === "number" &&
-    Number.isSafeInteger(total) &&
-    Number.isSafeInteger(available) &&
-    total >= 1 &&
-    total <= 1_024 &&
-    available >= 0 &&
-    available <= total
-    ? { total, available }
-    : undefined;
-}
-
 function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -146,7 +124,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
         ? (approvalState as NodeApprovalState)
         : undefined,
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
-    workerSlots: parseWorkerSlots(raw.workerSlots),
+    workerSlots: parseWorkerCapacity(raw.workerSlots) ?? undefined,
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
     hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
     connected: raw.connected === true,

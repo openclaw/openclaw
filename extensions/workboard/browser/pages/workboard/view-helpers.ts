@@ -15,14 +15,11 @@ import {
   type WorkboardLifecycle,
   type WorkboardPriority,
   type WorkboardStatus,
-  type WorkboardTaskSummary,
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
 import { isReservedSessionKey } from "../../lib/workboard/session-links.ts";
 import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
-import { taskMatchesLifecycle } from "../../lib/workboard/session-state.ts";
 import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
-export { taskMatchesLifecycle } from "../../lib/workboard/session-state.ts";
 
 export type BoardAutomationState = { jobId: string } & (
   | { status: "loading" }
@@ -158,10 +155,10 @@ export function refreshStatusLabel(state: WorkboardUiState) {
 }
 
 export function workboardErrorMessage(
-  state: Pick<WorkboardUiState, "error" | "lifecycleTaskRefreshError" | "lastRefreshError">,
+  state: Pick<WorkboardUiState, "error" | "lastRefreshError">,
   pageError?: string | null,
 ) {
-  return state.error ?? pageError ?? state.lifecycleTaskRefreshError ?? state.lastRefreshError;
+  return state.error ?? pageError ?? state.lastRefreshError;
 }
 
 export function canMutate(props: WorkboardProps): boolean {
@@ -274,28 +271,11 @@ export function engineBlockedByRuntime(
   });
 }
 
-export function formatLifecycle(
-  lifecycle: WorkboardLifecycle,
-  task?: WorkboardTaskSummary,
-): {
+export function formatLifecycle(lifecycle: WorkboardLifecycle): {
   label: string;
   detail: string | undefined;
   tone: "blocked" | "done" | "idle" | "live";
 } {
-  if (task && taskMatchesLifecycle(task, lifecycle)) {
-    return {
-      label: t(`workboard.taskStatus.${task.status}`),
-      detail: taskDetail(task),
-      tone:
-        task.status === "cancelled" || task.status === "queued"
-          ? "idle"
-          : task.status === "running"
-            ? "live"
-            : task.status === "completed"
-              ? "done"
-              : "blocked",
-    };
-  }
   if (lifecycle.state === "failed") {
     if (lifecycle.session?.status === "timeout") {
       return {
@@ -316,54 +296,21 @@ export function formatLifecycle(
   return { label: t(labelKey), detail: detailKey === undefined ? undefined : t(detailKey), tone };
 }
 
-export function taskDetail(task: WorkboardTaskSummary): string {
-  if (task.status === "queued" || task.status === "running") {
-    return task.progressSummary ?? task.title ?? task.taskId;
-  }
-  return task.terminalSummary ?? task.error ?? task.progressSummary ?? task.title ?? task.taskId;
-}
-
-const taskIsActive = (task: WorkboardTaskSummary | undefined) =>
-  task?.status === "queued" || task?.status === "running";
-
-function cardHasUnresolvedTaskLink(
-  card: WorkboardCard,
-  task: WorkboardTaskSummary | undefined,
-  missingTaskIds: ReadonlySet<string>,
-): boolean {
-  return Boolean(card.taskId && !task && !missingTaskIds.has(card.taskId));
-}
-
-export function cardHasActiveOrRunningUnresolvedTask(
-  card: WorkboardCard,
-  task: WorkboardTaskSummary | undefined,
-  missingTaskIds: ReadonlySet<string>,
-): boolean {
-  return (
-    taskIsActive(task) ||
-    (card.status === "running" && cardHasUnresolvedTaskLink(card, task, missingTaskIds))
-  );
-}
-
 export function cardHasUnresolvedStartedRun(card: WorkboardCard): boolean {
   const sessionKey = card.sessionKey ?? card.execution?.sessionKey;
   const runId = card.runId ?? card.execution?.runId;
   return card.status === "running" && Boolean(sessionKey && runId);
 }
 
-export function renderLifecycleIcon(lifecycle: WorkboardLifecycle, task?: WorkboardTaskSummary) {
-  const authoritativeTask = task && taskMatchesLifecycle(task, lifecycle) ? task : undefined;
-  const queuedTask = authoritativeTask?.status === "queued";
-  if (lifecycle.state === "running" && !queuedTask) {
+export function renderLifecycleIcon(lifecycle: WorkboardLifecycle) {
+  if (lifecycle.state === "running") {
     return html`<span class="session-run-spinner" aria-hidden="true"></span>`;
   }
   const icon =
     lifecycle.state === "failed" &&
-    (authoritativeTask
-      ? authoritativeTask.status === "cancelled"
-      : lifecycle.session?.status === "killed" || lifecycle.session?.abortedLastRun)
+    (lifecycle.session?.status === "killed" || lifecycle.session?.abortedLastRun)
       ? icons.stop
-      : lifecycle.state === "queued" || queuedTask
+      : lifecycle.state === "queued"
         ? icons.hourglass
         : lifecycle.state === "stale"
           ? icons.alertTriangle

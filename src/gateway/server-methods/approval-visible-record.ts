@@ -84,6 +84,9 @@ export async function loadVisibleApproval(params: {
     : undefined;
   let sourceSessionKey = admittedRecord?.request.sessionKey;
   let sourceAgentId = admittedRecord?.request.agentId;
+  if (admittedRecord) {
+    params.authority.bindSource(admittedRecord.request);
+  }
   const assertBindingCurrent = () => {
     if (
       admittedRecord &&
@@ -186,6 +189,7 @@ export async function loadVisibleApproval(params: {
     ) {
       return null;
     }
+    params.authority.bindSource(lookup.record.source);
     const manager =
       lookup.record.kind === "exec"
         ? params.execApprovalManager

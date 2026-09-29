@@ -2,6 +2,7 @@ import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
+  advancePreparedModelRuntimeConfig,
   markPreparedModelRuntimeSnapshotsStale,
   rejectPendingPreparedModelRuntimeReplacement,
   type PreparedModelRuntimeReplacementGateId,
@@ -15,8 +16,11 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewayRestartPolicy } from "../infra/restart.js";
 import { PluginRuntimeApplicationError, getPluginRuntimeGeneration } from "../plugins/lifecycle.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { diffConfigPaths } from "./config-diff.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import {
+  doesReloadAffectProviderAuth,
   reloadPlanNeedsRecovery,
   shouldRefreshContextWindowCache,
 } from "./config-reload-recovery.js";
@@ -61,29 +65,17 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   const {
     formatActiveDetails,
     formatDeferredWorkStatus,
-    formatTaskBlockers,
     getActiveCounts,
     getDeferredChannelReloads,
     waitForActiveWorkBeforeChannelReload,
   } = createGatewayActiveWorkTracker({ params, myGeneration });
 
   const {
-    acceptRestartConfig,
-    beginGatewayRestartLifecycle,
     deferGatewayRestartDebt,
     getLatestAcceptedRestartTarget,
-    hasOutstandingGatewayRestart,
-    hasConfigCandidatePending,
     hasRestartRequestTransaction,
     isRestartRetryStopped,
-    pauseGatewayRestartForConfigCandidate,
-    publishAcceptedRestartTarget,
-    publishAppliedConfigHash,
-    publishDeferredAppliedConfigHash,
-    recordAcceptedRestartTarget,
-    requestGatewayRestart,
-    restoreConservativeRestartDebt,
-    stopRestartRetries,
+    ...restartCoordinator
   } = createGatewayRestartCoordinator({
     params,
     myGeneration,
@@ -91,7 +83,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     getActiveCounts,
     formatActiveDetails,
     formatDeferredWorkStatus,
-    formatTaskBlockers,
   });
 
   const applyHotReload = async (
@@ -105,7 +96,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const state = params.getState();
     const nextState = { ...state };
     const candidateEnv = publication?.runtimeEnv ?? process.env;
-    const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds(plan.changedPaths);
+    const committedConfig = getRuntimeConfig();
+    const refreshModelRuntime = doesReloadAffectProviderAuth(plan, committedConfig, nextConfig);
+    const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds([
+      ...plan.changedPaths,
+      ...diffConfigPaths(committedConfig, nextConfig),
+    ]);
     const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
 
     if (plan.reloadHooks || plan.refreshHooksPolicy) {
@@ -212,15 +208,17 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         { waitForReplacement: true, ...modelRuntimeRefreshScope },
       );
       return async () => {
-        await mrReload.refreshModelRuntimeAfterHotReload({
-          config: previousConfig,
-          agentIds: modelRuntimeAgentIds,
-          pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
-          isPublicationCurrent: () =>
-            isCurrentGatewayReloadGeneration(myGeneration) &&
-            !isLifecycleReloadAborted() &&
-            !isRestartRetryStopped(),
-        });
+        await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+          mrReload.refreshModelRuntimeAfterHotReload({
+            config: previousConfig,
+            agentIds: modelRuntimeAgentIds,
+            pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
+            isPublicationCurrent: () =>
+              isCurrentGatewayReloadGeneration(myGeneration) &&
+              !isLifecycleReloadAborted() &&
+              !isRestartRetryStopped(),
+          }),
+        );
       };
     };
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
@@ -285,12 +283,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
         revokeActiveSkillReviewsBeforeConfigPublication(nextConfig);
-        // Config, plugin hooks, and prepared stores publish as one generation. Synchronously
-        // retire the prior stores at the commit edge so no request can mix generations.
-        preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
-          "prepared model runtime owner is stale before config publication",
-          { waitForReplacement: true, ...modelRuntimeRefreshScope },
-        );
+        if (refreshModelRuntime) {
+          // Retire model/auth inputs together so requests cannot mix generations.
+          preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
+            "prepared model runtime owner is stale before config publication",
+            { waitForReplacement: true, ...modelRuntimeRefreshScope },
+          );
+        } else {
+          advancePreparedModelRuntimeConfig(nextConfig);
+        }
         if (!runtime) {
           params.setState(nextState);
           runtimeCommitted = true;
@@ -441,12 +442,20 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           `${surface} failed after config supersession${detail}; recovery deferred to the newer config`,
         );
         const target = getLatestAcceptedRestartTarget();
-        if (!hasConfigCandidatePending() && !hasRestartRequestTransaction() && target) {
-          const restartTransaction = requestGatewayRestart(recoveryPlan, target.runtimeConfig, {
-            retainDebtAcrossConfigChanges: true,
-            debtConfig: target.sourceConfig,
-            prepareRuntimeConfig: target.prepareRuntimeConfig,
-          });
+        if (
+          !restartCoordinator.hasConfigCandidatePending() &&
+          !hasRestartRequestTransaction() &&
+          target
+        ) {
+          const restartTransaction = restartCoordinator.requestGatewayRestart(
+            recoveryPlan,
+            target.runtimeConfig,
+            {
+              retainDebtAcrossConfigChanges: true,
+              debtConfig: target.sourceConfig,
+              prepareRuntimeConfig: target.prepareRuntimeConfig,
+            },
+          );
           settleRecoveryRestart(restartTransaction, surface);
           return;
         }
@@ -463,7 +472,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
       try {
         // Reuse the config-restart path to drain other work and fence restart delivery.
-        const restartTransaction = requestGatewayRestart(
+        const restartTransaction = restartCoordinator.requestGatewayRestart(
           recoveryPlan,
           nextConfig,
           // Recovery debt represents a failed runtime surface, not every path
@@ -574,15 +583,19 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     }
 
-    try {
-      await mrReload.refreshModelRuntimeAfterHotReload({
-        config: nextConfig,
-        agentIds: modelRuntimeAgentIds,
-        pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
-      });
-    } catch (err) {
-      scheduleRecoveryRestart("prepared model runtime reload", err);
-      return "applied-restart-required";
+    if (refreshModelRuntime) {
+      try {
+        await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+          mrReload.refreshModelRuntimeAfterHotReload({
+            config: nextConfig,
+            agentIds: modelRuntimeAgentIds,
+            pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
+          }),
+        );
+      } catch (err) {
+        scheduleRecoveryRestart("prepared model runtime reload", err);
+        return "applied-restart-required";
+      }
     }
 
     if (plan.disposeMcpRuntimes) {
@@ -667,19 +680,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   };
 
   return {
+    ...restartCoordinator,
     applyHotReload,
     getDeferredChannelReloads,
-    acceptRestartConfig,
-    publishAppliedConfigHash,
-    publishDeferredAppliedConfigHash,
-    hasOutstandingGatewayRestart,
-    hasConfigCandidatePending,
-    beginGatewayRestartLifecycle,
-    pauseGatewayRestartForConfigCandidate,
-    publishAcceptedRestartTarget,
-    recordAcceptedRestartTarget,
-    requestGatewayRestart,
-    restoreConservativeRestartDebt,
-    stopRestartRetries,
   };
 }

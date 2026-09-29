@@ -12,6 +12,8 @@ let capturing = false;
 let cleanupUncertain = false;
 
 type FailureReason =
+  | "cooldown"
+  | "heap-too-large"
   | "busy"
   | "unsupported"
   | "conflict"

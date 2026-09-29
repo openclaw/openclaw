@@ -244,13 +244,11 @@ type CatalogTargetDiscoveryState =
       status: "loading";
       owner: CatalogTargetOwner;
       controller: AbortController;
-      requestId: number;
     }
   | { status: "ready"; owner: CatalogTargetOwner; targets: CatalogCreateTarget[] }
   | { status: "error"; owner: CatalogTargetOwner };
 
 export class CatalogTargetDiscovery {
-  private requestId = 0;
   private state: CatalogTargetDiscoveryState = { status: "idle" };
 
   constructor(private readonly notify: () => void) {}
@@ -258,7 +256,6 @@ export class CatalogTargetDiscovery {
   clear() {
     const previous = this.state;
     this.state = { status: "idle" };
-    this.requestId += 1;
     if (previous.status === "loading") {
       previous.controller.abort();
     }
@@ -269,8 +266,8 @@ export class CatalogTargetDiscovery {
 
   private startRequest(owner: CatalogTargetOwner) {
     const controller = new AbortController();
-    const requestId = ++this.requestId;
-    this.state = { status: "loading", owner, controller, requestId };
+    const pending = { status: "loading", owner, controller } as const;
+    this.state = pending;
     this.notify();
     void owner.client
       .request<SessionsCatalogListResult>(
@@ -280,8 +277,7 @@ export class CatalogTargetDiscovery {
       )
       .then(
         (result) => {
-          const active = this.state;
-          if (active.status !== "loading" || active.requestId !== requestId) {
+          if (this.state !== pending) {
             return;
           }
           this.state = {
@@ -294,8 +290,7 @@ export class CatalogTargetDiscovery {
           this.notify();
         },
         () => {
-          const active = this.state;
-          if (active.status !== "loading" || active.requestId !== requestId) {
+          if (this.state !== pending) {
             return;
           }
           this.state = { status: "error", owner };

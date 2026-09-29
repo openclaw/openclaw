@@ -96,8 +96,6 @@ describe("buildStatusText prepared context windows", () => {
       isGroup: false,
       defaultGroupActivation: () => "mention",
       pluginHealthLineOverride: "Plugins: test",
-      taskLineOverride: "",
-      skipDefaultTaskLookup: true,
       modelAuthOverride: "api-key",
       activeModelAuthOverride: "api-key",
       includeTranscriptUsage: false,

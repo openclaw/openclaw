@@ -23,6 +23,7 @@ import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
+import { listWhatsAppDeliveredMessageIdentities } from "./inbound/send-result.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
 const PERSISTENT_NAMESPACE = "whatsapp.approval-reactions";
@@ -215,7 +216,9 @@ export async function registerWhatsAppApprovalReactionTarget(params: {
   if (
     !key ||
     !approvalId ||
-    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    (params.approvalKind !== "exec" &&
+      params.approvalKind !== "plugin" &&
+      params.approvalKind !== "system-agent") ||
     allowedDecisions.length === 0
   ) {
     return null;
@@ -227,44 +230,6 @@ export async function registerWhatsAppApprovalReactionTarget(params: {
   };
   await whatsappApprovalReactionTargets.register(key, target, { ttlMs: params.ttlMs });
   return target;
-}
-
-function listWhatsAppDeliveredMessageIdentities(
-  results: readonly OutboundDeliveryResult[],
-): Array<{ messageId: string; remoteJid: string }> {
-  const identities: Array<{ messageId: string; remoteJid: string }> = [];
-  const seen = new Set<string>();
-  const add = (params: { channel?: string; messageId?: string; toJid?: string }) => {
-    if (params.channel && params.channel !== "whatsapp") {
-      return;
-    }
-    const messageId = params.messageId?.trim() ?? "";
-    const remoteJid = params.toJid?.trim() ?? "";
-    const key = `${remoteJid}:${messageId}`;
-    if (!messageId || messageId === "unknown" || !remoteJid || seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    identities.push({ messageId, remoteJid });
-  };
-
-  for (const result of results) {
-    if (result.channel !== "whatsapp") {
-      continue;
-    }
-    add(result);
-    for (const raw of result.receipt?.raw ?? []) {
-      add(raw);
-    }
-    for (const part of result.receipt?.parts ?? []) {
-      add({
-        channel: part.raw?.channel,
-        messageId: part.raw?.messageId ?? part.platformMessageId,
-        toJid: part.raw?.toJid,
-      });
-    }
-  }
-  return identities;
 }
 
 /** Bind generic forwarded approvals to the exact WhatsApp messages accepted by Baileys. */
@@ -294,7 +259,10 @@ export async function registerWhatsAppApprovalReactionTargetForDeliveredPayload(
     accountId: params.target.accountId,
   }).accountId;
   const registrations: Promise<WhatsAppApprovalReactionTarget | null>[] = [];
-  for (const { messageId, remoteJid } of listWhatsAppDeliveredMessageIdentities(params.results)) {
+  for (const { messageId, remoteJid } of listWhatsAppDeliveredMessageIdentities(
+    params.results,
+    (channel) => !channel || channel === "whatsapp",
+  )) {
     registrations.push(
       registerWhatsAppApprovalReactionTarget({
         accountId,

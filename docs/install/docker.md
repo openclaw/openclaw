@@ -238,10 +238,11 @@ make older images report that another Gateway owns even an empty state volume.
 Current images use the guarded filesystem fallback; keep native filesystem
 checks enabled. Doctor reports the underlying lock failure and recovery action
 instead of treating every acquisition error as an active Gateway. Permission
-errors require writable state and `/tmp` mounts for the container user. If the
-filesystem cannot provide SQLite locking, stop OpenClaw, back up its state, and
-move the state volume to a local filesystem that supports it; provide a writable
-local `/tmp` as well. Do not delete state or lock files to bypass ownership.
+errors require a writable state mount for the container user. If the filesystem
+cannot provide exclusive file creation for state ownership, stop OpenClaw, back
+up its state, and move the state volume to a local filesystem that supports it.
+Ordinary database transactions use SQLite locking on that volume. Do not delete
+state or lock files to bypass ownership.
 
 Other CLI commands and help pass through unchanged. If you replace the image's
 entrypoint, run Doctor against the same mounted state/config before launching the

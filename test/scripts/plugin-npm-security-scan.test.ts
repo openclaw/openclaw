@@ -10,7 +10,6 @@ import {
   buildPluginNpmSecurityScanReport,
   constrainPluginNpmSecurityScanReport,
   loadPluginNpmSecurityArtifacts,
-  listPluginNpmSecurityArtifacts,
   listPublishablePluginPackages,
   normalizePackedFindingPath,
   resolveCandidatePluginPackageDir,
@@ -242,12 +241,13 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       "release/2026.9.4",
       "release/2026.9.5",
       "release/2026.9.6",
+      "release/2026.9.7",
     ]) {
       expect(resolveReviewedSourceLayout(current, context)?.id, context).toBe("current");
     }
     expect(resolveReviewedSourceLayout(frozenLegacy, "release/2026.9.1")).toBeUndefined();
     expect(resolveReviewedSourceLayout(current, "release/2099.1.1")).toBeUndefined();
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.7")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(current, "release/2026.9.8")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",
@@ -536,28 +536,35 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
-  it("reviews the two Signal socket cleanup probes after 9.4", async () => {
+  it("reviews the Signal socket cleanup probes shipped after 9.4", async () => {
     const packageName = "@openclaw/signal";
     const fixturePath = "src/socket-path.test.ts";
     const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
-    const probe =
-      'import { spawnSync } from "node:child_process";\n' +
-      "spawnSync(process.execPath, []);\n".repeat(2);
     const { artifact } = writePluginArtifact({
       extensionId: "signal",
       packageName,
-      files: { [fixturePath]: probe },
+      files: {
+        [fixturePath]:
+          'import { spawnSync } from "node:child_process";\n' +
+          "spawnSync(process.execPath, []);\n",
+      },
     });
 
-    for (const context of ["release/2026.9.3", "release/2026.9.4", "release/2026.9.5", ""]) {
-      const admitted = context === "" || context === "release/2026.9.5";
+    // 9.5 and 9.6 shipped two probes; #159648 removed one before 9.7.
+    for (const [context, reviewedCount] of [
+      ["release/2026.9.4", 0],
+      ["release/2026.9.5", 2],
+      ["release/2026.9.6", 2],
+      ["release/2026.9.7", 1],
+      ["", 1],
+    ] as const) {
       const scanned = await scanPublishablePluginPackages([artifact], context);
       expect(scanned.scanErrors, context).toEqual([]);
       expect(scanned.packageResults[0]?.expectedReviewedCriticalFindings, context).toEqual(
-        admitted ? [fixtureKey, fixtureKey] : [],
+        Array.from({ length: reviewedCount }, () => fixtureKey),
       );
       expect(scanned.packageResults[0]?.unexpectedCriticalFindings, context).toHaveLength(
-        admitted ? 0 : 2,
+        reviewedCount === 0 ? 1 : 0,
       );
     }
   });
@@ -767,10 +774,12 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
           "extended-stable/2026.6.33",
           "extended-stable/2026.7.33",
           "release/2026.9.7",
+          "release/2026.9.8",
         ]) {
           const admitted =
             context === "" ||
             context === "release/2026.9.6" ||
+            context === "release/2026.9.7" ||
             (context === "release/2026.9.5" && reviewedIn95);
           const label = `${context || "current"}: ${count ?? "absent"}`;
           const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
@@ -1203,22 +1212,22 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       files: { "index.js": "export const value = 1;\n" },
       packageName: "@openclaw/test-identity",
     });
+    const loaded = loadPluginNpmSecurityArtifacts({
+      artifactRoot: artifact.artifactRoot,
+      candidateSha: CANDIDATE_SHA,
+      expectedPackages: [artifact.expectedPackage],
+      toolingSha: TOOLING_SHA,
+    });
+    expect(loaded.ingestionErrors).toEqual([]);
+    expect(loaded.artifacts.map((entry) => entry.packageName)).toEqual(["@openclaw/test-identity"]);
     expect(
-      listPluginNpmSecurityArtifacts({
-        artifactRoot: artifact.artifactRoot,
-        candidateSha: CANDIDATE_SHA,
-        expectedPackages: [artifact.expectedPackage],
-        toolingSha: TOOLING_SHA,
-      }).map((entry) => entry.packageName),
-    ).toEqual(["@openclaw/test-identity"]);
-    expect(() =>
-      listPluginNpmSecurityArtifacts({
+      loadPluginNpmSecurityArtifacts({
         artifactRoot: artifact.artifactRoot,
         candidateSha: CANDIDATE_SHA,
         expectedPackages: [],
         toolingSha: TOOLING_SHA,
-      }),
-    ).toThrow("unexpected entries");
+      }).ingestionErrors,
+    ).toEqual(["Plugin security artifact root contains 1 unexpected entries."]);
   });
 
   it("retains valid package scans when a sibling artifact is malformed", async () => {

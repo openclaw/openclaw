@@ -45,11 +45,7 @@ export {
   writeRestartSentinelIfUnchanged,
 } from "../../infra/restart-sentinel.js";
 export { waitForGatewayHealthyRestart } from "../daemon-cli/restart-health.js";
-export {
-  detectGatewayRespawnSupervisor,
-  detectGatewayRespawnSupervisorIdentity,
-  detectRespawnSupervisor,
-} from "../../infra/supervisor-markers.js";
+export { detectGatewayRespawnSupervisorIdentity } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 export {
   createGatewayActiveWorkSnapshot,
@@ -66,7 +62,6 @@ export {
   waitForActiveCronTaskRuns,
 } from "../../cron/service/active-run-cancellation.js";
 export { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
-export { reloadTaskRuntimeStateFromStore } from "../../tasks/runtime-internal.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-generation.js";
 
 export async function stopGatewayManagedProviderLocalServices(): Promise<void> {

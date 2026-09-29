@@ -23,6 +23,7 @@ import {
   resolveCrablineStateConversation,
   resolveDiscordQaId,
 } from "./crabline-provider-targets.js";
+import { createCrablineSlackIngress } from "./crabline-slack-ingress.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
 import { buildQaConversationTarget, parseQaTarget } from "./qa-bus-protocol.js";
 import {
@@ -41,6 +42,7 @@ import {
 import type { QaBusInboundMessageInput, QaBusMessage } from "./runtime-api.js";
 
 type QaCrablineTransportState = QaTransportState & {
+  slackIngress?: ReturnType<typeof createCrablineSlackIngress>;
   cleanup: () => Promise<void>;
   getOutboundEvents: () => Promise<readonly QaTransportOutboundEvent[]>;
   observeEvent: (event: unknown) => void;
@@ -168,6 +170,7 @@ function readTelegramLifecycleEvent(params: {
 async function postCrablineInbound(params: {
   adapter: StartedOpenClawCrablineCorrelatedAdapter;
   providerInbound: OpenClawCrablineInbound;
+  signal?: AbortSignal;
 }) {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.adapter.manifest.endpoints.adminInboundUrl,
@@ -180,6 +183,7 @@ async function postCrablineInbound(params: {
       method: "POST",
     },
     policy: { allowPrivateNetwork: true },
+    ...(params.signal ? { signal: params.signal, timeoutMs: 15_000 } : {}),
     auditContext: `qa-lab-crabline-${params.adapter.channel}-inbound`,
   });
   const label = `Crabline ${params.adapter.channel} inbound injection failed`;
@@ -205,6 +209,10 @@ function createCrablineState(params: {
   state: QaBusState;
 }): QaCrablineTransportState {
   const baseState = params.state;
+  const slackIngress =
+    params.adapter.manifest.provider === "slack"
+      ? createCrablineSlackIngress(params.adapter.manifest.signingSecret)
+      : undefined;
   const targetByProviderTarget = new Map<string, QaCrablineTarget>();
   const telegramMessageByProviderId = new Map<string, QaBusMessage>();
   const pendingTelegramMessagesByChat = new Map<string, QaBusMessage[]>();
@@ -217,6 +225,7 @@ function createCrablineState(params: {
   };
 
   return {
+    ...(slackIngress ? { slackIngress } : {}),
     reset() {
       resetTransport();
       baseState.reset();
@@ -283,19 +292,28 @@ function createCrablineState(params: {
       const providerInbound = params.adapter.createInbound({
         input: createCrablineProviderInboundInput(params.adapter, input),
       });
-      const ingress = await postCrablineInbound({
-        adapter: params.adapter,
-        providerInbound,
-      });
-      // Register only the provider identity confirmed by successful ingress. Provider servers may
-      // realize a symbolic target as a different native conversation than the provisional input.
-      targetByProviderTarget.set(
-        params.adapter.resolveInboundProviderTargetKey({
-          inbound: providerInbound,
-          response: ingress.response,
-        }),
-        qaTargetForInput(input),
-      );
+      const receive = async (signal?: AbortSignal) => {
+        const ingress = await postCrablineInbound({
+          adapter: params.adapter,
+          providerInbound,
+          signal,
+        });
+        // Install the confirmed provider route before a webhook can produce an immediate reply.
+        targetByProviderTarget.set(
+          params.adapter.resolveInboundProviderTargetKey({
+            inbound: providerInbound,
+            response: ingress.response,
+          }),
+          qaTargetForInput(input),
+        );
+        return ingress;
+      };
+      const ingress = slackIngress
+        ? await slackIngress.forward(async (signal) => {
+            const value = await receive(signal);
+            return { event: isRecord(value.response) ? value.response.event : undefined, value };
+          })
+        : await receive();
       return baseState.addInboundMessage(
         {
           ...input,
@@ -316,6 +334,7 @@ function createCrablineState(params: {
     searchMessages: baseState.searchMessages.bind(baseState),
     waitFor: baseState.waitFor.bind(baseState),
     async cleanup() {
+      await slackIngress?.cleanup();
       await params.adapter.close();
     },
   };
@@ -323,6 +342,7 @@ function createCrablineState(params: {
 
 class QaCrablineTransport extends QaStateBackedTransportAdapter {
   readonly #adapter: StartedOpenClawCrablineCorrelatedAdapter;
+  readonly #readiness: Awaited<ReturnType<typeof runOpenClawCrablineProviderReadiness>>;
   readonly #selection: OpenClawCrablineChannelDriverSelection;
   readonly #transportPolicy?: QaTransportPolicy;
   readonly #state: QaCrablineTransportState;
@@ -332,11 +352,13 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     final: QaBusMessage;
   }>;
   readonly prepareFlow?: QaTransportAdapter["prepareFlow"];
+  declare readonly cleanup?: QaTransportAdapter["cleanup"];
   readonly resetTransport: () => void;
   #releaseDiscordQaApiBase?: () => void;
 
   constructor(params: {
     adapter: StartedOpenClawCrablineCorrelatedAdapter;
+    readiness: Awaited<ReturnType<typeof runOpenClawCrablineProviderReadiness>>;
     transportPolicy?: QaTransportPolicy;
     selection: OpenClawCrablineChannelDriverSelection;
     state: QaCrablineTransportState;
@@ -349,10 +371,15 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
       state: params.state,
     });
     this.#adapter = params.adapter;
+    this.#readiness = params.readiness;
     this.#selection = params.selection;
     this.#transportPolicy = params.transportPolicy;
     this.#state = params.state;
     this.resetTransport = params.state.resetTransport;
+    if (params.state.slackIngress) {
+      this.prepareFlow = params.state.slackIngress.prepareFlow;
+      this.cleanup = params.state.slackIngress.cleanup;
+    }
     if (params.selection.channel === "discord" && params.adapter.manifest.provider === "discord") {
       const manifest = params.adapter.manifest;
       let prepared:
@@ -564,23 +591,23 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   ];
 
   captureArtifacts = async ({ outputDir }: { outputDir: string }) => {
-    const readiness = await runOpenClawCrablineProviderReadiness({
-      adapter: this.#adapter,
-      outputDir,
-      selection: this.#selection,
-    });
+    await this.#adapter.probe();
     return {
       artifacts: [
         {
           kind: "channel-capability-matrix" as const,
-          path: readiness.capabilityMatrixPath,
+          path: this.#readiness.capabilityMatrixPath,
         },
         {
           kind: "channel-driver-smoke" as const,
-          path: readiness.providerReadinessArtifactPath,
+          path: this.#readiness.providerReadinessArtifactPath,
         },
       ],
-      reportNotes: createOpenClawCrablineChannelReportNotes(this.#selection),
+      reportNotes: [
+        ...createOpenClawCrablineChannelReportNotes(this.#selection),
+        "Provider readiness records the strict startup probe before Gateway traffic; the same provider instance passed its final health probe.",
+        `Full unmodified runtime transcript: ${path.relative(outputDir, this.#adapter.manifest.recorderPath)}.`,
+      ],
     };
   };
 
@@ -622,7 +649,24 @@ export async function createQaCrablineTransportAdapter(params: {
     openclawConfig: {},
     recorderPath,
   });
-
+  // Readiness owns the startup probe; runtime transcripts may contain provider-specific API records.
+  let readiness: Awaited<ReturnType<typeof runOpenClawCrablineProviderReadiness>>;
+  try {
+    readiness = await runOpenClawCrablineProviderReadiness({
+      adapter,
+      outputDir: params.outputDir,
+      selection: params.selection,
+    });
+  } catch (error) {
+    try {
+      await adapter.close();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Crabline startup and cleanup failed", {
+        cause: cleanupError,
+      });
+    }
+    throw error;
+  }
   const state = createCrablineState({
     adapter,
     state: params.state ?? createQaBusState(),
@@ -630,6 +674,7 @@ export async function createQaCrablineTransportAdapter(params: {
   observeEvent = state.observeEvent;
   return new QaCrablineTransport({
     adapter,
+    readiness,
     transportPolicy: params.transportPolicy,
     selection: params.selection,
     state,
@@ -661,6 +706,7 @@ export async function createQaCrablineTransportDefinition(
       ? { createRuntimeEnvPatch: transport.createRuntimeEnvPatch }
       : {}),
     ...(transport.prepareFlow ? { prepareFlow: transport.prepareFlow } : {}),
+    ...(transport.cleanup ? { cleanup: transport.cleanup } : {}),
     captureArtifacts: transport.captureArtifacts,
     cleanupAfterGatewayStop: transport.cleanupAfterGatewayStop.bind(transport),
   };

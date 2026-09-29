@@ -19,6 +19,8 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
+import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
+import { isInvalidConfigError } from "./io.invalid-config.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
 import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import {
@@ -32,7 +34,6 @@ import {
   resolveConfigIncludesForRead,
   resolveConfigPathForDeps,
 } from "./io.read-helpers.js";
-import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import { autoOwnerDisplaySecretByPath } from "./io.state.js";
 import type {
   ConfigIoFactoryOptions,
@@ -75,47 +76,12 @@ type ValidationPluginMetadataSnapshotLoader = {
   getSnapshot: () => PluginMetadataSnapshot | undefined;
 };
 
-export type ConfigIoContext = {
-  deps: NormalizedConfigIoDeps;
-  pathResolution: { env: NodeJS.ProcessEnv; homedir?: () => string };
-  configPath: string;
-  options: ConfigIoFactoryOptions;
-  transformRecoveryCandidate?: ConfigRecoveryCandidateTransform;
-  resolveDeferredPluginMigrations: () => readonly DeferredPluginMigration[];
-  resolveDeferredPluginMigrationsAsync: () => Promise<readonly DeferredPluginMigration[]>;
-  observeLoadConfigSnapshot: (snapshot: ConfigFileSnapshot) => ConfigFileSnapshot;
-  observeLoadConfigSnapshotAsync: (
-    snapshot: ConfigFileSnapshot,
-    assertCurrent?: () => void,
-  ) => Promise<ConfigFileSnapshot>;
-  finalizeLoadedRuntimeConfig: (config: OpenClawConfig) => OpenClawConfig;
-  finalizeLoadedRuntimeConfigAsync: (
-    config: OpenClawConfig,
-    metadata: ValidationPluginMetadataSnapshotLoader,
-    assertCurrent?: () => void,
-  ) => Promise<OpenClawConfig>;
-  createValidationPluginMetadataSnapshotLoader: (params: {
-    env: NodeJS.ProcessEnv;
-    allowCurrentPluginMetadata?: boolean;
-  }) => ValidationPluginMetadataSnapshotLoader;
-  resolveRuntimePreflightSourceConfig: (
-    candidate: OpenClawConfig,
-    includeFileHashes?: Record<string, string>,
-    includeFileTargets?: Record<string, string>,
-    baseEnv?: NodeJS.ProcessEnv,
-  ) => OpenClawConfig;
-  prepareRecoveryBackupCandidateAsync: (
-    candidate: ConfigRecoveryCandidate,
-  ) => Promise<ConfigRecoveryCandidatePreparation>;
-  prepareRecoveryBackupCandidate: (
-    candidate: ConfigRecoveryCandidate,
-  ) => ConfigRecoveryCandidatePreparation;
-};
+export type ConfigIoContext = ReturnType<typeof createConfigIoContext>;
 
 export function createConfigIoContext(
   options: ConfigIoFactoryOptions = {},
   transformRecoveryCandidate?: ConfigRecoveryCandidateTransform,
-): ConfigIoContext {
+) {
   const deps = normalizeConfigIoDeps(options);
   const configPath = resolveConfigPathForDeps(deps);
   // The normalized default homedir already applies OPENCLAW_HOME. Path
@@ -392,8 +358,14 @@ export function createConfigIoContext(
         },
       };
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      return { ok: false, reason: `candidate preparation failed: ${detail}` };
+      // Unavailable dependencies cannot establish that the backup is invalid.
+      if (
+        error instanceof ConfigIncludeReadError ||
+        !(error instanceof ConfigIncludeError || isInvalidConfigError(error))
+      ) {
+        throw error;
+      }
+      return { ok: false, reason: `candidate preparation failed: ${error.message}` };
     }
   }
 

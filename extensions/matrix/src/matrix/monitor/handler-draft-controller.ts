@@ -57,9 +57,8 @@ export async function createMatrixDraftController(params: {
         }),
       )
     : undefined;
-  const shouldStreamPreviewToolProgress = Boolean(draftStream) && previewToolProgressEnabled;
   const shouldSuppressDefaultToolProgressMessages =
-    Boolean(draftStream) && (shouldStreamPreviewToolProgress || params.streaming === "progress");
+    Boolean(draftStream) && (previewToolProgressEnabled || progressDraftStreaming);
   type PendingDraftBoundary = {
     messageGeneration: number;
     endOffset: number;
@@ -132,21 +131,15 @@ export async function createMatrixDraftController(params: {
           explanationFormat: payload.explanationFormat,
         });
       },
-      onApprovalEvent: async (payload) => {
-        return await progressDraft.pushApprovalEvent(payload);
-      },
+      onApprovalEvent: (payload) => progressDraft.pushApprovalEvent(payload),
     };
   };
 
-  const getDisplayableDraftText = () => {
+  const updateDraftFromLatestFullText = () => {
     const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
       (boundary) => boundary.messageGeneration === currentDraftMessageGeneration,
     )?.endOffset;
-    return latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
-  };
-
-  const updateDraftFromLatestFullText = () => {
-    const blockText = getDisplayableDraftText();
+    const blockText = latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
     if (blockText) {
       draftStream?.update(blockText);
     }

@@ -24,7 +24,6 @@ import {
   isOrdinalSeg,
   isPositionalSeg,
   isPredicateSeg,
-  isQuotedSeg,
   isUnionSeg,
   parseArrayIndexSegment,
   parseOrdinalSeg,
@@ -270,7 +269,7 @@ const jsoncOps: WalkOps<JsoncValue> = {
     if (node.kind === "object") {
       // Entry keys are unquoted in the AST; strip quotes from a quoted
       // path key so the walker matches the resolver's behavior.
-      const lookupKey = isQuotedSeg(key) ? unquoteSeg(key) : key;
+      const lookupKey = unquoteSeg(key);
       const e = node.entries.find((entry) => entry.key === lookupKey);
       return e === undefined ? null : { keySub: key, child: e.value };
     }
@@ -437,7 +436,7 @@ const yamlOps: WalkOps<Node> = {
   },
   lookup(node, key) {
     if (isMap(node)) {
-      const lookupKey = isQuotedSeg(key) ? unquoteSeg(key) : key;
+      const lookupKey = unquoteSeg(key);
       const pair = (node as { items: readonly Pair[] }).items.find((p) => {
         const k = isScalar(p.key) ? p.key.value : p.key;
         return String(k) === lookupKey;
@@ -563,7 +562,7 @@ function walkMd(
       }
       return;
     }
-    const fmKey = isQuotedSeg(next.value) ? unquoteSeg(next.value) : next.value;
+    const fmKey = unquoteSeg(next.value);
     const entry = level.ast.frontmatter.find((e) => e.key === fmKey);
     if (entry === undefined) {
       return;

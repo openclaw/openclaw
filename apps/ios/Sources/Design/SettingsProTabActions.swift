@@ -167,7 +167,7 @@ extension SettingsProTab {
     }
 
     func refreshGatewayRegistry() {
-        self.gatewayRegistry = GatewaySettingsStore.loadGatewayRegistry()
+        self.gatewayRegistry = self.appModel.loadDisplayedGatewayRegistry()
     }
 
     func gatewayEndpointSummary(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> String {
@@ -214,7 +214,7 @@ extension SettingsProTab {
     func syncSettingsState() {
         self.refreshGatewayRegistry()
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
-        let activeManual = GatewaySettingsStore.activeGatewayEntry()
+        let activeManual = self.gatewayRegistry.activeEntry
         if activeManual?.kind == .manual,
            activeManual?.host?.caseInsensitiveCompare(self.manualGatewayHost) == .orderedSame,
            activeManual?.port == self.manualGatewayPort
@@ -226,7 +226,9 @@ extension SettingsProTab {
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
-        guard let stableID = self.currentManualGatewayStableID else {
+        guard !self.appModel.isLocalGatewayFixtureEnabled,
+              let stableID = self.currentManualGatewayStableID
+        else {
             self.gatewayCredentialFieldStableID = nil
             self.gatewayToken = ""
             self.gatewayPassword = ""
@@ -339,27 +341,31 @@ extension SettingsProTab {
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return false }
+        guard await self.applyGatewayLink(link) else { return false }
         self.stagedGatewaySetupLink = nil
         self.setupCode = ""
-        await self.applyGatewayLink(link)
         return true
     }
 
-    func applyGatewayLink(_ link: GatewayConnectDeepLink) async {
+    func applyGatewayLink(_ link: GatewayConnectDeepLink) async -> Bool {
+        let instanceId = GatewaySettingsStore.currentInstanceID()
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.hasBootstrapToken {
+            guard await GatewayOnboardingReset.prepareForBootstrapPairing(
+                appModel: self.appModel,
+                instanceId: instanceId,
+                gatewayStableID: setupAuth.targetStableID)
+            else {
+                self.setupStatusText = self.appModel.gatewayStatusText
+                return false
+            }
+        }
         self.manualGatewayHost = link.host
         self.manualGatewayPort = link.port
         self.manualGatewayPortText = String(link.port)
         self.manualGatewayTLS = link.tls
         self.manualGatewayContextPath = link.contextPath
-        let instanceId = GatewaySettingsStore.currentInstanceID()
-        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
-        if setupAuth.hasBootstrapToken {
-            await GatewayOnboardingReset.prepareForBootstrapPairing(
-                appModel: self.appModel,
-                instanceId: instanceId,
-                gatewayStableID: setupAuth.targetStableID)
-        }
         if !instanceId.isEmpty {
             GatewaySettingsStore.saveGatewayCredentials(
                 token: setupAuth.token,
@@ -372,6 +378,7 @@ extension SettingsProTab {
         self.gatewayToken = setupAuth.token
         self.gatewayPassword = setupAuth.password
         self.pendingManualAuthOverride = setupAuth.manualAuthOverride
+        return true
     }
 
     func openGatewayQRScanner() {
@@ -440,7 +447,7 @@ extension SettingsProTab {
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
-        await self.applyGatewayLink(link)
+        guard await self.applyGatewayLink(link) else { return }
         self.setupStatusText = String(
             format: String(localized: "QR loaded. Connecting to %@:%@..."),
             link.host,
@@ -869,10 +876,10 @@ extension SettingsProTab {
             GatewayStatusBuilder.build(appModel: self.appModel) == .connected
     }
 
-    /// First-run state: no paired gateways yet (demo mode fakes a pairing), so
-    /// the status card surfaces Scan QR as the primary action.
+    /// First-run state: no paired gateways yet (local gateway fixtures fake a
+    /// pairing), so the status card surfaces Scan QR as the primary action.
     var gatewayNeedsPairing: Bool {
-        self.gatewayRegistry.entries.isEmpty && !self.appModel.isAppleReviewDemoModeEnabled
+        self.gatewayRegistry.entries.isEmpty && !self.appModel.isLocalGatewayFixtureEnabled
     }
 
     var gatewayStatusDetail: String {

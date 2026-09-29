@@ -1,5 +1,6 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type, type Static } from "typebox";
+import { NODE_WORKER_CAPACITY_MAX } from "../worker-capacity.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -68,12 +69,18 @@ export const WorkerDesktopAppIdSchema = Type.Union([
 ]);
 
 /** Actionable issue attached only to runtime targets that need operator intervention. */
-export const RuntimeTargetIssueSchema = closedObject({
-  code: Type.Literal("update-required"),
-  action: Type.Literal("update-and-reconnect"),
-  updateCommand: Type.Literal("openclaw update"),
-  headlessReconnectCommand: Type.Literal("openclaw node restart"),
-});
+export const RuntimeTargetIssueSchema = Type.Union([
+  closedObject({
+    code: Type.Literal("update-required"),
+    action: Type.Literal("update-and-reconnect"),
+    updateCommand: Type.Literal("openclaw update"),
+    headlessReconnectCommand: Type.Literal("openclaw node restart"),
+  }),
+  closedObject({
+    code: Type.Literal("worker-host-unavailable"),
+    message: Type.String({ minLength: 1, maxLength: 1_024 }),
+  }),
+]);
 
 const NodeWorkerBundleStatusSchema = Type.Union([
   closedObject({ status: Type.Literal("installed"), version: NonEmptyString }),
@@ -83,10 +90,11 @@ const NodeWorkerBundleStatusSchema = Type.Union([
 /** Bounded live worker slots advertised by a connected node host. */
 export const WorkerSlotSummarySchema = Type.Refine(
   closedObject({
-    total: Type.Integer({ minimum: 1, maximum: 1_024 }),
-    available: Type.Integer({ minimum: 0, maximum: 1_024 }),
+    total: Type.Integer({ minimum: 1, maximum: NODE_WORKER_CAPACITY_MAX }),
+    available: Type.Integer({ minimum: 0, maximum: NODE_WORKER_CAPACITY_MAX }),
+    reclaimableIdle: Type.Optional(Type.Integer({ minimum: 0, maximum: 2 })),
   }),
-  (slots) => slots.available <= slots.total,
+  (slots) => slots.available + (slots.reclaimableIdle ?? 0) <= slots.total,
   (slots) => `available worker slots ${slots.available} exceed total ${slots.total}`,
 );
 
@@ -101,6 +109,7 @@ export const RequiredNodeCommandStateSchema = Type.Union([
 export const RequiredNodeCommandSchema = closedObject({
   command: Type.String({ minLength: 1, maxLength: 128 }),
   state: RequiredNodeCommandStateSchema,
+  message: Type.Optional(NonEmptyString),
 });
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
@@ -164,10 +173,6 @@ function createEnvironmentSummaryProperties() {
       }),
     ),
   };
-}
-
-function createEnvironmentSummarySchema() {
-  return closedObject(createEnvironmentSummaryProperties());
 }
 
 /** Public environment summary shown in listings and status responses. */
@@ -265,7 +270,7 @@ export const EnvironmentsStatusParamsSchema = closedObject({
 });
 
 /** Status lookup result for one environment id. */
-export const EnvironmentsStatusResultSchema = createEnvironmentSummarySchema();
+export const EnvironmentsStatusResultSchema = closedObject(createEnvironmentSummaryProperties());
 
 /** Creates a worker environment from one configured provider profile. */
 export const EnvironmentsCreateParamsSchema = closedObject({
@@ -274,7 +279,7 @@ export const EnvironmentsCreateParamsSchema = closedObject({
 });
 
 /** Create result uses the same public summary shape as list and status. */
-export const EnvironmentsCreateResultSchema = createEnvironmentSummarySchema();
+export const EnvironmentsCreateResultSchema = closedObject(createEnvironmentSummaryProperties());
 
 /** Prepares a configured profile's local Git project without dispatching a session. */
 export const EnvironmentsPrepareParamsSchema = closedObject({
@@ -295,7 +300,7 @@ export const EnvironmentsDestroyParamsSchema = closedObject({
 });
 
 /** Destroy result exposes the terminal worker lifecycle state. */
-export const EnvironmentsDestroyResultSchema = createEnvironmentSummarySchema();
+export const EnvironmentsDestroyResultSchema = closedObject(createEnvironmentSummaryProperties());
 
 export const WorkerDesktopObserveParamsSchema = closedObject({
   environmentId: NonEmptyString,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent } from "./service.js";
@@ -38,6 +39,7 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-cron-"));
+    fixtureRoot = await fs.realpath(fixtureRoot);
   });
 
   async function cleanupStore(storePath: string, dir: string) {
@@ -45,6 +47,7 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
       return;
     }
     await saveCronStore(storePath, { version: 1, jobs: [] });
+    await closeOpenClawAgentDatabasesAsync(dir);
     await fs.rm(dir, { recursive: true, force: true });
     stores.delete(storePath);
   }

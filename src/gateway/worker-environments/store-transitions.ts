@@ -5,6 +5,10 @@ import {
 } from "../../infra/kysely-sync.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
+import {
+  isCurrentWorkerWorkspacePendingResultOwner,
+  readWorkerWorkspaceReconciliationFacts,
+} from "./placement-workspace-result.js";
 import { assertPreparedEnvironmentAttachment } from "./prepared-environment-store.js";
 import { hasWorkerEnvironmentSessionAttachment } from "./session-attachment-store.js";
 import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
@@ -69,7 +73,7 @@ export function createWorkerEnvironmentTransitionOps({
               .selectFrom("worker_session_placements")
               .selectAll()
               .where("environment_id", "=", environmentId)
-              .where("state", "=", "active"),
+              .where("state", "=", input.expectedReclaimResult ? "draining" : "active"),
           ).rows;
           const placement = placements.length === 1 ? placements[0] : undefined;
           if (
@@ -81,6 +85,22 @@ export function createWorkerEnvironmentTransitionOps({
             placement.worker_bundle_hash !== expectedReceipt.bundleHash
           ) {
             throw new Error("Worker placement changed during runtime refresh");
+          }
+          if (input.expectedReclaimResult) {
+            const retained = readWorkerWorkspaceReconciliationFacts(db, [placement.session_id]);
+            const pending = retained.pendingResults.get(placement.session_id);
+            if (
+              !pending ||
+              pending.claimId !== pending.runId ||
+              !pending.claimId.startsWith("reclaim-") ||
+              !isDeepStrictEqual(pending, input.expectedReclaimResult) ||
+              !isCurrentWorkerWorkspacePendingResultOwner(
+                retained.placements.get(placement.session_id),
+                pending,
+              )
+            ) {
+              throw new Error("Worker runtime refresh lost its retained Stop result");
+            }
           }
           if (
             executeSqliteQueryTakeFirstSync(

@@ -119,6 +119,8 @@ export type SubagentRunReadRecord = {
   delivery?: SubagentCompletionDeliveryState;
   execution: {
     status: "queued" | "running" | "interrupted" | "terminal";
+    /** Retained after restart settlement; an interrupted execution is not a task failure. */
+    interruptionReason?: "gateway-restart";
     startedAt?: number;
     endedAt?: number;
     outcome?: SubagentRunOutcome;

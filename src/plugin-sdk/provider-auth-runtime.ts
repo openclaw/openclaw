@@ -39,11 +39,13 @@ export type OAuthCallbackResult = {
 };
 
 type ProviderOAuthLoopbackCallbackResult =
-  | { type: "authorization_code"; code: string; state: string }
+  | { type: "authorization_code"; code: string; state: string; parameters: URLSearchParams }
   | { type: "oauth_error"; error: string; errorDescription?: string };
 
 type ProviderOAuthLoopbackCallbackServer = {
   waitForCallback: () => Promise<ProviderOAuthLoopbackCallbackResult>;
+  /** Flushes a deferred browser result, then closes; closed listeners ignore late completion. */
+  complete: (response: ProviderOAuthLoopbackRenderedResponse & { status: number }) => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -59,9 +61,15 @@ type ProviderOAuthLoopbackCorsOriginResolver = (
 export async function startProviderOAuthLoopbackCallbackServer(params: {
   redirectUrl: string | URL;
   expectedState: string;
-  timeoutMs: number;
+  /** Optional listener deadline; the caller signal continues to own provider work. */
+  timeoutMs?: number;
   signal?: AbortSignal;
+  /** Additional loopback host; all addresses of the redirect hostname remain bound. */
   bindHostname?: string;
+  /** Exact Node bind host for providers whose existing redirect uses one address family. */
+  bindOnlyHostname?: string;
+  /** Admit callback parameters now, then render the browser outcome through complete(). */
+  deferResponse?: boolean;
   resolveCorsOrigin?: ProviderOAuthLoopbackCorsOriginResolver;
   renderSuccess?: () => ProviderOAuthLoopbackRenderedResponse;
   renderError?: (message: string) => ProviderOAuthLoopbackRenderedResponse;

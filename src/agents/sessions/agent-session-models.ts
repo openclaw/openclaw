@@ -253,17 +253,6 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
   }
 
   /**
-   * Get available thinking levels for current model.
-   * The provider will clamp to what the specific model supports internally.
-   */
-  getAvailableThinkingLevels(): ThinkingLevel[] {
-    if (!this.model) {
-      return THINKING_LEVELS;
-    }
-    return getSupportedThinkingLevels(this.model) as ThinkingLevel[];
-  }
-
-  /**
    * Check if current model supports thinking/reasoning.
    */
   supportsThinking(): boolean {

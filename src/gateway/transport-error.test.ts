@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
-import { GatewayTransportError, isGatewayRpcUnavailableError } from "./transport-error.js";
+import {
+  createGatewayCloseTransportError,
+  createGatewayTimeoutTransportError,
+  GatewayTransportError,
+  isGatewayRpcUnavailableError,
+} from "./transport-error.js";
 
 const connectionDetails = {
   url: "ws://127.0.0.1:18789",
@@ -10,6 +15,28 @@ const connectionDetails = {
 };
 
 describe("Gateway RPC transport availability", () => {
+  it.each([false, true])(
+    "retains requestDispatched=%s across transport failures",
+    (requestDispatched) => {
+      const errors = [
+        createGatewayCloseTransportError({
+          code: 1006,
+          reason: "connection interrupted",
+          connectionDetails,
+          requestDispatched,
+        }),
+        createGatewayTimeoutTransportError({
+          timeoutMs: 1_500,
+          connectionDetails,
+          requestDispatched,
+        }),
+      ];
+      for (const error of errors) {
+        expect(error).toMatchObject({ requestDispatched });
+      }
+    },
+  );
+
   it.each([
     {
       label: "typed connection close",

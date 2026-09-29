@@ -103,39 +103,24 @@ function compareTwilioWebhook(
   if (!phoneNumber) {
     return { status: "number-not-found", expectedNumber: account.fromNumber } as const;
   }
-  const configuredMethod = phoneNumber.smsMethod.toUpperCase();
+  const summary = {
+    phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
+    expectedUrl: account.publicWebhookUrl,
+    configuredMethod: phoneNumber.smsMethod.toUpperCase(),
+  };
   if (!phoneNumber.smsUrl) {
-    return {
-      status: "missing",
-      phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
-      expectedUrl: account.publicWebhookUrl,
-      configuredMethod,
-    } as const;
+    return { status: "missing", ...summary } as const;
   }
-  if (configuredMethod && configuredMethod !== "POST") {
-    return {
-      status: "method-mismatch",
-      phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
-      expectedUrl: account.publicWebhookUrl,
-      configuredUrl: phoneNumber.smsUrl,
-      configuredMethod,
-    } as const;
+  const configured = { ...summary, configuredUrl: phoneNumber.smsUrl };
+  if (summary.configuredMethod && summary.configuredMethod !== "POST") {
+    return { status: "method-mismatch", ...configured } as const;
   }
   if (phoneNumber.smsUrl !== account.publicWebhookUrl) {
-    return {
-      status: "url-mismatch",
-      phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
-      expectedUrl: account.publicWebhookUrl,
-      configuredUrl: phoneNumber.smsUrl,
-      configuredMethod,
-    } as const;
+    return { status: "url-mismatch", ...configured } as const;
   }
   return {
     status: "matches",
-    phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
-    expectedUrl: account.publicWebhookUrl,
-    configuredUrl: phoneNumber.smsUrl,
-    configuredMethod,
+    ...configured,
     voiceUrl: phoneNumber.voiceUrl,
   } as const;
 }
@@ -151,40 +136,22 @@ function compareTwilioMessagingService(
         "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before probing.",
     } as const;
   }
-  const configuredMethod = service.inboundMethod.toUpperCase();
-  if (!service.inboundRequestUrl) {
-    return {
-      status: "messaging-service-missing",
-      serviceSid: service.sid || account.messagingServiceSid,
-      expectedUrl: account.publicWebhookUrl,
-      configuredMethod,
-    } as const;
-  }
-  if (configuredMethod && configuredMethod !== "POST") {
-    return {
-      status: "messaging-service-method-mismatch",
-      serviceSid: service.sid || account.messagingServiceSid,
-      expectedUrl: account.publicWebhookUrl,
-      configuredUrl: service.inboundRequestUrl,
-      configuredMethod,
-    } as const;
-  }
-  if (service.inboundRequestUrl !== account.publicWebhookUrl) {
-    return {
-      status: "messaging-service-url-mismatch",
-      serviceSid: service.sid || account.messagingServiceSid,
-      expectedUrl: account.publicWebhookUrl,
-      configuredUrl: service.inboundRequestUrl,
-      configuredMethod,
-    } as const;
-  }
-  return {
-    status: "messaging-service-matches",
+  const summary = {
     serviceSid: service.sid || account.messagingServiceSid,
     expectedUrl: account.publicWebhookUrl,
-    configuredUrl: service.inboundRequestUrl,
-    configuredMethod,
-  } as const;
+    configuredMethod: service.inboundMethod.toUpperCase(),
+  };
+  if (!service.inboundRequestUrl) {
+    return { status: "messaging-service-missing", ...summary } as const;
+  }
+  const configured = { ...summary, configuredUrl: service.inboundRequestUrl };
+  if (summary.configuredMethod && summary.configuredMethod !== "POST") {
+    return { status: "messaging-service-method-mismatch", ...configured } as const;
+  }
+  if (service.inboundRequestUrl !== account.publicWebhookUrl) {
+    return { status: "messaging-service-url-mismatch", ...configured } as const;
+  }
+  return { status: "messaging-service-matches", ...configured } as const;
 }
 
 function recentInboundSummary(

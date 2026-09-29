@@ -1,4 +1,3 @@
-// Microsoft Teams helper module supports config schema behavior.
 import {
   buildChannelConfigSchema,
   buildChannelAccountSchemaParts,
@@ -12,7 +11,9 @@ import {
   buildSecretInputSchema,
   registerSensitiveConfigSchema,
 } from "openclaw/plugin-sdk/secret-input";
+import { isHttpsUrlAllowedByHostnameSuffixAllowlist } from "openclaw/plugin-sdk/ssrf-policy";
 import { z } from "zod";
+import { isAllowedBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import { msTeamsChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SecretInputSchema = buildSecretInputSchema();
@@ -21,6 +22,7 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 const MSTeamsChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     replyStyle: MSTeamsReplyStyleSchema.optional(),
@@ -31,40 +33,8 @@ const MSTeamsTeamSchema = MSTeamsChannelSchema.extend({
   channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
 });
 
-const MSTEAMS_SERVICE_URL_HOST_ALLOWLIST = [
-  "smba.trafficmanager.net",
-  "smba.infra.gcc.teams.microsoft.com",
-  "smba.infra.gov.teams.microsoft.us",
-  "smba.infra.dod.teams.microsoft.us",
-  "botframework.azure.cn",
-] as const;
-
-function isAllowedMSTeamsServiceUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value.trim());
-    if (parsed.protocol !== "https:") {
-      return false;
-    }
-    const host = parsed.hostname.toLowerCase();
-    return MSTEAMS_SERVICE_URL_HOST_ALLOWLIST.some(
-      (allowed) => host === allowed || host.endsWith(`.${allowed}`),
-    );
-  } catch {
-    return false;
-  }
-}
-
 function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value.trim());
-    if (parsed.protocol !== "https:") {
-      return false;
-    }
-    const host = parsed.hostname.toLowerCase();
-    return host === "botframework.azure.cn" || host.endsWith(".botframework.azure.cn");
-  } catch {
-    return false;
-  }
+  return isHttpsUrlAllowedByHostnameSuffixAllowlist(value.trim(), ["botframework.azure.cn"]);
 }
 
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
@@ -86,7 +56,7 @@ export const MSTeamsConfigSchema = z
     serviceUrl: z
       .string()
       .url()
-      .refine(isAllowedMSTeamsServiceUrl, {
+      .refine(isAllowedBotFrameworkServiceUrl, {
         message:
           "channels.msteams.serviceUrl must use a supported Microsoft Teams Bot Connector host",
       })
@@ -118,9 +88,9 @@ export const MSTeamsConfigSchema = z
     mediaAuthAllowHosts: z.array(z.string()).optional(),
     graphMediaFallback: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
-    /** Max inbound and outbound media size in MB (default: 100MB). */
     /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
     sharePointSiteId: z.string().optional(),
     welcomeCard: z.boolean().optional(),

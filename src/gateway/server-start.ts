@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
@@ -33,10 +34,7 @@ async function startGatewayServerWithSdkHost(
   opts: GatewayServerOptions,
   sdkResourceHost: LegacyPluginSdkResourceHost,
 ): Promise<GatewayServer> {
-  let releasePostReadyWork: () => void = () => {};
-  const postReadyWorkBarrier = new Promise<void>((resolve) => {
-    releasePostReadyWork = resolve;
-  });
+  const { promise: postReadyWorkBarrier, resolve: releasePostReadyWork } = createDeferredCore();
   const gatewayKernel = await createGatewayKernel(port, opts, {
     deferEarlyRuntime: true,
     sdkResourceHost,

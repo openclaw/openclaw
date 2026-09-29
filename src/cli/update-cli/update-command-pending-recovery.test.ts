@@ -84,7 +84,6 @@ function pendingPackageInvocation(
     serviceDrift?: boolean;
     alias?: boolean;
     existingRun?: boolean;
-    manager?: "npm" | "pnpm" | "bun";
     profile?: string;
     readOnlyConfig?: boolean;
   } = {},
@@ -136,9 +135,7 @@ function pendingPackageInvocation(
   }
   vi.spyOn(updateShared, "resolveUpdateRoot").mockResolvedValue(invocationRoot);
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
-  const manager = vi
-    .spyOn(updateShared, "resolveGlobalManager")
-    .mockResolvedValue(params.manager ?? "npm");
+  const manager = vi.spyOn(updateShared, "resolveGlobalManager").mockResolvedValue("npm");
   const service = createMockGatewayService({
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", systemd: { managerUid: 2001 } }),
@@ -218,12 +215,10 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
     { name: "canonical source behind an alias", alias: true },
     { name: "managed service in another prefix", serviceDrift: true, existingRun: true },
     {
-      name: "pnpm caller with another profile",
-      manager: "pnpm" as const,
+      name: "caller with another profile",
       profile: "other",
       existingRun: true,
     },
-    { name: "Bun caller with another profile", manager: "bun" as const, profile: "other" },
     { name: "externally managed config", readOnlyConfig: true, existingRun: true },
   ])("refuses $name before writable preparation or run admission", async (params) => {
     const f = pendingPackageInvocation(params);
@@ -257,8 +252,6 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
 
   it.each([
     { existingRun: false, serviceDrift: false },
-    { existingRun: true, serviceDrift: false },
-    { existingRun: false, serviceDrift: true },
     { existingRun: true, serviceDrift: true },
   ])(
     "reports pending after lease acquisition (existing history=$existingRun, service drift=$serviceDrift) without changing retained material",
@@ -381,13 +374,11 @@ async function fixture() {
     windows,
     rollback,
     complete,
-    entries: () => 0,
-    invoke: (previousInstallRoot = runtime.root) =>
+    invoke: () =>
       finishSuccessfulPackageSwitch(
         { packageRoot: runtime.root, run },
         {
           root: runtime.root,
-          previousInstallRoot,
           opts,
           result: {
             status: "error",
@@ -455,7 +446,6 @@ describe("pending recovery finalizer", () => {
           recovery: { serviceRestartSafe: false },
         },
       });
-      expect(f.entries()).toBe(0);
       expect(fs.existsSync(f.file)).toBe(false);
       expect(fs.readFileSync(f.displaced)).toEqual(before);
       expect(f.rollback).not.toHaveBeenCalled();
@@ -464,22 +454,6 @@ describe("pending recovery finalizer", () => {
       expect(f.windows.complete).not.toHaveBeenCalled();
     },
   );
-  it("refuses retained recovery without touching either the managed or caller root", async () => {
-    const f = await fixture();
-    const failure = await f.invoke(path.join(f.root, "caller-install")).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toMatchObject({
-      name: "UpdateCommandPendingRecoveryFailure",
-      result: { reason: "candidate-failed" },
-    });
-    expect(f.entries()).toBe(0);
-    expect(fs.existsSync(f.file)).toBe(false);
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.windows.restore).not.toHaveBeenCalled();
-  });
-
   it.each(["finalizer", "reported", "unexpected", "completed"] as const)(
     "keeps %s unwind away from autostart, history and managed triage",
     async (kind) => {

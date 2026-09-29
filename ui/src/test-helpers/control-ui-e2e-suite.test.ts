@@ -395,6 +395,31 @@ suite.define(() => {
       }
       expect(failure).toBe(bodyFault);
     });
+    it("settles unrequested module observation during context cleanup", async () => {
+      let publishContext;
+      const acquired = new Promise(resolve => { publishContext = resolve; });
+      const outcome = suite.withPage({}, async ({ context, page }) => {
+        const released = await holdModuleResponse(page, /module-unblocked/u);
+        released.release();
+        const callback = page.dispatchModule("module-unblocked", "unblocked");
+        expect(await released.request).toBe("https://fixture.invalid/module-unblocked.js");
+        expect(await callback).toMatchObject({ status: "fulfilled" });
+
+        const held = await holdModuleResponse(page, /module-never-requested/u);
+        await holdModuleResponse(page, /module-unobserved/u);
+        publishContext(context);
+        try {
+          await held.request;
+        } finally {
+          state.events.push("held request settled"); record();
+        }
+      }).then(() => undefined, error => error);
+      await suite.closeBrowserContext(await acquired);
+      expect(await outcome).toMatchObject({
+        message: "Browser context cleanup canceled the held module request",
+      });
+      state.events.push("held callback joined"); record();
+    });
   } else if (${JSON.stringify(mode)} === "concurrent-close") {
     it("joins the first context close", async () => {
       const context = await suite.newBrowserContext({});
@@ -703,11 +728,11 @@ it.for([
   }),
 );
 
-it("drains held-module callbacks before closing the context after a body failure", (context) =>
+it("drains held modules and cancels unrequested observations during cleanup", (context) =>
   runJoinedShutdownTest(context, async () => {
     const result = await runFixture("held-route-drain", context.signal);
     expect(result.code, result.output).toBe(0);
-    expect(result.report.numPassedTests, result.output).toBe(1);
+    expect(result.report.numPassedTests, result.output).toBe(2);
     expect(result.report.numFailedTests, result.output).toBe(0);
     expect(
       result.journal.firstCleanupEvent,
@@ -729,8 +754,10 @@ it("drains held-module callbacks before closing the context after a body failure
     expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
       result.journal.events.indexOf("close"),
     );
+    expect(result.journal.events).toContain("held request settled");
+    expect(result.journal.events.at(-1)).toBe("held callback joined");
     expect(result.journal).toMatchObject({
-      closeCalls: 1,
+      closeCalls: 2,
       heldBodyErrorRetained: true,
       browserClosed: true,
       serverClosed: true,

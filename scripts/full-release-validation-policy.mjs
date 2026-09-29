@@ -258,6 +258,11 @@ const REVIEWED_TELEGRAM_WAIVERS = new Map([
   ["2026.8.1-owner-approved", ["telegram"]],
   ["2026.9.1-owner-approved", ["telegram"]],
   ["2026.9.5-owner-approved", ["telegram", "matrix"]],
+  // Peter approved waiving minor live-channel QA for 2026.9.7 (2026-09-29 00:40 PT) when
+  // repair is not possible before release: QA Live Matrix 7/24 deterministic on
+  // 01d71319 (FRV 36534008742, jobs 109299525565 and rerun 109316259401) and Telegram
+  // QA 4/25 on 56fb8872 and e61efb6c (job 109279074202).
+  ["2026.9.7-owner-approved", ["telegram", "matrix"]],
 ]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
@@ -372,6 +377,12 @@ const CHILD_SPECS = Object.freeze([
     suffix: "",
     workflow: "openclaw-performance.yml",
   },
+]);
+const UNPHASED_CHILD_SPECS = Object.freeze([
+  CHILD_SPECS.find((spec) => spec.key === "normalCi"),
+  ...LEGACY_CHILD_SPECS,
+  CHILD_SPECS.find((spec) => spec.key === "npmTelegram"),
+  CHILD_SPECS.find((spec) => spec.key === "productPerformance"),
 ]);
 const HISTORICAL_EXECUTION_PLAN_KEYS = Object.freeze(
   [
@@ -953,14 +964,7 @@ export function buildReleaseExecutionPlan(input) {
       stringValue(input.releasePackageSpec).trim(),
     );
   const phasedChildren = Number(input.childPhaseVersion) === 3;
-  const childSpecs = phasedChildren
-    ? CHILD_SPECS
-    : [
-        CHILD_SPECS.find((spec) => spec.key === "normalCi"),
-        ...LEGACY_CHILD_SPECS,
-        CHILD_SPECS.find((spec) => spec.key === "npmTelegram"),
-        CHILD_SPECS.find((spec) => spec.key === "productPerformance"),
-      ];
+  const childSpecs = phasedChildren ? CHILD_SPECS : UNPHASED_CHILD_SPECS;
   const children = childSpecs.map((spec) => {
     const raw = childInputs[spec.key] ?? {};
     const required = releaseExecutionChildRequired(spec, input, npmTelegramForAll);
@@ -987,12 +991,6 @@ export function buildReleaseExecutionPlan(input) {
       name: "Resolve target ref",
       required: true,
       result: stringValue(input.resolveTargetResult, "missing"),
-    },
-    {
-      name: "Verify Docker runtime image assets",
-      required:
-        !reused && rerunGroup === "all" && stringValue(input.targetVersion).includes("-alpha."),
-      result: stringValue(input.dockerPreflightResult, "skipped"),
     },
     {
       name: phasedChildren ? "Acquire full release candidate" : "Prepare shared release candidate",
@@ -1256,15 +1254,7 @@ export function buildReleaseExecutionPlanArtifact({
       { sourceParentAttempt: attemptAware },
     );
   });
-  const artifactSpecs =
-    normalizedAttemptEvidenceVersion === 3
-      ? CHILD_SPECS
-      : [
-          CHILD_SPECS.find((spec) => spec.key === "normalCi"),
-          ...LEGACY_CHILD_SPECS,
-          CHILD_SPECS.find((spec) => spec.key === "npmTelegram"),
-          CHILD_SPECS.find((spec) => spec.key === "productPerformance"),
-        ];
+  const artifactSpecs = normalizedAttemptEvidenceVersion === 3 ? CHILD_SPECS : UNPHASED_CHILD_SPECS;
   for (const spec of artifactSpecs) {
     if (
       !normalizedChildren.some((child) => child.key === spec.key) &&
@@ -1530,15 +1520,11 @@ function isFailedJob(job) {
   );
 }
 
-function failedJobsForPolicy(child) {
-  return child.jobs.filter(isFailedJob);
-}
-
 export function terminalPolicyPass(child) {
   return (
     child.status === "completed" &&
     child.conclusion === "success" &&
-    failedJobsForPolicy(child).length === 0
+    child.jobs.filter(isFailedJob).length === 0
   );
 }
 
@@ -1595,7 +1581,7 @@ export function classifyReleaseSnapshot({
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
   const childJobBlockers = selected.flatMap((child) =>
-    failedJobsForPolicy(child).map((job) => ({
+    child.jobs.filter(isFailedJob).map((job) => ({
       child: child.key,
       conclusion: job.conclusion,
       job: job.name,
@@ -1818,16 +1804,7 @@ function validatePlan(value, options = {}) {
 }
 
 function validateExecutionPlanChildBindings(children, payload) {
-  const expectedKeys = (
-    payload.attemptEvidenceVersion === 3
-      ? CHILD_SPECS
-      : [
-          CHILD_SPECS.find((spec) => spec.key === "normalCi"),
-          ...LEGACY_CHILD_SPECS,
-          CHILD_SPECS.find((spec) => spec.key === "npmTelegram"),
-          CHILD_SPECS.find((spec) => spec.key === "productPerformance"),
-        ]
-  )
+  const expectedKeys = (payload.attemptEvidenceVersion === 3 ? CHILD_SPECS : UNPHASED_CHILD_SPECS)
     .map((spec) => spec.key)
     .toSorted();
   if (

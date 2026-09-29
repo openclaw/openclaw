@@ -10,6 +10,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
@@ -215,13 +216,8 @@ export class CodexToolTranscriptProjection {
   }
 
   recordRawNativeToolItem(item: JsonObject): void {
-    const type = typeof item.type === "string" ? item.type : undefined;
-    const callId =
-      typeof item.call_id === "string"
-        ? item.call_id
-        : typeof item.callId === "string"
-          ? item.callId
-          : undefined;
+    const type = readString(item, "type");
+    const callId = readString(item, "call_id") ?? readString(item, "callId");
     if (!callId) {
       return;
     }
@@ -259,25 +255,14 @@ export class CodexToolTranscriptProjection {
       } else if (type === "function_call" && typeof item.arguments === "string") {
         try {
           const parsed: unknown = JSON.parse(item.arguments);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            const parsedArguments = parsed as Record<string, unknown>;
+          if (isJsonObject(parsed)) {
             if (item.name === "apply_patch") {
-              args = parsedArguments;
+              args = parsed;
             } else {
-              const command =
-                typeof parsedArguments.cmd === "string"
-                  ? parsedArguments.cmd
-                  : typeof parsedArguments.command === "string"
-                    ? parsedArguments.command
-                    : undefined;
+              const command = readString(parsed, "cmd") ?? readString(parsed, "command");
               const patch = readInterceptedNativePatchInput(command);
               if (patch) {
-                const workdir =
-                  typeof parsedArguments.workdir === "string"
-                    ? parsedArguments.workdir
-                    : typeof parsedArguments.cwd === "string"
-                      ? parsedArguments.cwd
-                      : undefined;
+                const workdir = readString(parsed, "workdir") ?? readString(parsed, "cwd");
                 const cwd = patch.cwd
                   ? workdir && !path.isAbsolute(patch.cwd)
                     ? path.join(workdir, patch.cwd)
@@ -506,34 +491,27 @@ export class CodexToolTranscriptProjection {
     if (!params.synthesize) {
       return undefined;
     }
-    const missingTranscriptIds = [...this.namesById.keys()].filter((id) => !this.resultIds.has(id));
-    const missingTrajectoryIds = [...this.trajectoryNamesById.keys()].filter(
-      (id) => !this.trajectoryResultIds.has(id),
+    const missingTranscript = [...this.namesById].filter(([id]) => !this.resultIds.has(id));
+    const missingTrajectory = [...this.trajectoryNamesById].filter(
+      ([id]) => !this.trajectoryResultIds.has(id),
     );
-    if (missingTranscriptIds.length === 0 && missingTrajectoryIds.length === 0) {
+    if (missingTranscript.length === 0 && missingTrajectory.length === 0) {
       return undefined;
     }
-    for (const id of missingTranscriptIds) {
-      const name = this.namesById.get(id) ?? this.trajectoryNamesById.get(id);
-      if (name) {
-        const processId = params.retainedCommands?.get(id);
-        this.recordToolResult({
-          id,
-          name,
-          text: processId
-            ? formatRetainedCommandResult(processId)
-            : formatMissingToolResultError({ id, name }),
-          isError: !processId,
-          ...(processId ? { outcomeUnknown: true as const } : {}),
-          details: processId ? { status: "running", processId } : { reason: "missing_tool_result" },
-        });
-      }
+    for (const [id, name] of missingTranscript) {
+      const processId = params.retainedCommands?.get(id);
+      this.recordToolResult({
+        id,
+        name,
+        text: processId
+          ? formatRetainedCommandResult(processId)
+          : formatMissingToolResultError({ id, name }),
+        isError: !processId,
+        ...(processId ? { outcomeUnknown: true as const } : {}),
+        details: processId ? { status: "running", processId } : { reason: "missing_tool_result" },
+      });
     }
-    for (const id of missingTrajectoryIds) {
-      const name = this.trajectoryNamesById.get(id) ?? this.namesById.get(id);
-      if (!name) {
-        continue;
-      }
+    for (const [id, name] of missingTrajectory) {
       this.trajectoryResultIds.add(id);
       const processId = params.retainedCommands?.get(id);
       const text = processId
@@ -554,13 +532,14 @@ export class CodexToolTranscriptProjection {
       });
     }
     if (params.terminalDisposition === "tool_error") {
-      this.recordMissingToolError(missingTranscriptIds, missingTrajectoryIds);
+      this.recordMissingToolError([...missingTranscript, ...missingTrajectory]);
       return undefined;
     }
     if (params.terminalDisposition === "diagnostic_only") {
       return undefined;
     }
-    const missingCount = new Set([...missingTranscriptIds, ...missingTrajectoryIds]).size;
+    const missingCount = new Set([...missingTranscript, ...missingTrajectory].map(([id]) => id))
+      .size;
     return missingCount === 1
       ? MISSING_TOOL_RESULT_ERROR
       : `${MISSING_TOOL_RESULT_ERROR} missingToolResultCount=${missingCount}`;
@@ -616,22 +595,13 @@ export class CodexToolTranscriptProjection {
     });
   }
 
-  private recordMissingToolError(
-    missingTranscriptIds: string[],
-    missingTrajectoryIds: string[],
-  ): void {
-    const firstMissingId =
-      missingTranscriptIds.find((id) => Boolean(this.namesById.get(id))) ??
-      missingTrajectoryIds.find((id) =>
-        Boolean(this.trajectoryNamesById.get(id) ?? this.namesById.get(id)),
-      );
-    if (!firstMissingId) {
+  private recordMissingToolError(missing: Array<[string, string]>): void {
+    const first = missing.find(([, name]) => Boolean(name));
+    if (!first || !first[0]) {
       return;
     }
-    const name = this.namesById.get(firstMissingId) ?? this.trajectoryNamesById.get(firstMissingId);
-    if (!name) {
-      return;
-    }
+    const [firstMissingId, recordedName] = first;
+    const name = this.namesById.get(firstMissingId) ?? recordedName;
     const item = this.trajectoryItemsById.get(firstMissingId);
     const meta = item
       ? itemMeta(item, this.progress.toolProgressDetailMode())
@@ -666,9 +636,8 @@ export class CodexToolTranscriptProjection {
 
   private createToolResultMessage(params: ToolTranscriptResultInput) {
     const response = this.rawNativeToolOutputByCallId.get(params.id);
-    const text = response ?? params.text ?? toolResultStatusText(params);
     const message = createAgentHarnessToolResultMessage(
-      { ...params, text },
+      { ...params, text: response ?? params.text },
       this.nextTranscriptTimestamp(),
     );
     return {
@@ -694,10 +663,6 @@ function formatRetainedCommandResult(processId: string): string {
 
 function formatMissingToolResultError(params: { id: string; name: string }): string {
   return `${MISSING_TOOL_RESULT_ERROR} toolCallId=${params.id}; toolName=${params.name}`;
-}
-
-function toolResultStatusText(params: ToolTranscriptResultInput): string {
-  return params.isError ? `${params.name} failed` : `${params.name} completed`;
 }
 
 function resolveStartedAtFromDurationMs(durationMs: unknown): number | undefined {

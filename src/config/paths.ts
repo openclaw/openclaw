@@ -2,12 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
 import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import {
   resolveHomeRelativePath,
   resolveRequiredHomeDir,
+  resolveRequiredOsHomeDir,
   resolveUserPath,
 } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
@@ -110,17 +110,13 @@ export function isDefaultInstallIdentity(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   const accountHome = resolveRequiredHomeDir({}, homedir);
-  // Profiles have distinct host-service names; relocated homes do not. Keep
-  // OPENCLAW_HOME isolated so an alternate state tree cannot adopt that service.
-  // Normalize first: the rest of this gate and every home resolution treat the
-  // literal "undefined"/"null" as unset, so a raw truthiness test here would
-  // deny service management to a default install.
-  if (normalizeHomeDirValue(env.OPENCLAW_HOME)) {
-    return false;
-  }
+  // Native service paths use the process home independently of OPENCLAW_HOME.
+  // A canonical runtime override must not hide a relocated service home.
   if (
+    normalizePathForComparison(resolveRequiredOsHomeDir(env, homedir)) !==
+      normalizePathForComparison(accountHome) ||
     normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !==
-    normalizePathForComparison(accountHome)
+      normalizePathForComparison(accountHome)
   ) {
     return false;
   }
@@ -370,10 +366,18 @@ export function resolveGatewayLockDir(
   stateDir: string = resolveStateDir(),
   uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
 ): string {
+  return resolveGatewayLockDirForCanonicalStateDir(normalizePathForComparison(stateDir), uid);
+}
+
+/** Append the lock layout when the caller has already resolved the state directory. */
+export function resolveGatewayLockDirForCanonicalStateDir(
+  stateDir: string,
+  uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
+): string {
   const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
   // Clean break: older binaries still use process temp and do not exclude a
   // state-local binary during a mixed-version upgrade.
-  return path.join(normalizePathForComparison(stateDir), "tmp", suffix);
+  return path.join(stateDir, "tmp", suffix);
 }
 
 /**

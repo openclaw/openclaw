@@ -199,19 +199,20 @@ function managedImageUrl(fileName: string): string {
 
 export function buildChatAttachmentHistory(baseTime: number): unknown[] {
   const assets = getChatAttachmentAssets();
-  const assetSize = (fileName: string): number => {
+  const fixtureAsset = (fileName: string): FixtureAsset => {
     const asset = assets[fileName];
     if (!asset) {
       throw new Error(`Missing chat attachment fixture asset: ${fileName}`);
     }
-    return asset.body.byteLength;
+    return asset;
   };
-  const documentAttachment = (fileName: string, mimeType: string) => ({
+  const assetSize = (fileName: string) => fixtureAsset(fileName).body.byteLength;
+  const documentAttachment = (fileName: string) => ({
     type: "attachment",
     attachment: {
       kind: "document",
       label: fileName,
-      mimeType,
+      mimeType: fixtureAsset(fileName).contentType,
       url: fixtureUrl(fileName),
       sizeBytes: assetSize(fileName),
     },
@@ -251,57 +252,42 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime,
     },
-    textMessage("Documents", baseTime + 1),
-    {
-      role: "assistant",
-      content: [
-        documentAttachment("notes.md", "text/markdown"),
-        documentAttachment("notes.txt", "text/plain"),
-        documentAttachment("styles.css", "text/css"),
-        documentAttachment("settings.json", "application/json"),
-        documentAttachment("script.js", "text/javascript"),
-        documentAttachment("brief.pdf", "application/pdf"),
-        documentAttachment(
+    ...[
+      {
+        title: "Documents",
+        files: [
+          "notes.md",
+          "notes.txt",
+          "styles.css",
+          "settings.json",
+          "script.js",
+          "brief.pdf",
           "brief.docx",
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ),
-      ],
-      timestamp: baseTime + 2,
-    },
-    textMessage("File icon families", baseTime + 3),
-    {
-      role: "assistant",
-      content: [
-        documentAttachment("mystery.blob", "application/octet-stream"),
-        documentAttachment("sample-image.png", "image/png"),
-        documentAttachment("config.xml", "application/xml"),
-        documentAttachment("deploy.yaml", "application/yaml"),
-        documentAttachment("worker.py", "text/x-python"),
-        documentAttachment("vector.svg", "image/svg+xml"),
-        documentAttachment("broken-vector.svg", "image/svg+xml"),
-        documentAttachment("readme.rtf", "application/rtf"),
-      ],
-      timestamp: baseTime + 4,
-    },
-    textMessage("HTML", baseTime + 5),
-    {
-      role: "assistant",
-      content: [documentAttachment("preview.html", "text/html")],
-      timestamp: baseTime + 6,
-    },
-    textMessage("CSV / XLSX", baseTime + 7),
-    {
-      role: "assistant",
-      content: [
-        documentAttachment("rows.csv", "text/csv"),
-        documentAttachment("wide.csv", "text/csv"),
-        documentAttachment(
-          "report.xlsx",
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ),
-      ],
-      timestamp: baseTime + 8,
-    },
+        ],
+      },
+      {
+        title: "File icon families",
+        files: [
+          "mystery.blob",
+          "sample-image.png",
+          "config.xml",
+          "deploy.yaml",
+          "worker.py",
+          "vector.svg",
+          "broken-vector.svg",
+          "readme.rtf",
+        ],
+      },
+      { title: "HTML", files: ["preview.html"] },
+      { title: "CSV / XLSX", files: ["rows.csv", "wide.csv", "report.xlsx"] },
+    ].flatMap(({ title, files }, index) => [
+      textMessage(title, baseTime + index * 2 + 1),
+      {
+        role: "assistant",
+        content: files.map(documentAttachment),
+        timestamp: baseTime + index * 2 + 2,
+      },
+    ]),
     textMessage("Before — current generic delivery cards", baseTime + 9),
     {
       role: "assistant",
@@ -310,12 +296,12 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           type: "text",
           text: "Current WebChat delivery removes inline playback from every media file.",
         },
-        documentAttachment("voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3", "audio/mpeg"),
-        documentAttachment("reply.ogg", "audio/ogg"),
-        documentAttachment("reply.m4a", "audio/x-m4a"),
-        documentAttachment("reply.flac", "audio/flac"),
-        documentAttachment("sample-video.mp4", "video/mp4"),
-        documentAttachment("sample-video.webm", "video/webm"),
+        documentAttachment("voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3"),
+        documentAttachment("reply.ogg"),
+        documentAttachment("reply.m4a"),
+        documentAttachment("reply.flac"),
+        documentAttachment("sample-video.mp4"),
+        documentAttachment("sample-video.webm"),
       ],
       timestamp: baseTime + 10,
     },
@@ -369,41 +355,23 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
     textMessage("Archive", baseTime + 13),
     {
       role: "assistant",
-      content: [documentAttachment("bundle.zip", "application/zip")],
+      content: [documentAttachment("bundle.zip")],
       timestamp: baseTime + 14,
     },
     textMessage("Unavailable / failed / removed", baseTime + 15),
     {
       role: "assistant",
       content: [
+        { label: "temporarily-unavailable.pdf", mimeType: "application/pdf" },
+        { label: "download-failed.zip", mimeType: "application/zip" },
         {
-          type: "attachment",
-          attachment: {
-            kind: "document",
-            label: "temporarily-unavailable.pdf",
-            mimeType: "application/pdf",
-            url: fixtureUrl("temporarily-unavailable.pdf"),
-          },
+          label: "removed-file.docx",
+          mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         },
-        {
-          type: "attachment",
-          attachment: {
-            kind: "document",
-            label: "download-failed.zip",
-            mimeType: "application/zip",
-            url: fixtureUrl("download-failed.zip"),
-          },
-        },
-        {
-          type: "attachment",
-          attachment: {
-            kind: "document",
-            label: "removed-file.docx",
-            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            url: fixtureUrl("removed-file.docx"),
-          },
-        },
-      ],
+      ].map(({ label, mimeType }) => ({
+        type: "attachment",
+        attachment: { kind: "document", label, mimeType, url: fixtureUrl(label) },
+      })),
       timestamp: baseTime + 16,
     },
   ];

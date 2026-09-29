@@ -8,8 +8,8 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
-import type { CapturedSessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -28,7 +28,6 @@ import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import {
   prepareGatewaySessionStoreTargetsReadOnly,
-  resolveGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
   type GatewaySessionStoreDiscoveryCache,
@@ -114,17 +113,6 @@ export function resolveSessionSharingTarget(params: {
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   return toSessionSharingTarget(target);
-}
-
-/** Fresh metadata for one synchronous batch; no authorization decisions are retained. */
-export function resolveSessionSharingTargets(params: {
-  cfg: OpenClawConfig;
-  targets: readonly { sessionKey: string; agentId?: string }[];
-}): Array<SessionSharingTarget | null> {
-  return resolveGatewaySessionStoreTargetsReadOnly({
-    cfg: params.cfg,
-    targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
-  }).map(toSessionSharingTarget);
 }
 
 function toSessionSharingTarget(

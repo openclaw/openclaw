@@ -8,9 +8,9 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
-import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { OpenClawToolsOptions } from "../agents/openclaw-tools.types.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -20,13 +20,25 @@ import {
   baseOpenRequest,
   makeFakePty,
 } from "./terminal/session-manager.test-helpers.js";
-import { createToolsInvokeHttpTestServer } from "./tools-invoke-http.test-support.js";
+import {
+  createToolsInvokeHttpTestServer,
+  expectOkInvokeResponse,
+} from "./tools-invoke-http.test-support.js";
+import {
+  registerToolsInvokeUploadTests,
+  registerToolsInvokeErrorTests,
+} from "./tools-invoke.policy.test-support.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
 
 const hookMocks = vi.hoisted(() => ({
+  uploadToolExecute: vi.fn<AnyAgentTool["execute"]>(async () => ({
+    ok: true,
+    content: [],
+    details: {},
+  })),
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
   runBeforeToolCallHook: vi.fn(
     async (args: RunBeforeToolCallHookArgs): Promise<RunBeforeToolCallHookResult> => ({
@@ -39,7 +51,7 @@ const hookMocks = vi.hoisted(() => ({
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
 let cfg: Record<string, unknown> = {};
-let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
+let lastCreateOpenClawToolsContext: OpenClawToolsOptions | undefined;
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
@@ -107,6 +119,10 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
 // routing/policy tests we only need a small set of tool names.
 vi.mock("../agents/openclaw-tools.js", async () => {
   const { createTerminalTool } = await import("../agents/tools/terminal-tool.js");
+  const { createUploadToolFixtures, createClientUploadToolFixture } =
+    await import("./tools-invoke.policy.test-support.js");
+  const { resolveOpenClawPluginToolInputs } =
+    await import("../agents/openclaw-tools.plugin-context.js");
   const { setPluginToolMeta } = await import("../plugins/tool-metadata.js");
   const toolInputError = (message: string) => {
     const err = new Error(message);
@@ -137,6 +153,7 @@ vi.mock("../agents/openclaw-tools.js", async () => {
   };
   setPluginToolMeta(pluginDoctor, { pluginId: "test-plugin", optional: true });
   const tools = [
+    ...createUploadToolFixtures(hookMocks.uploadToolExecute),
     {
       name: "session_status",
       parameters: { type: "object", properties: {} },
@@ -224,23 +241,26 @@ vi.mock("../agents/openclaw-tools.js", async () => {
   ];
 
   return {
-    createOpenClawTools: (ctx: Record<string, unknown>) => {
+    createOpenClawTools: (ctx: OpenClawToolsOptions) => {
       lastCreateOpenClawToolsContext = ctx;
       const selected = ctx.disablePluginTools
         ? tools.filter((tool) => tool.name !== "browser")
         : tools;
       return [
         ...selected,
+        ...(ctx.disablePluginTools
+          ? []
+          : [
+              createClientUploadToolFixture(
+                resolveOpenClawPluginToolInputs({ options: ctx }).context,
+              ),
+            ]),
         createTerminalTool({
-          agentId:
-            typeof ctx.requesterAgentIdOverride === "string"
-              ? ctx.requesterAgentIdOverride
-              : "main",
-          agentSessionKey:
-            typeof ctx.agentSessionKey === "string" ? ctx.agentSessionKey : undefined,
-          sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : undefined,
-          config: ctx.config as OpenClawConfig | undefined,
-          execSession: (ctx.execSession as ExecSessionDefaults | undefined) ?? {},
+          agentId: ctx.requesterAgentIdOverride ?? "main",
+          agentSessionKey: ctx.agentSessionKey,
+          sessionId: ctx.sessionId,
+          config: ctx.config,
+          execSession: ctx.execSession ?? {},
         }),
       ];
     },
@@ -276,6 +296,7 @@ beforeEach(() => {
   cfg = {};
   server.resetContext();
   lastCreateOpenClawToolsContext = undefined;
+  hookMocks.uploadToolExecute.mockClear();
   sessionEntries.clear();
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
@@ -392,13 +413,6 @@ const invokeToolAuthed = async (params: {
     ...params,
   });
 
-const expectOkInvokeResponse = async (res: Response) => {
-  expect(res.status).toBe(200);
-  const body = await res.json();
-  expect(body.ok).toBe(true);
-  return body as { ok: boolean; result?: Record<string, unknown> };
-};
-
 const firstHookCallArg = () => {
   const call = hookMocks.runBeforeToolCallHook.mock.calls[0];
   if (!call) {
@@ -470,6 +484,22 @@ const setMainAllowedTools = (params: {
 };
 
 describe("POST /tools/invoke", () => {
+  registerToolsInvokeUploadTests({
+    getConfig: () => cfg,
+    setConfig: (config) => {
+      cfg = config;
+    },
+    getPort: () => sharedPort,
+    setMethodRegistry: server.setMethodRegistry,
+    hookMocks,
+    postToolsInvoke,
+    gatewayAdminHeaders,
+    invokeToolsRpc,
+    setMainAllowedTools,
+    invokeToolAuthed,
+    expectOkInvokeResponse,
+  });
+
   it("blocks an operator-triggered session spawn targeting an agent outside the role", async () => {
     await withOpenClawTestState({ label: "tools-invoke-operator-role" }, async () => {
       const profile = ensureProfileForEmail("operator@example.test");
@@ -1089,46 +1119,12 @@ describe("POST /tools/invoke", () => {
     expect(resMain.status).toBe(200);
   });
 
-  it("maps tool input/auth errors to 400/403 and unexpected execution errors to 500", async () => {
-    cfg = {
-      ...cfg,
-      agents: {
-        list: [{ id: "main", default: true, tools: { allow: ["tools_invoke_test"] } }],
-      },
-    };
-
-    const inputRes = await invokeToolAuthed({
-      tool: "tools_invoke_test",
-      args: { mode: "input" },
-      sessionKey: "main",
-    });
-    expect(inputRes.status).toBe(400);
-    const inputBody = await inputRes.json();
-    expect(inputBody.ok).toBe(false);
-    expect(inputBody.error?.type).toBe("tool_error");
-    expect(inputBody.error?.message).toBe("mode invalid");
-
-    const authRes = await invokeToolAuthed({
-      tool: "tools_invoke_test",
-      args: { mode: "auth" },
-      sessionKey: "main",
-    });
-    expect(authRes.status).toBe(403);
-    const authBody = await authRes.json();
-    expect(authBody.ok).toBe(false);
-    expect(authBody.error?.type).toBe("tool_error");
-    expect(authBody.error?.message).toBe("mode forbidden");
-
-    const crashRes = await invokeToolAuthed({
-      tool: "tools_invoke_test",
-      args: { mode: "crash" },
-      sessionKey: "main",
-    });
-    expect(crashRes.status).toBe(500);
-    const crashBody = await crashRes.json();
-    expect(crashBody.ok).toBe(false);
-    expect(crashBody.error?.type).toBe("tool_error");
-    expect(crashBody.error?.message).toBe("tool execution failed");
+  registerToolsInvokeErrorTests({
+    getConfig: () => cfg,
+    setConfig: (config) => {
+      cfg = config;
+    },
+    invokeToolAuthed,
   });
 
   it("passes deprecated format alias through invoke payloads even when schema omits it", async () => {

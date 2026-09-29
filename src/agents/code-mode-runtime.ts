@@ -24,6 +24,10 @@ const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
 export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
+export const CODE_MODE_RESUME_MARGIN_MS = 250;
+// Reserve the resume floor plus dispatch/settlement slack so a call that runs
+// to its yield still leaves enough budget to resume the guest inline.
+export const CODE_MODE_EXEC_YIELD_MARGIN_MS = 2 * CODE_MODE_RESUME_MARGIN_MS;
 export const DEFAULT_HEADLESS_WALL_CLOCK_MS = 30_000;
 // Cron script payloads persist caps of 900 seconds and 200 tool calls.
 // The shared executor must not silently lower those accepted job limits.
@@ -200,7 +204,6 @@ export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
   return {
     enabled: true,
     mode: "tools",
-    codeTimeoutMs: config.timeoutMs,
     searchDefaultLimit: config.searchDefaultLimit,
     maxSearchLimit: config.maxSearchLimit,
   };

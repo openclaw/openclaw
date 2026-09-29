@@ -73,6 +73,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   describeToolResultMediaPlaceholder,
+  createEmptyTransportUsage,
   failTransportStream,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
@@ -80,6 +81,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
 import {
   resolveBedrockCachePoint,
   resolveBedrockPromptCachePolicy,
@@ -173,14 +175,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       api: "bedrock-converse-stream",
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createEmptyTransportUsage(),
       stopReason: "stop",
       timestamp: Date.now(),
     };
@@ -199,6 +194,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
     const config: BedrockRuntimeClientConfig = {
       profile: options.profile,
+      ...resolveBedrockRuntimeAuth(options.bearerToken),
     };
     const configuredRegion = getConfiguredBedrockRegion(options);
     const requestRegion = options.region || getBedrockModelArnRegion(model.id) || configuredRegion;
@@ -217,10 +213,6 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       config.endpoint = model.baseUrl;
     }
 
-    // Resolve bearer token for Bedrock API key auth.
-    const bearerToken = options.bearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || undefined;
-    const useBearerToken = bearerToken !== undefined && process.env.AWS_BEDROCK_SKIP_AUTH !== "1";
-
     // in Node.js/Bun environment only
     if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
       // Region resolution: explicit option > model ARN > env vars > SDK default chain.
@@ -231,14 +223,6 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         config.region = endpointRegion;
       } else if (!hasConfiguredProfile) {
         config.region = "us-east-1";
-      }
-
-      // Support proxies that don't need authentication
-      if (process.env.AWS_BEDROCK_SKIP_AUTH === "1") {
-        config.credentials = {
-          accessKeyId: "dummy-access-key",
-          secretAccessKey: "dummy-secret-key",
-        };
       }
 
       const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
@@ -260,13 +244,9 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         "us-east-1";
     }
 
-    if (useBearerToken) {
-      config.token = { token: bearerToken };
-      config.authSchemePreference = ["httpBearerAuth"];
-    }
-
     let client: BedrockRuntimeClient | undefined;
     try {
+      options.signal?.throwIfAborted();
       client = new BedrockRuntimeClient(config);
       const cacheRetention = resolveCacheRetention(model, options.cacheRetention);
       const cachePoint = resolveBedrockCachePoint(model, cacheRetention);
@@ -299,6 +279,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         ...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
       };
       const nextCommandInput = await options?.onPayload?.(commandInput, model);
+      options.signal?.throwIfAborted();
       if (nextCommandInput !== undefined) {
         commandInput = nextCommandInput as typeof commandInput;
       }

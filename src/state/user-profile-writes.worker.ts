@@ -15,12 +15,17 @@ import {
   selectProfileDisplayEntries,
   requireResolvedUserProfileMetadataById,
 } from "./user-profiles-internal.js";
-import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
+import {
+  UserProfileMergeError,
+  UserProfileNotFoundError,
+  UserProfileOwnerError,
+} from "./user-profiles-schema.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   linkEmail,
+  mergeProfiles,
   setUserProfileRole,
   syncGitHubIdentity,
 } from "./user-profiles.js";
@@ -29,6 +34,7 @@ import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles
 export type UserProfileWriteResult<T> =
   | { ok: true; value: T }
   | { ok: false; kind: "not-found"; profileId: string }
+  | { ok: false; kind: "merge"; message: string }
   | { ok: false; kind: "owner"; code: UserProfileOwnerError["code"] };
 export type UserProfileWriteOperations = {
   "userProfiles.setRole": {
@@ -42,8 +48,16 @@ export type UserProfileWriteOperations = {
       display: ReturnType<typeof projectUserProfileDisplay>;
     }>;
   };
+  "userProfiles.merge": {
+    input: { sourceProfileId: string; targetProfileId: string };
+    output: UserProfileWriteResult<
+      ReturnType<typeof mergeProfiles> & {
+        display: ReturnType<typeof projectUserProfileDisplay>;
+      }
+    >;
+  };
   "userProfiles.ensureEmail": {
-    input: { email: string };
+    input: { email: string; expectedGitHubAccountId?: number };
     output: UserProfileWriteResult<ReturnType<typeof ensureProfileForEmail>>;
   };
   "userProfiles.ensureTailscale": {
@@ -65,6 +79,7 @@ export function isUserProfileWriteCommand(command: {
   return (
     command.type === "userProfiles.setRole" ||
     command.type === "userProfiles.linkEmail" ||
+    command.type === "userProfiles.merge" ||
     command.type === "userProfiles.ensureEmail" ||
     command.type === "userProfiles.ensureTailscale" ||
     command.type === "userProfiles.syncGitHub" ||
@@ -107,7 +122,7 @@ export function executeUserProfileWrite(
           facts: { kind: "user-profile-write", operation: command.type },
         });
         const value = operation();
-        if (command.type === "userProfiles.linkEmail") {
+        if (command.type === "userProfiles.linkEmail" || command.type === "userProfiles.merge") {
           const linked = requireResolvedUserProfileMetadataById(db, command.input.targetProfileId);
           const row = selectProfileDisplayEntries(db, [linked.id])[0]?.[1];
           if (!row) {
@@ -202,8 +217,25 @@ export function executeUserProfileWrite(
         }
         return { ok: true, value: { profile, display: linkedDisplay } };
       }
+      case "userProfiles.merge": {
+        const result = mergeProfiles(
+          command.input.sourceProfileId,
+          command.input.targetProfileId,
+          owned,
+        );
+        if (!linkedDisplay) {
+          throw new Error("Merged profile publication is unavailable");
+        }
+        return { ok: true, value: { ...result, display: linkedDisplay } };
+      }
       case "userProfiles.ensureEmail":
-        return { ok: true, value: ensureProfileForEmail(command.input.email, owned) };
+        return {
+          ok: true,
+          value: ensureProfileForEmail(command.input.email, {
+            ...owned,
+            expectedGitHubAccountId: command.input.expectedGitHubAccountId,
+          }),
+        };
       case "userProfiles.ensureTailscale":
         return { ok: true, value: ensureProfileForTailscaleIdentity(command.input, owned) };
       case "userProfiles.syncGitHub":
@@ -215,6 +247,9 @@ export function executeUserProfileWrite(
   } catch (error) {
     if (error instanceof UserProfileNotFoundError) {
       return { ok: false, kind: "not-found", profileId: error.profileId };
+    }
+    if (error instanceof UserProfileMergeError) {
+      return { ok: false, kind: "merge", message: error.message };
     }
     if (error instanceof UserProfileOwnerError) {
       return { ok: false, kind: "owner", code: error.code };

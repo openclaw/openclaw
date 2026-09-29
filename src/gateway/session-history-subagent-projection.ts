@@ -4,10 +4,8 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import type {
-  SessionEntryReadSource,
-  SessionTranscriptReadScope,
-} from "../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
@@ -15,7 +13,7 @@ import { createBoundSessionHistorySubagentProjection } from "./session-history-r
 import { prepareGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
 
 /** Bind source addresses and admission once, before an asynchronous history read. */
-export function prepareSessionHistorySubagentSources(
+function prepareSessionHistorySubagentSources(
   currentSource: SessionEntryReadSource,
   options: { env?: NodeJS.ProcessEnv; deferSources?: boolean } = {},
 ) {
@@ -32,7 +30,6 @@ export function prepareSessionHistorySubagentSources(
     stateDatabase: {
       path: context.admission.databasePath,
       environment: context.environment,
-      coordinatorRuntime: context.coordinatorRuntime,
     },
     get sourceDatabases() {
       return sourceReads.sources;

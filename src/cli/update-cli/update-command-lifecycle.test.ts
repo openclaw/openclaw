@@ -192,17 +192,16 @@ vi.mock("./update-command-runtime.js", async (importOriginal) => ({
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
   continuePostCoreUpdateInFreshProcess: vi.fn(),
-  postCoreUpdateParentOwnsCompletion: vi.fn(async () => false),
   readPostCorePluginInstallRecordsFile: vi.fn(async () => {
     record("handoff-records");
     return {};
   }),
-  resolvePostCoreUpdateStartedAtMs: vi.fn(async () => 1_000),
   writePostCorePluginUpdateResultFile: vi.fn(async () => undefined),
   writePostCoreUpdateFailureFile: vi.fn(async () => undefined),
 }));
 
 import { readPackageVersion, resolveUpdateRoot, tryWriteCompletionCache } from "./shared.js";
+import { readPostCorePreUpdateSourceConfig } from "./update-command-config.js";
 import { registerConvergenceCompletionTests } from "./update-command-convergence-completion.test-support.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
@@ -213,7 +212,6 @@ import {
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
-  postCoreUpdateParentOwnsCompletion,
   writePostCorePluginUpdateResultFile,
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
@@ -248,7 +246,6 @@ describe("update plugin lifecycle lease boundaries", () => {
     mocks.interactive = false;
     mocks.triage.mockReset().mockResolvedValue({ status: "completed", hint: "fixture" });
     mocks.maintenance.mockReset().mockResolvedValue(undefined);
-    vi.mocked(postCoreUpdateParentOwnsCompletion).mockReset().mockResolvedValue(false);
     vi.mocked(writePostCorePluginUpdateResultFile).mockReset().mockResolvedValue(undefined);
     vi.mocked(writePostCoreUpdateFailureFile).mockReset().mockResolvedValue(undefined);
     const root = dirs.make("update-lease-package-");
@@ -443,6 +440,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         run: <T>(operation: () => T): T => operation(),
         finish: vi.fn(async () => {}),
         release: vi.fn(async () => {}),
+        repairSqliteNoCow: async () => {},
         releaseState: vi.fn(async () => {}),
       };
       mocks.maintenance.mockResolvedValueOnce(maintenance);
@@ -740,17 +738,36 @@ describe("update plugin lifecycle lease boundaries", () => {
   });
 
   it.each([
+    { timestamp: undefined, expected: undefined },
+    { timestamp: "invalid", expected: undefined },
+    { timestamp: "1000", expected: 1000 },
+  ])(
+    "uses only the supplied post-core start time ($timestamp)",
+    async ({ timestamp, expected }) => {
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS", timestamp);
+      await resumePostCoreUpdate({
+        root: "/tmp/openclaw",
+        channel: "stable",
+        opts: { yes: true },
+        timeoutMs: 1_000,
+      });
+      expect(readPostCorePreUpdateSourceConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ updateStartedAtMs: expected }),
+      );
+    },
+  );
+
+  it.each([
     { owner: undefined, sourceRuntimePrepared: false },
     { owner: "parent", sourceRuntimePrepared: false },
     { owner: "parent", sourceRuntimePrepared: true },
   ])(
     "resumes with completion owner $owner before publishing (prepared=$sourceRuntimePrepared)",
     async ({ owner, sourceRuntimePrepared }) => {
-      vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValue(owner === "parent");
       const handoff = dirs.make("prepared-source-runtime-");
       await fs.writeFile(
         path.join(handoff, "handoff.json"),
-        JSON.stringify({ sourceRuntimePrepared }),
+        JSON.stringify({ completionOwner: owner, sourceRuntimePrepared }),
       );
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoff, "plugins.json"));
       vi.mocked(writePostCorePluginUpdateResultFile).mockImplementationOnce(async () => {
@@ -806,6 +823,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         return {
           signal: new AbortController().signal,
           run: <T>(operation: () => T): T => operation(),
+          repairSqliteNoCow: async () => {},
           releaseState: async () => {
             record("release-state");
           },
@@ -815,7 +833,6 @@ describe("update plugin lifecycle lease boundaries", () => {
           },
         };
       });
-      vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValueOnce(false);
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
       const publish = async () => {
         expect(finish).toHaveBeenCalledOnce();
@@ -986,6 +1003,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       signal: new AbortController().signal,
       run: <T>(operation: () => T): T => operation(),
       release: async () => {},
+      repairSqliteNoCow: async () => {},
       releaseState: async () => {},
       finish: async () => {
         warnings.push(warning);

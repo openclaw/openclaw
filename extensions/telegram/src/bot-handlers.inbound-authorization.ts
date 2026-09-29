@@ -4,12 +4,11 @@ import type {
   DmPolicy,
   OpenClawConfig,
   TelegramAccountConfig,
-  TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
+import { resolveTelegramDmAllow } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import {
   normalizeDmAllowFromWithStore,
@@ -65,7 +64,6 @@ export interface TelegramHandlerAuthorization {
     chatId: number;
     isGroup: boolean;
     senderId: string;
-    senderUsername: string;
     context: TelegramEventAuthorizationContext;
   }) => Promise<boolean>;
   authorizeInboundMessage: (params: {
@@ -233,15 +231,11 @@ export function createTelegramHandlerAuthorization({
 
     if (!isGroup && enforceDirectAuthorization) {
       // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom.
-      const dmAllowFrom = groupAllowOverride ?? authorizationAllowFrom;
-      const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+      const { effectiveAllow: effectiveDmAllow } = await resolveTelegramDmAllow({
         cfg: authorizationCfg,
-        allowFrom: dmAllowFrom,
+        allowFrom: groupAllowOverride ?? authorizationAllowFrom,
         accountId,
         senderId,
-      });
-      const effectiveDmAllow = normalizeDmAllowFromWithStore({
-        allowFrom: expandedDmAllowFrom,
         storeAllowFrom,
         dmPolicy,
       });
@@ -294,15 +288,11 @@ export function createTelegramHandlerAuthorization({
   ): Promise<boolean> => {
     const { chatId, isGroup, senderId, context } = params;
     const cfgLocal = context.cfg;
-    const dmAllowFrom = context.groupAllowOverride ?? context.allowFrom;
-    const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    const { effectiveAllow: dmAllow } = await resolveTelegramDmAllow({
       cfg: cfgLocal,
-      allowFrom: dmAllowFrom,
+      allowFrom: context.groupAllowOverride ?? context.allowFrom,
       accountId,
       senderId,
-    });
-    const dmAllow = normalizeDmAllowFromWithStore({
-      allowFrom: expandedDmAllowFrom,
       storeAllowFrom: isGroup ? [] : context.storeAllowFrom,
       dmPolicy: context.dmPolicy,
     });
@@ -352,14 +342,11 @@ export function createTelegramHandlerAuthorization({
       allowFrom: authorizationAllowFrom,
     } = context;
     // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
-    const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    const { effectiveAllow: effectiveDmAllow } = await resolveTelegramDmAllow({
       cfg: authorizationCfg,
       allowFrom: groupAllowOverride ?? authorizationAllowFrom,
       accountId,
       senderId: params.senderId,
-    });
-    const effectiveDmAllow = normalizeDmAllowFromWithStore({
-      allowFrom: expandedDmAllowFrom,
       storeAllowFrom,
       dmPolicy,
     });
@@ -469,21 +456,14 @@ export function createTelegramHandlerAuthorization({
   };
 }
 
-type TelegramEventAuthorizationContext = {
+type TelegramEventAuthorizationContext = Awaited<
+  ReturnType<typeof resolveTelegramGroupAllowFromContext>
+> & {
   commandAuthorizedByConfig: boolean;
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;
   dmPolicy: DmPolicy;
-  threadSpec: TelegramThreadSpec;
-  resolvedThreadId?: number;
-  dmThreadId?: number;
-  storeAllowFrom: string[];
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-  groupAllowOverride?: Array<string | number>;
-  effectiveGroupAllow: NormalizedAllowFrom;
-  hasGroupAllowOverride: boolean;
 };
 
 type TelegramInboundGate =

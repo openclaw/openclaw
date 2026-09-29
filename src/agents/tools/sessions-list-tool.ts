@@ -29,12 +29,16 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "./common.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  resolveGatewayToolOperatorSelection,
+  wrapGatewayPersonalToolExecution,
+} from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   getInProcessGatewayToolContext,
   hasGatewayToolRoutingContext,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
@@ -51,6 +55,12 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
+  user: Type.Optional(
+    Type.String({
+      description:
+        "The person's requester_profile.id, required when several people have steered this turn.",
+    }),
+  ),
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: SessionsListParamsSchema.properties.limit,
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
@@ -111,8 +121,6 @@ const SessionsListOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type GatewayCaller = AgentToolGatewayRequestCaller;
-
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 const SESSIONS_LIST_MAX_SCAN_PAGES = 5;
 const SESSIONS_LIST_MAX_RESULT_BYTES = 64 * 1024;
@@ -147,10 +155,10 @@ export function createSessionsListTool(opts?: {
         ? Type.Omit(SessionsListToolSchema, ["activeOnly"])
         : SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
-    execute: async (_toolCallId, args, signal) => {
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) => {
+      const params = args as Record<string, unknown>;
       const assertCallerCurrent = captureGatewayToolCallerAssertion();
       const gatewayContext = getInProcessGatewayToolContext();
-      const params = args as Record<string, unknown>;
       if (params.activeOnly === true && opts?.supportsActiveOnly === false) {
         throw new Error("activeOnly requires a Gateway-backed inventory with live run state");
       }
@@ -192,7 +200,9 @@ export function createSessionsListTool(opts?: {
       if (relationship && !["owned", "created", "involving"].includes(relationship)) {
         throw new Error("relationship must be owned, created, or involving");
       }
-      const profileId = opts?.requesterProfileId?.trim();
+      const profileId =
+        resolveGatewayToolOperatorSelection().operatorAuthority?.profileId ??
+        opts?.requesterProfileId?.trim();
       if (relationship && !profileId) {
         throw new Error(
           "relationship requires an authenticated requesting user; use an explicit ownerId or creatorId instead",
@@ -218,10 +228,9 @@ export function createSessionsListTool(opts?: {
         Boolean(gatewayContext) ||
         hasGatewayToolRoutingContext();
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-      const defaultAgentId = requesterAgentId;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
-        defaultAgentId,
+        defaultAgentId: requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
         visibility,
@@ -712,6 +721,6 @@ export function createSessionsListTool(opts?: {
         finalize,
         requireSessionReadOwner,
       );
-    },
+    }),
   };
 }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "../../agents/bash-tools.exec-host-node.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
 const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
@@ -28,6 +29,7 @@ function turn(overrides: Partial<SessionPlacementTurnParams> = {}): SessionPlace
 
 function authority(overrides: Partial<SessionPlacementTurnParams> = {}, portalAvailable = false) {
   return resolveWorkerToolAuthority({
+    launchToolNames: WORKER_TOOL_NAMES,
     modelRef: { provider: "openai", model: "gpt-test" },
     turn: turn(overrides),
     portalAvailable,
@@ -36,6 +38,7 @@ function authority(overrides: Partial<SessionPlacementTurnParams> = {}, portalAv
 
 function resolvedAuthority(overrides: Partial<SessionPlacementTurnParams> = {}) {
   return resolveWorkerToolAuthority({
+    launchToolNames: WORKER_TOOL_NAMES,
     modelRef: { provider: "openai", model: "gpt-test" },
     turn: turn(overrides),
   });
@@ -48,6 +51,7 @@ afterEach(() => {
 describe("resolveWorkerToolAuthority", () => {
   it("keeps browser available when a text-only model excludes computer", () => {
     const tools = resolveWorkerToolAuthority({
+      launchToolNames: WORKER_TOOL_NAMES,
       modelRef: { provider: "openai", model: "gpt-test" },
       turn: turn({ modelHasVision: false, toolsAllow: ["computer", "browser"] }),
       availableOptionalToolNames: ["computer", "browser"],
@@ -80,7 +84,11 @@ describe("resolveWorkerToolAuthority", () => {
       sessionKey: "agent:main:worker-sandboxed",
       config: { agents: { defaults: { sandbox: { mode: "all" } } }, tools },
     });
-    const params = { modelRef: { provider: "openai", model: "gpt-test" }, turn: turnParams };
+    const params = {
+      launchToolNames: WORKER_TOOL_NAMES,
+      modelRef: { provider: "openai", model: "gpt-test" },
+      turn: turnParams,
+    };
     expect(resolveWorkerToolAuthority(params).allowedToolNames).not.toContain("computer");
     expect(
       resolveWorkerToolAuthority({
@@ -248,12 +256,14 @@ describe("resolveWorkerToolAuthority", () => {
       "process",
       "sessions_spawn",
       "sessions_send",
+      "presence",
     ]);
   });
 
   it("adds the optional browser surface only when the launcher makes it available", () => {
     expect(
       resolveWorkerToolAuthority({
+        launchToolNames: WORKER_TOOL_NAMES,
         modelRef: { provider: "openai", model: "gpt-test" },
         turn: turn(),
         availableOptionalToolNames: ["browser"],
@@ -268,9 +278,11 @@ describe("resolveWorkerToolAuthority", () => {
       "browser",
       "sessions_spawn",
       "sessions_send",
+      "presence",
     ]);
     expect(
       resolveWorkerToolAuthority({
+        launchToolNames: WORKER_TOOL_NAMES,
         modelRef: { provider: "openai", model: "gpt-test" },
         turn: turn({ toolsAllow: ["browser"] }),
         availableOptionalToolNames: ["browser"],

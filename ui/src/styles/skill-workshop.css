@@ -547,7 +547,7 @@
   background: color-mix(in srgb, var(--card) 84%, transparent);
   padding: 30px 28px;
   text-align: center;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.16);
+  box-shadow: var(--shadow-xl);
 }
 
 .sw-empty-state__glyph {
@@ -883,8 +883,8 @@
 
 .sw-evaluation__badge.is-revise,
 .sw-evaluation__severity.is-warn {
-  border-color: color-mix(in srgb, var(--warn-bright) 46%, var(--border));
-  color: var(--warn-strong);
+  border-color: color-mix(in srgb, var(--warn) 46%, var(--border));
+  color: var(--warn);
 }
 
 .sw-evaluation__badge.is-block,
@@ -1004,7 +1004,7 @@
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--text-strong);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--overlay-shadow);
   white-space: nowrap;
 }
 
@@ -1018,7 +1018,7 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--card);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+  box-shadow: var(--shadow-xl);
   padding: 22px;
 }
 
@@ -1051,15 +1051,19 @@
 }
 
 .sw-revision-dialog__close {
+  display: grid;
+  place-items: center;
   width: 30px;
   height: 30px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--muted);
-  font: inherit;
-  font-size: 20px;
-  line-height: 1;
+}
+
+.sw-revision-dialog__close svg {
+  width: 16px;
+  height: 16px;
 }
 
 .sw-revision-dialog__close:hover:not(:disabled) {
@@ -1163,19 +1167,11 @@
 }
 
 .sw-btn--primary:hover {
-  background: color-mix(in srgb, var(--accent) 90%, white 10%);
+  background: var(--primary-hover);
 }
 
 .sw-btn--primary:disabled:hover {
   background: var(--primary);
-}
-
-:root[data-theme="dark"] .sw-btn--primary:hover:not(:disabled) {
-  background: var(--primary-hover);
-}
-
-:root[data-theme="openknot"] .sw-btn--primary:hover:not(:disabled) {
-  background: var(--primary-hover);
 }
 
 .sw-btn.is-busy {
@@ -1352,7 +1348,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--warn-strong);
+  color: var(--warn);
   font-size: 12.5px;
 }
 

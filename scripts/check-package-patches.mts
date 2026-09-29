@@ -10,6 +10,7 @@ import YAML from "yaml";
 import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
+  ["@openclaw/proxyline@0.3.12", "patches/@openclaw__proxyline@0.3.12.patch"],
   ["chrome-devtools-mcp@1.9.0", "patches/chrome-devtools-mcp@1.9.0.patch"],
   ["@awesome.me/webawesome@3.13.0", "patches/@awesome.me__webawesome@3.13.0.patch"],
   ["@novnc/novnc@1.7.0", "patches/@novnc__novnc@1.7.0.patch"],
@@ -18,6 +19,7 @@ const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
   ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
   ["matrix-js-sdk@42.4.0", "patches/matrix-js-sdk@42.4.0.patch"],
+  ["ghostty-web@0.4.0", "patches/ghostty-web@0.4.0.patch"],
 ]);
 
 const ALLOWED_PATCH_FILES = new Set(["patches/.gitkeep", ...ALLOWED_PATCHED_DEPENDENCIES.values()]);

@@ -4,10 +4,6 @@ import { formatUiError } from "../format-error.ts";
 import { getCronJobPayload } from "./payload.ts";
 import type { CronJobsState } from "./types.ts";
 
-function hasCronJobPayload(job: CronJob): boolean {
-  return getCronJobPayload(job) !== null;
-}
-
 function readCanonicalCronJobsPage<Row>(
   value: CronJobsListResult<Row>,
   requestedLimit: number,
@@ -81,7 +77,7 @@ type CronJobsProjection<Row> = {
 };
 
 const fullCronJobsProjection: CronJobsProjection<CronJob> = {
-  readRows: (rows) => rows.filter(hasCronJobPayload),
+  readRows: (rows) => rows.filter((job) => getCronJobPayload(job) !== null),
 };
 
 function isCronInventoryTimestamp(value: unknown): value is number {
@@ -199,8 +195,7 @@ async function loadCronJobsProjectionPage<Row>(
     }
     assertCanonicalCronJobsCursor(page, offset);
     const jobs = projection.readRows(page.jobs);
-    const nextJobs = append ? [...state.cronJobs, ...jobs] : jobs;
-    state.cronJobs = nextJobs;
+    state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
     state.cronJobsSnapshotRevision = page.snapshotRevision;
     state.cronJobsTotal = page.total;
     state.cronJobsHasMore = page.hasMore;

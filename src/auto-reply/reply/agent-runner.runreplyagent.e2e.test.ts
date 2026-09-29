@@ -53,6 +53,7 @@ import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
+import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -144,16 +145,6 @@ const parkedSteer = vi.hoisted(() => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
@@ -3238,17 +3229,22 @@ describe("runReplyAgent pending final delivery capture", () => {
       storePath,
     });
 
-    await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
+    try {
+      await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
 
-    expect(onAdopted).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(await readStoredMainSession(storePath)).toMatchObject({
-      abortedLastRun: true,
-      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
-      restartRecoveryDeliveryRunId: "msg",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-      status: "running",
-    });
+      expect(onAdopted).not.toHaveBeenCalled();
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(await readStoredMainSession(storePath)).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+        restartRecoveryDeliveryRunId: "msg",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        status: "running",
+      });
+    } finally {
+      // The rejected turn releases its durable recovery owner after run() settles.
+      await getSessionWorkAdmissionRelease({ scope: storePath, identities: ["main"] });
+    }
   });
 
   it("clears an adopted transcript-only claim after user cancellation", async () => {
@@ -5426,8 +5422,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
           expect(firstText).toBe("final");
           expect(secondText).toBe("final");
         }
-        expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-        expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+        expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
+        expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
         expect(sessionEntry.fallbackNotice).toBeUndefined();
         expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
       } finally {
@@ -5717,8 +5713,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       expect(firstText).toContain("Model Fallback:");
       expect(secondText).toContain("Model Fallback cleared:");
-      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+      expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
+      expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
     } finally {
       fallbackSpy.mockRestore();
     }

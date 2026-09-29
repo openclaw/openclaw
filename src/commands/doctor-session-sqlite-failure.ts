@@ -65,9 +65,6 @@ export function writeSessionSqliteMigrationFailureReports(
   fs.writeFileSync(markdownPath, renderFailureMarkdown(payload), { mode: 0o600 });
   if (manifest) {
     manifest.failureReports = {
-      ...(manifest.failureReports?.githubIssue
-        ? { githubIssue: manifest.failureReports.githubIssue }
-        : {}),
       jsonPath,
       markdownPath,
     };

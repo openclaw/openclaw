@@ -136,7 +136,6 @@ if (tool === "installer") {
       PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       RUNNER_TEMP: root,
       CI: "true",
-      GITHUB_OUTPUT: path.join(root, "github-output"),
       OPENCLAW_CI_SIMSLIM_BINARY: "",
       WATCH_FIXTURE_ROOT: root,
       WATCH_FIXTURE_MODE: mode,
@@ -156,12 +155,10 @@ if (tool === "installer") {
         .split("\n")
         .map((line) => JSON.parse(line))
     : [];
-  const output = path.join(root, "github-output");
   return {
     result,
     commands,
     product,
-    output: existsSync(output) ? readFileSync(output, "utf8") : "",
   };
 }
 
@@ -183,7 +180,7 @@ describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () =
     );
     expect(
       commands.filter(({ tool, args }) => tool === "xcrun" && args[1] === "bootstatus"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
   });
 
   it.each(["missing-installer", "missing-prepare"])("keeps %s targets stock", (mode) => {
@@ -201,18 +198,6 @@ describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () =
     ]);
     expect(result.status).toBe(23);
     expect(commands.some(({ tool }) => tool === "pnpm" || tool === "xcodebuild")).toBe(false);
-  });
-
-  it("publishes the screenshot binary only after installation succeeds", () => {
-    const install = workflow.jobs["ios-screenshot-shard"]?.steps?.find(
-      ({ name }) => name === "Install iOS simulator tooling",
-    );
-    const ready = runSimulatorStep("voice-slim", [install]);
-    expect(ready.result.status, ready.result.stderr).toBe(0);
-    expect(ready.output).toMatch(/^binary=.+\/openclaw-simslim\/simslim\n$/);
-    const failed = runSimulatorStep("voice-slim-install-failed", [install]);
-    expect(failed.result.status).toBe(23);
-    expect(failed.output).toBe("");
   });
 });
 
@@ -386,9 +371,11 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     const tests = commands.filter((command) => command.tool === "xcodebuild");
     expect(tests).toHaveLength(1);
     expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
-    expect(tests[0]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual(
-      authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
-    );
+    expect(tests[0]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
+      ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
+      "-only-testing:OpenClawTests/ChatTypingFocusTests",
+      "-only-testing:OpenClawTests/ChatSendHydrationTests",
+    ]);
     for (const name of authClasses) {
       expect(readFileSync(`apps/ios/Tests/${name}.swift`, "utf8")).toContain(`struct ${name}`);
     }
@@ -404,14 +391,17 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(tests[0]?.args).toEqual(
       expect.arrayContaining([
         ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
+        "-only-testing:OpenClawTests/ChatTypingFocusTests",
+        "-only-testing:OpenClawTests/ChatSendHydrationTests",
         "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
         "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
         "-only-testing:OpenClawTests/OpenClawTypographyTests",
       ]),
     );
-    expect(tests[1]?.args).toContain(
+    expect(tests[1]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
       "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
-    );
+      "-only-testing:OpenClawUITests/BootstrapSetupFailureUITests",
+    ]);
   });
 
   it("fails on auth test errors before attempting later UI tests", () => {

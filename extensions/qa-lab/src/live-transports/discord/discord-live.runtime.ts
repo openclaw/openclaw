@@ -20,6 +20,7 @@ import { z } from "zod";
 import type { QaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
+import { requireLiveQaEnv } from "../shared/live-credential-env.js";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
 import type { DiscordTranscriptsVoiceAuthorizationRun } from "./discord-transcripts-authorization.types.js";
 
@@ -155,23 +156,6 @@ type DiscordObservedMessage = {
   timestamp?: string;
 };
 
-type DiscordQaScenarioResult = {
-  artifactPaths?: Record<string, string>;
-  id: string;
-  title: string;
-  status: "pass" | "fail";
-  details: string;
-  requestStartedAt?: string;
-  responseObservedAt?: string;
-  rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs: number;
-    requestStartedAt: string;
-    responseObservedAt: string;
-    source: "request-to-observed-message";
-  };
-};
-
 type DiscordReactionSnapshot = {
   elapsedMs: number;
   observedAt: string;
@@ -217,13 +201,6 @@ const DISCORD_QA_CAPTURE_UI_METADATA_ENV = "OPENCLAW_QA_DISCORD_CAPTURE_UI_METAD
 const DISCORD_QA_KEEP_THREADS_ENV = "OPENCLAW_QA_DISCORD_KEEP_THREADS";
 const DISCORD_PUBLIC_API_BASE = "https://discord.com/api/v10";
 const discordQaApiBaseByToken = new Map<string, string>();
-const DISCORD_QA_ENV_KEYS = [
-  "OPENCLAW_QA_DISCORD_GUILD_ID",
-  "OPENCLAW_QA_DISCORD_CHANNEL_ID",
-  "OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN",
-  "OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN",
-  "OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID",
-] as const;
 
 type DiscordQaRequestOptions = NonNullable<Parameters<typeof requestDiscordLive>[2]>;
 
@@ -437,22 +414,14 @@ function assertDiscordSnowflake(value: string, label: string) {
   }
 }
 
-function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof DISCORD_QA_ENV_KEYS)[number]) {
-  const value = env[key]?.trim();
-  if (!value) {
-    throw new Error(`Missing ${key}.`);
-  }
-  return value;
-}
-
 function resolveDiscordQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): DiscordQaRuntimeEnv {
   const voiceChannelId = env.OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID?.trim();
   const runtimeEnv = {
-    guildId: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_GUILD_ID"),
-    channelId: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_CHANNEL_ID"),
-    driverBotToken: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN"),
-    sutBotToken: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN"),
-    sutApplicationId: resolveEnvValue(env, "OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID"),
+    guildId: requireLiveQaEnv(env, "OPENCLAW_QA_DISCORD_GUILD_ID"),
+    channelId: requireLiveQaEnv(env, "OPENCLAW_QA_DISCORD_CHANNEL_ID"),
+    driverBotToken: requireLiveQaEnv(env, "OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN"),
+    sutBotToken: requireLiveQaEnv(env, "OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN"),
+    sutApplicationId: requireLiveQaEnv(env, "OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID"),
     ...(voiceChannelId ? { voiceChannelId } : {}),
   };
   validateDiscordQaRuntimeEnv(runtimeEnv, "OPENCLAW_QA_DISCORD");
@@ -509,27 +478,25 @@ function buildDiscordQaConfig(
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },
   };
-  const messages = options.statusReactionsToolOnly
-    ? {
-        ...baseCfg.messages,
-        ackReaction: "👀",
-        ackReactionScope: "all" as const,
-        groupChat: {
-          ...baseCfg.messages?.groupChat,
-          visibleReplies: "message_tool" as const,
-        },
-        statusReactions: {
-          ...baseCfg.messages?.statusReactions,
-          enabled: true,
-        },
-      }
-    : {
-        ...baseCfg.messages,
-        groupChat: {
-          ...baseCfg.messages?.groupChat,
-          visibleReplies: "automatic" as const,
-        },
-      };
+  const messages = {
+    ...baseCfg.messages,
+    ...(options.statusReactionsToolOnly
+      ? {
+          ackReaction: "👀",
+          ackReactionScope: "all" as const,
+          statusReactions: {
+            ...baseCfg.messages?.statusReactions,
+            enabled: true,
+          },
+        }
+      : {}),
+    groupChat: {
+      ...baseCfg.messages?.groupChat,
+      visibleReplies: options.statusReactionsToolOnly
+        ? ("message_tool" as const)
+        : ("automatic" as const),
+    },
+  };
   const voiceConfig =
     options.voiceAutoJoin || options.voiceChannelAccess
       ? {
@@ -1419,7 +1386,7 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
         ...(artifactEvidence.screenshotPath ? { screenshot: artifactEvidence.screenshotPath } : {}),
         ...(artifactEvidence.uiPath ? { ui: artifactEvidence.uiPath } : {}),
       },
-    } satisfies DiscordQaScenarioResult;
+    };
   } finally {
     if (!keepThread) {
       await archiveDiscordThread({
@@ -1432,31 +1399,12 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
 
 async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: string) {
   const startedAt = Date.now();
-  let lastStatus:
-    | Pick<
-        ChannelAccountSnapshot,
-        | "running"
-        | "connected"
-        | "restartPending"
-        | "lastConnectedAt"
-        | "lastDisconnect"
-        | "lastError"
-      >
-    | undefined;
+  let lastStatus: ChannelAccountSnapshot | undefined;
   while (Date.now() - startedAt < 45_000) {
     try {
       const accounts = await readLiveQaChannelAccounts(gateway, "discord");
       const match = accounts.find((entry) => entry.accountId === accountId);
-      lastStatus = match
-        ? {
-            running: match.running,
-            connected: match.connected,
-            restartPending: match.restartPending,
-            lastConnectedAt: match.lastConnectedAt,
-            lastDisconnect: match.lastDisconnect,
-            lastError: match.lastError,
-          }
-        : undefined;
+      lastStatus = match;
       if (match?.running && match.connected === true && match.restartPending !== true) {
         return;
       }

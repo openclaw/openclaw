@@ -114,10 +114,6 @@ internal object JpegSizeLimiter {
     }
 
     val failed = checkNotNull(best)
-    if (failed.bytes.size > maxBytes) {
-      throw IllegalStateException("CAMERA_TOO_LARGE: ${failed.bytes.size} bytes > $maxBytes bytes")
-    }
-
-    return failed
+    throw IllegalStateException("CAMERA_TOO_LARGE: ${failed.bytes.size} bytes > $maxBytes bytes")
   }
 }

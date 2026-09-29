@@ -5,6 +5,11 @@ import type { ReadVisitorGatewayAccess } from "./access.js";
 import type { VisitorPolicyClient } from "./cloudflare.js";
 import type { VisitorAccessConfig } from "./config.js";
 import { VisitorAccessError } from "./errors.js";
+import type {
+  VisitorInviteDetails,
+  VisitorListDetails,
+  VisitorRevokeDetails,
+} from "./tool-results.js";
 
 export type VisitorGrant = {
   grantId?: string;
@@ -41,6 +46,7 @@ const grantIdSchema = z.uuid();
 const DAY_MS = 86_400_000;
 const LIST_MAX_CHARS = 12_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const SIGN_IN_URL = "https://team.openclaw.ai";
 
 type LiveVisitorGrant = {
   grant: VisitorGrant;
@@ -317,7 +323,7 @@ export class VisitorAccessService {
   invite(
     raw: unknown,
     { invitedVia, assertCurrent }: { invitedVia?: string; assertCurrent: () => void },
-  ): Promise<string> {
+  ): Promise<{ text: string; details: VisitorInviteDetails }> {
     return this.serialize(async () => {
       const store = this.actionStore(assertCurrent);
       const input = parseVisitorInput(inviteSchema, raw);
@@ -384,11 +390,24 @@ export class VisitorAccessService {
           : store,
       );
       const who = grant.githubLogin ? `@${grant.githubLogin} (${email})` : email;
-      return `${previous ? "Renewed" : "Invited"} ${who}. Visitor grant expires: ${expiryText(grant.expiresAt)}. ${gatewayAccess}. Sign in at https://team.openclaw.ai using Team's existing login with this email. The link itself does not grant access.`;
+      return {
+        text: `${previous ? "Renewed" : "Invited"} ${who}. Visitor grant expires: ${expiryText(grant.expiresAt)}. ${gatewayAccess}. Sign in at ${SIGN_IN_URL} using Team's existing login with this email. The link itself does not grant access.`,
+        details: {
+          outcome: previous ? "renewed" : "invited",
+          email,
+          ...(grant.githubLogin ? { githubLogin: grant.githubLogin } : {}),
+          expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
+          gatewayAccess,
+          signInUrl: SIGN_IN_URL,
+        },
+      };
     }, assertCurrent);
   }
 
-  revoke(raw: unknown, assertCurrent: () => void): Promise<string> {
+  revoke(
+    raw: unknown,
+    assertCurrent: () => void,
+  ): Promise<{ text: string; details: VisitorRevokeDetails }> {
     return this.serialize(async () => {
       const store = this.actionStore(assertCurrent);
       const input = parseVisitorInput(revokeSchema, raw);
@@ -424,13 +443,20 @@ export class VisitorAccessService {
         targets.size > 1
           ? `@${input.github} (${targets.size} recorded emails)`
           : [...targets].join(", ");
-      return removed
-        ? `Revoked visitor access for ${who}.`
-        : `No visitor grant found for ${who}; nothing to revoke.`;
+      return {
+        text: removed
+          ? `Revoked visitor access for ${who}.`
+          : `No visitor grant found for ${who}; nothing to revoke.`,
+        details: {
+          outcome: removed ? "revoked" : "not_found",
+          emails: [...targets].toSorted(),
+          ...(!input.email && input.github ? { githubLogin: input.github } : {}),
+        },
+      };
     }, assertCurrent);
   }
 
-  list(assertCurrent: () => void): Promise<string> {
+  list(assertCurrent: () => void): Promise<{ text: string; details: VisitorListDetails }> {
     return this.serialize(async () => {
       const policy = await this.policy.read(assertCurrent);
       const emails = new Set(policy?.emails ?? []);
@@ -442,38 +468,74 @@ export class VisitorAccessService {
       const missing = entries.filter((entry) => !emails.has(entry.key)).length;
       const summary = `Visitors: ${entries.length} recorded; ${emails.size} in policy. Drift: ${unmanaged.length} unmanaged, ${missing} missing from policy.`;
       const lines = [summary];
-      const rows = entries
+      const details: VisitorListDetails = {
+        counts: {
+          recorded: entries.length,
+          inPolicy: emails.size,
+          unmanaged: unmanaged.length,
+          missingFromPolicy: missing,
+        },
+        grants: [],
+        unmanaged: [],
+        omitted: 0,
+      };
+      const rows: Array<
+        | { line: string; grant: VisitorListDetails["grants"][number] }
+        | { line: string; unmanaged: VisitorListDetails["unmanaged"][number] }
+      > = entries
         .toSorted((a, b) => a.key.localeCompare(b.key))
         .map(({ value: grant }) => {
-          const state = !emails.has(grant.email)
+          const missingFromPolicy = !emails.has(grant.email);
+          const expired = grant.expiresAt !== null && grant.expiresAt <= Date.now();
+          const state = missingFromPolicy
             ? "MISSING FROM POLICY"
-            : grant.expiresAt !== null && grant.expiresAt <= Date.now()
+            : expired
               ? "EXPIRED; provider cleanup pending"
               : "managed";
-          return `${grant.email} | ${grant.githubLogin ? `@${grant.githubLogin}` : "GitHub unknown"} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${access.describe(grant.email)}`;
+          const gatewayAccess = access.describe(grant.email);
+          return {
+            line: `${grant.email} | ${grant.githubLogin ? `@${grant.githubLogin}` : "GitHub unknown"} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${gatewayAccess}`,
+            grant: {
+              email: grant.email,
+              ...(grant.githubLogin ? { githubLogin: grant.githubLogin } : {}),
+              invitedAt: new Date(grant.createdAt).toISOString(),
+              expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
+              state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",
+              gatewayAccess,
+            },
+          };
         });
       rows.push(
-        ...unmanaged.map(
-          (email) =>
-            `${email} | UNMANAGED: no grant record; retained until explicit revoke. | ${access.describe(email)}`,
-        ),
+        ...unmanaged.map((email) => {
+          const gatewayAccess = access.describe(email);
+          return {
+            line: `${email} | UNMANAGED: no grant record; retained until explicit revoke. | ${gatewayAccess}`,
+            unmanaged: { email, gatewayAccess },
+          };
+        }),
       );
       let length = summary.length;
       let shown = 0;
       for (const row of rows.slice(0, this.config.maxVisitors)) {
-        if (length + row.length + 1 > LIST_MAX_CHARS - 120) {
+        if (length + row.line.length + 1 > LIST_MAX_CHARS - 120) {
           break;
         }
-        lines.push(row);
-        length += row.length + 1;
+        lines.push(row.line);
+        if ("grant" in row) {
+          details.grants.push(row.grant);
+        } else {
+          details.unmanaged.push(row.unmanaged);
+        }
+        length += row.line.length + 1;
         shown++;
       }
       if (shown < rows.length) {
+        details.omitted = rows.length - shown;
         lines.push(
           `${rows.length - shown} entries omitted by output limits. Inspect the Access policy and revoke by explicit email.`,
         );
       }
-      return lines.join("\n");
+      return { text: lines.join("\n"), details };
     }, assertCurrent);
   }
 

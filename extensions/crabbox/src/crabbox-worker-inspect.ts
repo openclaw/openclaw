@@ -4,6 +4,7 @@ import {
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { parseCrabboxJson } from "./crabbox-worker-command.js";
 
 export type ParsedInspect = {
   awsInstanceProfileAttached?: boolean;
@@ -16,14 +17,8 @@ export type ParsedInspect = {
 };
 
 export function parseInspectJson(stdout: string): ParsedInspect {
-  let value: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (!isRecord(parsed)) {
-      throw new Error("inspect output is not an object");
-    }
-    value = parsed;
-  } catch {
+  const value = parseCrabboxJson(stdout, "inspect");
+  if (!isRecord(value)) {
     throw new Error("Crabbox inspect returned invalid JSON");
   }
 

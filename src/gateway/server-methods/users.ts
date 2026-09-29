@@ -4,6 +4,7 @@ import {
   GatewayErrorDetailCodes,
   errorShape,
   validateUsersLinkEmailParams,
+  validateUsersMergeParams,
   validateUsersListParams,
   validateUsersPrefsGetParams,
   validateUsersPrefsSetParams,
@@ -12,6 +13,7 @@ import {
   validateUsersSetDisplayNameParams,
   validateUsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getCanonicalUserPreferences,
@@ -19,9 +21,10 @@ import {
 } from "../../state/user-preferences.js";
 import {
   linkCanonicalUserProfileEmail,
+  mergeCanonicalUserProfiles,
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
-import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
+import { UserProfileMergeError, UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
   getUserProfileDisplay,
   getUserProfileListItem,
@@ -64,10 +67,34 @@ function refreshConnectedProfile(
 }
 
 function profileError(error: unknown) {
-  if (error instanceof UserProfileNotFoundError || error instanceof UserProfileOwnerError) {
+  if (
+    error instanceof UserProfileNotFoundError ||
+    error instanceof UserProfileOwnerError ||
+    error instanceof UserProfileMergeError
+  ) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+}
+
+function preparePersonalPreferences(client: GatewayRequestHandlerOptions["client"]) {
+  const unavailable =
+    "Personal settings are unavailable in this turn. Ask in your own Control UI turn with a new message.";
+  try {
+    const participant = resolveGatewayPersonalToolParticipant(
+      client?.internal?.agentRuntimeIdentity,
+      { requireSingleParticipant: true },
+    );
+    return () => {
+      try {
+        participant?.assertCurrent();
+      } catch {
+        throw new Error(unavailable);
+      }
+    };
+  } catch {
+    throw new Error(unavailable);
+  }
 }
 
 export const usersHandlers: GatewayRequestHandlers = {
@@ -125,7 +152,9 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const assertCurrent = preparePersonalPreferences(client);
       const preferences = await getCanonicalUserPreferences(profileId, params.keys);
+      assertCurrent();
       sessionMutationAuthorization?.assertCurrent();
       if (!preferences) {
         respond(false, undefined, authenticatedProfileUnavailableError());
@@ -153,8 +182,10 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const assertCurrent = preparePersonalPreferences(client);
       const result = await setCanonicalUserPreferences(profileId, params.entries, {
         expectedEntries: params.expectedEntries,
+        assertCurrent,
       });
       if (!result) {
         respond(false, undefined, authenticatedProfileUnavailableError());
@@ -219,6 +250,34 @@ export const usersHandlers: GatewayRequestHandlers = {
       refreshConnectedProfile(context, profile, display);
       broadcastChatMetadataChanged(context);
       respond(true, { profile });
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.merge": async (options) => {
+    const { context, params, respond } = options;
+    if (!assertValidParams(params, validateUsersMergeParams, "users.merge", respond)) {
+      return;
+    }
+    try {
+      const assertCurrent = await prepareUserProfileAdministration(options);
+      holdGatewayPolicyResponse(respond);
+      const { profile, display, movedAliasKinds } = await mergeCanonicalUserProfiles(
+        params.sourceProfileId,
+        params.targetProfileId,
+        {
+          assertCurrent,
+          onCommitted: (profileIds) => {
+            for (const profileId of profileIds) {
+              invalidateOperatorRolePolicy(profileId);
+              context.disconnectClientsForUserProfile?.(profileId);
+            }
+          },
+        },
+      );
+      refreshConnectedProfile(context, profile, display);
+      broadcastChatMetadataChanged(context);
+      respond(true, { profile, movedAliasKinds });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

@@ -13,7 +13,7 @@ export const syncPluginsForUpdateChannel = vi.fn();
 export const updateNpmInstalledPlugins = vi.fn();
 export const loadInstalledPluginIndexInstallRecords = vi.fn();
 export const pathExists = vi.fn();
-export const spawn = vi.fn();
+const spawn = vi.fn();
 export const observeUpdateGatewayReadiness =
   vi.fn<typeof import("./update-cli/update-command-readiness.js").observeUpdateGatewayReadiness>();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -194,7 +194,8 @@ const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
 export const { updateGitCheckout } = await import("../infra/update-runner-git.js");
-export const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
+const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
+export { runExec };
 export const { defaultRuntime, ExitError } = await import("../runtime.js");
 export const { readConfigFileSnapshot, replaceConfigFile, mutateConfigFileWithRetry } =
   await import("../config/config.js");
@@ -435,33 +436,6 @@ export function installDeferredCompletionFixture() {
   ): Promise<void> =>
     fs.writeFile(filePath, `${JSON.stringify(value)}${trailingNewline ? "\n" : ""}`, "utf-8");
 
-  const setupPostCoreConfigFixture = async (params: {
-    backupConfig?: OpenClawConfig;
-    postDoctorConfig: OpenClawConfig;
-    preUpdateConfig?: OpenClawConfig;
-    snapshotSuffix?: ".bak" | ".pre-update";
-    preserveParsed?: boolean;
-  }) => {
-    const tempDir = createCaseDir("openclaw-update");
-    const configPath = path.join(tempDir, "openclaw.json");
-    await fs.mkdir(tempDir, { recursive: true });
-    if (params.preUpdateConfig) {
-      await writeJsonFixture(
-        `${configPath}${params.snapshotSuffix ?? ".pre-update"}`,
-        params.preUpdateConfig,
-      );
-    }
-    if (params.backupConfig) {
-      await writeJsonFixture(`${configPath}.bak`, params.backupConfig);
-    }
-    await writeJsonFixture(configPath, params.postDoctorConfig);
-    mockPostDoctorSnapshot(configPath, params.postDoctorConfig, {
-      preserveParsed: params.preserveParsed,
-    });
-    mockNoopPostUpdatePluginConvergence();
-    return { tempDir, configPath };
-  };
-
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-deferred-completion-");
     fixtureRoot = dirs.make("openclaw-deferred-completion-fixtures-");
@@ -505,13 +479,10 @@ export function installDeferredCompletionFixture() {
     );
     const entrypoint = path.join(process.cwd(), "dist", "index.js");
     pathExists.mockImplementation(async (candidate: string) => candidate === entrypoint);
-    // Child completion may invoke only Doctor, config validation, and the parent's start probe.
+    // Child completion may invoke only Doctor and config validation.
     vi.mocked(runExec).mockImplementation(async (file, args) => {
       if (file === process.execPath && (args[1] === "doctor" || args[1] === "config")) {
         return { stdout: "", stderr: "" };
-      }
-      if (file === "ps") {
-        return { stdout: new Date(Date.now() - 1000).toString(), stderr: "" };
       }
       throw new Error(`Unexpected completion process: ${file}`);
     });
@@ -575,6 +546,5 @@ export function installDeferredCompletionFixture() {
     mockPostDoctorSnapshot,
     runPostCoreUpdate,
     lastReplaceConfigCall,
-    setupPostCoreConfigFixture,
   };
 }

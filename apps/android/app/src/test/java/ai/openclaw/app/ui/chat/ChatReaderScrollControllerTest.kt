@@ -197,9 +197,10 @@ class ChatReaderScrollControllerTest {
         latestUserMessageId = "user-1",
         latestContentVersion = timeline.latestContentVersion,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(state) }
+    val saver = createChatReaderStateSaver()
+    val saved = with(saver) { SaverScope { true }.save(state) }
 
-    val restored = ChatReaderStateSaver.restore(requireNotNull(saved))
+    val restored = saver.restore(requireNotNull(saved))
 
     assertEquals(state, restored)
   }
@@ -212,7 +213,7 @@ class ChatReaderScrollControllerTest {
         initialized = true,
         followTarget = ChatScrollFollowTarget.LatestContent,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(state) }
+    val saved = with(createChatReaderStateSaver("session-old")) { SaverScope { true }.save(state) }
 
     val restored = createChatReaderStateSaver("session-new").restore(requireNotNull(saved))
 
@@ -234,8 +235,9 @@ class ChatReaderScrollControllerTest {
         latestUserMessageVersion = before.latestUserMessageVersion,
         latestContentVersion = before.latestContentVersion,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(savedState) }
-    val restored = requireNotNull(ChatReaderStateSaver.restore(requireNotNull(saved)))
+    val saver = createChatReaderStateSaver()
+    val saved = with(saver) { SaverScope { true }.save(savedState) }
+    val restored = requireNotNull(saver.restore(requireNotNull(saved)))
     val after =
       timeline(
         user("user-after", text = "rewritten prompt", timestampMs = 2000L, idempotencyKey = "run-1:user"),

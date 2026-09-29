@@ -480,6 +480,7 @@ describe("bundled plugin metadata", () => {
       ...EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS,
     ].toSorted((left, right) => left.localeCompare(right));
 
+    expect(expectedPluginIds).not.toContain("slack-huddles");
     expect(
       resolveGatewayStartupPluginPlanFromRegistry({
         config: {},

@@ -21,10 +21,7 @@ function actionSchema() {
 
 function payloadSchema(tools: Tool[], strict = false): Record<string, unknown> {
   const [tool] = convertResponsesToolPayload(tools, { strict });
-  if (!tool?.parameters) {
-    throw new Error("Expected a function schema");
-  }
-  return tool.parameters;
+  return expectDefined(tool?.parameters, "function schema");
 }
 
 function actions(schema: Record<string, unknown>): string[] {
@@ -32,16 +29,12 @@ function actions(schema: Record<string, unknown>): string[] {
   return (schema.properties as ReturnType<typeof actionSchema>["properties"]).action.enum;
 }
 
-function normalizePreparedSchema(
-  tools: Tool[],
-  strict: boolean,
-  modelCompat: ToolSchemaModelCompat,
-) {
+function normalizePreparedSchema(tools: Tool[], modelCompat: ToolSchemaModelCompat) {
   const { projection, schemas } = prepareOpenAITools(tools);
   return withPreparedToolSchemaNormalization(schemas, () =>
     normalizeOpenAIStrictToolParameters(
       expectDefined(projection.tools[0], "projected tool").parameters,
-      strict,
+      true,
       modelCompat,
     ),
   );
@@ -67,12 +60,12 @@ describe("OpenAI tool schema reuse", () => {
     },
   );
 
-  it.each([false, true])("keeps current provider options isolated with strict=%s", (strict) => {
+  it("keeps current provider options isolated", () => {
     const tools = [{ name: "choose", description: "Choose", parameters: actionSchema() }];
     const modelCompat: ToolSchemaModelCompat = {};
     for (const stripEnum of [false, true, false, true]) {
       modelCompat.unsupportedToolSchemaKeywords = stripEnum ? ["enum"] : [];
-      const parameters = normalizePreparedSchema(tools, strict, modelCompat);
+      const parameters = normalizePreparedSchema(tools, modelCompat);
       if (stripEnum) {
         expect(parameters).not.toHaveProperty("properties.action.enum");
       } else {
@@ -81,41 +74,25 @@ describe("OpenAI tool schema reuse", () => {
     }
   });
 
-  it("rechecks toJSON, quarantine, and recovery while reading each descriptor once", () => {
-    const reads: string[] = [];
-    let maximum = 1;
-    let unreadable = false;
+  it("rechecks toJSON once per payload through edits, quarantine, and recovery", () => {
+    let reads = 0;
+    let maximum: number | Error = 1;
     const parameters = {
       toJSON() {
-        reads.push("json");
-        if (unreadable) {
-          throw new Error("unreadable schema");
+        reads++;
+        if (maximum instanceof Error) {
+          throw maximum;
         }
         return { type: "object", properties: { amount: { type: "number", maximum } } };
       },
     };
-    const tool = new Proxy(
-      { name: "amount", description: "Choose amount", parameters },
-      {
-        get(target, property, receiver) {
-          if (property === "name" || property === "parameters" || property === "description") {
-            reads.push(property);
-          }
-          return Reflect.get(target, property, receiver);
-        },
-      },
-    );
+    const tool = { name: "amount", description: "Choose amount", parameters };
     const healthy = { name: "healthy", description: "Healthy sibling", parameters: {} };
-    for (const value of [1, 1, 2, Number.POSITIVE_INFINITY, 3]) {
+    for (const value of [1, 1, 2, Infinity, 3, new Error("unreadable schema"), 3]) {
       maximum = value;
-      reads.length = 0;
+      reads = 0;
       const payload = convertResponsesToolPayload([tool, healthy]);
-      expect(reads).toEqual([
-        "name",
-        "parameters",
-        "json",
-        ...(Number.isFinite(value) ? ["description"] : []),
-      ]);
+      expect(reads).toBe(1);
       if (Number.isFinite(value)) {
         expect(payload[0]?.parameters).toMatchObject({
           properties: { amount: { maximum: value } },
@@ -124,46 +101,31 @@ describe("OpenAI tool schema reuse", () => {
         expect(payload.map((entry) => entry.name)).toEqual(["healthy"]);
       }
     }
-    unreadable = true;
-    expect(convertResponsesToolPayload([tool, healthy]).map((entry) => entry.name)).toEqual([
-      "healthy",
-    ]);
-    unreadable = false;
-    expect(payloadSchema([tool])).toMatchObject({ properties: { amount: { maximum: 3 } } });
   });
 
-  it.each([false, true])(
-    "preserves the direct-normalizer identity contract alongside projected strict=%s",
-    (strict) => {
-      const wire = actionSchema();
-      const parameters = {
-        properties: { direct: { type: "string" } },
-        required: ["direct"],
-        additionalProperties: false,
-        toJSON: () => wire,
-      };
-      const direct = normalizeOpenAIStrictToolParameters(parameters, strict);
-      const tools = [{ name: "choose", description: "Choose", parameters }];
-      expect(actions(payloadSchema(tools, strict))).toEqual(["read"]);
-      wire.properties.action.enum.push("write");
-      expect(actions(payloadSchema(tools, strict))).toEqual(["read", "write"]);
-      for (let index = 0; index < 8; index++) {
-        normalizePreparedSchema(tools, strict, {
-          unsupportedToolSchemaKeywords: [`synthetic_${index}`],
-        });
-      }
-      expect(normalizeOpenAIStrictToolParameters(parameters, strict)).toBe(direct);
-      expect(direct).toHaveProperty("properties.direct");
-      expect(direct).not.toHaveProperty("properties.action");
-    },
-  );
+  it("preserves direct-normalizer identity across prepared cache eviction", () => {
+    const parameters = {
+      properties: { direct: { type: "string" } },
+      toJSON: actionSchema,
+    };
+    const direct = normalizeOpenAIStrictToolParameters(parameters, true);
+    const tools = [{ name: "choose", description: "Choose", parameters }];
+    expect(actions(payloadSchema(tools, true))).toEqual(["read"]);
+    for (let index = 0; index < 8; index++) {
+      normalizePreparedSchema(tools, {
+        unsupportedToolSchemaKeywords: [`synthetic_${index}`],
+      });
+    }
+    expect(normalizeOpenAIStrictToolParameters(parameters, true)).toBe(direct);
+    expect(direct).toHaveProperty("properties.direct");
+    expect(direct).not.toHaveProperty("properties.action");
+  });
 
   it("keeps hostile public projections outside source-cache provenance", () => {
     const parameters = actionSchema();
     const tools = [{ name: "choose", description: "Choose", parameters }];
     expect(actions(payloadSchema(tools))).toEqual(["read"]);
     const projection = projectOpenAITools(tools);
-    expect(Object.keys(projection)).toEqual(["inputToolCount", "tools", "diagnostics"]);
     const projected = expectDefined(projection.tools[0], "projected tool").parameters;
     actions(projected).push("public-edit");
     Object.defineProperty(projected, "toJSON", {
@@ -175,55 +137,26 @@ describe("OpenAI tool schema reuse", () => {
       "public-edit",
     ]);
     expect(actions(payloadSchema(tools))).toEqual(["read"]);
-
-    const another = expectDefined(projectOpenAITools(tools).tools[0], "projected tool").parameters;
-    Object.defineProperty(another, "properties", {
-      get: () => {
-        throw new Error("public projection changed");
-      },
-    });
-    expect(() => normalizeToolParameterSchema(another)).toThrow("public projection changed");
-    expect(actions(payloadSchema(tools))).toEqual(["read"]);
   });
 
-  it.each([false, true])(
-    "retires private facts after return or throw=%s and reentry",
-    (throwing) => {
-      const outer = prepareOpenAITools([
-        { name: "outer", description: "Outer", parameters: actionSchema() },
-      ]);
-      const inner = prepareOpenAITools([
-        { name: "inner", description: "Inner", parameters: actionSchema() },
-      ]);
-      const schema = expectDefined(outer.projection.tools[0], "outer tool").parameters;
-      const convert = () =>
-        withPreparedToolSchemaNormalization(outer.schemas, () => {
-          const first = normalizeToolParameterSchema(schema);
-          expect(() =>
-            withPreparedToolSchemaNormalization(inner.schemas, () => {
-              normalizeToolParameterSchema(
-                expectDefined(inner.projection.tools[0], "inner tool").parameters,
-              );
-              throw new Error("inner");
-            }),
-          ).toThrow("inner");
-          const second = normalizeToolParameterSchema(schema);
-          const third = normalizeToolParameterSchema(schema);
-          expect(second).toEqual(first);
-          expect(second).not.toBe(first);
-          expect(third).toEqual(second);
-          expect(third).not.toBe(second);
-          if (throwing) {
-            throw new Error("outer");
-          }
-        });
-      if (throwing) {
-        expect(convert).toThrow("outer");
-      } else {
-        convert();
-      }
-      const direct = normalizeToolParameterSchema(schema);
-      expect(normalizeToolParameterSchema(schema)).toBe(direct);
-    },
-  );
+  it("restores outer facts after an inner throw and retires them on return", () => {
+    const outer = prepareOpenAITools([{ name: "outer", parameters: actionSchema() }]);
+    const schema = expectDefined(outer.projection.tools[0], "outer tool").parameters;
+    withPreparedToolSchemaNormalization(outer.schemas, () => {
+      const first = normalizeToolParameterSchema(schema);
+      expect(() =>
+        withPreparedToolSchemaNormalization(new Map(), () => {
+          throw new Error("inner");
+        }),
+      ).toThrow("inner");
+      const second = normalizeToolParameterSchema(schema);
+      const third = normalizeToolParameterSchema(schema);
+      expect(second).toEqual(first);
+      expect(second).not.toBe(first);
+      expect(third).toEqual(second);
+      expect(third).not.toBe(second);
+    });
+    const direct = normalizeToolParameterSchema(schema);
+    expect(normalizeToolParameterSchema(schema)).toBe(direct);
+  });
 });

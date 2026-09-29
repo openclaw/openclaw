@@ -29,11 +29,11 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { normalizeGatewayRestartDelayMs, scheduleGatewayRestart } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
-import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
+import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
 import { devUpdateTargetFromGitTarget } from "../../infra/update-dev-target.js";
 import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
@@ -83,6 +83,7 @@ import {
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
 } from "./update-admission.js";
+import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
 
@@ -219,6 +220,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       }
     };
     let ownsUpdateOutcome = false;
+    const updateLifecycle = currentUpdateCheckLifecycle();
     let adoptedCampaignId: string | undefined;
     const refuseUnauthorizedChatUpdate = () => {
       // Chat update authority is revocable; internal or channel-less requesters
@@ -240,8 +242,8 @@ export const updateHandlers: GatewayRequestHandlers = {
         reason === "owner_required"
           ? `Only the OpenClaw owner can start an update from chat. ${formatCommandOwnerHint({ cfg: currentConfig, channel: requester.channel, id: requester.senderId })}`
           : "Updates from chat are disabled (commands.restart=false). Use the Control UI or ask the Gateway operator to update OpenClaw.";
-      if (adoptedCampaignId && gatewayUpdateCampaign.getState()?.id === adoptedCampaignId) {
-        gatewayUpdateCampaign.clear();
+      if (adoptedCampaignId && updateLifecycle.campaign?.getState()?.id === adoptedCampaignId) {
+        updateLifecycle.campaign?.clear();
       }
       recordUpdateRunPhase(runId, "requested", { origin: { nextAction: message } });
       const refusedRun = finishUpdateRun(runId, {
@@ -321,7 +323,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               : undefined;
       const adoption = targetFailureReason
         ? undefined
-        : gatewayUpdateCampaign.adopt(explicitDevTarget);
+        : updateLifecycle.campaign?.adopt(explicitDevTarget);
       if (adoption?.status === "mismatch") {
         targetFailureReason = "update-target-campaign-mismatch";
       } else if (adoption?.status === "applying") {
@@ -351,7 +353,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         },
       });
       if (adoptedCampaign) {
-        gatewayUpdateCampaign.bindRun(adoptedCampaign.campaignId, runId);
+        updateLifecycle.campaign?.bindRun(adoptedCampaign.campaignId, runId);
         context?.logGateway?.info(
           `update.run adopted campaign ${adoptedCampaign.campaignId} ${formatControlPlaneActor(actor)}`,
           { target: adoptedCampaign.target },
@@ -637,7 +639,7 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     // Rejected requests and retired campaigns cannot replace another update's outcome.
     if (ownsUpdateOutcome && adoptedCampaignId !== undefined) {
-      ownsUpdateOutcome = gatewayUpdateCampaign.getState()?.id === adoptedCampaignId;
+      ownsUpdateOutcome = updateLifecycle.campaign?.getState()?.id === adoptedCampaignId;
     }
     const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({
       result,
@@ -690,9 +692,9 @@ export const updateHandlers: GatewayRequestHandlers = {
       ownsUpdateOutcome &&
       handoff?.status !== "started" &&
       adoptedCampaignId !== undefined &&
-      gatewayUpdateCampaign.getState()?.id === adoptedCampaignId
+      updateLifecycle.campaign?.getState()?.id === adoptedCampaignId
     ) {
-      gatewayUpdateCampaign.clear();
+      updateLifecycle.campaign?.clear();
       context?.logGateway?.info("update.run failed; adopted campaign cleared", {
         campaignId: adoptedCampaignId,
       });
@@ -701,9 +703,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     if ((ackDelivered || ackQueued) && handoff?.status !== "started") {
       await notify(outcomeRun, "finished");
     }
-    context?.logGateway?.info(
-      `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
-    );
+    recordGatewayUpdateOutcome(result, actor, context?.logGateway);
     respond(
       true,
       {

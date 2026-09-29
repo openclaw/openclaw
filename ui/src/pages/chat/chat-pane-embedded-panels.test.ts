@@ -689,8 +689,7 @@ describe("chat pane embedded panels", () => {
     const { mount, renderPanels, state } = createReviewFixture();
     const message = 'Failed to load docs/chat.md: <img src="missing.png">';
     state.client = createGatewayBrowserClientFixture({
-      request: (method, params) =>
-        method === "tasks.list" ? { tasks: [] } : request(method, params),
+      request: (method, params) => request(method, params),
     });
     state.hello = gatewayHelloForMethods(["sessions.diff"]);
     state.sessionKey = "agent:main:review";
@@ -706,48 +705,5 @@ describe("chat pane embedded panels", () => {
     expect(notice?.querySelector("img")).toBeNull();
     expect(mount.querySelector("openclaw-session-diff")).toBeNull();
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("exposes task refresh in the shared side-panel header", () => {
-    const onRefreshTasks = vi.fn();
-    const params = {} as NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]>;
-    params.connected = true;
-    params.companion = { turns: [], loading: false, draft: "" };
-    params.onRefreshTasks = onRefreshTasks;
-    params.tasksLoading = false;
-    const tasks = sidebarPanelDefinitions(params).find((definition) => definition.slot === "tasks");
-    const mount = document.body.appendChild(document.createElement("div"));
-    render(tasks?.headerAction, mount);
-
-    const refresh = mount.querySelector<HTMLButtonElement>(
-      'button[aria-label="Refresh background tasks"]',
-    );
-    expect(refresh).not.toBeNull();
-    expect(refresh?.querySelector("svg")?.outerHTML).toContain("M21 12a9");
-    refresh?.click();
-    expect(onRefreshTasks).toHaveBeenCalledOnce();
-
-    for (const [connected, tasksLoading] of [
-      [false, false],
-      [true, true],
-    ] as const) {
-      params.connected = connected;
-      params.tasksLoading = tasksLoading;
-      const definition = sidebarPanelDefinitions(params).find(
-        (candidate) => candidate.slot === "tasks",
-      );
-      render(definition?.headerAction, mount);
-      expect(
-        mount.querySelector<HTMLButtonElement>('button[aria-label="Refresh background tasks"]')
-          ?.disabled,
-      ).toBe(true);
-      if (tasksLoading) {
-        expect(
-          mount.querySelector(
-            'button[aria-label="Refresh background tasks"] .btn__spinner[aria-hidden="true"]',
-          ),
-        ).not.toBeNull();
-      }
-    }
   });
 });

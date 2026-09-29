@@ -403,16 +403,30 @@ describe("web monitor inbox socket lifecycle", () => {
     // Keep durable inbound settlement and its read receipt outside the socket clock.
     await waitForInboundWorkDrained();
     vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    let sendTimeoutIndex = -1;
     try {
-      sock.sendMessage.mockImplementationOnce(() => new Promise(() => {}));
+      sock.sendMessage.mockImplementationOnce(() => {
+        // The adapter schedules this send's timeout immediately after the socket call.
+        sendTimeoutIndex = setTimeoutSpy.mock.calls.length;
+        return new Promise(() => {});
+      });
 
       const replyPromise = inbound.platform.reply("pong");
       await expectSocketOperationTimeout("sendMessage", replyPromise);
       expect(sock.sendMessage).toHaveBeenCalledTimes(1);
       expect(socketRef.current).toBe(sock);
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
+      expect(setTimeoutSpy.mock.calls[sendTimeoutIndex]?.[1]).toBe(
+        DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      );
+      const sendTimeout = setTimeoutSpy.mock.results[sendTimeoutIndex];
+      expect(sendTimeout?.type).toBe("return");
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(sendTimeout?.value);
     } finally {
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
       await listener.close();
     }

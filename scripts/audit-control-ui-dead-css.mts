@@ -9,6 +9,7 @@ import postcss, { type Rule } from "postcss";
 import selectorParser, { type ClassName, type Selector } from "postcss-selector-parser";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -44,13 +45,6 @@ const EXTERNAL_CLASS_FAMILIES: ExternalClassFamily[] = [
   {
     matches: (className) => className.startsWith("ProseMirror"),
     producer: "ProseMirror editor DOM",
-  },
-  // markdown-it-task-lists emits these two classes from parsed markdown.
-  {
-    matches: (className) =>
-      className === "task-list-item" || className === "task-list-item-checkbox",
-    producer:
-      "markdown-it-task-lists via ui/src/components/markdown-parser.ts (the contains-task-list class is removed there)",
   },
 ];
 
@@ -89,12 +83,9 @@ function groupBy<T, K>(values: Iterable<T>, keyFor: (value: T) => K): Map<K, T[]
   const groups = new Map<K, T[]>();
   for (const value of values) {
     const key = keyFor(value);
-    const group = groups.get(key);
-    if (group) {
-      group.push(value);
-    } else {
-      groups.set(key, [value]);
-    }
+    const group = groups.get(key) ?? [];
+    group.push(value);
+    groups.set(key, group);
   }
   return groups;
 }
@@ -153,11 +144,7 @@ function classMapPropertyName(node: ts.ObjectLiteralElementLike): string | null 
   if (!ts.isPropertyAssignment(node) && !ts.isShorthandPropertyAssignment(node)) {
     return null;
   }
-  const name = node.name;
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
+  return getPropertyNameText(node.name);
 }
 
 /** Collect literal class tokens and dynamic class stems from TypeScript source. */

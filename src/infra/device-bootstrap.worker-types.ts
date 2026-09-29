@@ -7,6 +7,7 @@ import type {
   DevicePairSetupCompletionRecord,
   PairedDevice,
 } from "./device-pairing.types.js";
+import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 
 export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
 
@@ -78,9 +79,4 @@ export type DeviceBootstrapOperations = {
   };
 };
 
-export type DeviceBootstrapCommand = {
-  [Key in keyof DeviceBootstrapOperations]: {
-    type: Key;
-    input: DeviceBootstrapOperations[Key]["input"];
-  };
-}[keyof DeviceBootstrapOperations];
+export type DeviceBootstrapCommand = SqliteWorkerCommand<DeviceBootstrapOperations>;

@@ -173,8 +173,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     params.modelOptions.length + targetOptionCount > 0 ||
     targetGroups.some((group) => group.status !== "ready");
   const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
-  const commitModel = (entry: ChatModelPickerOption) => {
-    if (params.modelSelectionLocked) {
+  const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
+    event.stopPropagation();
+    // An unavailable Default row still clears a recorded pin: it commits the reset, not the model.
+    const resetsPin = entry.isDefault && params.sessionModelPinned;
+    if (params.disabled || params.modelSelectionLocked || (entry.disabled && !resetsPin)) {
+      event.preventDefault();
       return;
     }
     void params
@@ -186,16 +190,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       )
       .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
-  };
-  const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
-    event.stopPropagation();
-    // An unavailable Default row still clears a recorded pin: it commits the reset, not the model.
-    const resetsPin = entry.isDefault && params.sessionModelPinned;
-    if (params.disabled || params.modelSelectionLocked || (entry.disabled && !resetsPin)) {
-      event.preventDefault();
-      return;
-    }
-    commitModel(entry);
     closeModelPickerAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
@@ -241,7 +235,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         }`}
         aria-busy=${params.triggerLoading || params.triggerStarting ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason?.trim() || params.selectionScopeDescription || triggerTitle}
+        title=${params.disabledReason?.trim() || nothing}
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();
@@ -395,7 +389,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                         type="button"
                                         data-chat-model-group-toggle
                                         data-chat-model-provider-toggle
-                                        aria-expanded="false"
+                                        aria-expanded=${String(provider === activeModelOption?.provider)}
                                         aria-label=${`${t("chat.modelControls.providerModels", {
                                           provider: providerDisplayLabel(provider),
                                         })} (${options.length})`}

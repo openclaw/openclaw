@@ -385,7 +385,6 @@ export function createTelegramMessagePipeline({
         return await spooledReplayFinalization;
       }
       const finalization = (async () => {
-        const finalized = result;
         if (result.kind === "completed") {
           // Do not cache or settle a durable-adoption failure. Deferred queue
           // ownership retries this callback with the same spool participants.
@@ -408,9 +407,9 @@ export function createTelegramMessagePipeline({
             result.kind === "failed-retryable" ? result.error : undefined,
           );
         }
-        spooledReplayFinalResult = finalized;
-        settleSpooledReplayParticipants(spooledReplayParticipants, finalized);
-        return finalized;
+        spooledReplayFinalResult = result;
+        settleSpooledReplayParticipants(spooledReplayParticipants, result);
+        return result;
       })();
       spooledReplayFinalization = finalization;
       try {
@@ -536,8 +535,7 @@ export function createTelegramMessagePipeline({
           },
           spooledReplayAbortSignal: params.spooledReplayAbortSignal,
           spooledReplayParticipant: processingParticipant,
-          finalizeSpooledReplayResult: async (processingResult) =>
-            await finalizeSpooledReplayResult(processingResult),
+          finalizeSpooledReplayResult,
           completeSpooledReplayAfterIrrevocableAdoption: async () => {
             const completed = { kind: "completed" } satisfies TelegramMessageProcessingResult;
             return await finalizeSpooledReplayResult(completed);

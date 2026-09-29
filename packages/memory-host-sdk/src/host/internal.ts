@@ -14,7 +14,6 @@ import {
   readRegularFile,
   statRegularFile,
   walkDirectory,
-  type WalkDirectoryEntry,
 } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import type { MemoryChunk } from "./markdown-chunks.js";
@@ -92,11 +91,6 @@ async function statEnumerableMemoryFile(absPath: string): Promise<fsSync.Stats |
   }
 }
 
-function normalizeRelPath(value: string): string {
-  const trimmed = value.trim().replace(/^[./]+/, "");
-  return trimmed.replace(/\\/g, "/");
-}
-
 function expandHomePath(value: string): string {
   if (value === "~") {
     return homedir();
@@ -137,24 +131,48 @@ export function normalizeExtraMemoryPaths(
 export function matchesExtraMemoryPathEntry(
   entry: NormalizedExtraMemoryPath,
   candidatePath: string,
+  options?: { directory?: boolean },
 ): boolean {
   if (!entry.pattern) {
     return true;
   }
   const relativePath = path.relative(entry.path, candidatePath);
   try {
-    return (
-      !relativePath ||
-      (isPathInside(entry.path, candidatePath) &&
-        path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern))
-    );
+    if (!relativePath) {
+      return true;
+    }
+    if (!isPathInside(entry.path, candidatePath)) {
+      return false;
+    }
+    const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
+    if (!options?.directory) {
+      return path.posix.matchesGlob(normalizedRelativePath, entry.pattern);
+    }
+    const segments = entry.pattern.split("/");
+    // Keep complex patterns conservative; the leaf matcher owns their semantics.
+    if (
+      /[{[(]/.test(entry.pattern) ||
+      segments.some((segment) => segment === "." || segment === "..")
+    ) {
+      return true;
+    }
+    const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
+    for (let length = 1; length <= parentCount; length += 1) {
+      if (path.posix.matchesGlob(normalizedRelativePath, segments.slice(0, length).join("/"))) {
+        return true;
+      }
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
 export function isMemoryPath(relPath: string): boolean {
-  const normalized = normalizeRelPath(relPath);
+  const normalized = relPath
+    .trim()
+    .replace(/^[./]+/, "")
+    .replace(/\\/g, "/");
   if (!normalized) {
     return false;
   }
@@ -175,16 +193,6 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   return (
     classifyMemoryMultimodalPath(filePath, multimodal ?? DISABLED_MULTIMODAL_SETTINGS) !== null
   );
-}
-
-function shouldDescendMemoryEntry(
-  entry: WalkDirectoryEntry,
-  shouldSkipPath?: (absPath: string) => boolean,
-): boolean {
-  if (shouldSkipPath?.(entry.path)) {
-    return false;
-  }
-  return entry.kind === "directory" && entry.name !== ".openclaw-repair";
 }
 
 class MemorySourceScanError extends Error {
@@ -225,17 +233,27 @@ async function collectMemoryFilesFromDir(
   files: string[],
   multimodal?: MemoryMultimodalSettings,
   shouldSkipPath?: (absPath: string) => boolean,
-  extraPathEntry?: NormalizedExtraMemoryPath,
+  extraPathEntries?: NormalizedExtraMemoryPath[],
 ): Promise<void> {
   const scan = await scanMemorySource(dir, () =>
     walkDirectory(dir, {
       symlinks: "skip",
-      descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
+      descend: (entry) =>
+        !shouldSkipPath?.(entry.path) &&
+        entry.kind === "directory" &&
+        entry.name !== ".openclaw-repair" &&
+        (!extraPathEntries ||
+          extraPathEntries.some((extraPathEntry) =>
+            matchesExtraMemoryPathEntry(extraPathEntry, entry.path, { directory: true }),
+          )),
       include: (entry) =>
         !shouldSkipPath?.(entry.path) &&
         entry.kind === "file" &&
         isAllowedMemoryFilePath(entry.path, multimodal) &&
-        (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
+        (!extraPathEntries ||
+          extraPathEntries.some((extraPathEntry) =>
+            matchesExtraMemoryPathEntry(extraPathEntry, entry.path),
+          )),
     }),
   );
   const operationalFailure = scan.failedDirs.find((failure) => !isFileMissingError(failure.error));
@@ -284,40 +302,45 @@ export async function listMemoryFiles(
     }
   }
 
-  const normalizedExtraPaths = normalizeExtraMemoryPathEntries(workspaceDir, extraPaths);
-  if (normalizedExtraPaths.length > 0) {
-    for (const entry of normalizedExtraPaths) {
-      const inputPath = entry.path;
-      if (shouldSkipWorkspaceMemoryPath(inputPath)) {
+  const extraPathsByRoot = new Map<string, NormalizedExtraMemoryPath[]>();
+  for (const entry of normalizeExtraMemoryPathEntries(workspaceDir, extraPaths)) {
+    const entries = extraPathsByRoot.get(entry.path);
+    if (entries) {
+      entries.push(entry);
+    } else {
+      extraPathsByRoot.set(entry.path, [entry]);
+    }
+  }
+  for (const [inputPath, entries] of extraPathsByRoot) {
+    if (shouldSkipWorkspaceMemoryPath(inputPath)) {
+      continue;
+    }
+    try {
+      const stat = await scanMemorySource(inputPath, () => fs.lstat(inputPath));
+      if (stat.isSymbolicLink()) {
+        onSkippedSymlinkRoot?.(inputPath);
         continue;
       }
-      try {
-        const stat = await scanMemorySource(inputPath, () => fs.lstat(inputPath));
-        if (stat.isSymbolicLink()) {
-          onSkippedSymlinkRoot?.(inputPath);
-          continue;
-        }
-        if (stat.isDirectory()) {
-          await collectMemoryFilesFromDir(
-            inputPath,
-            result,
-            multimodal,
-            shouldSkipWorkspaceMemoryPath,
-            entry,
-          );
-          continue;
-        }
-        if (
-          stat.isFile() &&
-          (isExplicitExtraMarkdownFilePath(inputPath) ||
-            isAllowedMemoryFilePath(inputPath, multimodal))
-        ) {
-          result.push(inputPath);
-        }
-      } catch (error) {
-        if (!isFileMissingError(error)) {
-          throw error;
-        }
+      if (stat.isDirectory()) {
+        await collectMemoryFilesFromDir(
+          inputPath,
+          result,
+          multimodal,
+          shouldSkipWorkspaceMemoryPath,
+          entries,
+        );
+        continue;
+      }
+      if (
+        stat.isFile() &&
+        (isExplicitExtraMarkdownFilePath(inputPath) ||
+          isAllowedMemoryFilePath(inputPath, multimodal))
+      ) {
+        result.push(inputPath);
+      }
+    } catch (error) {
+      if (!isFileMissingError(error)) {
+        throw error;
       }
     }
   }
@@ -424,8 +447,7 @@ async function loadMultimodalEmbeddingInput(
   if (regularFile.missing) {
     return null;
   }
-  const stat = regularFile.stat;
-  if (stat.size !== entry.size) {
+  if (regularFile.stat.size !== entry.size) {
     return null;
   }
   let buffer: Buffer;

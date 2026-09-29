@@ -1,6 +1,3 @@
-/**
- * Coordinates provider auth, profile rotation, and runtime auth refresh.
- */
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
@@ -381,10 +378,9 @@ export function createEmbeddedRunAuthController(params: {
   const resolveAuthProfileFailoverReason = (failoverParams: {
     allInCooldown: boolean;
     message: string;
-    profileIds?: Array<string | undefined>;
   }): FailoverReason => {
     if (failoverParams.allInCooldown) {
-      const profileIds = (failoverParams.profileIds ?? params.profileCandidates).filter(
+      const profileIds = params.profileCandidates.filter(
         (id): id is string => typeof id === "string" && id.length > 0,
       );
       return (
@@ -394,10 +390,7 @@ export function createEmbeddedRunAuthController(params: {
         }) ?? "unknown"
       );
     }
-    const classified = classifyFailoverReason(failoverParams.message, {
-      provider: params.provider,
-    });
-    return classified ?? "auth";
+    return classifyFailoverReason(failoverParams.message, { provider: params.provider }) ?? "auth";
   };
 
   const recordOAuthRefreshFailure = async (
@@ -457,7 +450,6 @@ export function createEmbeddedRunAuthController(params: {
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
       message: messageForReason,
-      profileIds: params.profileCandidates,
     });
     const message =
       failoverParams.message?.trim() ||

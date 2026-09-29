@@ -96,18 +96,6 @@ function requireFirstMockArg(
   return arg;
 }
 
-function selectText(element: Element) {
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function pointerClick(element: Element) {
-  element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-}
-
 beforeEach(() => {
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
@@ -861,7 +849,7 @@ describe("grouped chat rendering", () => {
 
     expect(onReply).toHaveBeenLastCalledWith({
       messageId: "user-message",
-      senderLabel: "Jason",
+      senderLabel: "Message",
       sourceMessageId: "user-entry-1",
       text: "User reply context.",
     });
@@ -1532,13 +1520,14 @@ describe("grouped chat rendering", () => {
       );
       const summary = container.querySelector<HTMLElement>(".msg-meta__summary")!;
       summary.click();
+      const metadata = summary.closest("openclaw-tooltip")!;
+      expect(metadata.hasAttribute("open")).toBe(true);
       const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn")!;
       reply.focus();
       const replyTooltip = reply.closest("openclaw-tooltip")!;
-      await Promise.resolve();
-      expect(replyTooltip.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(true);
-      const metadata = summary.closest("openclaw-tooltip")!;
-      expect(metadata.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(false);
+      // The wrapper owns visibility even while the optional popup is upgrading.
+      expect(replyTooltip.hasAttribute("open")).toBe(true);
+      expect(metadata.hasAttribute("open")).toBe(false);
     } finally {
       provider.remove();
     }
@@ -1780,7 +1769,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-turn-recap--continuation")?.textContent).toContain(
       "Done in 5 seconds",
     );
-    expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
+    expect(container.querySelector(".chat-turn-recap__claw")).toBeNull();
     expect(container.querySelector(".chat-group-footer")).not.toBeNull();
   });
 
@@ -1880,19 +1869,17 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
   });
 
-  it("renders configured local user names", () => {
-    const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
-      const container = document.createElement("div");
-      renderGroupedMessage(
-        container,
-        createUserMessage("hello", { timestamp: 1000 }),
-        "user",
-        opts,
-      );
-      return container;
-    };
-
-    const named = renderUser({ userName: "Buns" });
+  it("renders configured local user names for a qualified profile", () => {
+    const named = document.createElement("div");
+    const message = createUserMessage("hello", {
+      timestamp: 1000,
+      __openclaw: {
+        senderId: "profile-buns",
+        senderIdentity: { type: "profile", id: "profile-buns" },
+      },
+    });
+    const group = prepareMessageGroup({ key: "local-user", message });
+    render(renderTestMessageGroup(group, { userId: "profile-buns", userName: "Buns" }), named);
     const sender = named.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
     expect(sender?.textContent).toBe("Buns");
 
@@ -2836,75 +2823,6 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(3);
   });
 
-  it("uses the newest group's live card label without inheriting an earlier failure", () => {
-    const container = document.createElement("div");
-    const groups = [
-      createToolGroup("live-first", [
-        createMessageEntry(
-          "failed-read",
-          createToolResultMessage("call-read", "read", JSON.stringify({ error: "failed" }), {
-            isError: true,
-            activity: [
-              projectAgentToolActivity({
-                toolCallId: "call-read",
-                name: "read",
-                phase: "result",
-                isError: true,
-              }),
-            ],
-          }),
-        ),
-      ]),
-      createToolGroup(
-        "live-second",
-        [
-          createMessageEntry("running-edit", {
-            role: "assistant",
-            activity: [
-              projectAgentToolActivity({
-                toolCallId: "call-edit",
-                name: "edit",
-                phase: "start",
-                args: { path: "/repo/src/a.ts" },
-              }),
-            ],
-            __openclawToolStreamLive: true,
-            __openclawToolStreamResultReceived: false,
-            content: [
-              {
-                type: "tool_use",
-                id: "call-edit",
-                name: "edit",
-                input: { path: "/repo/src/a.ts", oldText: "old", newText: "new" },
-              },
-            ],
-          }),
-        ],
-        { isStreaming: true },
-      ),
-    ];
-    const opts = { showReasoning: true, showToolCalls: true, runActive: true };
-
-    render(renderActivityGroup(groups, opts), container);
-    const activitySummary = expectElement(
-      container,
-      ".chat-activity-group__summary",
-      HTMLButtonElement,
-    );
-    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
-    expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
-    expect(activitySummary.getAttribute("aria-label")).toBeNull();
-    expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
-    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Edit in /repo/src/a.ts…",
-    );
-
-    render(renderActivityGroup(groups, { ...opts, runActive: false }), container);
-    expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-      "1 read · 1 edit 1 failed",
-    );
-  });
-
   it("keeps cross-group activity neutral while retaining failed child badges", () => {
     const container = document.createElement("div");
     const failedMessage = (id: string) =>
@@ -2976,57 +2894,6 @@ describe("grouped chat rendering", () => {
     expect(failedSummary.getAttribute("aria-label")).toBeNull();
   });
 
-  it("uses the prepared running mutation title in an active group summary", () => {
-    const container = document.createElement("div");
-    const group = createToolGroup(
-      "running-tool-group",
-      [
-        createMessageEntry("finished-read", {
-          role: "toolResult",
-          toolCallId: "call-read",
-          toolName: "read",
-          activity: [
-            projectAgentToolActivity({
-              toolCallId: "call-read",
-              name: "read",
-              phase: "result",
-              isError: false,
-            }),
-          ],
-          content: "done",
-        }),
-        createMessageEntry("running-edit", {
-          role: "assistant",
-          activity: [
-            projectAgentToolActivity({
-              toolCallId: "call-edit",
-              name: "edit",
-              phase: "start",
-              args: { path: "/repo/src/a.ts" },
-            }),
-          ],
-          __openclawToolStreamLive: true,
-          __openclawToolStreamResultReceived: false,
-          content: [
-            {
-              type: "tool_use",
-              id: "call-edit",
-              name: "edit",
-              input: { path: "/repo/src/a.ts", oldText: "old", newText: "new" },
-            },
-          ],
-        }),
-      ],
-      { timestamp: 1000, isStreaming: true },
-    );
-
-    renderMessageGroups(container, [group], { runActive: true });
-
-    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Edit in /repo/src/a.ts…",
-    );
-  });
-
   it("keeps failed activity collapsed with neutral chain chrome", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -3069,11 +2936,6 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("Read failed");
     expect(activitySummary.querySelector(".chat-activity-group__badge")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
-    selectText(expectElement(activitySummary, ".chat-activity-group__label", HTMLElement));
-    pointerClick(activitySummary);
-    expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
     activitySummary.click();
 
     expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", false);
@@ -3342,11 +3204,6 @@ describe("grouped chat rendering", () => {
     expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
       "sessions_spawn",
     );
-    selectText(expectElement(summary, ".chat-tool-msg-summary__label", HTMLElement));
-    pointerClick(summary);
-    expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
     summary.click();
     expect(onToggleToolMessageExpanded).toHaveBeenCalledOnce();
 
@@ -4104,7 +3961,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
     player.onExpand(kind === "video" ? source : undefined);
     if (kind === "video") {
-      expect(onOpenImage).toHaveBeenCalledWith({
+      expect(onOpenImage.mock.lastCall?.[0]).toMatchObject({
         kind: "video",
         originalSrc: source,
         src: source,

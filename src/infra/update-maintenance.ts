@@ -5,7 +5,7 @@ import { formatErrorMessage } from "./errors.js";
 import type { UpdateRunStep } from "./update-run-record.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-const TEMPORARY_COPY_CLEANUP_BUDGET_MS = 5 * 60_000;
+export const UPDATE_CLEANUP_BUDGET_MS = 5 * 60_000;
 
 export function formatUpdateCleanupCommand(directory: string): string {
   return process.platform === "win32"
@@ -24,14 +24,14 @@ export async function cleanupUpdateTemporaryDirectory(params: {
   onWarning: (step: UpdateStepResult) => void;
 }): Promise<void> {
   const started = Date.now();
-  const monotonicDeadline = performance.now() + TEMPORARY_COPY_CLEANUP_BUDGET_MS;
+  const monotonicDeadline = performance.now() + UPDATE_CLEANUP_BUDGET_MS;
   const recordProgress = (reason: string, completed = false) =>
     params.onProgress?.({
       step: params.name,
       status: completed ? "completed" : "in_progress",
       startedAtMs: started,
       ...(completed ? { endedAtMs: Date.now(), exitCode: 0 } : {}),
-      detail: `Temporary-copy cleanup ${params.directory}; ${reason}; budget=${TEMPORARY_COPY_CLEANUP_BUDGET_MS}ms (5 minutes for large copies on slow disks); deadline=${new Date(started + TEMPORARY_COPY_CLEANUP_BUDGET_MS).toISOString()}.`,
+      detail: `Temporary-copy cleanup ${params.directory}; ${reason}; budget=${UPDATE_CLEANUP_BUDGET_MS}ms (5 minutes for large copies on slow disks); deadline=${new Date(started + UPDATE_CLEANUP_BUDGET_MS).toISOString()}.`,
     });
   recordProgress(
     `waiting for ${params.canRemove ? "directory custody verification" : "filesystem removal"}`,
@@ -67,7 +67,7 @@ export async function cleanupUpdateTemporaryDirectory(params: {
   // Unverified paths may be absent or replaced; never recommend deleting them.
   const command = canRemove ? formatUpdateCleanupCommand(params.directory) : "";
   const reason = expired
-    ? `Temporary-copy cleanup budget expired after ${TEMPORARY_COPY_CLEANUP_BUDGET_MS}ms.`
+    ? `Temporary-copy cleanup budget expired after ${UPDATE_CLEANUP_BUDGET_MS}ms.`
     : (failure ?? "Directory ownership could not be verified.");
   params.onWarning({
     name: params.name,

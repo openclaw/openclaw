@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import type { Selectable } from "kysely";
+import type { InferResult } from "kysely";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   deliveryContextFromSession,
@@ -19,23 +18,14 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { scanCanonicalSqliteSessionEntries } from "./session-canonical-key.js";
+import {
+  attachSessionEntrySnapshots,
+  sessionEntrySnapshotColumns,
+} from "./session-entry-snapshots.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
-type CanonicalRepairRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]> & {
-  current_agent_harness_id: string | null;
-  current_chat_type: string | null;
-  current_ended_at: number | null;
-  current_model: string | null;
-  current_model_provider: string | null;
-  current_previous_session_id: string | null;
-  current_started_at: number | null;
-  current_window_owner_session_key: string | null;
-  delivery_account_id: string | null;
-  delivery_channel: string | null;
-  delivery_target: string | null;
-  delivery_thread_id: string | null;
-};
+type CanonicalRepairRow = InferResult<ReturnType<typeof canonicalRepairQuery>>[number];
 
 type CanonicalSessionDecision = {
   canonicalOwnerSessionKey?: string;
@@ -71,6 +61,12 @@ type DoctorSessionEntrySummary = SessionEntrySummary & {
   recoveredFromProjections: boolean;
 };
 
+type CanonicalSessionRepairEntry = SessionEntrySummary &
+  (
+    | { rawEntryJson: string; rawSnapshotRevision: number }
+    | { rawEntryJson?: never; rawSnapshotRevision?: never }
+  );
+
 /** Doctor inventory hydrates rejected legacy blobs from promoted node/window columns. */
 function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
   let record: Record<string, unknown> = {};
@@ -82,6 +78,7 @@ function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
   } catch {
     // Doctor owns malformed legacy repair; promoted identity columns keep the row reachable.
   }
+  attachSessionEntrySnapshots(record, row);
   const createdActor = row.created_actor_type
     ? {
         type: row.created_actor_type,
@@ -166,6 +163,7 @@ function canonicalRepairQuery(database: Pick<OpenClawAgentDatabase, "db">) {
       "current_window.primary_conversation_id",
     )
     .selectAll("session_nodes")
+    .select(sessionEntrySnapshotColumns)
     .select([
       "current_window_owner.session_key as current_window_owner_session_key",
       "current_window.started_at as current_started_at",
@@ -189,10 +187,13 @@ function scanCanonicalSessionFactsFromDatabase(
 ): {
   facts: CanonicalSessionRepairFact[];
   inventoryToken: string;
-  loaded: Map<string, { entry: SessionEntry; rawEntryJson: string }>;
+  loaded: Map<string, { entry: SessionEntry; rawEntryJson: string; rawSnapshotRevision: number }>;
 } {
   const scanned: ScannedCanonicalSessionFact[] = [];
-  const loaded = new Map<string, { entry: SessionEntry; rawEntryJson: string }>();
+  const loaded = new Map<
+    string,
+    { entry: SessionEntry; rawEntryJson: string; rawSnapshotRevision: number }
+  >();
   const validSessionKeysById = new Map<string, string[]>();
   const inventoriedSessionKeys = new Set<string>();
   for (const row of iterateSqliteQuerySync(database.db, canonicalRepairQuery(database))) {
@@ -205,7 +206,11 @@ function scanCanonicalSessionFactsFromDatabase(
     }
     const entry = persistedEntry ?? hydrateCanonicalRepairEntry(row);
     if (selectedKeys?.has(row.session_key)) {
-      loaded.set(row.session_key, { entry, rawEntryJson: row.entry_json });
+      loaded.set(row.session_key, {
+        entry,
+        rawEntryJson: row.entry_json,
+        rawSnapshotRevision: row.snapshot_revision,
+      });
     }
     const lineageProjectionMismatch = Boolean(
       persistedEntry &&
@@ -235,6 +240,7 @@ function scanCanonicalSessionFactsFromDatabase(
         row.session_key,
         row.current_session_id,
         row.entry_valid,
+        row.snapshot_revision,
         persistedEntry !== null,
         row.entry_json === "{}",
         row.current_window_owner_session_key,
@@ -292,7 +298,7 @@ function scanCanonicalSessionFactsFromDatabase(
 function loadCanonicalRepairEntriesFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   facts: readonly CanonicalSessionRepairFact[],
-): Array<SessionEntrySummary & { rawEntryJson?: string }> {
+): CanonicalSessionRepairEntry[] {
   const current = scanCanonicalSessionFactsFromDatabase(
     database,
     new Set(facts.map((fact) => fact.sessionKey)),
@@ -312,11 +318,17 @@ function loadCanonicalRepairEntriesFromDatabase(
     if (!loaded) {
       throw new Error(`Canonical session repair row disappeared during scan: ${fact.sessionKey}`);
     }
-    return {
+    const summary = {
       entry: loaded.entry,
       sessionKey: fact.sessionKey,
-      ...(fact.rawCompareRequired ? { rawEntryJson: loaded.rawEntryJson } : {}),
     };
+    return fact.rawCompareRequired
+      ? {
+          ...summary,
+          rawEntryJson: loaded.rawEntryJson,
+          rawSnapshotRevision: loaded.rawSnapshotRevision,
+        }
+      : summary;
   });
 }
 
@@ -334,7 +346,7 @@ export function listCanonicalSessionRepairFacts(
 export function loadCanonicalSessionRepairEntries(
   scope: DoctorSessionScanScope,
   facts: readonly CanonicalSessionRepairFact[],
-): Array<SessionEntrySummary & { rawEntryJson?: string }> {
+): CanonicalSessionRepairEntry[] {
   if (facts.length === 0) {
     return [];
   }

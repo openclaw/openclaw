@@ -458,11 +458,12 @@ export function renderChatComposer(props: ChatComposerProps) {
   const devicePicker = state.microphonePicker;
   devicePicker.syncCatalog(props.gatewayClient ?? null, props.connected);
   const startRealtimeTalk = () => {
-    if (props.submitDisabledReason) {
-      return;
-    }
+    // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
       devicePicker.handleOpen();
+      return;
+    }
+    if (props.submitDisabledReason) {
       return;
     }
     props.onToggleRealtimeTalk?.();
@@ -629,8 +630,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     voiceVideoCapable: props.realtimeTalkVideoCapable,
     voiceVideoEnabled: Boolean(props.realtimeTalkVideoStream),
     voiceVideoPending: props.realtimeTalkVideoPending,
-    voice: props.realtimeTalkVoice,
-    onSelectVoice: props.onSelectRealtimeVoice,
     onAbort: props.onAbort,
     onSend: handleSend,
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,

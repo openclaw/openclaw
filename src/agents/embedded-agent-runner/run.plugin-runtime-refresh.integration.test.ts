@@ -27,57 +27,51 @@ beforeAll(async () => {
   ({ registerAgentHarness: registerPreparedAgentHarness } = await import("../harness/registry.js"));
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   resetSharedRunIntegrationHarnessMocks();
+  const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+  state = await createOpenClawTestState({ label: "plugin-runtime-refresh" });
 });
 
 afterEach(async () => {
+  mockedRunEmbeddedAttempt.mockReset();
+  mockedAcquireAgentRunPreparedModelRuntime.mockReset();
   await state?.cleanup();
 });
 
 describe("plugin runtime refresh admission", () => {
-  it.each([
-    { name: "same-route text", media: false, unrelatedText: false, unrelatedRoute: false },
-    { name: "same-route media", media: true, unrelatedText: false, unrelatedRoute: false },
-    { name: "unrelated final text", media: false, unrelatedText: true, unrelatedRoute: false },
-    { name: "unrelated delivery route", media: false, unrelatedText: false, unrelatedRoute: true },
-  ])("preserves delivery dedupe across refresh for $name", async (scenario) => {
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "plugin-refresh-delivery" });
-    const text = "The requested result was delivered by the original plugin generation.";
-    const mediaUrl = "https://example.test/delivered-result.png";
-    const sentTarget = {
-      tool: "message",
-      provider: "telegram",
-      to: scenario.unrelatedRoute ? "telegram:999" : "telegram:123",
-      ...(scenario.media ? { mediaUrls: [mediaUrl] } : { text }),
-    };
-    const payload = scenario.media
-      ? { mediaUrl }
-      : {
-          text: scenario.unrelatedText ? "The remaining work is now independently verified." : text,
-        };
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-      params.registerPluginRuntimeRefreshConsumer?.(() => true);
-      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
-      return makeAttemptResult({
-        assistantTexts: [],
-        toolMetas: [
-          { toolName: "message", isError: false },
-          { toolName: "plugins", isError: false },
-        ],
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: scenario.media ? [] : [text],
-        messagingToolSentMediaUrls: scenario.media ? [mediaUrl] : [],
-        messagingToolSentTargets: [sentTarget],
+  it.each([false, true])(
+    "preserves same-route delivery dedupe across refresh (media: %s)",
+    async (media) => {
+      const text = "The requested result was delivered by the original plugin generation.";
+      const mediaUrl = "https://example.test/delivered-result.png";
+      const sentTarget = {
+        tool: "message",
+        provider: "telegram",
+        to: "telegram:123",
+        ...(media ? { mediaUrls: [mediaUrl] } : { text }),
+      };
+      const payload = media ? { mediaUrl } : { text };
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+        params.registerPluginRuntimeRefreshConsumer?.(() => true);
+        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+        return makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [
+            { toolName: "message", isError: false },
+            { toolName: "plugins", isError: false },
+          ],
+          didSendViaMessagingTool: true,
+          messagingToolSentTexts: media ? [] : [text],
+          messagingToolSentMediaUrls: media ? [mediaUrl] : [],
+          messagingToolSentTargets: [sentTarget],
+        });
       });
-    });
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({ assistantTexts: [payload.text ?? "The requested image is ready."] }),
-    );
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
-    const onAttemptStart = vi.fn();
-    try {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({ assistantTexts: [payload.text ?? "The requested image is ready."] }),
+      );
+      mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
+      const onAttemptStart = vi.fn();
       const result = await runEmbeddedAgent({
         ...createOverflowRunParams(state),
         prompt: "send the result, reload the plugin, then verify the result",
@@ -104,16 +98,9 @@ describe("plugin runtime refresh admission", () => {
         blockReplyPipeline: null,
         replyToMode: "off",
       });
-      if (scenario.unrelatedText || scenario.unrelatedRoute) {
-        expect(final.replyPayloads).toHaveLength(1);
-        expect(final.replyPayloads[0]).toMatchObject(payload);
-      } else {
-        expect(final.replyPayloads).toEqual([]);
-      }
-    } finally {
-      mockedRunEmbeddedAttempt.mockReset();
-    }
-  });
+      expect(final.replyPayloads).toEqual([]);
+    },
+  );
 
   it("reacquires generations while preserving run authority, committed work, and one terminal", async () => {
     const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
@@ -125,9 +112,7 @@ describe("plugin runtime refresh admission", () => {
       getPreparedModelRuntimePluginGeneration,
       withPreparedModelRuntimePluginGenerationScope,
     } = await import("../prepared-model-runtime-generation-scope.js");
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     const { getAgentRunContext } = await import("../../infra/agent-run-registry.js");
-    state = await createOpenClawTestState({ label: "plugin-runtime-refresh" });
     const runParams = createOverflowRunParams(state);
     const originalPrompt = "edit and reload twice";
     const originalMessage = { role: "user" as const, content: originalPrompt, timestamp: 1 };
@@ -233,67 +218,56 @@ describe("plugin runtime refresh admission", () => {
       });
     }
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "new behavior verified" }]);
-    try {
-      const result = await withPluginRuntimeGatewayRequestScope(caller, () =>
-        withPreparedModelRuntimePluginGenerationScope(
-          generation,
-          () =>
-            withPluginRuntimeGenerationScope(first, () =>
-              runEmbeddedAgent({
-                ...runParams,
-                prompt: originalPrompt,
-                onUserMessagePersisted,
-                onAgentEvent,
-                agentHarnessId: "openclaw",
-                provider: "fixture-provider",
-                model: "fixture-model",
-                sessionKey: undefined,
-              }),
-            ),
-          () => first as NonNullable<ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>>,
-        ),
-      );
-      expect(result.payloads).toEqual([{ text: "new behavior verified" }]);
-      expect(result.meta.agentMeta?.terminalReceipt).toMatchObject({
-        runId: runParams.runId,
-        sessionId: "test-session",
-        successfulToolNames: ["plugins", "alpha", "zeta", "read", "beta", "final_check"],
-      });
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
-      expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledTimes(3);
-      expect(onUserMessagePersisted).toHaveBeenCalledExactlyOnceWith(originalMessage);
-      expect(
-        onAgentEvent.mock.calls.filter(
-          ([event]) => event.stream === "lifecycle" && event.data.phase === "end",
-        ),
-      ).toHaveLength(1);
-      for (const release of releases) {
-        expect(release).toHaveBeenCalledOnce();
-      }
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({ assistantTexts: ["separate operator turn"] }),
-      );
-      const next = await runEmbeddedAgent({ ...runParams, prompt: "new task" });
-      expect(next.meta.agentMeta?.terminalReceipt?.successfulToolNames).toEqual([]);
-    } finally {
-      mockedAcquireAgentRunPreparedModelRuntime.mockReset();
-      mockedRunEmbeddedAttempt.mockReset();
+    const result = await withPluginRuntimeGatewayRequestScope(caller, () =>
+      withPreparedModelRuntimePluginGenerationScope(
+        generation,
+        () =>
+          withPluginRuntimeGenerationScope(first, () =>
+            runEmbeddedAgent({
+              ...runParams,
+              prompt: originalPrompt,
+              onUserMessagePersisted,
+              onAgentEvent,
+              agentHarnessId: "openclaw",
+              provider: "fixture-provider",
+              model: "fixture-model",
+              sessionKey: undefined,
+            }),
+          ),
+        () => first as NonNullable<ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>>,
+      ),
+    );
+    expect(result.payloads).toEqual([{ text: "new behavior verified" }]);
+    expect(result.meta.agentMeta?.terminalReceipt).toMatchObject({
+      runId: runParams.runId,
+      sessionId: "test-session",
+      successfulToolNames: ["plugins", "alpha", "zeta", "read", "beta", "final_check"],
+    });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledTimes(3);
+    expect(onUserMessagePersisted).toHaveBeenCalledExactlyOnceWith(originalMessage);
+    expect(
+      onAgentEvent.mock.calls.filter(
+        ([event]) => event.stream === "lifecycle" && event.data.phase === "end",
+      ),
+    ).toHaveLength(1);
+    for (const release of releases) {
+      expect(release).toHaveBeenCalledOnce();
     }
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["separate operator turn"] }),
+    );
+    const next = await runEmbeddedAgent({ ...runParams, prompt: "new task" });
+    expect(next.meta.agentMeta?.terminalReceipt?.successfulToolNames).toEqual([]);
   });
-  it.each(
-    ["generated", "host-owned", "tts", "foreign-tts"].flatMap((kind) =>
-      [false, true].map((refresh) => ({ kind, refresh })),
-    ),
-  )(
-    "preserves pending $kind media and its provenance (refresh: $refresh)",
-    async ({ kind, refresh }) => {
+  it.each(["generated", "host-owned", "tts", "foreign-tts"])(
+    "preserves pending %s media and its provenance across refresh",
+    async (kind) => {
       useOpenAIPlatformAuthFixture();
-      const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
       const { getReplyPayloadMetadata } = await import("../../auto-reply/reply-payload.js");
       const { markCoreTtsAttemptResult } = await import("../tools/tts-tool-result-provenance.js");
       const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
         await import("../admitted-run-context.js");
-      state = await createOpenClawTestState({ label: "plugin-refresh-pending-media" });
       const runParams = createOverflowRunParams(state);
       const selected = "https://example.test/selected-output.opus";
       const alternate = "https://example.test/alternate-output.opus";
@@ -312,12 +286,10 @@ describe("plugin runtime refresh admission", () => {
         },
       });
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        if (refresh) {
-          params.registerPluginRuntimeRefreshConsumer?.(() => true);
-          expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
-        }
+        params.registerPluginRuntimeRefreshConsumer?.(() => true);
+        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
         const attempt = makeAttemptResult({
-          assistantTexts: refresh ? [] : [finalText],
+          assistantTexts: [],
           toolMetas: [{ toolName: "produce_media", isError: false }],
           toolMediaUrls: mediaUrls,
           hostOwnedToolMediaUrls: kind === "host-owned" ? [selected, alternate] : undefined,
@@ -334,11 +306,9 @@ describe("plugin runtime refresh admission", () => {
             )
           : attempt;
       });
-      if (refresh) {
-        mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-          makeAttemptResult({ assistantTexts: [finalText] }),
-        );
-      }
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({ assistantTexts: [finalText] }),
+      );
       mockedBuildEmbeddedRunPayloads.mockImplementation(({ assistantTexts }) =>
         assistantTexts.map((text) => ({ text })),
       );
@@ -351,7 +321,7 @@ describe("plugin runtime refresh admission", () => {
         preparedRunAdmission: admission,
         ...(kind === "generated" ? {} : { sourceReplyDeliveryMode: "message_tool_only" as const }),
       }).finally(() => admission.close());
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(refresh ? 2 : 1);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(result.didSendViaMessagingTool).not.toBe(true);
       expect(result.messagingToolSentMediaUrls ?? []).toEqual([]);
       expect(result.meta.agentMeta?.terminalReceipt?.sourceReplyDelivered).not.toBe(true);
@@ -377,8 +347,6 @@ describe("plugin runtime refresh admission", () => {
     },
   );
   it("does not readmit completed work after a provider-shaped handoff failure", async () => {
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "plugin-refresh-failure" });
     const runParams = createOverflowRunParams(state);
     const onAgentEvent = vi.fn();
     const completedEffect = vi.fn();
@@ -401,34 +369,28 @@ describe("plugin runtime refresh admission", () => {
         },
       });
     });
-    try {
-      const result = await runEmbeddedAgent({
-        ...runParams,
-        prompt: "reload and verify",
-        agentHarnessId: "openclaw",
-        provider: "fixture-provider",
-        model: "fixture-model",
-        sessionKey: undefined,
-        onAgentEvent,
-      });
-      expect(completedEffect).toHaveBeenCalledOnce();
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-      expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
-      expect(result.meta.error).toBeDefined();
-      expect(
-        onAgentEvent.mock.calls.filter(
-          ([event]) => event.stream === "lifecycle" && event.data.phase === "error",
-        ),
-      ).toHaveLength(1);
-    } finally {
-      mockedRunEmbeddedAttempt.mockReset();
-    }
+    const result = await runEmbeddedAgent({
+      ...runParams,
+      prompt: "reload and verify",
+      agentHarnessId: "openclaw",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      sessionKey: undefined,
+      onAgentEvent,
+    });
+    expect(completedEffect).toHaveBeenCalledOnce();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
+    expect(result.meta.error).toBeDefined();
+    expect(
+      onAgentEvent.mock.calls.filter(
+        ([event]) => event.stream === "lifecycle" && event.data.phase === "error",
+      ),
+    ).toHaveLength(1);
   });
   it.each([false, true])(
     "uses only producer-owned settled finalization context (present: %s)",
     async (hasContext) => {
-      const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-      state = await createOpenClawTestState({ label: "plugin-refresh-stale-finalization" });
       const assistant = buildEmbeddedRunnerAssistant({
         stopReason: "toolUse",
         content: [
@@ -538,22 +500,14 @@ describe("plugin runtime refresh admission", () => {
 
 describe("plugin runtime refresh streaming delivery", () => {
   it.each([
-    { name: "same source", otherRoute: false, toolOnly: false, mirror: false, ownedMedia: false },
-    { name: "another target", otherRoute: true, toolOnly: false, mirror: false, ownedMedia: false },
-    { name: "source mirrors", otherRoute: false, toolOnly: false, mirror: true, ownedMedia: false },
-    {
-      name: "delivered tool-only source",
-      otherRoute: false,
-      toolOnly: true,
-      mirror: false,
-      ownedMedia: false,
-    },
+    { name: "same source", otherRoute: false, toolOnly: false, mirror: false },
+    { name: "another target", otherRoute: true, toolOnly: false, mirror: false },
+    { name: "source mirrors", otherRoute: false, toolOnly: false, mirror: true },
     {
       name: "tool-only source with owned media",
       otherRoute: false,
       toolOnly: true,
       mirror: false,
-      ownedMedia: true,
     },
   ])("retains committed delivery before successor callbacks for $name", async (scenario) => {
     const {
@@ -561,8 +515,6 @@ describe("plugin runtime refresh streaming delivery", () => {
       markReplyPayloadForSourceSuppressionDelivery,
       setReplyPayloadMetadata,
     } = await import("../../auto-reply/reply-payload.js");
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "plugin-refresh-streaming" });
     const text =
       "The original plugin generation already delivered the requested detailed status report to this conversation.";
     const prefix = text.slice(0, 60);
@@ -626,7 +578,7 @@ describe("plugin runtime refresh streaming delivery", () => {
       await params.onPartialReply?.({ text: unrelated });
       await params.onBlockReply?.(scenario.mirror ? mirror : duplicate);
       await params.onBlockReply?.(remaining);
-      if (scenario.ownedMedia) {
+      if (scenario.toolOnly) {
         await params.onBlockReply?.(ownedMedia);
       }
       await params.onReasoningStream?.({
@@ -641,9 +593,7 @@ describe("plugin runtime refresh streaming delivery", () => {
             ? [prefix, divergent, text, unrelated]
             : [divergent, unrelated],
         blocks: scenario.toolOnly
-          ? scenario.ownedMedia
-            ? [ownedMedia]
-            : []
+          ? [ownedMedia]
           : scenario.otherRoute
             ? [duplicate, remaining]
             : [...(scenario.mirror ? [mirror] : []), { text: unrelated }],
@@ -660,35 +610,31 @@ describe("plugin runtime refresh streaming delivery", () => {
       return makeAttemptResult({ assistantTexts: ["Final verification complete."] });
     });
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Final verification complete." }]);
-    try {
-      const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        prompt: "send the result, reload, then continue verification",
-        agentHarnessId: "openclaw",
-        provider: "fixture-provider",
-        model: "fixture-model",
-        sessionKey: undefined,
-        messageChannel: "telegram",
-        messageProvider: "telegram",
-        messageTo: "telegram:123",
-        currentChannelId: "telegram:123",
-        currentMessagingTarget: "telegram:123",
-        sourceReplyDeliveryMode: scenario.toolOnly ? "message_tool_only" : "automatic",
-        onPartialReply: ({ text: partialText }) => {
-          partials.push(partialText ?? "");
-          return true;
-        },
-        onBlockReply: (payload) => {
-          blocks.push(payload);
-        },
-        onReasoningStream: ({ text: reasoningText }) => {
-          reasoning.push(reasoningText ?? "");
-        },
-      });
-      expect(result.meta.error).toBeUndefined();
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    } finally {
-      mockedRunEmbeddedAttempt.mockReset();
-    }
+    const result = await runEmbeddedAgent({
+      ...createOverflowRunParams(state),
+      prompt: "send the result, reload, then continue verification",
+      agentHarnessId: "openclaw",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      sessionKey: undefined,
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+      messageTo: "telegram:123",
+      currentChannelId: "telegram:123",
+      currentMessagingTarget: "telegram:123",
+      sourceReplyDeliveryMode: scenario.toolOnly ? "message_tool_only" : "automatic",
+      onPartialReply: ({ text: partialText }) => {
+        partials.push(partialText ?? "");
+        return true;
+      },
+      onBlockReply: (payload) => {
+        blocks.push(payload);
+      },
+      onReasoningStream: ({ text: reasoningText }) => {
+        reasoning.push(reasoningText ?? "");
+      },
+    });
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 });

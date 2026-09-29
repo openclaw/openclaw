@@ -84,22 +84,17 @@ export function resetSlashMenuState(state: SlashMenuState): void {
   state.slashMenuCompletion = null;
 }
 
-function hasVisibleSlashMenuState(state: SlashMenuState): boolean {
-  return (
+function closeSlashMenuIfNeeded(state: SlashMenuState, requestUpdate: () => void): void {
+  if (
     state.slashMenuOpen ||
     state.slashMenuMode !== "command" ||
     state.slashMenuCommand !== null ||
     state.slashMenuArgItems.length > 0 ||
     state.slashMenuItems.length > 0
-  );
-}
-
-function closeSlashMenuIfNeeded(state: SlashMenuState, requestUpdate: () => void): void {
-  if (!hasVisibleSlashMenuState(state)) {
-    return;
+  ) {
+    resetSlashMenuState(state);
+    requestUpdate();
   }
-  resetSlashMenuState(state);
-  requestUpdate();
 }
 
 function requestSlashCommandRefresh(
@@ -119,20 +114,16 @@ function requestSlashCommandRefresh(
     .catch(() => undefined)
     .finally(() => {
       state.slashCommandRefreshPending = false;
-      const nextValue = host.getDraft();
-      if (state.slashMenuMode === "freeform-args" && state.slashMenuCompletion?.inline) {
-        updateSlashMenu(nextValue, state, host, requestUpdate, { skipSlashIntent: true });
+      // Dismissal clears both the menu and completion intent while refresh is pending.
+      if (!state.slashMenuOpen && !state.slashMenuCompletion) {
         return;
       }
       if (state.slashMenuMode === "args" && state.slashMenuCompletion?.inline) {
         return;
       }
-      const caret = host.getTextarea()?.selectionStart ?? nextValue.length;
-      if (!findInlineSlashCompletion(nextValue, caret)) {
-        closeSlashMenuIfNeeded(state, requestUpdate);
-        return;
-      }
-      updateSlashMenu(nextValue, state, host, requestUpdate, { skipSlashIntent: true });
+      // The input parser owns command tokens and argument drafts; a token-only
+      // check would discard an argument menu when this refresh settles late.
+      updateSlashMenu(host.getDraft(), state, host, requestUpdate, { skipSlashIntent: true });
     });
 }
 

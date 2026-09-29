@@ -74,7 +74,7 @@ describe("insertBlocksInBatches", () => {
     expect(createMock).toHaveBeenCalledTimes(2);
     expect(createCallParams(createMock).data.children_id).toHaveLength(BATCH_SIZE);
     expect(createCallParams(createMock, 1).data.children_id).toHaveLength(200);
-    expect(result.children).toHaveLength(blockCount);
+    expect(result).toHaveLength(blockCount);
   });
 
   it("keeps nested descendants grouped with their root blocks", async () => {

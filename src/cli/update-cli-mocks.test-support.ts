@@ -378,10 +378,22 @@ vi.mock("../infra/update-managed-service-handoff-cleanup.js", async (importOrigi
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");
   return {
     ...actual,
-    execFile,
-    spawn,
+    // Async status snapshots need real SQLite IPC; updater and service children stay simulated.
+    execFile: (...args: Parameters<typeof actual.execFile>) =>
+      args[0] === process.execPath &&
+      Array.isArray(args[1]) &&
+      args[1].includes(SQLITE_READONLY_CHILD_ARG)
+        ? actual.execFile(...args)
+        : execFile(...args),
+    spawn: (...args: Parameters<typeof actual.spawn>) =>
+      args[0] === process.execPath &&
+      Array.isArray(args[1]) &&
+      args[1].includes(SQLITE_READONLY_CHILD_ARG)
+        ? actual.spawn(...args)
+        : spawn(...args),
   };
 });
 
@@ -389,8 +401,6 @@ vi.mock("../process/exec.js", async (importOriginal) => {
   const { createUpdateCommandTransportFixture, createUpdateUtf8CommandTransportFixture } =
     await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
-  // A process start time stays fixed while post-core work awaits I/O.
-  const parentStartedAt = new Date(Date.now() - 1000).toString();
   return {
     isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
     // The real snapshot worker has separate WAL/source-inode boundary coverage.
@@ -428,7 +438,7 @@ vi.mock("../process/exec.js", async (importOriginal) => {
         actual.runUtf8CommandWithTimeout,
       ),
     ),
-    runExec: vi.fn(async () => ({ stdout: parentStartedAt, stderr: "" })),
+    runExec: vi.fn(async () => ({ stdout: "", stderr: "" })),
   };
 });
 

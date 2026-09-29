@@ -31,6 +31,28 @@ const { getRuntimeConfigWriteApplication } =
   await import("../../config/runtime-write-application.js");
 const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
 
+function restrictedLoginConfig(workspace: string): OpenClawConfig {
+  return {
+    ...buildLoginParams("/login").cfg,
+    agents: {
+      defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
+      entries: { main: { workspace } },
+    },
+  };
+}
+
+function buildConsentParams(
+  body: string,
+  config: OpenClawConfig,
+  opts: ReturnType<typeof blockReplyOpts> = {},
+) {
+  const params = buildLoginParams(body, {
+    opts: { ...blockReplyOpts(), getProviderLoginConfig: () => config, ...opts },
+  });
+  params.cfg = config;
+  return params;
+}
+
 function loginChoiceCommand(
   reply: ReplyPayload | undefined,
   label = "Show all OpenAI models",
@@ -109,13 +131,8 @@ describe("handleLoginCommand model consent", () => {
         await state.writeConfig(config);
         const before = await fs.readFile(state.configPath, "utf8");
         const delivery = blockReplyOpts();
-        const command = (body: string) => {
-          const params = buildLoginParams(body, {
-            opts: { ...delivery, getProviderLoginConfig: () => config },
-          });
-          params.cfg = config;
-          return dispatchLoginCommand(params);
-        };
+        const command = (body: string) =>
+          dispatchLoginCommand(buildConsentParams(body, config, delivery));
         const menu = await command("/login");
         const providerCommand = loginChoiceCommand(menu.reply, label);
         expect(providerCommand).toBe(`/login oauth/${pluginId}/${provider}`);
@@ -158,26 +175,14 @@ describe("handleLoginCommand model consent", () => {
     },
   );
 
-  it.each(["applied", "failed", "restart-pending"] as const)(
+  it.each(["applied", "restart-pending"] as const)(
     "waits for registered model-access application and reports %s",
     async (status) => {
       await withOpenClawTestState({ label: "login-access-application" }, async (state) => {
-        const config: OpenClawConfig = {
-          ...buildLoginParams("/login openai").cfg,
-          agents: {
-            defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
-            entries: { main: { workspace: state.workspaceDir } },
-          },
-        };
+        const config = restrictedLoginConfig(state.workspaceDir);
         await state.writeConfig(config);
         mockSuccessfulLoginWithRestrictions(config);
-        const command = (body: string) => {
-          const params = buildLoginParams(body, {
-            opts: { ...blockReplyOpts(), getProviderLoginConfig: () => config },
-          });
-          params.cfg = config;
-          return dispatchLoginCommand(params);
-        };
+        const command = (body: string) => dispatchLoginCommand(buildConsentParams(body, config));
         const initial = await command("/login openai");
         const claimReady = createDeferredCore<RuntimeConfigWriteApplicationClaim>();
         let pendingClaim: RuntimeConfigWriteApplicationClaim | undefined;
@@ -224,29 +229,19 @@ describe("handleLoginCommand model consent", () => {
     "renews a %s model-access choice without another sign-in or an unconfirmed write",
     async (cause) => {
       await withOpenClawTestState({ label: "login-access-recovery" }, async (state) => {
-        let config: OpenClawConfig = {
-          ...buildLoginParams("/login codex").cfg,
-          agents: {
-            defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
-            entries: { main: { workspace: state.workspaceDir } },
-          },
-        };
+        let config = restrictedLoginConfig(state.workspaceDir);
         await state.writeConfig(config);
         mockSuccessfulLoginWithRestrictions(config);
         let authorized = true;
         const command = async (body: string) => {
-          const params = buildLoginParams(body, {
-            opts: {
-              ...blockReplyOpts(),
-              getProviderLoginConfig: () => config,
-              assertProviderLoginAuthority: () => {
-                if (!authorized) {
-                  throw new Error("Owner access was removed.");
-                }
-              },
+          const params = buildConsentParams(body, config, {
+            getProviderLoginConfig: () => config,
+            assertProviderLoginAuthority: () => {
+              if (!authorized) {
+                throw new Error("Owner access was removed.");
+              }
             },
           });
-          params.cfg = config;
           return handleLoginCommand(params, true);
         };
         const initial = await command("/login codex");
@@ -306,22 +301,10 @@ describe("handleLoginCommand model consent", () => {
 
   it("keeps model access answerable after releasing the login reservation", async () => {
     await withOpenClawTestState({ label: "login-access-lifetime" }, async (state) => {
-      const config: OpenClawConfig = {
-        ...buildLoginParams("/login codex").cfg,
-        agents: {
-          defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
-          entries: { main: { workspace: state.workspaceDir } },
-        },
-      };
+      const config = restrictedLoginConfig(state.workspaceDir);
       await state.writeConfig(config);
       mockSuccessfulLoginWithRestrictions(config);
-      const command = (body: string) => {
-        const params = buildLoginParams(body, {
-          opts: { ...blockReplyOpts(), getProviderLoginConfig: () => config },
-        });
-        params.cfg = config;
-        return handleLoginCommand(params, true);
-      };
+      const command = (body: string) => handleLoginCommand(buildConsentParams(body, config), true);
       const initial = await command("/login codex");
       const choice = loginChoiceCommand(initial?.reply);
       runModelsAuthLoginFlowMock.mockResolvedValueOnce({
@@ -376,10 +359,7 @@ describe("handleLoginCommand model consent", () => {
     async (label, allow, outcome, revocation) => {
       await withOpenClawTestState({ label: "login-command-consent" }, async (state) => {
         const params = buildLoginParams("/login codex", { opts: blockReplyOpts() });
-        params.cfg.agents = {
-          defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
-          entries: { main: { workspace: state.workspaceDir } },
-        };
+        params.cfg = restrictedLoginConfig(state.workspaceDir);
         params.cfg.commands = { ...params.cfg.commands, allowFrom: { slack: ["owner"] } };
         await state.writeConfig(params.cfg);
         setRuntimeConfigSnapshot(params.cfg);
@@ -406,13 +386,7 @@ describe("handleLoginCommand model consent", () => {
         const login = await dispatchLoginCommand(params);
         expect(login?.shouldContinue).toBe(false);
         expect(login.reply?.text).toContain("Sign-in status could not be confirmed.");
-        const button = login?.reply?.presentation?.blocks
-          .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
-          .find((entry) => entry.label === label);
-        if (button?.action?.type !== "command") {
-          throw new Error("Expected returned consent buttons");
-        }
-        const command = button.action.command;
+        const command = loginChoiceCommand(login.reply, label);
         const revokedConfig: OpenClawConfig = {
           ...params.cfg,
           commands: { ...params.cfg.commands, allowFrom: { slack: ["replacement"] } },

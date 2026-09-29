@@ -70,14 +70,8 @@ function isAbortLikeReceiveError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
-  const name =
-    "name" in err && typeof (err as { name?: unknown }).name === "string"
-      ? (err as { name: string }).name
-      : "";
-  const message =
-    "message" in err && typeof (err as { message?: unknown }).message === "string"
-      ? (err as { message: string }).message
-      : "";
+  const name = "name" in err && typeof err.name === "string" ? err.name : "";
+  const message = "message" in err && typeof err.message === "string" ? err.message : "";
   return (
     name === "AbortError" ||
     message === "Premature close" ||

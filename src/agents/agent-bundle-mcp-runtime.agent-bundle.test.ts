@@ -4,12 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { setSessionMcpRuntimeScheduler } from "./agent-bundle-mcp-manager-api.js";
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import {
   disposeAllSessionMcpRuntimes,
@@ -19,9 +21,16 @@ import {
 const tempDirs: string[] = [];
 const PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
+beforeEach(async () => {
+  scheduler = createTestGatewayScheduler();
+  await setSessionMcpRuntimeScheduler(scheduler);
+});
 
 afterEach(async () => {
   await disposeAllSessionMcpRuntimes();
+  await scheduler.stop();
   clearPluginMetadataLifecycleCaches();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });

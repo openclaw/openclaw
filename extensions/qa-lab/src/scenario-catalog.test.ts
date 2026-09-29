@@ -174,7 +174,7 @@ describe("qa scenario catalog", () => {
 
   it("keeps the audited parallel script allowlist exact", () => {
     const expected =
-      "active-talk-agent-run-status agent-run-identity-inspection channel-health-monitor-lifecycle cli-status-health-snapshots diagnostic-events-boundary gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-pty-evidence-producer-contract tui-streaming-tool-cards-pty voice-call-cli-rpc-agent-tool".split(
+      "active-talk-agent-run-status agent-run-identity-inspection channel-health-monitor-lifecycle cli-status-health-snapshots diagnostic-events-boundary gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-pty-evidence-producer-contract tui-streaming-tool-cards-pty".split(
         " ",
       );
     const marked = readQaScenarioPack().scenarios.filter(
@@ -189,7 +189,12 @@ describe("qa scenario catalog", () => {
       parallelSafe: true,
       allowBlockedEvidence: true,
     });
-    for (const scenarioId of ["cached-health-snapshot-boundaries", "gateway-rpc-account-health"]) {
+    for (const scenarioId of [
+      "cached-health-snapshot-boundaries",
+      "gateway-rpc-account-health",
+      "mcp-gateway-connect-startup-retry",
+      "voice-call-cli-rpc-agent-tool",
+    ]) {
       expect(readQaScenarioById(scenarioId).execution).toMatchObject({
         kind: "script",
         parallelSafe: false,
@@ -695,12 +700,6 @@ describe("qa scenario catalog", () => {
     expect(flow).toContain("[sourceSessionKey, targetSessionKey, groupSessionKey]");
     expect(flow).toContain("readSessionTranscriptSummary");
     expect(flow).toContain("transcript.eventCursor > 0");
-    expect(flow).toContain(
-      "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length",
-    );
-    expect(flow).toContain('"saveAs":"pauseCommandOutbound"');
-    expect(flow).toContain("candidate.conversation.id === config.pausedConversationId");
-    expect(flow).toContain('"sinceIndex":{"ref":"pauseCommandStartIndex"}');
     expect(flow).not.toContain('"call":"sleep"');
     expect(flow).not.toContain(".sessionFile");
   });

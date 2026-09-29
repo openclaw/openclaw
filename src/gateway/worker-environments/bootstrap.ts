@@ -10,14 +10,18 @@ import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
 import { normalizeScpRemotePath } from "../../infra/scp-host.js";
 import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
-import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
+import {
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_MANIFEST_VERSION,
+} from "../../shared/worker-bundle-hash.js";
 import {
   commandFailure,
   isSuccess,
   runSshScript,
   type WorkerBootstrapCommandRunner,
 } from "./bootstrap-command.js";
-import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from "./bundle.js";
+import { bundleTransferTimeoutMs, DEFAULT_BOOTSTRAP_TIMEOUT_MS } from "./bootstrap-timeouts.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   prepareWorkerSsh,
   type PreparedWorkerSsh,
@@ -28,10 +32,6 @@ import {
 
 const BOOTSTRAP_ROOT = ".openclaw-worker";
 const BOOTSTRAP_RECEIPT = "bootstrap-receipt.json";
-const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 10 * 60_000;
-const BUNDLE_TRANSFER_MIN_THROUGHPUT_BYTES_PER_SECOND = 125_000;
-const BUNDLE_TRANSFER_TIMEOUT_MAX_MS = 60 * 60_000;
-const BOOTSTRAP_OPERATION_HEADROOM_MS = 5 * 60_000;
 const NODE_MISSING_EXIT_CODE = 42;
 const NPM_MISSING_EXIT_CODE = 43;
 const LOCK_TIMEOUT_EXIT_CODE = 44;
@@ -43,31 +43,6 @@ const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
 const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
-
-// Scale transfer time for congested uplinks (~243 MB at <4 Mbps exceeds 10 minutes).
-// The base timeout remains the floor; the cap keeps transfer bounded and fail-closed.
-function bundleTransferTimeoutMs(tarballBytes: number, floorMs: number): number {
-  if (!Number.isSafeInteger(tarballBytes) || tarballBytes < 0) {
-    throw new Error("Worker bundle artifact has an invalid tarball size");
-  }
-  return Math.min(
-    BUNDLE_TRANSFER_TIMEOUT_MAX_MS,
-    Math.max(
-      floorMs,
-      Math.ceil(tarballBytes / BUNDLE_TRANSFER_MIN_THROUGHPUT_BYTES_PER_SECOND) * 1000,
-    ),
-  );
-}
-
-/** Bounds the complete bootstrap lifecycle without preempting any permitted phase. */
-export function workerBootstrapOperationTimeoutMs(artifact: WorkerInstallationArtifact): number {
-  const nonTransferTimeoutMs = DEFAULT_BOOTSTRAP_TIMEOUT_MS * 3;
-  const transferTimeoutMs =
-    artifact.install === "bundle"
-      ? bundleTransferTimeoutMs(artifact.tarballBytes, DEFAULT_BOOTSTRAP_TIMEOUT_MS)
-      : 0;
-  return nonTransferTimeoutMs + transferTimeoutMs + BOOTSTRAP_OPERATION_HEADROOM_MS;
-}
 
 const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));
 const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};
@@ -538,10 +513,6 @@ function parseReceiptJson(
   return parsed;
 }
 
-function workerUploadFilename(bundleHash: string, operationToken: string): string {
-  return `openclaw-upload-${bundleHash}.tgz.${operationToken}`;
-}
-
 const CLEANUP_UPLOAD_SCRIPT = String.raw`set -eu
 hash=$1
 operation_token=$2
@@ -660,7 +631,7 @@ export async function bootstrapWorker(
       : timeoutMs;
   const receipt = normalizeHandshake(artifact);
   const operationToken = createHash("sha256").update(request.operationId).digest("hex");
-  const uploadFilename = workerUploadFilename(receipt.bundleHash, operationToken);
+  const uploadFilename = `openclaw-upload-${receipt.bundleHash}.tgz.${operationToken}`;
   const run = dependencies.runCommand ?? runCommandWithTimeout;
   let needsUploadCleanup = false;
   const assertCurrent = () => {

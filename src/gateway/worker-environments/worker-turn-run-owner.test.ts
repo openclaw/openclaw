@@ -17,9 +17,10 @@ import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-r
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import {
   logSessionStateChange,
-  startDiagnosticHeartbeat,
-  stopDiagnosticHeartbeat,
+  startGatewayDiagnosticHeartbeat,
+  stopGatewayDiagnosticHeartbeat,
 } from "../../logging/diagnostic.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -34,6 +35,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   credential,
   measureLaunchTurn,
+  readLaunchToolNames,
   placements,
   seedActivePlacement,
   setupWorkerTurnLauncherTest,
@@ -72,6 +74,7 @@ describe("cloud worker run ownership", () => {
           reconcileWorkspace: vi.fn(),
           stop: vi.fn(),
           measureLaunchTurn,
+          readLaunchToolNames,
           launchTurn: async (request) => {
             request.onDispatchReady?.();
             workerSignal = request.signal;
@@ -151,7 +154,8 @@ describe("cloud worker run ownership", () => {
         sessionKey: SESSION_KEY,
         state: "processing",
       });
-      startDiagnosticHeartbeat(
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler("fake-timers"),
         { diagnostics: { enabled: true } },
         {
           recoverStuckSession: recoverStuckDiagnosticSession,
@@ -238,7 +242,7 @@ describe("cloud worker run ownership", () => {
         ).toBeUndefined();
         expect(environments.destroy).not.toHaveBeenCalled();
       } finally {
-        stopDiagnosticHeartbeat();
+        stopGatewayDiagnosticHeartbeat();
         setDiagnosticsEnabledForProcess(previousDiagnostics);
         finishLaunch.resolve();
         operation.abortByUser();

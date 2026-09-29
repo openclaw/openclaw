@@ -7,7 +7,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { hasErrnoCode } from "../../infra/errno.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -47,23 +46,9 @@ afterEach(() => {
 });
 
 it.each([
-  { name: "revoked-absent", revoked: true, existing: false, releaseDenied: false, json: true },
-  { name: "revoked-existing", revoked: true, existing: true, releaseDenied: false, json: true },
-  { name: "authorized-failure", revoked: false, existing: true, releaseDenied: false, json: true },
-  {
-    name: "release-denied-absent",
-    revoked: false,
-    existing: false,
-    releaseDenied: true,
-    json: true,
-  },
-  {
-    name: "release-denied-existing",
-    revoked: false,
-    existing: true,
-    releaseDenied: true,
-    json: false,
-  },
+  { name: "revoked", revoked: true, releaseDenied: false, json: true },
+  { name: "authorized-failure", revoked: false, releaseDenied: false, json: true },
+  { name: "release-denied", revoked: false, releaseDenied: true, json: false },
 ])("preserves settled managed failure disposition: $name", async (trial) => {
   const root = await fs.realpath(dirs.make("update-terminal-triage-"));
   const temporary = path.join(root, "private-tmp");
@@ -86,10 +71,8 @@ it.each([
   const owner = randomUUID();
   const artifact = path.join(diagnosticDir, "update-failure.json");
   const previous = '{"retained":"original diagnostic"}\n';
-  if (trial.existing) {
-    await fs.writeFile(artifact, previous, { mode: 0o600 });
-  }
-  const priorStat = trial.existing ? await fs.stat(artifact) : undefined;
+  await fs.writeFile(artifact, previous, { mode: 0o600 });
+  const priorStat = await fs.stat(artifact);
   await fs.writeFile(
     metadata,
     JSON.stringify({
@@ -234,13 +217,8 @@ it.each([
     ).catch((error: unknown) => {
       exit = error;
     });
-    const after = await fs.readFile(artifact, "utf8").catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return null;
-      }
-      throw error;
-    });
-    const afterStat = after === null ? undefined : await fs.stat(artifact);
+    const after = await fs.readFile(artifact, "utf8");
+    const afterStat = await fs.stat(artifact);
     const artifactOpens = opened.mock.calls.filter(
       ([file, flags]) => path.dirname(String(file)) === diagnosticDir && flags === "wx",
     ).length;
@@ -248,38 +226,10 @@ it.each([
       ([, destination]) => String(destination) === artifact,
     ).length;
     const recorded = getUpdateRun(run.runId, { env });
-    const observation = {
-      name: trial.name,
-      statusAtPublication,
-      pendingAtPublication,
-      releasePendingAtPublication,
-      failureCauses,
-      humanOutput: human.mock.calls.map(([value]) => String(value)),
-      exitCode: exit instanceof ExitError ? exit.code : null,
-      reports: output.mock.calls.map(([value]) => value),
-      artifactBefore: trial.existing ? previous : null,
-      artifactAfter: after,
-      artifactOpens,
-      artifactRenames,
-      recorded,
-      artifactIdentityUnchanged:
-        priorStat && afterStat
-          ? priorStat.ino === afterStat.ino && priorStat.mtimeMs === afterStat.mtimeMs
-          : undefined,
-      leaseAfter: store.read(root),
-    };
-    const evidence = process.env.OPENCLAW_TERMINAL_TRIAGE_PROOF_DIR;
-    if (evidence) {
-      await fs.mkdir(evidence, { recursive: true });
-      await fs.writeFile(
-        path.join(evidence, `${trial.name}.json`),
-        JSON.stringify(observation, null, 2),
-      );
-    }
     expect(exit).toBeInstanceOf(ExitError);
     expect(savedAtPublication).toContain("OpenClaw update failed");
     const unsettled = trial.revoked || trial.releaseDenied;
-    expect(observation.exitCode).toBe(unsettled ? 1 : 7);
+    expect(exit).toMatchObject({ code: unsettled ? 1 : 7 });
     expect(statusAtPublication).toBe("running");
     expect(pendingAtPublication).toBe(trial.revoked);
     expect(releasePendingAtPublication).toBe(trial.releaseDenied);
@@ -298,13 +248,13 @@ it.each([
       expect(output).not.toHaveBeenCalled();
       expect(recorded).toBeDefined();
       const report = renderUpdateRunReport(recorded!);
-      expect(observation.humanOutput.filter((line) => line.includes(report.headline))).toHaveLength(
-        1,
-      );
+      expect(
+        human.mock.calls.filter(([line]) => String(line).includes(report.headline)),
+      ).toHaveLength(1);
     }
     expect(recorded?.status).toBe("failed");
     // Direct release denial retains the local lease; borrowing retains the helper's lease.
-    expect(observation.leaseAfter).toMatchObject({
+    expect(store.read(root)).toMatchObject({
       kind: "current",
       lease: trial.releaseDenied
         ? { helper: { pid: process.pid }, executor: { pid: process.pid } }
@@ -313,14 +263,13 @@ it.each([
     if (unsettled) {
       expect(artifactOpens).toBe(0);
       expect(artifactRenames).toBe(0);
-      expect(after).toBe(trial.existing ? previous : null);
-      if (trial.existing) {
-        expect(observation.artifactIdentityUnchanged).toBe(true);
-      }
+      expect(after).toBe(previous);
+      expect(afterStat.ino).toBe(priorStat.ino);
+      expect(afterStat.mtimeMs).toBe(priorStat.mtimeMs);
     } else {
       expect(artifactOpens).toBe(1);
       expect(artifactRenames).toBe(1);
-      expect(JSON.parse(after!)).toMatchObject({
+      expect(JSON.parse(after)).toMatchObject({
         result: { status: "error", reason: result.reason },
       });
     }

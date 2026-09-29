@@ -107,6 +107,30 @@ describe("plugin install transaction ownership", () => {
     expect(settled).toEqual(["rollback:second", "rollback:first"]);
   });
 
+  it("retains the original install failure when rollback also fails", async () => {
+    const failure = new Error("record write failed");
+    const recoveryFailure = new Error("backup restore failed");
+    const rollback = vi.fn(async () => {
+      throw recoveryFailure;
+    });
+    const outcome = await withPluginInstallTransactions(
+      {},
+      () => {},
+      async (owned) => {
+        retainPluginInstallTransaction(
+          owned,
+          attachPluginInstallTransaction({}, { commit: vi.fn(), rollback }),
+        );
+        throw failure;
+      },
+    ).catch((error: unknown) => error);
+
+    expect(outcome).toBeInstanceOf(AggregateError);
+    expect(outcome).toMatchObject({ cause: failure, errors: [failure, recoveryFailure] });
+    expect(String(outcome)).toContain(failure.message);
+    expect(rollback).toHaveBeenCalledOnce();
+  });
+
   it("preserves published state when final cleanup fails after the record commit", async () => {
     const rollback = vi.fn(async () => {});
     const failure = new Error("backup identity changed");

@@ -21,7 +21,6 @@ import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js
 import {
   resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
-  type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
@@ -49,6 +48,14 @@ export type MemorySyncProgressState = {
   total: number;
   label?: string;
   report: (update: MemorySyncProgressUpdate) => void;
+};
+
+export type MemoryEmbeddingBatchConfig = {
+  enabled: boolean;
+  wait: boolean;
+  concurrency: number;
+  pollIntervalMs: number;
+  timeoutMs: number;
 };
 
 export type MemoryIndexWorkItem = {
@@ -89,17 +96,11 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: EmbeddingProviderId;
+  protected fallbackFrom?: string;
   protected abstract providerUnavailableReason?: string;
   protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
-  protected abstract batch: {
-    enabled: boolean;
-    wait: boolean;
-    concurrency: number;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  };
+  protected abstract batch: MemoryEmbeddingBatchConfig;
   protected readonly sources: Set<MemorySource> = new Set();
   protected readonly sourceInspections = new Map<
     MemorySource,
@@ -187,11 +188,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     }
   }
 
-  protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
-    for (const item of items) {
-      await this.indexFile(item.entry, { source: item.source });
-    }
-  }
+  protected abstract indexFiles(items: MemoryIndexWorkItem[]): Promise<void>;
 
   protected emptySourceSyncPlan(): MemorySourceSyncPlan {
     return { indexItems: [], finalize: () => {} };
@@ -265,14 +262,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       this.sessionsDirtyFiles.size > 0;
   }
 
-  protected shouldDeferSourceWideBatch(): boolean {
-    return Boolean(
-      this.batch.enabled &&
-      this.provider &&
-      this.providerRuntime?.batchEmbed &&
-      this.providerRuntime.sourceWideBatchEmbed === true,
-    );
-  }
+  protected abstract shouldDeferSourceWideBatch(): boolean;
 
   protected advanceSyncProgress(progress: MemorySyncProgressState | undefined, count = 1): void {
     if (!progress) {

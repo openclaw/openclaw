@@ -5,9 +5,9 @@ import {
   sameQueuedDeliveryVersion,
   type StoredComposerSession,
 } from "../../lib/chat/outbox-store-codec.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   applyStoredChatOutboxScope,
-  type StoredChatOutboxScope,
   type StoredComposerState,
 } from "../../lib/chat/outbox-store.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";

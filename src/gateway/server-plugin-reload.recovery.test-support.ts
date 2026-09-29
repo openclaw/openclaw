@@ -368,6 +368,7 @@ export type RecoveryFixtureFactory = (
 
 export function createRecoveryChannelManager(fixture: Awaited<ReturnType<RecoveryFixtureFactory>>) {
   return createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: fixture.getConfig,
     getPluginRegistry: () => fixture.registryOwner.registry,
     channelLogs: {},

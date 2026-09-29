@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { ExpressionBuilder } from "kysely";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
@@ -190,7 +191,7 @@ export function clearOpenClawAgentIntegrityVerification(
   withQuarantineWriter(env, (database) =>
     runSqliteImmediateTransactionSync(
       database,
-      () => deleteAgentIntegrityVerification(database, pathname, runtimeProof),
+      () => invalidateAgentIntegrityVerification(database, pathname, runtimeProof),
       {
         databaseLabel: resolveQuarantineStorePath(env),
         operationLabel: "quarantine.integrity.invalidate",
@@ -199,7 +200,7 @@ export function clearOpenClawAgentIntegrityVerification(
   );
 }
 
-function deleteAgentIntegrityVerification(
+function invalidateAgentIntegrityVerification(
   database: DatabaseSync,
   pathname: string,
   runtimeProof: "revoke" | "retain" = "revoke",
@@ -220,21 +221,26 @@ function deleteAgentIntegrityVerification(
       }
     }
   }
-  executeSqliteQuerySync(
-    database,
-    query
-      .deleteFrom("agent_integrity_verifications")
-      .where((eb) =>
-        eb.or([
-          eb("path", "=", resolveAgentIntegrityPath(pathname)),
-          ...[stored, current].flatMap((file) =>
-            file
-              ? [eb.and([eb("dev", "=", String(file.dev)), eb("ino", "=", String(file.ino))])]
-              : [],
-          ),
-        ]),
+  const matchesFile = (eb: ExpressionBuilder<IntegrityDatabase, "agent_integrity_verifications">) =>
+    eb.or([
+      eb("path", "=", resolveAgentIntegrityPath(pathname)),
+      ...[stored, current].flatMap((file) =>
+        file ? [eb.and([eb("dev", "=", String(file.dev)), eb("ino", "=", String(file.ino))])] : [],
       ),
-  );
+    ]);
+  // A blocked checkpoint dirties restart proof, but a later last writer can
+  // still certify this verified file after completing its checkpoint and close.
+  if (runtimeProof === "retain") {
+    executeSqliteQuerySync(
+      database,
+      query.updateTable("agent_integrity_verifications").set({ clean_close: 0 }).where(matchesFile),
+    );
+  } else {
+    executeSqliteQuerySync(
+      database,
+      query.deleteFrom("agent_integrity_verifications").where(matchesFile),
+    );
+  }
 }
 
 /** Only the last graceful lease release may publish cleanliness. */
@@ -242,14 +248,14 @@ export function markOpenClawAgentIntegrityClean(
   pathname: string,
   env: NodeJS.ProcessEnv,
   identity: string,
-): void {
+): "written" | "file-changed" | "verification-missing" {
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!current || identity !== `${current.dev}:${current.ino}`) {
-    return;
+    return "file-changed";
   }
-  withQuarantineWriter(env, (database) => {
+  return withQuarantineWriter(env, (database) => {
     const query = getNodeSqliteKysely<IntegrityDatabase>(database);
-    executeSqliteQuerySync(
+    const result = executeSqliteQuerySync(
       database,
       query
         .updateTable("agent_integrity_verifications")
@@ -259,6 +265,7 @@ export function markOpenClawAgentIntegrityClean(
         .where("ino", "=", String(current.ino))
         .where("app_version", "=", VERSION),
     );
+    return result.numAffectedRows === 1n ? "written" : "verification-missing";
   });
 }
 
@@ -525,7 +532,7 @@ export function recordOpenClawDatabaseQuarantine(options: {
               serializedGeneration,
             );
           if (options.kind === "agent") {
-            deleteAgentIntegrityVerification(database, options.path);
+            invalidateAgentIntegrityVerification(database, options.path);
           }
           return true;
         },
@@ -557,7 +564,7 @@ export function clearOpenClawDatabaseQuarantine(
           database
             .prepare("DELETE FROM quarantined_databases WHERE path = ?")
             .run(path.resolve(pathname));
-          deleteAgentIntegrityVerification(database, pathname);
+          invalidateAgentIntegrityVerification(database, pathname);
           return true;
         },
         {

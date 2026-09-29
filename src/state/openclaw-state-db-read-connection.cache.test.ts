@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as executionIdentityContext from "../audit/execution-identity-context.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   withOpenClawStateReadOnlyLocation,
@@ -26,6 +28,7 @@ vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
   },
 }));
 import "./openclaw-state-read.worker.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -56,18 +59,14 @@ function fixture() {
     operation: (database: OpenClawStateReadOnlyDatabase) => T,
     location = pathname,
   ) =>
-    withStateDatabaseCoordinatorRuntimeDirectory(
-      { directory: path.join(root, "locks"), keepAlive: false },
-      () =>
-        withOpenClawStateReadOnlyLocation(
-          operation,
-          pathname,
-          location,
-          undefined,
-          undefined,
-          undefined,
-          true,
-        ),
+    withOpenClawStateReadOnlyLocation(
+      operation,
+      pathname,
+      location,
+      undefined,
+      undefined,
+      undefined,
+      true,
     );
   const value = () => read(({ db }) => db.prepare("SELECT value FROM sample").get()?.value);
   const countOpens = () => opens.mock.calls.filter(([location]) => location === pathname).length;
@@ -75,7 +74,6 @@ function fixture() {
     worker.read({
       context: {
         environment: { OPENCLAW_STATE_DIR: root },
-        coordinatorRuntime: { directory: path.join(root, "locks"), keepAlive: false },
       },
       databasePath: pathname,
       location: pathname,
@@ -213,4 +211,140 @@ it("reopens a replacement file and leaves private snapshot readers task-scoped",
   const privateReader = read(({ db }) => db, snapshot);
   expect(privateReader.isOpen).toBe(false);
   fs.rmSync(snapshot);
+});
+
+it("reuses admitted audit schema facts and refreshes them after a peer schema change", () => {
+  const { pathname, read, workerRead, workerValue } = fixture();
+  const reader = read(({ db }) => db);
+  const schemaQueries = trackSqliteStatementExecutions(reader, ["schema"], (sql) =>
+    /\b(?:sqlite_schema|sqlite_master)\b/iu.test(sql) ? "schema" : null,
+  );
+  const inspect = vi.spyOn(executionIdentityContext, "inspectExecutionIdentityRunInDatabase");
+  const input = { runId: "missing-audit-run", now: 1_000 };
+  workerValue();
+  expect(schemaQueries.counts.schema).toBe(0);
+  expect(inspect).not.toHaveBeenCalled();
+  expect(workerRead({ type: "audit.run.inspect", input })).toMatchObject({
+    ok: true,
+    type: "audit.run.inspect",
+    result: { status: "inspected" },
+  });
+  expect(inspect).toHaveBeenLastCalledWith(reader, input, {
+    executionIdentityContexts: false,
+    auditEvents: false,
+    cronRunReceipts: false,
+    executionOwnerLifecycleBindings: false,
+  });
+  expect(schemaQueries.counts.schema).toBe(0);
+
+  const peer = sqlite.openNodeSqliteDatabase(pathname);
+  try {
+    for (const table of [
+      "execution_identity_contexts",
+      "audit_events",
+      "cron_run_receipts",
+      "execution_owner_lifecycle_bindings",
+    ]) {
+      peer.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table));
+    }
+    expect(workerRead({ type: "audit.run.inspect", input })).toMatchObject({
+      ok: true,
+      type: "audit.run.inspect",
+      result: { status: "inspected" },
+    });
+    expect(inspect).toHaveBeenLastCalledWith(reader, input, {
+      executionIdentityContexts: true,
+      auditEvents: true,
+      cronRunReceipts: true,
+      executionOwnerLifecycleBindings: true,
+    });
+    expect(schemaQueries.counts.schema).toBeGreaterThan(0);
+    const refreshedQueries = schemaQueries.counts.schema;
+    expect(read(({ db }) => db)).toBe(reader);
+    workerValue();
+    expect(schemaQueries.counts.schema).toBe(refreshedQueries);
+    expect(reader.isTransaction).toBe(false);
+  } finally {
+    schemaQueries.restore();
+    peer.close();
+  }
+});
+
+it("pins audit schema facts and inspection to one admission snapshot", () => {
+  const { pathname, read, workerRead } = fixture();
+  const reader = read(({ db }) => db);
+  const peer = sqlite.openNodeSqliteDatabase(pathname);
+  const original = executionIdentityContext.inspectExecutionIdentityRunInDatabase;
+  const inspect = vi
+    .spyOn(executionIdentityContext, "inspectExecutionIdentityRunInDatabase")
+    .mockImplementationOnce((db, input, schema) => {
+      expect(db).toBe(reader);
+      expect(db.isTransaction).toBe(true);
+      expect(schema.executionIdentityContexts).toBe(false);
+      peer.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "execution_identity_contexts"));
+      return original(db, input, schema);
+    });
+  const input = { runId: "admitted-before-first-use", now: 1_000 };
+  try {
+    expect(workerRead({ type: "audit.run.inspect", input })).toMatchObject({
+      ok: true,
+      type: "audit.run.inspect",
+      result: { status: "inspected" },
+    });
+    expect(reader.isTransaction).toBe(false);
+    expect(workerRead({ type: "audit.run.inspect", input })).toMatchObject({
+      ok: true,
+      type: "audit.run.inspect",
+      result: { status: "inspected" },
+    });
+    expect(inspect).toHaveBeenLastCalledWith(reader, input, {
+      executionIdentityContexts: true,
+      auditEvents: false,
+      cronRunReceipts: false,
+      executionOwnerLifecycleBindings: false,
+    });
+  } finally {
+    peer.close();
+  }
+});
+
+it("keeps Bun readers warm until pool retirement and reports replacement cleanup in the reply", () => {
+  const { root, pathname, read, workerRead, countOpens } = fixture();
+  vi.stubGlobal("process", {
+    ...process,
+    on: process.on.bind(process),
+    removeListener: process.removeListener.bind(process),
+    versions: { ...process.versions, bun: "1.4.2" },
+  });
+  try {
+    expect(workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      row: { updated_at_ms: 1 },
+    });
+    const previous = read(({ db }) => db);
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+    expect(previous.isOpen).toBe(true);
+    expect(workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      row: { updated_at_ms: 1 },
+    });
+    expect(countOpens()).toBe(1);
+
+    const replacementPath = path.join(root, "replacement.sqlite");
+    const replacement = sqlite.openNodeSqliteDatabase(replacementPath);
+    replacement.exec(
+      "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); INSERT INTO config_machine_state VALUES ('nodeHost.config', '2', 2)",
+    );
+    replacement.close();
+    fs.renameSync(pathname, path.join(root, "previous.sqlite"));
+    fs.renameSync(replacementPath, pathname);
+    expect(workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      row: { updated_at_ms: 2 },
+      nativeCleanupFailure: { error: undefined },
+    });
+    expect(previous.isOpen).toBe(false);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

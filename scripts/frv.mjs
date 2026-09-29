@@ -45,6 +45,7 @@ import {
   selectQueuedRunsToCancel,
   writeReleasePriorityRecord,
 } from "./lib/release-priority.mjs";
+import { sleep } from "./lib/sleep.mjs";
 import {
   createReleaseEvidenceClient,
   releaseExecutionPlanRestoreContract,
@@ -238,12 +239,6 @@ function isUnknownAllowEscapeSequencesFlag(error) {
   );
 }
 
-async function sleep(milliseconds) {
-  await new Promise((resolvePromise) => {
-    setTimeout(resolvePromise, milliseconds);
-  });
-}
-
 async function execGhRead(args, options = {}) {
   const attempts = options.attempts ?? 4;
   let lastError;
@@ -391,7 +386,10 @@ async function inspectRecovery(plan, producers, client, options) {
     inspectContinuation(plan, client, options),
     inspectArtifactProducers(producers, client, options),
   ]);
-  const children = [...diagnostics.children, ...artifacts];
+  return continuationStatus([...diagnostics.children, ...artifacts]);
+}
+
+function continuationStatus(children) {
   return {
     children,
     failed: children.filter((child) => child.status === "failed"),
@@ -794,13 +792,7 @@ export async function inspectContinuation(plan, client, options = {}) {
       };
     }),
   );
-  return {
-    children,
-    failed: children.filter((child) => child.status === "failed"),
-    active: children.filter((child) => child.status === "active"),
-    missing: children.filter((child) => child.status === "missing"),
-    passed: children.filter((child) => child.status === "passed"),
-  };
+  return continuationStatus(children);
 }
 
 export function createClient(repository, dependencies = {}) {
@@ -819,22 +811,19 @@ export function createClient(repository, dependencies = {}) {
   const rerun = (runId, action) =>
     mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);
   const execute = dependencies.execCommand ?? execCommand;
+  const readJobs = async (path, options) => {
+    const output = await apiText(path, ".jobs[] | @json", [], options);
+    return output
+      ? output
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+  };
   const attemptJobs =
     dependencies.getAttemptJobs ??
-    (async (runId, runAttempt, options) => {
-      const output = await apiText(
-        "actions/runs/" + runId + "/attempts/" + runAttempt + "/jobs?per_page=100",
-        ".jobs[] | @json",
-        [],
-        options,
-      );
-      return output
-        ? output
-            .split("\n")
-            .filter(Boolean)
-            .map((line) => JSON.parse(line))
-        : [];
-    });
+    ((runId, runAttempt, options) =>
+      readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options));
   const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
     const sourceSha = plan.trustedWorkflow?.sha;
     return execute(
@@ -868,7 +857,7 @@ export function createClient(repository, dependencies = {}) {
       },
     );
   };
-  const client = {
+  return {
     repository,
     getReleaseEvidenceClient() {
       releaseEvidenceClient ??= createReleaseEvidenceClient(repository);
@@ -883,20 +872,8 @@ export function createClient(repository, dependencies = {}) {
     getRunAttempt(runId, runAttempt, options) {
       return apiJson(`actions/runs/${runId}/attempts/${runAttempt}`, options);
     },
-    async getParentJobs(runId, options) {
-      const output = await apiText(
-        `actions/runs/${runId}/jobs?filter=all&per_page=100`,
-        ".jobs[] | @json",
-        [],
-        options,
-      );
-      return output
-        ? output
-            .split("\n")
-            .filter(Boolean)
-            .map((line) => JSON.parse(line))
-        : [];
-    },
+    getParentJobs: (runId, options) =>
+      readJobs(`actions/runs/${runId}/jobs?filter=all&per_page=100`, options),
     async getJobLog(jobId, options) {
       // Octopool's gh shim refuses log bodies with terminal escape sequences even off a TTY;
       // real gh ignores the flag off-TTY, so the controller works with either binary.
@@ -944,20 +921,18 @@ export function createClient(repository, dependencies = {}) {
       }
     },
   };
-  return client;
 }
 
 function controllerRunAttempt(run, sourceAttempt, expectedAttempt) {
   const runId = String(run.id);
   const observedAttempt = positiveInteger(run.run_attempt, `${runId} run attempt`);
-  switch (true) {
-    case observedAttempt < sourceAttempt:
-      throw new Error(`rerun source ${runId} attempt regressed`);
-    case observedAttempt > expectedAttempt:
-      throw new Error(`controller-owned run ${runId} advanced past attempt ${expectedAttempt}`);
-    default:
-      return observedAttempt;
+  if (observedAttempt < sourceAttempt) {
+    throw new Error(`rerun source ${runId} attempt regressed`);
   }
+  if (observedAttempt > expectedAttempt) {
+    throw new Error(`controller-owned run ${runId} advanced past attempt ${expectedAttempt}`);
+  }
+  return observedAttempt;
 }
 
 async function waitForTerminal(runIds, client, operationDeadline, expectedAttempts = new Map()) {
@@ -1911,6 +1886,17 @@ async function inspectPublicationStatus(options) {
     observeWindowsMarker,
     parseClawHubDispatch,
   } = policy;
+  function requireArtifactUploadJob(jobs, jobName, stepName) {
+    const matches = jobs.filter((job) => job.name === jobName);
+    requirePublication(
+      matches.length === 1 &&
+        matches[0].steps?.filter(
+          (step) =>
+            step.name === stepName && step.status === "completed" && step.conclusion === "success",
+        ).length === 1,
+    );
+    return matches[0];
+  }
   const { validateParentManifest } = await import("./release-ci-summary.mjs");
   const publication = newPublicationObservation(
     options.repository,
@@ -1977,15 +1963,10 @@ async function inspectPublicationStatus(options) {
     let diagnostic;
     if (evidence.state === "available") {
       // Failed publishers can upload diagnostics. Their job need not pass; its exact upload must.
-      const owner = jobs.filter((job) => job.name === "Publish plugins, then OpenClaw");
-      requirePublication(
-        owner.length === 1 &&
-          owner[0].steps?.filter(
-            (step) =>
-              step.name === "Upload postpublish diagnostics" &&
-              step.status === "completed" &&
-              step.conclusion === "success",
-          ).length === 1,
+      requireArtifactUploadJob(
+        jobs,
+        "Publish plugins, then OpenClaw",
+        "Upload postpublish diagnostics",
       );
       diagnostic = parsePublicationDiagnostic(evidence.value, publisher);
       if (!diagnostic) {
@@ -2095,15 +2076,10 @@ async function inspectPublicationStatus(options) {
       PUBLICATION_LIMITS.diagnosticBytes,
     );
     if (windows.state === "available") {
-      const owner = jobs.filter((job) => job.name === "Dispatch Windows assets after publication");
-      requirePublication(
-        owner.length === 1 &&
-          owner[0].steps?.filter(
-            (step) =>
-              step.name === "Upload Windows dispatch evidence" &&
-              step.status === "completed" &&
-              step.conclusion === "success",
-          ).length === 1,
+      requireArtifactUploadJob(
+        jobs,
+        "Dispatch Windows assets after publication",
+        "Upload Windows dispatch evidence",
       );
       const dispatch = parseWindowsDispatch(windows.value);
       requirePublication(
@@ -2132,17 +2108,10 @@ async function inspectPublicationStatus(options) {
         );
         if (terminal.state === "available") {
           const nativeJobs = await reader.getAttemptJobs(String(run.id), run.run_attempt);
-          const nativeOwner = nativeJobs.filter(
-            (job) => job.name === "Promote signed Windows installers",
-          );
-          requirePublication(
-            nativeOwner.length === 1 &&
-              nativeOwner[0].steps?.filter(
-                (step) =>
-                  step.name === "Upload Windows promotion evidence" &&
-                  step.status === "completed" &&
-                  step.conclusion === "success",
-              ).length === 1,
+          const nativeOwner = requireArtifactUploadJob(
+            nativeJobs,
+            "Promote signed Windows installers",
+            "Upload Windows promotion evidence",
           );
           observeWindowsMarker(
             publication,
@@ -2150,7 +2119,7 @@ async function inspectPublicationStatus(options) {
             dispatch,
             run,
             terminal.artifactId,
-            nativeOwner[0],
+            nativeOwner,
           );
         }
       }

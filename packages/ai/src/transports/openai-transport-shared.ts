@@ -12,7 +12,6 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getAiTransportHost } from "../host.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
-/** Shared options, usage shape, cache identity, and ordering for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { headersToRecord } from "../utils/headers.js";
 import { notifyProviderHttpResponse } from "./transport-stream-shared.js";

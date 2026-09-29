@@ -52,7 +52,11 @@ import {
   readToolStringParam,
   ToolInputError,
 } from "./common.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+  wrapGatewayPersonalToolExecution,
+} from "./gateway-caller-context.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   recordSessionToolActionFact,
@@ -62,8 +66,8 @@ import {
 import {
   maybeSpawnVisibleSession,
   type VisibleSessionsSpawnDeps,
-  VISIBLE_SESSIONS_SPAWN_SCHEMA,
 } from "./sessions-spawn-visible.js";
+import { VISIBLE_SESSIONS_SPAWN_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -155,6 +159,12 @@ function createSessionsSpawnToolSchema(params: {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
     task: Type.String(),
+    user: Type.Optional(
+      Type.String({
+        description:
+          "The person's requester_profile.id, required when several people have steered this turn.",
+      }),
+    ),
     taskName: Type.Optional(
       Type.String({
         description:
@@ -371,13 +381,18 @@ export function createSessionsSpawnTool(
       spawnRestricted: restrictToSpawned,
     }),
     parameters,
-    execute: async (_toolCallId, args, signal) =>
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
+        const operatorSelection = resolveGatewayToolOperatorSelection();
         const executionSignal =
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
             : (signal ?? opts?.signal);
-        const assertSourceActive = captureAgentToolSourceExecutionGuard(executionSignal);
+        const assertSourceExecution = captureAgentToolSourceExecutionGuard(executionSignal);
+        const assertSourceActive = () => {
+          assertSourceExecution();
+          operatorSelection.assertCurrent();
+        };
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(
@@ -567,6 +582,25 @@ export function createSessionsSpawnTool(
           cleanup,
           expectsCompletionMessage,
         } as const;
+        const inheritedSpawnContext = () => ({
+          assertActive,
+          onSpawnEffectsStart,
+          agentSessionKey: opts?.agentSessionKey,
+          requesterTurnRunId: opts?.requesterTurnRunId,
+          completionOwnerKey: opts?.completionOwnerKey,
+          requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+          agentChannel: opts?.agentChannel,
+          agentAccountId: opts?.agentAccountId,
+          agentTo: opts?.agentTo,
+          agentThreadId: opts?.agentThreadId,
+          currentChannelId: opts?.currentChannelId,
+          currentMessageId: opts?.currentMessageId,
+          agentGroupSpace: opts?.agentGroupSpace,
+          agentMemberRoleIds: opts?.agentMemberRoleIds,
+          sandboxed: opts?.sandboxed,
+          inheritedToolAllowlist: opts?.inheritedToolAllowlist,
+          inheritedToolDenylist: opts?.inheritedToolDenylist,
+        });
 
         if (runtime === "acp") {
           const { spawnAcpDirect } = await loadAcpSpawnModule();
@@ -590,25 +624,9 @@ export function createSessionsSpawnTool(
             },
             withParentExecutionIdentity(
               {
-                assertActive,
-                onSpawnEffectsStart,
-                agentSessionKey: opts?.agentSessionKey,
-                requesterTurnRunId: opts?.requesterTurnRunId,
-                completionOwnerKey: opts?.completionOwnerKey,
-                requesterAgentIdOverride: opts?.requesterAgentIdOverride,
-                agentChannel: opts?.agentChannel,
-                agentAccountId: opts?.agentAccountId,
-                agentTo: opts?.agentTo,
-                agentThreadId: opts?.agentThreadId,
+                ...inheritedSpawnContext(),
                 currentMessagingTarget: opts?.currentMessagingTarget,
-                currentChannelId: opts?.currentChannelId,
-                currentMessageId: opts?.currentMessageId,
                 agentGroupId: opts?.agentGroupId ?? undefined,
-                agentGroupSpace: opts?.agentGroupSpace,
-                agentMemberRoleIds: opts?.agentMemberRoleIds,
-                sandboxed: opts?.sandboxed,
-                inheritedToolAllowlist: opts?.inheritedToolAllowlist,
-                inheritedToolDenylist: opts?.inheritedToolDenylist,
               },
               parentExecutionIdentityToken,
             ),
@@ -649,31 +667,15 @@ export function createSessionsSpawnTool(
           },
           withParentExecutionIdentity(
             {
-              agentSessionKey: opts?.agentSessionKey,
-              requesterTurnRunId: opts?.requesterTurnRunId,
+              ...inheritedSpawnContext(),
               requesterThinkingLevel: opts?.requesterThinkingLevel,
               requesterModel: opts?.requesterModel,
-              completionOwnerKey: opts?.completionOwnerKey,
-              agentChannel: opts?.agentChannel,
-              agentAccountId: opts?.agentAccountId,
-              agentTo: opts?.agentTo,
-              agentThreadId: opts?.agentThreadId,
               currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
-              currentChannelId: opts?.currentChannelId,
-              currentMessageId: opts?.currentMessageId,
               agentGroupId: opts?.agentGroupId,
               agentGroupChannel: opts?.agentGroupChannel,
-              agentGroupSpace: opts?.agentGroupSpace,
-              agentMemberRoleIds: opts?.agentMemberRoleIds,
-              requesterAgentIdOverride: opts?.requesterAgentIdOverride,
               workspaceDir: opts?.workspaceDir,
               sessionPermissionPolicy: opts?.sessionPermissionPolicy,
-              inheritedToolAllowlist: opts?.inheritedToolAllowlist,
-              inheritedToolDenylist: opts?.inheritedToolDenylist,
               requesterRunId: opts?.requesterRunId,
-              sandboxed: opts?.sandboxed,
-              assertActive,
-              onSpawnEffectsStart,
             },
             parentExecutionIdentityToken,
           ),
@@ -682,6 +684,7 @@ export function createSessionsSpawnTool(
         recordAcceptedSessionSpawn(result, result.context);
         return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }),
+    ),
   };
   return bindCollectorSpawnTool(tool, parameters.properties, opts?.signal);
 }

@@ -3,7 +3,10 @@ import { lstatSync } from "node:fs";
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { hasErrnoCode } from "../infra/errno.js";
-import { SqliteCoordinatorError, throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
+import {
+  SqliteCoordinatorError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
@@ -20,11 +23,6 @@ import {
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-snapshot-source.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import {
-  acquireStateDatabaseHandleLease,
-  hasStateDatabaseSourceExclusion,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -47,6 +45,7 @@ import {
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import {
+  canReadWarmNativeSourceIndependently,
   withCachedOpenClawStateDatabaseReadOnly,
   type ReusedOpenClawStateReadOnlyDatabase,
 } from "./openclaw-state-db-readonly-reuse.js";
@@ -117,10 +116,10 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   const controller = new AbortController();
   let closeSnapshotWork: ((reason: unknown) => void) | undefined;
   const run = async () => {
-    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
     let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>;
     let prepared: PreparedSqliteReadOnlyLocation;
     try {
+      openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
       admission = captureOpenClawStateDatabaseReadAdmission(pathname);
       prepared = await prepareSqliteReadOnlyLocation(pathname, {
         preserveSourceArtifacts: isArtifactPreservingStateRead(),
@@ -384,18 +383,21 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
 export function executeExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
-  { context, current, mapError, signal }: OpenClawStateReadOptions = {},
+  { context, current, mapError, signal, preferIndependentWarmRead }: OpenClawStateReadOptions = {},
 ): Promise<OpenClawStateReadReply | undefined> {
   return mapOpenClawStateReadError(mapError, (receipt) => {
     context?.admission.assertCurrent();
     const execute = () =>
-      executeRetainedOpenClawStateRead(options, command, receipt, context, signal);
+      executeRetainedOpenClawStateRead(
+        options,
+        command,
+        receipt,
+        context,
+        signal,
+        preferIndependentWarmRead,
+      );
     const read = current ? () => stateSnapshotReads.exit(execute) : execute;
-    const run = () =>
-      context
-        ? withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, read)
-        : read();
-    return context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(run) : run();
+    return context?.runInCapturedSchemaScope ? context.runInCapturedSchemaScope(read) : read();
   });
 }
 
@@ -405,6 +407,7 @@ function executeRetainedOpenClawStateRead(
   receipt: OpenClawStateReadReceipt,
   capturedContext?: OpenClawStateReadOptions["context"],
   signal?: AbortSignal,
+  preferIndependentWarmRead?: true,
 ): Promise<OpenClawStateReadReply | undefined> {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -424,7 +427,6 @@ function executeRetainedOpenClawStateRead(
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
   }
-  const excluded = hasStateDatabaseSourceExclusion(pathname);
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();
   const readSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -437,27 +439,26 @@ function executeRetainedOpenClawStateRead(
     let validated = false;
     const acceptanceErrors: unknown[] = [];
     let borrowed: ReturnType<typeof retainOpenClawStateDatabaseForIndependentRead>;
-    let sourcePin: ReturnType<typeof acquireStateDatabaseHandleLease> | undefined;
     let prepared: AsyncPreparedSqliteReadOnlyLocation | undefined;
     let expectedIdentity: string | undefined;
     let releasePreparedSource: (() => void) | undefined;
+    const assertReadLifetime = () => {
+      readSignal.throwIfAborted();
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      borrowed?.assertCurrent();
+      if (expectedIdentity !== undefined) {
+        assertExistingDatabaseIdentity(pathname, expectedIdentity);
+      }
+      if (scopes.some((scope) => !scope.active)) {
+        throw new Error("Shared-state read scope is closed");
+      }
+    };
     const authority: OpenClawStateReadAuthority = {
       signal: readSignal,
       assertCurrent() {
-        readSignal.throwIfAborted();
-        context.maintenanceScope?.assertAdmission();
-        context.admission.assertCurrent();
-        if (excluded && !hasStateDatabaseSourceExclusion(pathname)) {
-          throw new Error("Shared-state source read scope is closed");
-        }
-        borrowed?.assertCurrent();
-        if (expectedIdentity !== undefined) {
-          assertExistingDatabaseIdentity(pathname, expectedIdentity);
-        }
-        if (scopes.some((scope) => !scope.active)) {
-          throw new Error("Shared-state read scope is closed");
-        }
-        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
+        assertReadLifetime();
+        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
       },
     };
     const cleanup = (): Promise<void> => {
@@ -488,20 +489,8 @@ function executeRetainedOpenClawStateRead(
             acceptanceErrors.push(error);
           }
         }
-        const errors: unknown[] = [];
-        try {
-          sourcePin?.release();
-          sourcePin = undefined;
-        } catch (error) {
-          errors.push(error);
-        }
-        try {
-          borrowed?.release();
-          borrowed = undefined;
-        } catch (error) {
-          errors.push(error);
-        }
-        throwSqliteLifecycleErrors(errors, "Shared-state read source release failed");
+        borrowed?.release();
+        borrowed = undefined;
         cleaned = true;
         unregister();
         for (const scope of scopes) {
@@ -533,43 +522,42 @@ function executeRetainedOpenClawStateRead(
       scope.resources.add(resource);
     }
     const read = async () => {
-      authority.assertCurrent();
+      assertReadLifetime();
       let nativeSource: OpenClawStateDatabase | undefined;
-      if (!snapshot) {
-        if (preserveArtifacts || excluded) {
-          const native = borrowOpenClawStateDatabaseForAsyncRead(pathname);
-          borrowed = native;
-          nativeSource = native?.database;
-        } else {
-          borrowed = retainOpenClawStateDatabaseForIndependentRead(pathname);
-        }
+      if (snapshot) {
+        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
+      } else if (preserveArtifacts) {
+        const native = borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read");
+        borrowed = native;
+        nativeSource = native?.database;
+      } else {
+        // The retainer checks database access before acquiring this read's native custody.
+        borrowed = retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read");
       }
       if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
         return undefined;
       }
-      if (excluded) {
-        sourcePin = acquireStateDatabaseHandleLease({ databasePath: pathname });
-      }
+      const independentWarmSource =
+        nativeSource &&
+        preferIndependentWarmRead &&
+        canReadWarmNativeSourceIndependently(
+          nativeSource,
+          pathname,
+          context.admission.identity.key,
+        );
       let location = snapshot?.location ?? pathname;
-      if (nativeSource) {
-        prepared = excluded
-          ? await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-              nativeSource.db,
-              authority.assertCurrent,
-            )
-          : await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-              nativeSource.db,
-              authority.assertCurrent,
-              authority.signal,
-              "async",
-            );
+      if (nativeSource && !independentWarmSource) {
+        prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+          nativeSource.db,
+          authority.assertCurrent,
+          authority.signal,
+          "async",
+        );
         location = prepared.location;
-      } else if (!snapshot && (preserveArtifacts || excluded)) {
+      } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
         await transport.validateFresh(context, authority);
         authority.assertCurrent();
-        prepared = await (
-          excluded ? prepareSqliteReadOnlyLocation : prepareSqliteReadOnlyLocationAsync
-        )(pathname, {
+        prepared = await prepareSqliteReadOnlyLocationAsync(pathname, {
           preserveSourceArtifacts: preserveArtifacts,
           signal: authority.signal,
         });
@@ -580,11 +568,12 @@ function executeRetainedOpenClawStateRead(
         expectedIdentity = context.admission.identity.key;
       }
       if (prepared) {
+        authority.assertCurrent();
         releasePreparedSource = retainSnapshotTempDirectory(
           prepared.cleanupRoot ?? path.dirname(prepared.location),
         );
       }
-      authority.assertCurrent();
+      // The transport checks current authority at dispatch, including after a queue wait.
       receipt.phase = "unobserved";
       const outcome = await transport.read(
         {

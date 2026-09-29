@@ -13,7 +13,6 @@ import {
   type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -47,20 +46,14 @@ import {
 } from "./bot-processing-outcome.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
-import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
+import { apiThrottler, Bot, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
   setTelegramCallbackQueryAnswerPromise,
   startTelegramCallbackQueryAnswer,
   takeTelegramCallbackQueryAdmissionAnswer,
 } from "./callback-query-answer-state.js";
-import {
-  asTelegramClientFetch,
-  createTelegramClientFetch,
-  resolveTelegramClientTimeoutMinimumSeconds,
-  resolveTelegramClientTimeoutSeconds,
-  resolveTelegramOutboundClientTimeoutFloorSeconds,
-} from "./client-fetch.js";
+import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import {
@@ -69,7 +62,7 @@ import {
 } from "./poll-answer-context.js";
 import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
-import { getTelegramSequentialConstraints } from "./sequential-key.js";
+import { createTelegramSequentializer } from "./sequentialize.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export async function createTelegramBotCore(
@@ -105,20 +98,12 @@ export async function createTelegramBotCore(
     transport: telegramTransport,
   });
 
-  const timeoutSeconds = resolveTelegramClientTimeoutSeconds({
-    value: undefined,
-    minimum: resolveTelegramClientTimeoutMinimumSeconds([
-      opts.minimumClientTimeoutSeconds,
-      resolveTelegramOutboundClientTimeoutFloorSeconds(undefined),
-    ]),
-  });
   const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
   const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
   const client: ApiClientOptions | undefined =
-    finalFetch || timeoutSeconds || normalizedApiRoot
+    finalFetch || normalizedApiRoot
       ? {
           ...(finalFetch ? { fetch: asTelegramClientFetch(finalFetch) } : {}),
-          ...(timeoutSeconds ? { timeoutSeconds } : {}),
           ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
         }
       : undefined;
@@ -193,12 +178,8 @@ export async function createTelegramBotCore(
           });
         return;
       }
-      if (result?.kind === "failed-retryable") {
-        if (isTelegramSpooledReplayUpdate(ctx.update)) {
-          throw new TelegramSpooledReplayProcessingError(result.error);
-        }
-        updateTracker.finishUpdate(begin.update, { completed: true });
-        return;
+      if (result?.kind === "failed-retryable" && isTelegramSpooledReplayUpdate(ctx.update)) {
+        throw new TelegramSpooledReplayProcessingError(result.error);
       }
       updateTracker.finishUpdate(begin.update, { completed: true });
     } catch (error) {
@@ -240,7 +221,7 @@ export async function createTelegramBotCore(
     await next();
   });
 
-  bot.use(sequentialize(getTelegramSequentialConstraints));
+  bot.use(createTelegramSequentializer());
 
   // A fast vote can know its route before outbound verification finishes. Hold
   // only that route's sequential lane until registration succeeds or declines it.
@@ -297,14 +278,10 @@ export async function createTelegramBotCore(
         storePath,
         sessionKey: params.sessionKey,
       })?.groupActivation;
-      const activation =
-        storedActivation === "mention" || storedActivation === "always"
-          ? normalizeGroupActivation(storedActivation)
-          : undefined;
-      if (activation === "always") {
+      if (storedActivation === "always") {
         return false;
       }
-      if (activation === "mention") {
+      if (storedActivation === "mention") {
         return true;
       }
     } catch (err) {
@@ -381,26 +358,7 @@ export async function createTelegramBotCore(
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
-    processMessage: async ({
-      ctx,
-      allMedia,
-      storeAllowFrom,
-      turnContext,
-      options,
-      replyMedia,
-      replyChain,
-      promptContext,
-    }) =>
-      await processMessage(
-        ctx,
-        allMedia,
-        storeAllowFrom,
-        turnContext,
-        options,
-        replyMedia,
-        replyChain,
-        promptContext,
-      ),
+    processMessage,
     logger,
     telegramDeps,
   });

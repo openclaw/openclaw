@@ -1,15 +1,16 @@
 // Cron service timer tests cover timer scheduling, cancellation, and wakeups.
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.test-support.js";
 import { loadCronStore } from "../../cron/store.js";
+import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -25,7 +26,7 @@ import {
   createDueIsolatedAgentJob,
   createDueMainJob,
   createDueScriptJob,
-  findCronTaskByBaseRunId,
+  findCronRunByBaseRunId,
 } from "./timer.seam.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -42,10 +43,6 @@ function createCronServiceState(
     ...params,
   });
 }
-
-afterEach(() => {
-  resetTaskRegistryForTests();
-});
 
 describe("cron service timer seam coverage", () => {
   it.each(["timer", "startup"] as const)("%s ignores stale event schedule slots", async (entry) => {
@@ -202,22 +199,15 @@ describe("cron service timer seam coverage", () => {
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.runningAtMs).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(now + 60_000);
-    const task = findCronTaskByBaseRunId(`cron:main-heartbeat-job:${now}`);
+    const task = findCronRunByBaseRunId(storePath, `cron:main-heartbeat-job:${now}`);
     if (!task) {
       throw new Error("expected cron task ledger record");
     }
-    expect(task.runtime).toBe("cron");
-    expect(task.sourceId).toBe("main-heartbeat-job");
+    expect(task.jobId).toBe("main-heartbeat-job");
     expect(task.agentId).toBe("ops");
-    expect(task.ownerKey).toBe("");
-    expect(task.scopeKind).toBe("system");
-    expect(task.childSessionKey).toBeUndefined();
+    expect(task.sessionKey).toBeUndefined();
     expect(task.runId).toMatch(new RegExp(`^cron:main-heartbeat-job:${now}:`));
-    expect(task.label).toBe("main heartbeat job");
-    expect(task.task).toBe("main heartbeat job");
     expect(task.status).toBe("succeeded");
-    expect(task.deliveryStatus).toBe("not_applicable");
-    expect(task.notifyPolicy).toBe("silent");
     expect(task.startedAt).toBe(now);
     expect(task.lastEventAt).toBe(now);
     expect(task.endedAt).toBe(now);
@@ -260,28 +250,21 @@ describe("cron service timer seam coverage", () => {
       },
     });
     const database = openOpenClawStateDatabase().db;
-    database.function("observe_timer_reservation", (stateJson) => {
-      if (typeof stateJson === "string") {
-        const marker = (JSON.parse(stateJson) as CronJob["state"]).queuedAtMs;
-        if (reservedAt === undefined && typeof marker === "number") {
-          reservedAt = marker;
-        }
+    const stopObserving = observeCronStoreCommits(storePath, () => {
+      const row = database
+        .prepare(
+          "SELECT json_extract(state_json, '$.queuedAtMs') AS queued_at_ms FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+        )
+        .get(cronStoreKey(storePath), job.id);
+      if (reservedAt === undefined && typeof row?.queued_at_ms === "number") {
+        reservedAt = row.queued_at_ms;
       }
-      return 0;
     });
-    database.exec(`
-      CREATE TEMP TRIGGER observe_timer_reservation
-      AFTER UPDATE ON cron_jobs
-      WHEN NEW.job_id = '${job.id}'
-      BEGIN
-        SELECT observe_timer_reservation(NEW.state_json);
-      END;
-    `);
 
     try {
       await onTimer(state);
     } finally {
-      database.exec("DROP TRIGGER IF EXISTS observe_timer_reservation");
+      stopObserving();
     }
 
     expect(reservedAt).toEqual(expect.any(Number));
@@ -291,7 +274,7 @@ describe("cron service timer seam coverage", () => {
     expect(liveError).toBeUndefined();
     expect(emittedStartedAt).toBe(persistedReservation);
     expect(
-      findCronTaskByBaseRunId(`cron:isolated-agent-job:${persistedReservation}`),
+      findCronRunByBaseRunId(storePath, `cron:isolated-agent-job:${persistedReservation}`),
     ).toMatchObject({
       startedAt: emittedStartedAt,
       status: "succeeded",

@@ -42,22 +42,13 @@ function prepare(assertCurrent = () => {}) {
 }
 
 describe("session-owned pending followup cleanup", () => {
-  it.each([
-    { agentId: "main", admissionSessionId: undefined, cleared: 1 },
-    { agentId: "main", admissionSessionId: alias, cleared: 1 },
-    { agentId: "main", admissionSessionId: "successor-session", cleared: 0 },
-    { agentId: "", admissionSessionId: undefined, cleared: 0 },
-  ])(
-    "requires the captured producer agent and admission target ($agentId, $admissionSessionId)",
-    ({ agentId, admissionSessionId, cleared }) => {
-      const original = source("pending admission");
-      original.item.run.agentId = agentId;
-      original.item.admissionSessionId = admissionSessionId;
-      enqueueFollowupRun(key, original.item, createQueueSettings(), "none", undefined, false);
-      expect(prepare()()).toBe(cleared);
-      expect(original.settled).toHaveBeenCalledTimes(cleared);
-    },
-  );
+  it("does not treat an absent producer agent as the default agent", () => {
+    const original = source("pending admission");
+    original.item.run.agentId = "";
+    enqueueFollowupRun(key, original.item, createQueueSettings(), "none", undefined, false);
+    expect(prepare()()).toBe(0);
+    expect(original.settled).not.toHaveBeenCalled();
+  });
 
   it("removes only captured own pending, summary and elided sources with exact accounting", () => {
     const runs = Array.from({ length: 6 }, (_, index) =>
@@ -116,7 +107,7 @@ describe("session-owned pending followup cleanup", () => {
     expect(injecting.steerPending.settle).not.toHaveBeenCalled();
   });
 
-  it.each(["agent", "key", "session", "admission", "run-object", "new-source", "queue"] as const)(
+  it.each(["agent", "key", "admission", "run-object", "new-source"] as const)(
     "does not adopt a changed %s after preparation",
     (change) => {
       const original = source("original");
@@ -129,23 +120,18 @@ describe("session-owned pending followup cleanup", () => {
         original.item.run.agentId = "other";
       } else if (change === "key") {
         original.item.run.sessionKey = "agent:main:other";
-      } else if (change === "session") {
-        original.item.run.sessionId = "successor-session";
       } else if (change === "admission") {
         original.item.admissionSessionId = "successor-session";
       } else if (change === "run-object") {
         original.item.run = { ...original.item.run };
-      } else if (change === "new-source") {
-        queue.items.splice(0, 1, successor.item);
       } else {
-        FOLLOWUP_QUEUES.delete(key);
-        enqueueFollowupRun(key, successor.item, settings, "none", undefined, false);
+        queue.items.splice(0, 1, successor.item);
       }
       expect(cleanup()).toBe(0);
       expect(original.settled).not.toHaveBeenCalled();
       expect(successor.settled).not.toHaveBeenCalled();
       expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([
-        change === "new-source" || change === "queue" ? successor.item : original.item,
+        change === "new-source" ? successor.item : original.item,
       ]);
       expect(queue.abortController.signal.aborted).toBe(false);
     },

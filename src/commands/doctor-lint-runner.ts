@@ -47,6 +47,10 @@ import {
   resolvePluginInstallRoots,
   withPluginInstallRoots,
 } from "../plugins/install-root-context.js";
+import {
+  getPluginSourceCaptureStorage,
+  withPluginSourceCaptureStorage,
+} from "../plugins/plugin-source-capture-context.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
@@ -532,6 +536,10 @@ async function withReadOnlyPluginStateSnapshot<T>(
   cleanupWarnings?: HealthFinding[],
 ): Promise<T> {
   const sourceDatabasePath = resolveOpenClawStateSqlitePath(sourceEnv);
+  const captureStorage = Object.freeze({
+    stateDir: getPluginSourceCaptureStorage()?.stateDir ?? resolveStateDir(sourceEnv),
+    placement: "temporary" as const,
+  });
   let cleanup: () => Promise<boolean>;
   let privateRoot: string;
   let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
@@ -582,11 +590,13 @@ async function withReadOnlyPluginStateSnapshot<T>(
       // Runtime schema checks defer OAuth probes: external rotation cannot be snapshotted.
       outcome = {
         ok: true,
-        value: await withDisposableOpenClawStateReads(privateDatabasePath, () =>
-          withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
-            runStarted = true;
-            return await run(privateEnv);
-          }),
+        value: await withPluginSourceCaptureStorage(captureStorage, () =>
+          withDisposableOpenClawStateReads(privateDatabasePath, () =>
+            withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
+              runStarted = true;
+              return await run(privateEnv);
+            }),
+          ),
         ),
       };
     } catch (error) {

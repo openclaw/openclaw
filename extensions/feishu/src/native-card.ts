@@ -33,18 +33,7 @@ export function resolveFeishuCardTemplate(template?: string): string | undefined
 }
 
 export function escapeFeishuCardMarkdownText(text: string): string {
-  return text.replace(/[&<>]/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      default:
-        return char;
-    }
-  });
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 export function escapeFeishuCardPlainText(text: string): string {

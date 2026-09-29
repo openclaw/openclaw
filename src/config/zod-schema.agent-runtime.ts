@@ -1,6 +1,7 @@
 // Defines Zod schema fragments for per-agent runtime configuration.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -154,20 +155,12 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
-const TrimmedOptionalConfigStringSchema = z
-  .string()
-  .transform((value) => {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  })
-  .optional();
+const TrimmedOptionalConfigStringSchema = z.string().transform(normalizeOptionalString).optional();
 
 const CodexAllowedDomainsSchema = z
   .array(z.string())
   .transform((values) => {
-    const deduped = uniqueStrings(
-      values.map((value) => value.trim()).filter((value) => value.length > 0),
-    );
+    const deduped = normalizeUniqueStringEntries(values);
     return deduped.length > 0 ? deduped : undefined;
   })
   .optional();
@@ -494,10 +487,8 @@ const ToolSearchSchema = z
       .object({
         /** Enable compact search/call cataloging for large tool sets. */
         enabled: z.boolean().optional(),
-        /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
-        mode: z.enum(["code", "tools", "directory"]).optional(),
-        /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
-        codeTimeoutMs: z.number().int().positive().optional(),
+        /** Exposed model surface. "tools" exposes structured search/describe/call tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
+        mode: z.enum(["tools", "directory"]).optional(),
         /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
         searchDefaultLimit: z.number().int().positive().optional(),
         /** Maximum search result count. Runtime clamps to 1..50. */

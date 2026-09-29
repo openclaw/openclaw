@@ -389,13 +389,17 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
   return { conversationId: baseConversationId };
 }
 
-function buildPluginInboundClaimContext(
+export function toPluginInboundClaimPair(
   canonical: CanonicalInboundMessageHookContext,
-  conversation: {
-    conversationId?: string;
-    parentConversationId?: string;
+  extras?: {
+    commandAuthorized?: boolean;
+    wasMentioned?: boolean;
   },
-): PluginHookInboundClaimContext {
+): {
+  context: PluginHookInboundClaimContext;
+  event: PluginHookInboundClaimEvent;
+} {
+  const conversation = resolveInboundConversation(canonical);
   const context: PluginHookInboundClaimContext = {
     channelId: canonical.channelId,
     accountId: canonical.accountId,
@@ -410,17 +414,6 @@ function buildPluginInboundClaimContext(
   };
   Object.assign(context, projectHookReplyFields(canonical));
   assignTraceFields(context, canonical.trace);
-  return context;
-}
-
-function buildPluginInboundClaimEvent(
-  canonical: CanonicalInboundMessageHookContext,
-  context: PluginHookInboundClaimContext,
-  extras?: {
-    commandAuthorized?: boolean;
-    wasMentioned?: boolean;
-  },
-): PluginHookInboundClaimEvent {
   const event: PluginHookInboundClaimEvent = {
     content: canonical.content,
     body: canonical.body,
@@ -469,25 +462,7 @@ function buildPluginInboundClaimEvent(
     assignRemoteMediaStagingMetadata(event.metadata, canonical);
   }
   assignTraceFields(event, canonical.trace);
-  return event;
-}
-
-export function toPluginInboundClaimPair(
-  canonical: CanonicalInboundMessageHookContext,
-  extras?: {
-    commandAuthorized?: boolean;
-    wasMentioned?: boolean;
-  },
-): {
-  context: PluginHookInboundClaimContext;
-  event: PluginHookInboundClaimEvent;
-} {
-  const conversation = resolveInboundConversation(canonical);
-  const context = buildPluginInboundClaimContext(canonical, conversation);
-  return {
-    context,
-    event: buildPluginInboundClaimEvent(canonical, context, extras),
-  };
+  return { context, event };
 }
 
 export function toPluginMessageReceivedEvent(
@@ -589,9 +564,8 @@ export function toInternalMessageTranscribedContext(
   canonical: CanonicalInboundMessageHookContext,
   cfg: OpenClawConfig,
 ): MessageTranscribedHookContext & { cfg: OpenClawConfig } {
-  const shared = toInternalInboundMessageHookContextBase(canonical);
   return {
-    ...shared,
+    ...toInternalInboundMessageHookContextBase(canonical),
     transcript: canonical.transcript ?? "",
     cfg,
   };
@@ -601,9 +575,8 @@ export function toInternalMessagePreprocessedContext(
   canonical: CanonicalInboundMessageHookContext,
   cfg: OpenClawConfig,
 ): MessagePreprocessedHookContext & { cfg: OpenClawConfig } {
-  const shared = toInternalInboundMessageHookContextBase(canonical);
   return {
-    ...shared,
+    ...toInternalInboundMessageHookContextBase(canonical),
     transcript: canonical.transcript,
     isGroup: canonical.isGroup,
     groupId: canonical.groupId,

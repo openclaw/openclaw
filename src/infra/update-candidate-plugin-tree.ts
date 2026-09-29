@@ -2,12 +2,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import { isPackageActivationControlName } from "./package-update-activation-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
@@ -17,6 +17,10 @@ import {
   resolveUpdateCandidatePluginTreeTargets,
   verifyUpdateCandidatePluginTree,
 } from "./update-candidate-plugin-tree-links.js";
+import type {
+  UpdateCandidatePluginEntry,
+  UpdateCandidatePluginTreePlan,
+} from "./update-candidate-plugin-tree-schema.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import {
   readRuntimeModulesManifest,
@@ -25,44 +29,8 @@ import {
 } from "./update-runtime-relocation.js";
 import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
 
-const entryFields = {
-  path: z.string(),
-  size: z.number().int().nonnegative(),
-  mode: z.number().int().nonnegative(),
-  dev: z.string(),
-  ino: z.string(),
-};
-const UpdateCandidatePluginEntrySchema = z.discriminatedUnion("kind", [
-  z.object({ ...entryFields, kind: z.literal("directory") }),
-  z.object({
-    ...entryFields,
-    kind: z.literal("file"),
-    birthtimeNs: z.string(),
-    mtimeNs: z.string(),
-    ctimeNs: z.string(),
-  }),
-  z.object({
-    ...entryFields,
-    kind: z.literal("symlink"),
-    link: z.string(),
-    linkType: z.enum(["file", "junction"]),
-  }),
-]);
-type UpdateCandidatePluginEntry = z.infer<typeof UpdateCandidatePluginEntrySchema>;
-
-export const UpdateCandidatePluginTreePlanSchema = z.object({
-  bytes: z.number().int().nonnegative(),
-  privateRoot: z.string(),
-  candidateRoot: z.string(),
-  copies: z.array(z.tuple([z.string(), z.string()])),
-  entries: z.array(UpdateCandidatePluginEntrySchema),
-  hostLinks: z.array(z.string()),
-  relocations: z.array(z.object({ sourceRoot: z.string(), destinationRoot: z.string() })),
-  aliases: z.array(z.tuple([z.string(), z.string()])),
-  moduleBindings: z.array(z.tuple([z.string(), z.string()])),
-  edges: z.array(z.object({ source: z.string(), target: z.string(), real: z.string() })),
-});
-export type UpdateCandidatePluginTreePlan = z.infer<typeof UpdateCandidatePluginTreePlanSchema>;
+export { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
+export type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
 
 async function dependencyOwner(
   target: string,
@@ -147,6 +115,17 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const stores = new Set<string>();
   const moduleAliases = new Map<string, string>();
   const moduleOwners = new Set<string>();
+  const isRecoveryControl = (file: string) => {
+    for (let current = file; path.dirname(current) !== current; current = path.dirname(current)) {
+      if (
+        moduleOwners.has(path.dirname(current)) &&
+        isPackageActivationControlName(path.basename(current))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
   const retainedHostRoot = params.retainedHostRoot;
   const retainedHost = retainedHostRoot
     ? { root: retainedHostRoot, moduleOnlyRoots: new Set<string>() }
@@ -349,7 +328,10 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     }
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
-      if (isOwnedHostEdge(file)) {
+      if (isRecoveryControl(file)) {
+        // Installation control state is not a dependency of the retained code.
+        continue;
+      } else if (isOwnedHostEdge(file)) {
         // The complete-wave owner pass records the authoritative host identity.
         continue;
       } else if (entry.isDirectory()) {
@@ -455,7 +437,14 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     const storeLookup = lookupRoots(stores);
     const stagingLookup = lookupRoots(staging);
     let added = false;
-    for (const [file, { real }] of edges) {
+    for (const [file, { real, target }] of edges) {
+      if (isRecoveryControl(file)) {
+        edges.delete(file);
+        continue;
+      }
+      if (isRecoveryControl(real) || isRecoveryControl(target)) {
+        throw new Error("Package recovery state cannot be a runtime dependency.");
+      }
       const directory = stagingLookup(real);
       if (directory && staging.delete(directory)) {
         // Explicit links still demand their source bytes and normal validation.
@@ -538,7 +527,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     [...hosts].filter((root) => root !== params.retainedHostRoot).map(projected),
   );
   const entries = [...footprints.values()].filter((entry) => {
-    if (insideHost(entry.path) || copyOwner(entry.path) === undefined) {
+    if (
+      isRecoveryControl(entry.path) ||
+      insideHost(entry.path) ||
+      copyOwner(entry.path) === undefined
+    ) {
       return false;
     }
     // Owner selection precedes scanning; bind its exception to the actual inventory.
@@ -634,8 +627,11 @@ export async function copyUpdateCandidatePluginTrees(
         // native binding. Recheck the inventory before its private stage is published.
         await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
           overwrite: false,
+          // Every destination parent is prepared before copies are admitted.
+          mkdir: false,
           // Rehearsal payloads are disposable and never serve as recovery backups.
           durable: false,
+          clone: "auto",
           maxBytes: entry.size,
           mode: entry.mode | 0o600,
           sourceHardlinks: "allow",

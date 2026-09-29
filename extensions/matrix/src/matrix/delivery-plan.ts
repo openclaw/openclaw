@@ -40,6 +40,14 @@ type MatrixDeliveryIdentity = {
   partCount: number;
 };
 
+type MatrixDeliveryTarget = {
+  identity: MatrixDeliveryIdentity;
+  accountId?: string | null;
+  roomId: string;
+  transactionScopeId: string;
+  wireEventType: "m.room.message" | "m.room.encrypted";
+};
+
 type MatrixDeliveryPlan = {
   version: typeof DELIVERY_PLAN_VERSION;
   queueId: string;
@@ -161,16 +169,7 @@ function decodePlan(bytes: Uint8Array): MatrixDeliveryPlan {
   return value;
 }
 
-function assertPlanIdentity(
-  plan: MatrixDeliveryPlan,
-  params: {
-    identity: MatrixDeliveryIdentity;
-    accountId?: string | null;
-    roomId: string;
-    transactionScopeId: string;
-    wireEventType: "m.room.message" | "m.room.encrypted";
-  },
-): void {
+function assertPlanIdentity(plan: MatrixDeliveryPlan, params: MatrixDeliveryTarget): void {
   if (
     plan.queueId !== params.identity.queueId ||
     plan.partIndex !== params.identity.partIndex ||
@@ -229,13 +228,9 @@ export function resolveMatrixDurableDeliveryIdentity(params: {
   };
 }
 
-export async function loadMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-}): Promise<MatrixDeliveryPlan | null> {
+export async function loadMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget,
+): Promise<MatrixDeliveryPlan | null> {
   const entry = await createDeliveryPlanStore().lookup(planKey(params.identity));
   if (!entry) {
     return null;
@@ -248,15 +243,12 @@ export async function loadMatrixDeliveryPlan(params: {
   return structuredClone(plan);
 }
 
-export async function persistMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-  events: readonly MatrixPreparedEvent[];
-  dispatch: MatrixMessageWireDispatch;
-}): Promise<MatrixDeliveryPlan> {
+export async function persistMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget & {
+    events: readonly MatrixPreparedEvent[];
+    dispatch: MatrixMessageWireDispatch;
+  },
+): Promise<MatrixDeliveryPlan> {
   if (params.events.length === 0) {
     throw new Error("Matrix durable delivery plan must contain at least one event");
   }

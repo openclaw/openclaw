@@ -302,6 +302,17 @@ export function renderChatPreferencesSection(
           ],
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
+        ${
+          props.setOpenLinksExternally
+            ? renderSettingsToggleRow({
+                title: t("configView.chatPrefs.openLinksExternally"),
+                description: html`${t("configView.chatPrefs.openLinksExternallyHint")}<br />
+                  ${t("configView.chatPrefs.openLinksExternallyStorage")}`,
+                checked: props.openLinksExternally === true,
+                onChange: props.setOpenLinksExternally,
+              })
+            : nothing
+        }
         ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
         ${
           props.setComposerHoldToRecord
@@ -357,23 +368,24 @@ export function renderLobsterPetSection(props: ConfigProps) {
       <div class="settings-group">
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterVisits"),
-          description: lobsterPetVisits
-            ? html`${t("quickSettings.appearance.lobsterVisitsOn")}<br />
-                ${lobsterVisitsDefaultDescription}
-                ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`
-            : html`${t("quickSettings.appearance.lobsterVisitsOff")}<br />
-                ${lobsterVisitsDefaultDescription}
-                ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`,
+          description: html`${t(
+              lobsterPetVisits
+                ? "quickSettings.appearance.lobsterVisitsOn"
+                : "quickSettings.appearance.lobsterVisitsOff",
+            )}<br />
+            ${lobsterVisitsDefaultDescription}
+            ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`,
           checked: lobsterPetVisits,
           onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
         })}
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterSounds"),
-          description: lobsterPetSounds
-            ? html`${t("quickSettings.appearance.lobsterSoundsOn")}<br />
-                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`
-            : html`${t("quickSettings.appearance.lobsterSoundsOff")}<br />
-                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          description: html`${t(
+              lobsterPetSounds
+                ? "quickSettings.appearance.lobsterSoundsOn"
+                : "quickSettings.appearance.lobsterSoundsOff",
+            )}<br />
+            ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: lobsterPetSounds,
           onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
           onAct: (enabled) => {

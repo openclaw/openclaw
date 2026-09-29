@@ -104,6 +104,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
+  "gateway.uploads":
+    "Client file and image upload policy for the Gateway and Control UI. Downloads and agent-generated media remain available.",
+  "gateway.uploads.enabled":
+    "Allows client file and image uploads (default: true). Set false to reject attachments, workspace/terminal uploads, avatar uploads, and archive imports at the Gateway, including direct API requests. Changes apply without restarting. This is not a sandbox or a restriction on channel media, agent tools, or operator shell access.",
   "gateway.cliAgents":
     "Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":
@@ -135,7 +139,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId":
     "Exact Access identity-provider ID for the trusted OIDC integration. A provider display name or a matching claim name alone does not establish trust.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc.githubAccountIdClaim":
-    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it in oidc_fields; never use an unverified user-editable claim.",
+    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it, then inspect the authenticated Access identity response. OpenClaw reads oidc_fields, or custom when oidc_fields is absent. Never use an unverified user-editable claim.",
   "gateway.auth.trustedProxy.deviceAutoApprove":
     "Optional policy for automatically approving new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":

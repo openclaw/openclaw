@@ -36,10 +36,60 @@ function publicationPragmas(db: DatabaseSync): MemoryPublicationConnection["prag
     busy_timeout: read("busy_timeout"),
     synchronous: read("synchronous"),
     foreign_keys: read("foreign_keys"),
-    wal_autocheckpoint: read("wal_autocheckpoint"),
     journal_size_limit: read("journal_size_limit"),
     checkpoint_fullfsync: read("checkpoint_fullfsync"),
   };
+}
+
+function createPublicationDatabase(stateDir: string) {
+  const options = { agentId: "main", path: path.join(stateDir, "agent.sqlite") };
+  const { db } = openOpenClawAgentDatabase(options);
+  ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+  db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
+    VALUES ('memory/current.md', 'memory', 'old', 1, 1)`);
+  const input: PublicationFaultInput = {
+    marker: path.join(stateDir, "entered"),
+    failRollback: false,
+    failClose: false,
+    throwResultFailure: false,
+    fileIdentity: readMemoryShadowIdentity(options.path),
+    pragmas: publicationPragmas(db),
+  };
+  return { options, db, input };
+}
+
+const deleteCurrentSource = {
+  type: "source.delete",
+  input: {
+    path: "memory/current.md",
+    source: "memory",
+    expectedHash: "old",
+    state: {
+      vector: { enabled: false, available: false },
+      fts: { enabled: false, available: false },
+    },
+  },
+} as const;
+
+function observePublicationExit(
+  calls: readonly { arguments: unknown[]; this: unknown }[],
+  databasePath: string,
+  events: string[],
+) {
+  const opening = calls.find((call) => {
+    const request: unknown = call.arguments[0];
+    return (
+      typeof request === "object" &&
+      request !== null &&
+      "databasePath" in request &&
+      request.databasePath === databasePath
+    );
+  });
+  const nativeWorker = opening?.this;
+  if (!(nativeWorker instanceof Worker)) {
+    throw new Error("Expected the native publication Worker");
+  }
+  nativeWorker.once("exit", () => events.push("exit"));
 }
 
 it.each([
@@ -60,44 +110,20 @@ it.each([
   let ticks = 0;
   const heartbeat = setInterval(() => ticks++, 10);
   try {
-    const options = { agentId: "main", path: path.join(state.stateDir, "agent.sqlite") };
-    const { db } = openOpenClawAgentDatabase(options);
-    ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-    db.exec(`
-      CREATE TABLE sibling (value TEXT);
-      INSERT INTO memory_index_sources(path, source, hash, mtime, size)
-        VALUES ('memory/current.md', 'memory', 'old', 1, 1);
-    `);
-    const marker = path.join(state.stateDir, "entered");
-    const input: PublicationFaultInput = {
-      ...faults,
-      marker,
-      fileIdentity: readMemoryShadowIdentity(options.path),
-      pragmas: publicationPragmas(db),
-    };
+    const { options, db, input } = createPublicationDatabase(state.stateDir);
+    Object.assign(input, faults);
+    db.exec("CREATE TABLE sibling (value TEXT)");
     worker = await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(options, db, {
       moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
       input,
     });
-    const command = {
-      type: "source.delete",
-      input: {
-        path: "memory/current.md",
-        source: "memory",
-        expectedHash: "old",
-        state: {
-          vector: { enabled: false, available: false },
-          fts: { enabled: false, available: false },
-        },
-      },
-    } as const;
     const native = worker
       .run(
         async (scope) => {
           db.exec(`CREATE TRIGGER fail_publication BEFORE DELETE ON memory_index_sources
             BEGIN SELECT RAISE(FAIL, 'injected publication failure'); END`);
           try {
-            return await scope.execute(command);
+            return await scope.execute(deleteCurrentSource);
           } finally {
             db.exec("DROP TRIGGER fail_publication");
           }
@@ -109,26 +135,13 @@ it.each([
         (error: unknown) => ({ error }),
       );
     const deadline = performance.now() + 5000;
-    while (!fs.existsSync(marker)) {
+    while (!fs.existsSync(input.marker)) {
       if (performance.now() >= deadline) {
         throw new Error("Publication did not enter its native transaction");
       }
       await nextTurn();
     }
-    const opening = messages.mock.calls.find((call) => {
-      const request: unknown = call.arguments[0];
-      return (
-        typeof request === "object" &&
-        request !== null &&
-        "databasePath" in request &&
-        request.databasePath === options.path
-      );
-    });
-    const nativeWorker = opening?.this;
-    if (!(nativeWorker instanceof Worker)) {
-      throw new Error("Expected the native publication Worker");
-    }
-    nativeWorker.once("exit", () => events.push("exit"));
+    observePublicationExit(messages.mock.calls, options.path, events);
     messages.mock.restore();
     const sibling = withOpenClawAgentDatabaseWrite(
       options,
@@ -171,8 +184,8 @@ it.each([
         worker.run(
           (scope) =>
             scope.execute({
-              ...command,
-              input: { ...command.input, expectedHash: "not-current" },
+              ...deleteCurrentSource,
+              input: { ...deleteCurrentSource.input, expectedHash: "not-current" },
             }),
           () => undefined,
         ),
@@ -200,7 +213,7 @@ it.each([
       );
       await expect(
         worker.run(
-          (scope) => scope.execute(command),
+          (scope) => scope.execute(deleteCurrentSource),
           () => undefined,
         ),
       ).resolves.toEqual({ ok: true, value: true });
@@ -213,7 +226,7 @@ it.each([
       expect(events).toEqual(["sibling"]);
       await expect(
         worker.run(
-          (scope) => scope.execute(command),
+          (scope) => scope.execute(deleteCurrentSource),
           () => undefined,
         ),
       ).resolves.toEqual({ ok: true, value: true });
@@ -240,39 +253,13 @@ it("preserves a committed publication when binding cleanup fails", async () => {
     | Awaited<ReturnType<typeof openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>>>
     | undefined;
   try {
-    const options = { agentId: "main", path: path.join(state.stateDir, "agent.sqlite") };
-    const { db } = openOpenClawAgentDatabase(options);
-    ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-    db.exec(`
-      INSERT INTO memory_index_sources(path, source, hash, mtime, size)
-        VALUES ('memory/current.md', 'memory', 'old', 1, 1);
-    `);
+    const { options, db, input } = createPublicationDatabase(state.stateDir);
+    input.failBindingClose = true;
     const beforeRevision = readMemoryDatabaseRevision(db);
-    const input: PublicationFaultInput = {
-      marker: path.join(state.stateDir, "entered"),
-      failRollback: false,
-      failClose: false,
-      throwResultFailure: false,
-      failBindingClose: true,
-      fileIdentity: readMemoryShadowIdentity(options.path),
-      pragmas: publicationPragmas(db),
-    };
     worker = await openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(options, db, {
       moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
       input,
     });
-    const command = {
-      type: "source.delete",
-      input: {
-        path: "memory/current.md",
-        source: "memory",
-        expectedHash: "old",
-        state: {
-          vector: { enabled: false, available: false },
-          fts: { enabled: false, available: false },
-        },
-      },
-    } as const;
     let completed: MemoryPublicationOperations["source.delete"]["output"] | undefined;
     let replay: (() => Promise<unknown>) | undefined;
     let callbacks = 0;
@@ -280,22 +267,9 @@ it("preserves a committed publication when binding cleanup fails", async () => {
       .run(
         async (scope) => {
           callbacks++;
-          completed = await scope.execute(command);
-          replay = () => scope.execute(command);
-          const opening = messages.mock.calls.find((call) => {
-            const request: unknown = call.arguments[0];
-            return (
-              typeof request === "object" &&
-              request !== null &&
-              "databasePath" in request &&
-              request.databasePath === options.path
-            );
-          });
-          const nativeWorker = opening?.this;
-          if (!(nativeWorker instanceof Worker)) {
-            throw new Error("Expected the native publication Worker");
-          }
-          nativeWorker.once("exit", () => events.push("exit"));
+          completed = await scope.execute(deleteCurrentSource);
+          replay = () => scope.execute(deleteCurrentSource);
+          observePublicationExit(messages.mock.calls, options.path, events);
           messages.mock.restore();
           return completed;
         },
@@ -353,23 +327,9 @@ it.each([false, true])(
       | Awaited<ReturnType<typeof openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>>>
       | undefined;
     try {
-      const options = { agentId: "main", path: path.join(state.stateDir, "agent.sqlite") };
-      const { db } = openOpenClawAgentDatabase(options);
-      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-      db.exec(`
-        INSERT INTO memory_index_sources(path, source, hash, mtime, size)
-          VALUES ('memory/current.md', 'memory', 'old', 1, 1);
-      `);
+      const { options, db, input } = createPublicationDatabase(state.stateDir);
+      input.failDiscard = true;
       const beforeRevision = readMemoryDatabaseRevision(db);
-      const input: PublicationFaultInput = {
-        marker: path.join(state.stateDir, "entered"),
-        failRollback: false,
-        failClose: false,
-        throwResultFailure: false,
-        failDiscard: true,
-        fileIdentity: readMemoryShadowIdentity(options.path),
-        pragmas: publicationPragmas(db),
-      };
       const open = (failDiscard: boolean) =>
         openOpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>(options, db, {
           moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),

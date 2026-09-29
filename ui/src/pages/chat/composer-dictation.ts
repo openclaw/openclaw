@@ -186,7 +186,7 @@ class ComposerDictationSession {
   }
 
   transcriptSnapshot(): string {
-    return this.transcriptIncludingPartial();
+    return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
   async finish(drainFinalTranscript = false): Promise<string> {
@@ -198,7 +198,7 @@ class ComposerDictationSession {
       void cleanup.catch(() => undefined);
       return lateFinal;
     }
-    return cleanup.then(() => this.transcriptIncludingPartial());
+    return cleanup.then(() => this.transcriptSnapshot());
   }
 
   async cancel(): Promise<void> {
@@ -276,22 +276,17 @@ class ComposerDictationSession {
     ) {
       return;
     }
-    if (payload.type === "transcript" && typeof payload.text === "string") {
+    if (
+      (payload.type === "transcript" || payload.type === "partial") &&
+      typeof payload.text === "string"
+    ) {
       const text = payload.text.trim();
-      if (payload.final !== true) {
+      if (payload.type === "partial" || payload.final !== true) {
         this.currentPartial = text;
-        this.callbacks.onTranscriptChange();
-        return;
-      }
-      if (text) {
+      } else if (text) {
         this.finalTranscripts.push(text);
         this.currentPartial = "";
       }
-      this.callbacks.onTranscriptChange();
-      return;
-    }
-    if (payload.type === "partial" && typeof payload.text === "string") {
-      this.currentPartial = payload.text.trim();
       this.callbacks.onTranscriptChange();
       return;
     }
@@ -319,10 +314,6 @@ class ComposerDictationSession {
 
   private hasTranscript(): boolean {
     return this.finalTranscripts.length > 0 || Boolean(this.currentPartial);
-  }
-
-  private transcriptIncludingPartial(): string {
-    return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
   private async stopCapture(): Promise<void> {

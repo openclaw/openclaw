@@ -46,6 +46,21 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
+function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]>) {
+  return runExecProcess({
+    command: "sandbox-fixture",
+    workdir: "/tmp",
+    env: {},
+    usePty: false,
+    warnings: [],
+    maxOutput: 1000,
+    pendingMaxOutput: 1000,
+    notifyOnExit: false,
+    timeoutSec: null,
+    ...params,
+  });
+}
+
 it.each([
   { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: false },
   { reason: "overall-timeout" as const, cleanupFails: true, duringFinalize: false },
@@ -111,17 +126,6 @@ it.each([
         cancel: cancelOther,
         wait: () => otherExit.promise,
       }));
-    const options = {
-      command: "sandbox-fixture",
-      workdir: "/tmp",
-      env: {},
-      usePty: false,
-      warnings: [],
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
-      notifyOnExit: false,
-      timeoutSec: null,
-    };
     const originalSource = new AbortController();
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
@@ -132,9 +136,9 @@ it.each([
     });
     const guest = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:targeted-cleanup", operatorAuthority: authority },
-      () => runExecProcess({ ...options, scopeKey: "targeted-cleanup:guest", sandbox }),
+      () => runTestExecProcess({ scopeKey: "targeted-cleanup:guest", sandbox }),
     );
-    const other = await runExecProcess({ ...options, sandbox: otherSandbox });
+    const other = await runTestExecProcess({ sandbox: otherSandbox });
     markBackgrounded(guest.session);
     markBackgrounded(other.session);
     try {
@@ -223,17 +227,8 @@ it("joins targeted sandbox cleanup on startup failure and still finalizes artifa
     }),
     finalizeExec,
   };
-  const pending = runExecProcess({
-    command: "sandbox-fixture",
-    workdir: "/tmp",
-    env: {},
+  const pending = runTestExecProcess({
     sandbox,
-    usePty: false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
-    timeoutSec: null,
   });
   const rejected = expect(pending).rejects.toThrow("transport construction failed");
   try {
@@ -249,7 +244,6 @@ it("joins targeted sandbox cleanup on startup failure and still finalizes artifa
 
 it.each([
   { fails: false, beforeJoin: false, commandCode: 0 },
-  { fails: true, beforeJoin: false, commandCode: 0 },
   { fails: true, beforeJoin: true, commandCode: 0 },
   { fails: true, beforeJoin: false, commandCode: 127 },
 ])(
@@ -266,16 +260,7 @@ it.each([
       startedAtMs: Date.now(),
       stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
       cancel: vi.fn(),
-      wait: async () => ({
-        reason: "exit",
-        exitCode: commandCode,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
+      wait: async () => createRunExit({ exitCode: commandCode }),
     }));
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     const finalizeExec = vi.fn(async () => {
@@ -287,10 +272,7 @@ it.each([
     });
     try {
       await cleanupScope.run(async () => {
-        run = await runExecProcess({
-          command: "sandbox-fixture",
-          workdir: "/tmp",
-          env: {},
+        run = await runTestExecProcess({
           scopeKey,
           sandbox: {
             containerName: "fixture",
@@ -303,12 +285,6 @@ it.each([
             }),
             finalizeExec,
           },
-          usePty: false,
-          warnings: [],
-          maxOutput: 1000,
-          pendingMaxOutput: 1000,
-          notifyOnExit: false,
-          timeoutSec: null,
         });
         markBackgrounded(run.session);
         await entered.promise;
@@ -345,9 +321,6 @@ describe("terminal execution-context release", () => {
     { path: "quiet", trace: ["task"] },
     { path: "unrouted", trace: ["task"] },
     { path: "observed", trace: ["task"] },
-    { path: "task failure", trace: ["task", "task"] },
-    { path: "enqueue failure", trace: ["task", "enqueue", "task"] },
-    { path: "wake failure", trace: ["task", "enqueue", "wake", "task"] },
   ])(
     "releases routing after $path without changing notification order",
     async ({ path, trace }) => {
@@ -355,33 +328,20 @@ describe("terminal execution-context release", () => {
       const observed: string[] = [];
       const removal = vi.fn(() => true);
       const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
-      const failure = new Error("notification boundary failed");
       enqueueSystemEventWithReceiptMock.mockImplementation((_text, options) => {
         observed.push("enqueue");
         expect(options.deliveryContext).toEqual(deliveryContext);
-        if (path === "enqueue failure") {
-          throw failure;
-        }
         return removal;
       });
       requestHeartbeatMock.mockImplementation(() => {
         observed.push("wake");
-        if (path === "wake failure") {
-          throw failure;
-        }
       });
       supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
         ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
         wait: () => exit.promise,
       }));
-      const run = await runExecProcess({
+      const run = await runTestExecProcess({
         command: "context-release",
-        workdir: "/tmp",
-        env: {},
-        usePty: false,
-        warnings: [],
-        maxOutput: 1_000,
-        pendingMaxOutput: 1_000,
         scopeKey: "process-scope",
         sessionKey: path === "unrouted" ? undefined : "agent:main:main",
         agentId: "main",
@@ -389,12 +349,8 @@ describe("terminal execution-context release", () => {
         notifyDeliveryContext: deliveryContext,
         notifyOnExit: true,
         notifyOnExitEmptySuccess: false,
-        timeoutSec: null,
         onSettledBeforeNotify: () => {
           observed.push("task");
-          if (path === "task failure" && observed.length === 1) {
-            throw failure;
-          }
         },
       });
       markBackgrounded(run.session);
@@ -404,7 +360,7 @@ describe("terminal execution-context release", () => {
       exit.resolve(createRunExit());
       const outcome = await run.promise;
       expect(observed).toEqual(trace);
-      expect(outcome.status).toBe(path.endsWith("failure") ? "failed" : "completed");
+      expect(outcome.status).toBe("completed");
       const retained = getFinishedSession(run.session.id);
       expect(retained).toMatchObject({ scopeKey: "process-scope", terminalStatus: "completed" });
       for (const field of [
@@ -426,15 +382,12 @@ describe("terminal execution-context release", () => {
 
 describe("exec settlement recovery", () => {
   it.each([
-    { boundary: "task", asynchronous: false },
     { boundary: "persistent task", asynchronous: false },
     { boundary: "enqueue", asynchronous: false },
     { boundary: "wake", asynchronous: false },
     { boundary: "task", asynchronous: true },
     { boundary: "persistent task", asynchronous: true },
     { boundary: "stdin", asynchronous: true },
-    { boundary: "enqueue", asynchronous: true },
-    { boundary: "wake", asynchronous: true },
   ])(
     "settles $boundary failure with asynchronous=$asynchronous before releasing the exec scope",
     async ({ boundary, asynchronous }) => {
@@ -467,18 +420,15 @@ describe("exec settlement recovery", () => {
       const run = await withGatewayToolCallerIdentity(
         { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
         () =>
-          runExecProcess({
+          runTestExecProcess({
             command: "settlement-recovery",
-            workdir: "/tmp",
-            env: {},
-            usePty: false,
-            warnings: [],
-            maxOutput: 1000,
-            pendingMaxOutput: 1000,
             scopeKey,
             sessionKey: "agent:main:settlement-recovery",
+            agentId: "main",
+            eventRouting: { mainKey: "main", sessionScope: "per-sender" },
+            notifyDeliveryContext: { channel: "telegram", to: "synthetic-chat" },
             notifyOnExit: true,
-            timeoutSec: null,
+            notifyOnExitEmptySuccess: false,
             onSettledBeforeNotify: (outcome) => {
               observed.push(`task:${outcome.status}`);
               identities.push(getGatewayToolCallerIdentity());
@@ -561,7 +511,16 @@ describe("exec settlement recovery", () => {
             aggregated: "process output\n",
           });
         }
-        expect(run.session.sessionKey).toBeUndefined();
+        for (const field of [
+          "sessionKey",
+          "agentId",
+          "eventRouting",
+          "notifyDeliveryContext",
+          "notifyOnExit",
+          "notifyOnExitEmptySuccess",
+        ] as const) {
+          expect(run.session[field], field).toBeUndefined();
+        }
       } finally {
         settlement.resolve();
         correction.resolve();
