@@ -13,6 +13,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
+internal fun speechPlaybackAttributes(): AudioAttributes =
+  AudioAttributes
+    .Builder()
+    .setUsage(AudioAttributes.USAGE_MEDIA)
+    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+    .build()
+
 internal interface TalkAudioPlaying {
   /** Plays one assistant reply, replacing any active playback. */
   suspend fun play(audio: TalkSpeakAudio)
@@ -118,13 +125,8 @@ internal class TalkAudioPlayer(
       val track =
         AudioTrack
           .Builder()
-          .setAudioAttributes(
-            AudioAttributes
-              .Builder()
-              .setUsage(AudioAttributes.USAGE_MEDIA)
-              .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-              .build(),
-          ).setAudioFormat(
+          .setAudioAttributes(speechPlaybackAttributes())
+          .setAudioFormat(
             AudioFormat
               .Builder()
               .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -190,13 +192,7 @@ internal class TalkAudioPlayer(
         val player =
           withContext(Dispatchers.Main) {
             MediaPlayer().also { mediaPlayer = it }.apply {
-              setAudioAttributes(
-                AudioAttributes
-                  .Builder()
-                  .setUsage(AudioAttributes.USAGE_MEDIA)
-                  .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                  .build(),
-              )
+              setAudioAttributes(speechPlaybackAttributes())
               setDataSource(audioFile.absolutePath)
               setOnCompletionListener {
                 finished.complete(Unit)
