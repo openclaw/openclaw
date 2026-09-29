@@ -5,6 +5,7 @@ import process from "node:process";
 import { execa } from "execa";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
+import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import {
@@ -318,6 +319,8 @@ export function spawnCommandWithInvocation<
   if (scope?.signal.aborted) {
     throw new Error("Command process scope is closed");
   }
+  // Fail fast where libuv cannot create a child's pipes (AppContainer, libuv < 1.53).
+  assertAppContainerSpawnSupported();
   const sourceOptions: SpawnCommandOptions = options;
   const {
     baseEnv,

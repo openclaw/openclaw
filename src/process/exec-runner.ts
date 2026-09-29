@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { hasErrnoCode } from "../infra/errno.js";
+import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -214,6 +215,10 @@ async function runCommandWithOutputEncoding(
     MAX_PRESERVED_PENDING_LINE_BYTES,
   );
   const maxPreservedOutputLines = Math.max(0, Math.floor(options.maxPreservedOutputLines ?? 16));
+  // The console-encoding probe below spawns a piped child, which never returns
+  // inside a Windows AppContainer on libuv < 1.53, so fail with the named error
+  // before it rather than after.
+  assertAppContainerSpawnSupported();
   const windowsEncoding = forceUtf8 ? null : resolveWindowsConsoleEncoding();
   const cancelController = new AbortController();
   let termination: CommandTerminationReason | undefined;

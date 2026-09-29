@@ -2,7 +2,10 @@
 import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { noteStartupOptimizationHints } from "./doctor-platform-notes.js";
+import {
+  noteStartupOptimizationHints,
+  noteWindowsAppContainerSpawnSupport,
+} from "./doctor-platform-notes.js";
 
 const { note } = vi.hoisted(() => ({ note: vi.fn() }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
@@ -93,5 +96,24 @@ describe("noteStartupOptimizationHints", () => {
     });
 
     expect(note).not.toHaveBeenCalled();
+  });
+});
+
+describe("noteWindowsAppContainerSpawnSupport", () => {
+  it("says nothing when child processes can start", () => {
+    noteWindowsAppContainerSpawnSupport({ supported: true });
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns with the check's own message when they cannot", () => {
+    noteWindowsAppContainerSpawnSupport({
+      supported: false,
+      uvVersion: "1.52.1",
+      message: "Cannot start child processes: libuv 1.52.1",
+    });
+    expect(note).toHaveBeenCalledWith(
+      "Cannot start child processes: libuv 1.52.1",
+      "Windows AppContainer",
+    );
   });
 });

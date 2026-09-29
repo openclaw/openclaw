@@ -102,6 +102,7 @@ vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteStartupOptimizationHints: () => undefined,
+  noteWindowsAppContainerSpawnSupport: () => undefined,
 }));
 
 vi.mock("../commands/doctor-config-flow.js", () => ({

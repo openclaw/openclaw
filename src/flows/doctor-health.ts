@@ -329,7 +329,11 @@ async function runDoctorHealthFlowWithResult(
       const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
       const { noteStalePluginRuntimeSymlinks } =
         await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
-      const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
+      const { noteStartupOptimizationHints, noteWindowsAppContainerSpawnSupport } =
+        await import("../commands/doctor-platform-notes.js");
+      // Report a Windows AppContainer spawn limitation before the checks that
+      // themselves start child processes, so the operator sees the cause first.
+      noteWindowsAppContainerSpawnSupport();
       await maybeRepairUiProtocolFreshness(doctorRuntime, prompter);
       noteSourceInstallIssues(root);
       await noteStalePluginRuntimeSymlinks(root);

@@ -7,6 +7,7 @@ import {
   type WindowsJobExtinction,
 } from "../../../../scripts/lib/managed-windows-job.mts";
 import { toErrorObject } from "../../../infra/errors.js";
+import { assertAppContainerSpawnSupported } from "../../../infra/windows-appcontainer-spawn.js";
 import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
@@ -132,6 +133,10 @@ export function createChildAdapter(
 export async function createChildAdapter(
   params: ChildAdapterInput,
 ): Promise<ProcessAdapterStartup<WorkerChildAdapter>> {
+  // Both routes below reserve piped stdio for the child (and IPC for the relay),
+  // which never completes inside a Windows AppContainer on libuv < 1.53, so fail
+  // with the named error before either is prepared.
+  assertAppContainerSpawnSupported();
   if (params.anchoredShellCommand !== undefined) {
     return await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,

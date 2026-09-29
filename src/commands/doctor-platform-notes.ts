@@ -16,6 +16,10 @@ import {
   resolveLaunchAgentLabel,
 } from "../daemon/launchd.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import {
+  readAppContainerSpawnSupport,
+  type AppContainerSpawnSupport,
+} from "../infra/windows-appcontainer-spawn.js";
 import { runExec } from "../process/exec.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -225,6 +229,16 @@ function isTmpCompileCachePath(cachePath: string): boolean {
     normalized === "/private/tmp" ||
     normalized.startsWith("/private/tmp/")
   );
+}
+
+/** Warns when this process cannot start child processes (Windows AppContainer, libuv < 1.53). */
+export function noteWindowsAppContainerSpawnSupport(
+  support: AppContainerSpawnSupport = readAppContainerSpawnSupport(),
+) {
+  if (support.supported) {
+    return;
+  }
+  note(support.message, "Windows AppContainer");
 }
 
 /** Emits startup tuning hints for low-power Linux hosts when env settings are suboptimal. */
