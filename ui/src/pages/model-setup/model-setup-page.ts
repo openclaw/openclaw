@@ -268,9 +268,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const connection = observation.connection;
     this.observedConnection = connection;
     this.nativeModels.reset();
-    // A pending agent roster keeps the connection; only a lost Gateway delays sign-in.
+    // A pending agent roster keeps its prior connection fields; read the live phase.
     const suspendedNotice =
-      !connection.connected && this.wizardMode === "auth"
+      snapshot.phase !== "connected" && this.wizardMode === "auth"
         ? t("modelSetup.wizard.gatewayReconnecting")
         : undefined;
     if (observation.kind === "pending") {
