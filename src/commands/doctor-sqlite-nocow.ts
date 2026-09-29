@@ -8,6 +8,7 @@ import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { copyFileHandle, sameFileMutationFingerprint } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import { isSqlitePathOnBtrfs, setSqliteDirectoryNoCow } from "../infra/sqlite-wal-filesystem.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
@@ -139,10 +140,7 @@ async function quickCheck(pathname: string) {
   const db = openNodeSqliteDatabase(pathname, { readOnly: true, allowExtension: true });
   try {
     await loadSqliteVecExtension({ db });
-    const rows = db.prepare("PRAGMA quick_check").all();
-    if (rows.length !== 1 || Object.values(rows[0] ?? {})[0] !== "ok") {
-      throw new Error(`SQLite NOCOW quick_check failed: ${pathname}`);
-    }
+    assertSqliteIntegrity(db, pathname, "quick_check");
   } finally {
     db.close();
   }
