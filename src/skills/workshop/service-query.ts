@@ -12,7 +12,10 @@ import { resolveSkillProposalName } from "./frontmatter.js";
 import { dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { captureSkillWorkshopStoreOptions } from "./store-client.js";
-import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
+import type {
+  SkillWorkshopDirectoryStoreOptions,
+  SkillWorkshopStoreOptions,
+} from "./store-sqlite-schema.js";
 import {
   SkillProposalDraftMissingError,
   readSkillProposal,
@@ -32,12 +35,6 @@ type SkillProposalScopeOptions = SkillWorkshopStoreOptions & {
   agentId: string;
   env?: NodeJS.ProcessEnv;
   config: OpenClawConfig;
-};
-
-type RequiredProposalReadOptions = {
-  config: OpenClawConfig;
-  reconcile?: boolean;
-  store?: SkillWorkshopStoreOptions;
 };
 
 export async function listSkillProposals(
@@ -138,20 +135,14 @@ export async function resolvePendingSkillProposal(input: {
 
 export async function readRequiredProposal(
   proposalId: string,
-  env: NodeJS.ProcessEnv | undefined,
-  agentId: string | undefined,
-  readOptions: RequiredProposalReadOptions,
+  store: SkillWorkshopDirectoryStoreOptions,
+  options: { reconcile?: boolean } = {},
 ): Promise<SkillProposalReadResult> {
   const read = await readSkillProposal(
     proposalId,
-    {
-      ...readOptions.store,
-      env: readOptions.store?.env ?? env,
-      agentId,
-      config: readOptions.config,
-    },
-    { agentId },
-    readOptions,
+    store,
+    { agentId: store.agentId },
+    { config: store.config, ...options },
   );
   if (!read) {
     throw new Error(`Skill proposal not found: ${proposalId}`);

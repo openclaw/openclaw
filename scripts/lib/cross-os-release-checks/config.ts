@@ -261,9 +261,6 @@ export function managedGatewayRestartCommandTimeoutMs(platform = process.platfor
   return gatewayReadyDeadlineMs(platform) + 60_000;
 }
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
-export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 10 * 60;
-export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =
-  (CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS + 2 * 60) * 1000;
 export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS",
   60,
@@ -606,7 +603,27 @@ function isBoundedTimingMs(value: unknown): value is number {
   );
 }
 
-export function buildPackagedUpgradeUpdateArgs(candidateUrl: string) {
+export function resolvePackagedUpgradeTimeouts(
+  baselineInstallDurationMs: number,
+  platform = process.platform,
+) {
+  if (platform !== "win32") {
+    return { stepTimeoutSeconds: 1200, wrapperTimeoutMs: 20 * 60_000 };
+  }
+  // Allow 50% registry/runner variance per install, bounded to 10–20 minutes.
+  // The updater installs and rehearses; give both steps their full budget plus
+  // two minutes for shutdown/reporting (wrapper floor 22m, ceiling 42m).
+  const measuredSeconds = Number.isFinite(baselineInstallDurationMs)
+    ? Math.ceil((baselineInstallDurationMs * 1.5) / 1000)
+    : 0;
+  const stepTimeoutSeconds = Math.min(20 * 60, Math.max(10 * 60, measuredSeconds));
+  return { stepTimeoutSeconds, wrapperTimeoutMs: (2 * stepTimeoutSeconds + 120) * 1000 };
+}
+
+export function buildPackagedUpgradeUpdateArgs(
+  candidateUrl: string,
+  timeoutSeconds = resolvePackagedUpgradeTimeouts(0).stepTimeoutSeconds,
+) {
   return [
     "update",
     "--tag",
@@ -615,7 +632,7 @@ export function buildPackagedUpgradeUpdateArgs(candidateUrl: string) {
     "--json",
     "--no-restart",
     "--timeout",
-    String(updateStepTimeoutSeconds()),
+    String(timeoutSeconds),
   ];
 }
 
@@ -708,13 +725,5 @@ export function installTimeoutMs() {
 }
 
 export function updateTimeoutMs() {
-  return process.platform === "win32"
-    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS
-    : 20 * 60 * 1000;
-}
-
-function updateStepTimeoutSeconds() {
-  return process.platform === "win32"
-    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
-    : 1200;
+  return process.platform === "win32" ? 12 * 60 * 1000 : 20 * 60 * 1000;
 }

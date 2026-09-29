@@ -47,6 +47,7 @@ import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseJsonWithRepair } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { requireApiKey } from "../utils/required-api-key.js";
 import {
   isAnthropicOAuthApiKey,
   omitFoundryBearerCredentialHeaders,
@@ -104,12 +105,6 @@ function getAnthropicCompat(model: Model<"anthropic-messages">) {
       model.compat?.sendSessionAffinityHeaders ?? (isFireworks || isCloudflareAiGatewayAnthropic),
     allowEmptySignature: model.compat?.allowEmptySignature ?? false,
   };
-}
-
-function mergeHeaders(
-  ...headerSources: (Record<string, string | null> | undefined)[]
-): Record<string, string | null> {
-  return Object.assign({}, ...headerSources);
 }
 
 const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
@@ -204,7 +199,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
           apiKey,
           requestOptions?.thinkingEnabled === true,
           requestOptions?.interleavedThinking ?? true,
-          shouldUseFineGrainedToolStreamingBeta(model, requestContext),
+          Boolean(requestContext.tools?.length) &&
+            !getAnthropicCompat(model).supportsEagerToolInputStreaming,
           resolveOpencodeSessionHeaders(model, requestOptions),
           copilotDynamicHeaders,
           cacheSessionId,
@@ -320,10 +316,7 @@ export const streamSimpleAnthropic: StreamFunction<
   context: Context,
   options?: AnthropicSimpleStreamOptions,
 ) => {
-  const apiKey = options?.apiKey || getEnvApiKey(model.provider);
-  if (!apiKey) {
-    throw new Error(`No API key for provider: ${model.provider}`);
-  }
+  const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = {
     ...buildBaseOptions(model, options, apiKey),
@@ -342,13 +335,12 @@ export const streamSimpleAnthropic: StreamFunction<
       thinkingEnabled: false,
     } satisfies AnthropicCompactionOptions);
   }
-  const reasoning =
-    options?.reasoning === "off"
-      ? mandatoryAdaptiveThinking
-        ? "low"
-        : "high"
-      : options?.reasoning;
-  if (resolveClaudeOpus5ModelIdentity(model) || resolveClaudeSonnet5ModelIdentity(model)) {
+  const reasoning = options?.reasoning === "off" ? "low" : options?.reasoning;
+  if (
+    resolveClaudeOpus5ModelIdentity(model) ||
+    resolveClaudeSonnet5ModelIdentity(model) ||
+    (reasoning && supportsClaudeAdaptiveThinking(model))
+  ) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
@@ -359,17 +351,6 @@ export const streamSimpleAnthropic: StreamFunction<
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: mandatoryAdaptiveThinking,
-    } satisfies AnthropicCompactionOptions);
-  }
-
-  // For Opus 4.6 and Sonnet 4.6: use adaptive thinking with effort level
-  // For older models: use budget-based thinking
-  if (supportsClaudeAdaptiveThinking(model)) {
-    const effort = resolveAnthropicThinkingEffort(model, reasoning);
-    return streamAnthropic(model, context, {
-      ...base,
-      thinkingEnabled: true,
-      effort,
     } satisfies AnthropicCompactionOptions);
   }
 
@@ -463,7 +444,8 @@ function createClient(
       apiKey,
       authToken: null,
       baseURL: resolveCloudflareBaseUrl(model),
-      defaultHeaders: mergeHeaders(
+      defaultHeaders: Object.assign(
+        {},
         {
           accept: baseHeaders.accept,
           "anthropic-dangerous-direct-browser-access": "true",
@@ -490,7 +472,8 @@ function createClient(
       ...clientOptions,
       apiKey: null,
       authToken: apiKey,
-      defaultHeaders: mergeHeaders(
+      defaultHeaders: Object.assign(
+        {},
         baseHeaders,
         isCopilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
         dynamicHeaders,
@@ -528,7 +511,8 @@ function createClient(
     sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
       ? { "x-session-affinity": sessionId }
       : {};
-  const defaultHeaders = mergeHeaders(
+  const defaultHeaders: Record<string, string | null> = Object.assign(
+    {},
     baseHeaders,
     sessionAffinityHeaders,
     model.headers,
@@ -637,13 +621,4 @@ async function buildParams(
   );
 
   return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
-}
-
-function shouldUseFineGrainedToolStreamingBeta(
-  model: Model<"anthropic-messages">,
-  context: Context,
-): boolean {
-  return (
-    Boolean(context.tools?.length) && !getAnthropicCompat(model).supportsEagerToolInputStreaming
-  );
 }

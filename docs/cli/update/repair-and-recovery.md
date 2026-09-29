@@ -291,6 +291,12 @@ For full finalization, `update repair` runs `openclaw doctor --fix`, reloads the
 install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.
+If plugin migrations remain deferred, finalization runs another fresh Doctor after
+releasing install-record ownership, even when no plugin package changed. This lets
+a corrected local plugin finish its pending confirmation in the same repair run.
+Doctor preserves the plugin's configuration when compatibility checks prevent
+discovery, so correcting the plugin does not require recreating its allowlist or
+enabled entry.
 Configured runtime plugins whose versions follow OpenClaw are checked against
 the newly installed core during post-update repair, even when the updater process
 started on the previous version.

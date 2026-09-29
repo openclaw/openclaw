@@ -199,7 +199,6 @@ function createTextEvent(params: {
 
 async function setupDebounceMonitor(params?: {
   botOpenId?: string;
-  botName?: string;
 }): Promise<(data: unknown) => Promise<void>> {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
@@ -219,7 +218,6 @@ async function setupDebounceMonitor(params?: {
     botOpenIdSource: {
       kind: "prefetched",
       botOpenId: params?.botOpenId ?? "ou_bot",
-      botName: params?.botName,
     },
   });
   stopDebounceMonitor = async () => {
@@ -272,7 +270,7 @@ function expectParsedFirstDispatchedEvent(botOpenId = "ou_bot") {
   };
   return {
     dispatched,
-    parsed: parseFeishuMessageEvent(dispatched, botOpenId, undefined, preparedContent),
+    parsed: parseFeishuMessageEvent(dispatched, botOpenId, preparedContent),
   };
 }
 
@@ -723,34 +721,6 @@ describe("Feishu inbound debounce regressions", () => {
     expect(JSON.parse(first.message.content)).toEqual({ text: "first" });
     expect(second?.message.message_id).toBe("om_stop");
     expect(JSON.parse(second?.message.content ?? "{}")).toEqual({ text: "stop" });
-  });
-
-  it("passes prefetched botName through to handleFeishuMessage", async () => {
-    setDedupPassThroughMocks();
-    const onMessage = await setupDebounceMonitor({ botName: "OpenClaw Bot" });
-
-    await onMessage(
-      createTextEvent({
-        messageId: "om_name_passthrough",
-        text: "@bot hello",
-        mentions: [
-          {
-            key: "@_user_1",
-            id: { open_id: "ou_bot" },
-            name: "OpenClaw Bot",
-          },
-        ],
-      }),
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(25);
-
-    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
-    const firstParams = mockCallAt(handleFeishuMessageMock, 0, "Feishu message dispatch")[0] as
-      | { botName?: string }
-      | undefined;
-    expect(firstParams?.botName).toBe("OpenClaw Bot");
   });
 
   it("does not synthesize mention-forward intent across separate messages", async () => {

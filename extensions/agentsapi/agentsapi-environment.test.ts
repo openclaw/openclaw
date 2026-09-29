@@ -49,6 +49,11 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   agentHarnessAttemptTerminal: { normalize: () => ({ kind: "ok" }) },
+  loadAgentHarnessMcpConfig: async () => ({
+    config: { mcpServers: {} },
+    diagnostics: [],
+    requesterScopedServerNames: [],
+  }),
   resolveAgentHarnessBeforePromptBuildResult: async ({
     prompt,
     developerInstructions,
@@ -150,11 +155,98 @@ afterEach(() => {
 });
 
 describe("Agents API attempt environment selection", () => {
+  it.each([
+    { access: "enabled" },
+    { access: "disabled", allowed_domains: null },
+    {
+      access: "restricted",
+      allowed_domains: ["api.github.com", "pypi.org", "files.pythonhosted.org"],
+    },
+    null,
+  ])("forwards hosted network policy %j and continues its saved session", async (network) => {
+    const config = { openai_host: { network } };
+    const created = await attempt(undefined, undefined, undefined, undefined, config);
+
+    expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
+    expect(await requestBody(0)).toMatchObject({ environment: { type: "openai_hosted", network } });
+    const binding = created.bind.mock.calls[0]![0];
+    mocks.fetch.mockClear();
+
+    const continued = await attempt(undefined, binding, undefined, undefined, config);
+
+    expect(continued.result).toMatchObject({ terminal: { kind: "ok" } });
+    expect(mocks.fetch.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([
+      "/v1/agents/sessions/session-fixture",
+      "/v1/agents/sessions/session-fixture/events",
+      "/v1/agents/sessions/session-fixture/items",
+    ]);
+  });
+
+  it.each([
+    { name: "added", previous: undefined, next: { access: "disabled" } },
+    { name: "removed", previous: { access: "disabled" }, next: undefined },
+    { name: "access changed", previous: { access: "enabled" }, next: { access: "disabled" } },
+    {
+      name: "domains changed",
+      previous: { access: "restricted", allowed_domains: ["api.github.com"] },
+      next: { access: "restricted", allowed_domains: ["pypi.org"] },
+    },
+  ])("requires reset when hosted network policy is $name", async ({ previous, next }) => {
+    const created = await attempt(undefined, undefined, undefined, undefined, {
+      openai_host: { network: previous },
+    });
+    expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
+    mocks.fetch.mockClear();
+
+    const { result, bind } = await attempt(
+      undefined,
+      created.bind.mock.calls[0]![0],
+      undefined,
+      undefined,
+      { openai_host: { network: next } },
+    );
+
+    expect(result).toMatchObject({
+      terminal: {
+        kind: "failed",
+        error: expect.objectContaining({
+          message: expect.stringContaining("reset the OpenClaw session"),
+        }),
+      },
+    });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(bind).not.toHaveBeenCalled();
+  });
+
+  it("requires reset before adopting a legacy tool binding with a hosted network policy", async () => {
+    const binding = {
+      sessionId: "session-fixture",
+      authFingerprint: createHash("sha256")
+        .update(JSON.stringify(["fixture-model", "fixture-not-a-real-api-key", []]))
+        .digest("hex"),
+    };
+    const { result } = await attempt(undefined, binding, undefined, undefined, {
+      openai_host: { network: { access: "restricted", allowed_domains: ["api.github.com"] } },
+    });
+
+    expect(result).toMatchObject({
+      terminal: {
+        kind: "failed",
+        error: expect.objectContaining({
+          message: expect.stringContaining("reset the OpenClaw session"),
+        }),
+      },
+    });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, "openai_hosted", "self_hosted"])(
     "uses configured environment %s in the SDK session-create request",
     async (environment) => {
       const workspaceDir = "fixture-workspace/../fixture-project";
-      const { result, bind } = await attempt(environment, undefined, workspaceDir);
+      const { result, bind } = await attempt(environment, undefined, workspaceDir, undefined, {
+        openai_host: environment === "self_hosted" ? { network: { access: "disabled" } } : {},
+      });
 
       expect(result).toMatchObject({ terminal: { kind: "ok" } });
       expect(mocks.fetch.mock.calls[0]?.[0].init?.method).toBe("POST");
@@ -166,6 +258,12 @@ describe("Agents API attempt environment selection", () => {
             : { type: "openai_hosted" },
         agent: { model: "fixture-model", tools: [{ type: "web_search", mode: "live" }] },
       });
+      if (environment === "self_hosted") {
+        expect(createRequest).toHaveProperty("environment", {
+          type: "self_hosted",
+          workspace_directory: path.resolve(workspaceDir),
+        });
+      }
       expect(bind).toHaveBeenCalledOnce();
       expect(bind.mock.calls[0]?.[0].sessionId).toBe("session-fixture");
       expect(mocks.commit).toHaveBeenCalledWith(
@@ -281,7 +379,10 @@ describe("Agents API attempt environment selection", () => {
     mocks.prepareInputs.mockResolvedValueOnce({ files: [file], mappingText });
     mocks.collectOutputs.mockResolvedValueOnce([outputUrl]);
 
-    const { result } = await attempt("openai_hosted", undefined, undefined, media);
+    const network = { access: "restricted", allowed_domains: ["api.github.com"] };
+    const { result } = await attempt("openai_hosted", undefined, undefined, media, {
+      openai_host: { network },
+    });
 
     expect(result).toMatchObject({
       terminal: { kind: "ok" },
@@ -296,7 +397,7 @@ describe("Agents API attempt environment selection", () => {
       expect.any(AbortSignal),
     );
     expect(await requestBody(0)).toMatchObject({
-      environment: { type: "openai_hosted", files: [file] },
+      environment: { type: "openai_hosted", files: [file], network },
     });
     expect(await requestBody(1)).toMatchObject({
       events: [
@@ -343,6 +444,7 @@ async function attempt(
   binding?: AgentsApiBinding,
   workspaceDir = "/fixture/project",
   media?: AgentHarnessAttemptParamsV2["media"],
+  pluginConfig?: Record<string, unknown>,
 ) {
   // Authentication/tool construction are host-prepared and mocked at their boundaries.
   const authStorage = AuthStorage.inMemory();
@@ -406,7 +508,7 @@ async function attempt(
       sessionKey: params.sessionKey!,
       storePath: "/fixture/sessions.json",
     },
-    () => (environment === undefined ? undefined : { environment }),
+    () => ({ ...(environment === undefined ? {} : { environment }), ...pluginConfig }),
   );
   return { result, bind };
 }

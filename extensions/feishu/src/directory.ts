@@ -1,3 +1,4 @@
+import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -5,14 +6,13 @@ import {
   listFeishuDirectoryGroups,
   listFeishuDirectoryPeers,
   type FeishuDirectoryGroup,
-  type FeishuDirectoryParams,
   type FeishuDirectoryPeer,
 } from "./directory.static.js";
 
 const MAX_FEISHU_DIRECTORY_PAGES = 100;
 
 export async function listFeishuDirectoryPeersLive(
-  params: FeishuDirectoryParams & {
+  params: DirectoryConfigParams & {
     fallbackToStatic?: boolean;
   },
 ): Promise<FeishuDirectoryPeer[]> {
@@ -83,7 +83,7 @@ export async function listFeishuDirectoryPeersLive(
 }
 
 export async function listFeishuDirectoryGroupsLive(
-  params: FeishuDirectoryParams & {
+  params: DirectoryConfigParams & {
     fallbackToStatic?: boolean;
     filter?: (group: FeishuDirectoryGroup) => boolean;
   },

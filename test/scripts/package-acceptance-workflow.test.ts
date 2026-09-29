@@ -24,6 +24,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
+import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/config.ts";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { listRecordedFirstHopSourceVersions } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
@@ -40,7 +41,7 @@ import {
   releaseWorkflowJobNeeds as jobNeeds,
 } from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -3000,6 +3001,20 @@ function evaluatedJobTimeouts(path: string, jobName: string, job: WorkflowJob): 
   }
   if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
     return [60, 90];
+  }
+  if (path === CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW && jobName === "cross_os_release_checks") {
+    return resolveRunnerMatrix({ mode: "both", ref: "main" }).include.map((matrix) => {
+      const minutes: unknown = evaluateWorkflowExpression(timeout, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix,
+      });
+      if (typeof minutes !== "number") {
+        throw new Error(`Invalid matrix timeout for ${path}:${jobName}`);
+      }
+      return minutes;
+    });
   }
   if (timeout !== "${{ matrix.timeout_minutes }}") {
     throw new Error(`Unsupported timeout for ${path}:${jobName}: ${String(timeout)}`);
@@ -15316,7 +15331,15 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(installSmoke.jobs?.bun_global_install_smoke?.["timeout-minutes"]).toBe(60);
     expect(installSmoke.jobs?.["docker-e2e-fast"]?.["timeout-minutes"]).toBe(12);
     expect(crossOs.jobs?.prepare?.["timeout-minutes"]).toBe(90);
-    expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
+    expect(
+      new Set(
+        evaluatedJobTimeouts(
+          CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW,
+          "cross_os_release_checks",
+          workflowJob(CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW, "cross_os_release_checks"),
+        ),
+      ),
+    ).toEqual(new Set([60, 180]));
     expect(qaLive.jobs?.authorize_actor?.["timeout-minutes"]).toBe(10);
     expect(qaLive.jobs?.validate_selected_ref?.["timeout-minutes"]).toBe(30);
     expect(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"]).toBe(30);
@@ -15481,10 +15504,16 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "stable"),
       timeoutForProfile(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"], "stable"),
       timeoutForProfile(crossOs.jobs?.prepare?.["timeout-minutes"], "stable"),
-      timeoutForProfile(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"], "stable"),
+      Math.max(
+        ...evaluatedJobTimeouts(
+          CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW,
+          "cross_os_release_checks",
+          workflowJob(CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW, "cross_os_release_checks"),
+        ),
+      ),
       timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
     ];
-    expect(releaseCrossOsPath).toEqual([30, 15, 90, 60, 5]);
+    expect(releaseCrossOsPath).toEqual([30, 15, 90, 180, 5]);
 
     const releaseInstall = workflowJob(RELEASE_CHECKS_WORKFLOW, "install_smoke_release_checks");
     expect(jobNeeds(releaseInstall)).toEqual(["resolve_target"]);

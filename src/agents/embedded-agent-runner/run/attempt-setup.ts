@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -24,6 +25,7 @@ import {
   resolveProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
@@ -52,7 +54,6 @@ import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
-  createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
@@ -78,7 +79,7 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
-  const prepStages = createEmbeddedRunStageTracker();
+  const prepStages = createStageTimingTracker(Date.now);
   const emitPrepStageSummary = createEmbeddedRunStageSummaryEmitter({
     label: "prep stages",
     log,
@@ -454,16 +455,6 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
   return { diagnosticTrace, runTrace, emitCompleted };
 }
 
-function isRelativePathInsideOrEqual(relativePath: string): boolean {
-  // `path.relative` returns "" for the workspace root; reject parent escapes and absolute paths.
-  return (
-    relativePath === "" ||
-    (relativePath !== ".." &&
-      !relativePath.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relativePath))
-  );
-}
-
 /**
  * Rewrites injected context file paths when a bootstrap assembled in one
  * workspace is replayed in another. Files outside the source workspace keep
@@ -479,10 +470,7 @@ export function remapInjectedContextFilesToWorkspace(params: {
   }
   return params.files.map((file) => {
     const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    // Only files that were inside the source workspace can be safely projected
-    // into the target workspace.
-    const canRemap = isRelativePathInsideOrEqual(relative);
-    return canRemap
+    return !isPathRelativeEscape(relative)
       ? {
           ...file,
           path:

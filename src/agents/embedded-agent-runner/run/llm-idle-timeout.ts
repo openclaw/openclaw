@@ -365,7 +365,6 @@ export function streamWithIdleTimeout(
         const producerCompletion = getEventStreamCompletion(stream);
         let idleTimer: NodeJS.Timeout | null = null;
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
-        let firstArmPending = true;
         // Pre-stream tool timestamps are consumed after the first bridged wait
         // so that subsequent provider chunk progress restores a full idle budget.
         // Without this guard a stale pre-stream timestamp would shorten every
@@ -392,15 +391,12 @@ export function streamWithIdleTimeout(
           }
           const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
           const recentActivity = activeToolMs > 0 && Date.now() - activeToolMs < timeoutMs;
-          const isFirstStreamArm = firstArmPending && !streamFirstArmDone;
+          const isFirstStreamArm = !streamFirstArmDone;
           const effectiveTimeout =
             isFirstStreamArm && recentActivity
               ? Math.max(1, timeoutMs - Math.max(0, Date.now() - activeToolMs))
               : timeoutMs;
-          firstArmPending = false;
-          if (isFirstStreamArm) {
-            streamFirstArmDone = true;
-          }
+          streamFirstArmDone = true;
           idleTimer = setTimeout(() => {
             idleTimer = null;
             const error = createIdleTimeoutError();
@@ -441,7 +437,6 @@ export function streamWithIdleTimeout(
             try {
               const timeoutPromise = new Promise<never>((_, reject) => {
                 rejectIdleTimeout = reject;
-                firstArmPending = true;
                 armTimer();
               });
               // Providers may ignore their mirrored abort signal, so caller

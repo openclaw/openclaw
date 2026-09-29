@@ -42,6 +42,7 @@ async function useReadPool() {
   return {
     ...sharedStateOwnerFixtureFiles(),
     ...scheduledCloseFixtureFiles(),
+    ...subagentRetirementFixtureFiles(),
     ...stateReadPoolFixtureFiles(),
     ...failedDrainFixtureFiles(readPoolFixture),
     "11-a-sqlite-owner.test.ts": `
@@ -517,4 +518,47 @@ it("binds shared-state retirement to the current file's database lifecycle " + g
 `,
     ]),
   );
+}
+
+function subagentRetirementFixtureFiles(): Record<string, string> {
+  return {
+    "10-c-subagent-registry.test.ts": `
+import { expect, it, vi } from "vitest";
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
+}));
+import ${JSON.stringify(import.meta.resolve("../src/agents/subagents/registry/subagent-registry.ts"))};
+import { subagentRuns } from ${JSON.stringify(import.meta.resolve("../src/agents/subagents/registry/subagent-registry-memory.ts"))};
+import { createSubagentRunRecord } from ${JSON.stringify(import.meta.resolve("../src/agents/subagent-test-fixtures.test-helpers.ts"))};
+it("leaves a retired-store delivery in its original registry generation", () => {
+  const entry = createSubagentRunRecord({
+    runId: "retired-registry-delivery", endedAt: 1, outcome: { status: "ok" },
+    delivery: { status: "pending" },
+  });
+  subagentRuns.set(entry.runId, entry);
+  subagentRuns.retireCompletionAuthority(entry);
+  const api = Reflect.get(globalThis, Symbol.for("openclaw.subagentRegistryTestApi"));
+  Reflect.set(globalThis, Symbol.for("fixture.retiredSubagentRegistry"), {
+    runs: subagentRuns, tick: api.testing.runSweeperTickForTests,
+  });
+  expect(subagentRuns.size).toBe(1);
+});
+`,
+    "10-d-subagent-registry-observer.test.ts": `
+import { expect, it } from "vitest";
+import ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
+it("prevents an old registry tick from recreating a worker against a retired cache", async () => {
+  const key = Symbol.for("fixture.retiredSubagentRegistry");
+  const previous = Reflect.get(globalThis, key);
+  try {
+    await previous.tick();
+    expect(Reflect.has(globalThis, Symbol.for("openclaw.sharedStateWorkerOwner")),
+      "retired registry recreated a shared-state worker owner").toBe(false);
+    expect(previous.runs.size).toBe(0);
+  } finally {
+    Reflect.deleteProperty(globalThis, key);
+  }
+});
+`,
+  };
 }

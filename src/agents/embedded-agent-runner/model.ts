@@ -429,16 +429,8 @@ export async function resolveModelAsync(
     : await resolve();
 }
 
-/**
- * Build a more helpful error when the model is not found.
- *
- * Some provider plugins only become available after setup/auth has registered
- * them. When users point `agents.defaults.model.primary` at one of those
- * providers before setup, the raw `Unknown model` error is too vague. Provider
- * plugins can append a targeted recovery hint here.
- *
- * See: https://github.com/openclaw/openclaw/issues/17328
- */
+// Providers registered by setup/auth can explain an otherwise opaque model miss.
+// See https://github.com/openclaw/openclaw/issues/17328.
 function buildUnknownModelError(params: {
   provider: string;
   modelId: string;
@@ -506,13 +498,8 @@ function buildMissingProviderModelRegistrationHint(params: {
   if (!configuredEntry) {
     return undefined;
   }
-  // Models bound to an agent runtime (e.g. "codex") draw their catalog from that
-  // runtime and its linked account, not from models.providers[].models[].
-  // Advising a models.providers[] registration here is actively misleading: it
-  // makes resolution "succeed" only for the request to be rejected later by the
-  // runtime/provider (e.g. OpenAI returns 400 "model is not supported when using
-  // Codex with a ChatGPT account" once a deprecated model id is no longer
-  // offered). Point the user at the runtime's live catalog instead.
+  // Runtime-bound models use the harness/account catalog; registering a retired
+  // model in models.providers would hide the miss until the provider rejects it.
   const agentRuntimeId = configuredEntry.agentRuntime?.id;
   if (agentRuntimeId) {
     return `Found agents.defaults.models["${agentModelKey}"] bound to the "${agentRuntimeId}" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["${params.provider}"].models[] — registering it there will not make it usable. Confirm "${params.modelId}" is still offered by the "${agentRuntimeId}" runtime and switch agents.defaults.model.primary to a currently available model (run \`openclaw models list --refresh --provider ${params.provider}\` to list them). See https://docs.openclaw.ai/concepts/model-providers.`;

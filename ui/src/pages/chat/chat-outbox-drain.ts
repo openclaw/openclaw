@@ -248,7 +248,11 @@ async function drainStoredChatOutbox(
       holdProviderReviewQueuedInputs(host, scope.sessionKey, scope.agentId);
       return "blocked";
     }
-    if (!host.connected || !host.client || chatSendHoldReason(host, scope.sessionKey)) {
+    if (
+      !host.connected ||
+      !host.client ||
+      chatSendHoldReason(host, scope.sessionKey, false, scope.agentId)
+    ) {
       return "blocked";
     }
     const outbox = readStoredChatOutbox(host, scope);
@@ -375,7 +379,7 @@ async function drainStoredChatOutbox(
           continue;
         }
       }
-      if (chatSendHoldReason(host, outbox.sessionKey)) {
+      if (chatSendHoldReason(host, outbox.sessionKey, false, outbox.agentId)) {
         return "blocked";
       }
       // Claim before execution to preserve FIFO and crash-review state.

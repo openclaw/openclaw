@@ -258,7 +258,7 @@ export function finishChatDeliveryAdmission(
   }
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
   if (
-    chatSendHoldReason(host, route) ||
+    chatSendHoldReason(host, route, false, current.agentId) ||
     (options?.routingSessionKey && !routeVisible(current.agentId)) ||
     (!sendsDuringActiveRun &&
       routeVisible(current.agentId) &&

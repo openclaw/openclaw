@@ -31,10 +31,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
-import {
-  adoptCandidateManagedServiceStop,
-  stopSupervisedPredecessorGateway,
-} from "./update-candidate-predecessor-stop.js";
+import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -407,26 +404,7 @@ async function finalizeInput(
     executorFence.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
-  const { stopped, restartRequired } = await adoptCandidateManagedServiceStop({
-    transferred: input.params.preManagedServiceStop,
-    shouldRestart: input.params.shouldRestart,
-    mode: input.params.result.mode,
-    windowsTaskAutoStartSuspended: input.windowsTaskAutoStartSuspended,
-    runId: run.runId,
-    ledger: { env: run.env },
-    root: input.params.result.root ?? input.params.root,
-    timeoutMs: input.params.updateStepTimeoutMs,
-    assertCurrent: () => {
-      executorFence.assertCurrent();
-      if (run.requesterAuthority?.isCurrent() === false) {
-        throw new UpdateRequesterRevokedError();
-      }
-    },
-    onStep: (step) => input.params.result.steps.push(step),
-  });
-  if (restartRequired) {
-    input.params.shouldRestart = true;
-  }
+  const stopped = input.params.preManagedServiceStop;
   if (input.windowsTaskAutoStartSuspended && !stopped?.serviceEnv) {
     throw new Error("Transferred Windows task suspension is missing its stopped service owner.");
   }

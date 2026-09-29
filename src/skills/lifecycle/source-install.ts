@@ -53,16 +53,6 @@ function createGitCommandEnv(): NodeJS.ProcessEnv {
   });
 }
 
-async function readSkillNameFromFrontmatter(skillDir: string): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
-    const frontmatter = parseSkillFrontmatter(raw);
-    return normalizeOptionalString(frontmatter.name) ?? null;
-  } catch {
-    return null;
-  }
-}
-
 async function resolveSkillInstallSlug(params: {
   sourceDir: string;
   fallbackLabel: string;
@@ -73,31 +63,17 @@ async function resolveSkillInstallSlug(params: {
     return validateRequestedSkillSlug(explicit);
   }
 
-  const frontmatterName = await readSkillNameFromFrontmatter(params.sourceDir);
-  if (frontmatterName) {
-    try {
+  try {
+    const raw = await fs.readFile(path.join(params.sourceDir, "SKILL.md"), "utf8");
+    const frontmatterName = normalizeOptionalString(parseSkillFrontmatter(raw).name);
+    if (frontmatterName) {
       return validateRequestedSkillSlug(frontmatterName);
-    } catch {
-      // Fall back to the source label when the display name is not a valid install slug.
     }
+  } catch {
+    // Missing/unreadable metadata and invalid display names fall back to the source label.
   }
 
   return validateRequestedSkillSlug(params.fallbackLabel);
-}
-
-async function copyGitWorktreeExport(params: {
-  repoDir: string;
-  exportDir: string;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    await fs.cp(params.repoDir, params.exportDir, {
-      recursive: true,
-      filter: (source) => !path.relative(params.repoDir, source).split(path.sep).includes(".git"),
-    });
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: `failed to prepare git skill source: ${String(err)}` };
-  }
 }
 
 async function installLocalSkillDir(
@@ -206,9 +182,13 @@ async function installGitSkill(
       commit: acquired.commit,
       resolvedAt: new Date().toISOString(),
     };
-    const exported = await copyGitWorktreeExport({ repoDir, exportDir });
-    if (!exported.ok) {
-      return exported;
+    try {
+      await fs.cp(repoDir, exportDir, {
+        recursive: true,
+        filter: (source) => !path.relative(repoDir, source).split(path.sep).includes(".git"),
+      });
+    } catch (err) {
+      return { ok: false, error: `failed to prepare git skill source: ${String(err)}` };
     }
 
     return await installLocalSkillDir({

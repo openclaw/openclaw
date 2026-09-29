@@ -423,6 +423,14 @@ function createAnthropicTransportClient(params: {
     },
     model.headers,
     optionHeaders,
+    // Attribution policy headers are protected over config and caller headers, as on the
+    // OpenAI transports (for example OpenRouter or Vercel AI Gateway Messages endpoints).
+    getAiTransportHost().resolveProviderRequestHeaders({
+      provider: model.provider,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      model,
+    }),
   );
   return {
     request: createAnthropicMessageRequest({

@@ -209,17 +209,8 @@ function resolveUnimportedAgentCodexAuthMessage(params: {
 
 function resolveCodexAppServerAuthProfile(params: CodexAppServerAuthProfileLookup) {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-  const store = resolveCodexAppServerAuthProfileStore({
-    agentDir,
-    authProfileId: params.authProfileId,
-    authProfileStore: params.authProfileStore,
-    config: params.config,
-  });
-  const profileId = resolveCodexAppServerAuthProfileId({
-    authProfileId: params.authProfileId,
-    store,
-    config: params.config,
-  });
+  const store = resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
+  const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
   if (!profileId) {
     return undefined;
   }
@@ -375,10 +366,8 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   }
 
   const snapshot = await resolveCodexAppServerPreparedAuthProfileSnapshot({
+    ...params,
     authProfileId,
-    authProfileStore: params.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.config,
   });
   if (!snapshot) {
     throw createCodexAppServerAuthError(
@@ -822,11 +811,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
   }
   if (previousAccountId) {
     const store = resolveCodexAppServerAuthProfileStore(params);
-    const profileId = resolveCodexAppServerAuthProfileId({
-      authProfileId: params.authProfileId,
-      store,
-      config: params.config,
-    });
+    const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
     const credential = profileId ? store.profiles[profileId] : undefined;
     const selectedAccountId = credential
       ? (resolveExplicitChatgptAccountId(credential) ??
@@ -873,17 +858,8 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   forceOAuthRefresh?: boolean;
   config?: AuthProfileOrderConfig;
 }): Promise<CodexLoginAccountParams | undefined> {
-  const store = resolveCodexAppServerAuthProfileStore({
-    agentDir: params.agentDir,
-    authProfileId: params.authProfileId,
-    authProfileStore: params.authProfileStore,
-    config: params.config,
-  });
-  const profileId = resolveCodexAppServerAuthProfileId({
-    authProfileId: params.authProfileId,
-    store,
-    config: params.config,
-  });
+  const store = resolveCodexAppServerAuthProfileStore(params);
+  const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
   if (!profileId) {
     return undefined;
   }
@@ -974,9 +950,6 @@ async function resolveLoginParamsForCredential(
     return credential.type === "api_key"
       ? { type: "apiKey", apiKey: value }
       : buildChatgptAuthTokensParams(profileId, credential, value);
-  }
-  if (credential.type !== "oauth") {
-    return undefined;
   }
   const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(profileId, credential, {
     agentDir: params.agentDir,
@@ -1271,10 +1244,6 @@ function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {
   const credential = profileId
     ? params.store.profiles[profileId]
     : params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
-  return isCodexSubscriptionCredential(credential);
-}
-
-function isCodexSubscriptionCredential(credential: AuthProfileCredential | undefined): boolean {
   if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
     return false;
   }

@@ -1,7 +1,4 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
-/**
- * Shared parameter and metric types for embedded-agent compaction.
- */
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { ExecToolDefaults } from "../bash-tools.exec-types.js";

@@ -38,6 +38,7 @@ import type {
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
+import { registerRequesterWakeReceiptBoundaryTests } from "./subagent-registry.requester-wake-receipts.test-support.js";
 import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registry.requester-wake-settlement.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
@@ -65,6 +66,7 @@ let rejectNextRequesterWake = false;
 let rejectNextRequesterWakePersistence = false;
 let armRequesterWakePersistenceFailure = false;
 let emptyGatedAgentReply = false;
+let releaseWakeReceipts: (() => void) | undefined;
 
 const sendMessageMock = vi.fn<typeof import("../../../infra/outbound/message.js").sendMessage>(
   async () => ({
@@ -297,6 +299,8 @@ describe("requester settle wake product flow", () => {
     // Failed assertions must also release the delivery owned by this test.
     releaseAgentCallGate?.();
     releaseAgentCallGate = undefined;
+    releaseWakeReceipts?.();
+    releaseWakeReceipts = undefined;
     try {
       try {
         await vi.advanceTimersByTimeAsync(0);
@@ -548,160 +552,39 @@ describe("requester settle wake product flow", () => {
     },
   );
 
-  it.each([
-    {
-      name: "delivers the visible requester final",
-      rejectRequesterWake: false,
-      rejectPersistence: false,
-      emptyReply: false,
+  registerRequesterWakeReceiptBoundaryTests({
+    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    spawnVisibleChild,
+    emitCompleted,
+    flushOwnedWork,
+    waitForDeliveredCleanup,
+    waitForAgentCallCount,
+    getRequesterWakeCalls,
+    createGatewayContext,
+    statePath: (...parts) => testState.statePath(...parts),
+    sendMessageMock,
+    setEmptyReply: (value) => {
+      emptyGatedAgentReply = value;
     },
-    {
-      name: "settles the rejected delivered-row wake",
-      rejectRequesterWake: true,
-      rejectPersistence: false,
-      emptyReply: false,
+    setWakeRefusal: (wake, persistence) => {
+      rejectNextRequesterWake = wake;
+      armRequesterWakePersistenceFailure = persistence;
     },
-    {
-      name: "backs off when rejected-wake settlement persistence fails",
-      rejectRequesterWake: true,
-      rejectPersistence: true,
-      emptyReply: false,
-    },
-    {
-      name: "retires a stale empty announce after requester delivery",
-      rejectRequesterWake: false,
-      rejectPersistence: false,
-      emptyReply: true,
-    },
-  ])("$name", async ({ rejectRequesterWake, rejectPersistence, emptyReply }) => {
-    emptyGatedAgentReply = emptyReply;
-    const requesterTurnRunId = "run-requester-yield";
-    const alpha = {
-      runId: "run-alpha",
-      childSessionKey: "agent:main:subagent:alpha",
-      expectsCompletionMessage: true,
-    };
-    const beta = {
-      runId: "run-beta",
-      childSessionKey: "agent:main:subagent:beta",
-      expectsCompletionMessage: true,
-    };
-    await spawnVisibleChild({ ...alpha, requesterTurnRunId });
-    await spawnVisibleChild({ ...beta, requesterTurnRunId });
-
-    agentCallGates.set(
-      beta.childSessionKey,
-      new Promise<void>((resolve) => {
-        releaseAgentCallGate = resolve;
-      }),
-    );
-    emitCompleted(alpha.runId, alpha.childSessionKey, "alpha complete");
-    await waitForAgentCallCount(1);
-    await waitForDeliveredCleanup(alpha.runId, { allowPendingRequesterSettleWake: true });
-    const modelRouteChange = "Model route changed: requested/model → actual/model.";
-    emitCompleted(beta.runId, beta.childSessionKey, "beta complete", modelRouteChange);
-    await waitForAgentCallCount(2);
-
-    const betaBeforeYield = registry.getSubagentRunByRunId(beta.runId);
-    if (!betaBeforeYield) {
-      throw new Error("expected beta run before requester yield");
-    }
-    betaBeforeYield.delivery = rejectRequesterWake
-      ? {
-          ...betaBeforeYield.delivery,
-          status: "delivered",
-          disposition: "delivered",
-          deliveredAt: Date.now(),
-        }
-      : { ...betaBeforeYield.delivery, status: "in_progress" };
-
-    const yieldTool = createSessionsYieldTool({
-      sessionId: "sess-main",
-      claimYield: () =>
-        registry.markRequesterTurnYielded({
-          requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-          requesterAgentId: "main",
-          requesterTurnRunId,
-        }) > 0,
-      onYield: () => {},
-    });
-    await expect(
-      yieldTool.execute("yield-requester-wake", { message: "Wait for visible children" }),
-    ).resolves.toMatchObject({ details: { status: "yielded" } });
-
-    rejectNextRequesterWake = rejectRequesterWake;
-    armRequesterWakePersistenceFailure = rejectPersistence;
-    const { withLocalSessionPlacementTurnSettlement } =
-      await import("../../session-placement-admission.js");
-    await withLocalSessionPlacementTurnSettlement(
-      {
-        sessionId: "sess-main",
-        sessionKey: MAIN_REQUESTER_SESSION_KEY,
-        agentId: "main",
-        runId: requesterTurnRunId,
-      },
-      async () => ({
-        acceptedSessionSpawns: [alpha, beta],
-        meta: {
-          durationMs: 1,
-          yielded: true,
-          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-        },
-      }),
-    );
-    await waitForAgentCallCount(rejectRequesterWake ? 2 : 3);
-    await waitForDeliveredCleanup(alpha.runId, {
-      allowPendingRequesterSettleWake: rejectPersistence,
-    });
-    expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
-    if (rejectPersistence) {
-      expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 0,
-      });
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(getRequesterWakeCalls()).toHaveLength(0);
-      await vi.advanceTimersByTimeAsync(1);
-      await waitForDeliveredCleanup(alpha.runId);
-      expect(getRequesterWakeCalls()).toHaveLength(0);
-    }
-    if (!rejectRequesterWake) {
-      const wakeMessage = getRequesterWakeCalls()[0]?.params?.message;
-      expect(wakeMessage).toContain(modelRouteChange);
-      // Yielded batches must retain the same outcome/blocked boundary as
-      // individual completions, not downgrade failed checks to a final update.
-      expect(wakeMessage).toContain(
-        "Reviews, failed checks, and other in-scope fixable blockers require continued work",
+    holdAgentCall: (sessionKey) => {
+      agentCallGates.set(
+        sessionKey,
+        new Promise<void>((resolve) => {
+          releaseAgentCallGate = resolve;
+        }),
       );
-      expect(wakeMessage).toContain(
-        "report a blocker only when progress needs new user authority or an unavailable external decision",
-      );
-      expect(wakeMessage).toContain(
-        "Keep this runtime-authored model-route change notice internal on this shared surface.",
-      );
-    }
-    for (const child of [alpha, beta]) {
-      const entry = registry.getSubagentRunByRunId(child.runId);
-      expect(entry).toMatchObject({
-        delivery: { status: "delivered" },
-      });
-      expect(entry?.requesterSettleWake).toBeUndefined();
-    }
-
-    agentCallGates.delete(beta.childSessionKey);
-    releaseAgentCallGate?.();
-    await waitForDeliveredCleanup(alpha.runId);
-    await waitForDeliveredCleanup(beta.runId);
-    await registry.testing.sweepOnceForTests();
-    expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
-    expect(sendMessageMock).not.toHaveBeenCalled();
-    expect(registry.getSubagentRunByRunId(beta.runId)?.delivery).toMatchObject({
-      status: "delivered",
-      disposition: "delivered",
-      payload: undefined,
-      lastError: undefined,
-      lastDropReason: undefined,
-    });
+    },
+    releaseAgentCall: (sessionKey) => {
+      agentCallGates.delete(sessionKey);
+      releaseAgentCallGate?.();
+    },
+    onReceiptsHeld: (release) => {
+      releaseWakeReceipts = release;
+    },
   });
 
   it.each([

@@ -2264,7 +2264,7 @@ class NodeRuntime private constructor(
     lazy {
       MessageSpeechController(
         scope = scope,
-        synthesizer = MessageSpeechClient(session = operatorSession, json = json),
+        synthesizer = MessageSpeechClient(requestDetailed = operatorSession::requestDetailed, json = json),
         player = TalkAudioPlayer(appContext),
         localSpeech = SystemSpeechSpeaker(appContext),
       ).also { controller ->
@@ -3119,7 +3119,6 @@ class NodeRuntime private constructor(
   val locationMode: StateFlow<LocationMode> = prefs.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = prefs.preventSleep
-  val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
@@ -3200,7 +3199,6 @@ class NodeRuntime private constructor(
   val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
-  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   private var didAutoConnect = false
 
@@ -3869,20 +3867,6 @@ class NodeRuntime private constructor(
         end = normalizedEnd,
       )
     }
-  }
-
-  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    val normalized = value.coerceAtLeast(1)
-    if (prefs.notificationForwardingMaxEventsPerMinute.value == normalized) return
-    notificationOutbox.updatePolicy {
-      prefs.setNotificationForwardingMaxEventsPerMinute(normalized)
-    }
-  }
-
-  fun setNotificationForwardingSessionKey(value: String?) {
-    val normalized = value?.trim()?.takeIf(String::isNotEmpty)
-    if (prefs.notificationForwardingSessionKey.value == normalized) return
-    notificationOutbox.updatePolicy { prefs.setNotificationForwardingSessionKey(normalized) }
   }
 
   fun setVoiceScreenActive(active: Boolean) {
@@ -9678,30 +9662,19 @@ internal fun manualGatewayEndpoint(entry: GatewayRegistryEntry): GatewayEndpoint
 internal fun gatewayRegistryEntry(
   endpoint: GatewayEndpoint,
   existing: GatewayRegistryEntry?,
-): GatewayRegistryEntry =
-  if (endpoint.stableId.startsWith("manual|")) {
-    GatewayRegistryEntry(
-      stableId = endpoint.stableId,
-      kind = GatewayRegistryEntryKind.MANUAL,
-      name = endpoint.name,
-      host = endpoint.host,
-      port = endpoint.port,
-      tls = endpoint.tlsEnabled,
-      contextPath = endpoint.contextPath,
-      lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
-    )
-  } else {
-    GatewayRegistryEntry(
-      stableId = endpoint.stableId,
-      kind = GatewayRegistryEntryKind.DISCOVERED,
-      name = endpoint.name,
-      host = endpoint.host,
-      port = endpoint.port,
-      contextPath = endpoint.contextPath,
-      tls = true,
-      lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
-    )
-  }
+): GatewayRegistryEntry {
+  val manual = endpoint.stableId.startsWith("manual|")
+  return GatewayRegistryEntry(
+    stableId = endpoint.stableId,
+    kind = if (manual) GatewayRegistryEntryKind.MANUAL else GatewayRegistryEntryKind.DISCOVERED,
+    name = endpoint.name,
+    host = endpoint.host,
+    port = endpoint.port,
+    tls = !manual || endpoint.tlsEnabled,
+    contextPath = endpoint.contextPath,
+    lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
+  )
+}
 
 /** HTTP(S) base URL serving the connected gateway's Control UI pages. */
 internal fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
@@ -10115,12 +10088,7 @@ fun providerDisplayName(provider: String): String =
     }
 
     else -> {
-      provider
-        .replace('-', ' ')
-        .replace('_', ' ')
-        .split(' ')
-        .filter { it.isNotBlank() }
-        .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
+      gatewayIdentifierDisplayName(provider)
         .replace(" Ai", " AI")
         .ifBlank { "Provider" }
     }
@@ -10141,15 +10109,18 @@ fun channelDisplayLabel(channel: String): String =
     }
 
     else -> {
-      channel
-        .replace('-', ' ')
-        .replace('_', ' ')
-        .split(' ')
-        .filter { it.isNotBlank() }
-        .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
+      gatewayIdentifierDisplayName(channel)
         .ifBlank { "Channel" }
     }
   }
+
+private fun gatewayIdentifierDisplayName(value: String): String =
+  value
+    .replace('-', ' ')
+    .replace('_', ' ')
+    .split(' ')
+    .filter { it.isNotBlank() }
+    .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
 
 private fun gatewayControlPageTlsFingerprint(
   prefs: SecurePrefs,

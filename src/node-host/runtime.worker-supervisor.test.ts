@@ -63,7 +63,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 describe("node-host runtime worker supervisor lifetime", () => {
   it("keeps a claimed worker alive across invoke cancel and reconnect until runtime close", async () => {
     const fixture = writeNodeWorkerFixture(tempDirs.make("node-worker-runtime-"));
-    fs.mkdirSync(fixture.stateDir, { recursive: true });
+    fs.mkdirSync(fixture.stateDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(fixture.stateDir, 0o700);
     fs.renameSync(fixture.bundleRoot, path.join(fixture.stateDir, "node-host"));
     const input = testWorkerLaunchInput(fixture.workspaceDir, "launch-runtime", "wait");
     const launchResponseEntered = createDeferred();
@@ -91,9 +92,10 @@ describe("node-host runtime worker supervisor lifetime", () => {
       enableWorkerRuns: true,
       platform: "linux",
     });
-    expect(prepared.manifest.commands).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
-    );
+    expect(prepared.workerHostingEnabled, prepared.workerHostingDisabledReason).toBe(true);
+    for (const command of NODE_WORKER_PRIVATE_COMMANDS) {
+      expect(prepared.manifest.commands, command).not.toContain(command);
+    }
     const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const capacityReady = createDeferred();
     const runtime = prepared.start({

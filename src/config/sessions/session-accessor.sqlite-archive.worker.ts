@@ -16,6 +16,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { routeLogsToStderr } from "../../logging/console.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -521,6 +522,8 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
   if (!parentPort) {
     throw new Error("SQLite transcript archive worker requires a parent port");
   }
+  // Every mode returns results over IPC; lease cleanup diagnostics must preserve CLI JSON stdout.
+  routeLogsToStderr();
   const operation = workerData.operation;
   if (operation === "canonical-validation-pool") {
     const { serveWorkerTasks } = await import("../../infra/worker-task-server.js");

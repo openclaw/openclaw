@@ -246,6 +246,8 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
           if (!(await injection.claimPendingUserInputAnswer?.(text, options))) {
             throw new Error("pending user input was not accepted");
           }
+          options?.onQueueAccepted?.(true);
+          options?.onQueueSettled?.();
         },
       },
     };

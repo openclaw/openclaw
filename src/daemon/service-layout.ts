@@ -6,6 +6,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { isBunRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
 import {
   hasGatewayServiceLauncherOverride,
@@ -270,6 +271,30 @@ export async function summarizeGatewayServiceLayout(
     ...(packageVersion ? { packageVersion } : {}),
     ...(entrypointSourceCheckout !== undefined ? { entrypointSourceCheckout } : {}),
   };
+}
+
+/** Physical installation overlap only; deployment current/releases names are not evidence. */
+export async function gatewayServiceCommandOverlapsPhysicalInstallation(
+  root: string,
+  command: GatewayServiceCommandConfig | null,
+): Promise<boolean | null> {
+  const layout = await summarizeGatewayServiceLayout(command);
+  if (!layout?.packageRootReal || !layout.entrypointReal) {
+    return null;
+  }
+  const [destination, serving] = await Promise.all(
+    [root, layout.packageRootReal].map((directory) => fs.realpath(directory).catch(() => null)),
+  );
+  if (!destination || !serving) {
+    return null;
+  }
+  if (isPathInside(destination, serving) || isPathInside(serving, destination)) {
+    return true;
+  }
+  const [left, right] = await Promise.all(
+    [destination, serving].map((directory) => fs.stat(directory).catch(() => null)),
+  );
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
 }
 
 /** Compare an already inspected launcher with one installation; no service discovery or effects. */

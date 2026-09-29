@@ -363,6 +363,7 @@ describe("subagent registry persistence resume", () => {
       const oldDone = createDeferredCore<boolean>();
       const replacementDone = createDeferredCore();
       const oldParams: WakeParams[] = [];
+      const initialTransitions: Promise<void>[] = [];
       let oldFinished = 0;
       let firstGatewayOpen = true;
       const firstGateway = {
@@ -391,11 +392,15 @@ describe("subagent registry persistence resume", () => {
               async (params) => {
                 if (getGatewayContextResolver(params.settledEntry!)?.() === firstGateway) {
                   oldParams.push(params);
-                  await params.transitionBatch([params.settledEntry], {
-                    ...params.settledEntry.requesterSettleWake!,
-                    status: "dispatching",
-                    attemptCount: 3,
-                  });
+                  const transition = Promise.resolve(
+                    params.transitionBatch([params.settledEntry], {
+                      ...params.settledEntry.requesterSettleWake!,
+                      status: "dispatching",
+                      attemptCount: 3,
+                    }),
+                  );
+                  initialTransitions.push(transition);
+                  await transition;
                   const result = await oldDone.promise;
                   await params.completeBatch([params.settledEntry], 1, {
                     delivered: false,
@@ -428,6 +433,8 @@ describe("subagent registry persistence resume", () => {
             await waitForCalls(oldActiveCount);
             expect(wakeRequester).toHaveBeenCalledTimes(oldActiveCount);
             const oldWork = Promise.all(wakeRequester.mock.results.map((result) => result.value));
+            expect(initialTransitions).toHaveLength(oldActiveCount);
+            await Promise.all(initialTransitions);
             const retiredRuns = runs.map((run) => mod.getSubagentRunByRunId(run.runId)!);
             const retiredResolvers = retiredRuns.map(getGatewayContextResolver);
             const expectedWakes = retiredRuns.map((run) =>

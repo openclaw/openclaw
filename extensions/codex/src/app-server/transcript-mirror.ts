@@ -364,9 +364,16 @@ async function deliverAsyncMessageBestEffort(params: {
     text = params.text;
   }
 
-  if (params.params.onBlockReply && text !== undefined) {
+  const onBlockReply = params.params.onBlockReply;
+  if (onBlockReply && text !== undefined) {
     try {
-      await deliverAsyncBlockReply(params.params.onBlockReply, text, deliveryIntentId);
+      // An empty question list preserves the exact upstream message under the host's
+      // existing source-delivery authorization.
+      await deliverAgentHarnessUserInputPrompt(
+        { onBlockReply: (payload) => onBlockReply(payload, { deliveryIntentId }) },
+        [],
+        { intro: text },
+      );
     } catch (error) {
       embeddedAgentLog.warn(
         target
@@ -391,17 +398,3 @@ export const codexTranscriptMirrorRuntime = {
   mirror,
   mirrorBestEffort,
 };
-
-async function deliverAsyncBlockReply(
-  onBlockReply: NonNullable<EmbeddedRunAttemptParams["onBlockReply"]>,
-  text: string,
-  deliveryIntentId: string,
-): Promise<void> {
-  // Harness-owned prompts already carry the host's canonical source-delivery
-  // authorization; an empty question list keeps the upstream message exact.
-  await deliverAgentHarnessUserInputPrompt(
-    { onBlockReply: (payload) => onBlockReply(payload, { deliveryIntentId }) },
-    [],
-    { intro: text },
-  );
-}

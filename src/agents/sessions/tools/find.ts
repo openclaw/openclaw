@@ -4,13 +4,8 @@ import { createInterface } from "node:readline";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
-/**
- * Built-in find session tool.
- *
- * Searches files by glob through fd/local operations and returns bounded, renderable results.
- */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -85,10 +80,7 @@ function formatFindCall(
 }
 
 function formatFindResult(
-  result: {
-    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-    details?: FindToolDetails;
-  },
+  result: AgentToolResult<FindToolDetails>,
   options: ToolRenderResultOptions,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   showImages: boolean,

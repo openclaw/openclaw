@@ -205,7 +205,7 @@ async function runNativeHookRelayPreToolUse(
     if (params.executionAdmission?.toolNames.includes(toolName)) {
       // Accepted execution outlives the one-shot hook transport, while this
       // request must still be current before returning or publishing approval.
-      await params.executionAdmission.admit(
+      const assertAdmitted = await params.executionAdmission.admit(
         params.invocation,
         params.assertExecutionAdmissionCurrent,
         {
@@ -218,6 +218,13 @@ async function runNativeHookRelayPreToolUse(
       );
       params.registration.signal?.throwIfAborted();
       params.registration.assertActive?.();
+      const refusal = assertAdmitted?.();
+      if (refusal) {
+        if (outcome.deferredApproval) {
+          cancelDeferredPluginToolApproval(outcome.deferredApproval);
+        }
+        return params.adapter.renderPreToolUseBlockResponse(refusal);
+      }
     }
   } catch (error) {
     if (outcome.deferredApproval) {
