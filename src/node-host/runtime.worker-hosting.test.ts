@@ -33,6 +33,7 @@ vi.mock("./node-worker-container-engine.js", () => ({
 vi.mock("./node-worker-supervisor.js", () => ({
   createNodeWorkerSupervisor: vi.fn(() => ({
     initialize: mocks.initializeWorkerSupervisor,
+    retireIdle: vi.fn(async () => undefined),
     close: mocks.closeWorkerSupervisor,
   })),
 }));

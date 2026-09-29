@@ -459,35 +459,32 @@ export function isNodeCommandAllowed(params: {
   return { ok: true };
 }
 
-export type RequiredNodeCommandAuthority = {
-  command: string;
-  state: "invocable" | "pending-approval" | "undeclared" | "unauthorized";
-};
+type UnavailableNodeCommandState = "pending-approval" | "undeclared" | "unauthorized";
+export type RequiredNodeCommandAuthority = { command: string } & (
+  | { state: "invocable" }
+  | { state: UnavailableNodeCommandState; message: string }
+);
 
 /** Present the failed authority layer without suggesting that another layer can grant it. */
-export function formatRequiredNodeCommandUnavailable(
-  { command, state }: RequiredNodeCommandAuthority,
+function formatRequiredNodeCommandUnavailable(
+  command: string,
+  state: UnavailableNodeCommandState,
   nodeId: string,
-): string | undefined {
+): string {
   const prefix = `paired-device command ${command}`;
-  switch (state) {
-    case "invocable":
-      break;
-    case "undeclared": {
-      const pluginId = getActivePluginGatewayNodePolicyRegistry()?.nodeHostCommands.find(
-        (entry) => entry.command.command === command,
-      )?.pluginId;
-      const enable = pluginId
-        ? `${pluginId === "codex" ? "install the codex plugin on that node if missing (openclaw plugins install @openclaw/codex), then " : ""}enable the ${pluginId} plugin on that node (openclaw plugins enable ${pluginId})`
-        : "enable the plugin or node capability that provides this command on that node";
-      return `${prefix} is not advertised by node ${nodeId}; ${enable}, then restart the node (openclaw node restart) and approve its updated command surface`;
-    }
-    case "pending-approval":
-      return `${prefix} is awaiting pairing approval for node ${nodeId}; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>`;
-    case "unauthorized":
-      return `${prefix} is blocked by Gateway policy for node ${nodeId}; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry`;
+  if (state === "undeclared") {
+    const pluginId = getActivePluginGatewayNodePolicyRegistry()?.nodeHostCommands.find(
+      (entry) => entry.command.command === command,
+    )?.pluginId;
+    const enable = pluginId
+      ? `${pluginId === "codex" ? "install the codex plugin on that node if missing (openclaw plugins install @openclaw/codex), then " : ""}enable the ${pluginId} plugin on that node (openclaw plugins enable ${pluginId})`
+      : "enable the plugin or node capability that provides this command on that node";
+    return `${prefix} is not advertised by node ${nodeId}; ${enable}, then restart the node (openclaw node restart) and approve its updated command surface`;
   }
-  return undefined;
+  if (state === "pending-approval") {
+    return `${prefix} is awaiting pairing approval for node ${nodeId}; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>`;
+  }
+  return `${prefix} is blocked by Gateway policy for node ${nodeId}; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry`;
 }
 
 /**
@@ -495,6 +492,7 @@ export function formatRequiredNodeCommandUnavailable(
  * Clients receive one closed state instead of rebuilding authority from partial lists.
  */
 export function resolveRequiredNodeCommandAuthority(params: {
+  nodeId: string;
   requiredCommands: readonly string[];
   declaredCommands: readonly string[];
   effectiveCommands: readonly string[];
@@ -505,28 +503,31 @@ export function resolveRequiredNodeCommandAuthority(params: {
   const effectiveCommands = new Set(params.effectiveCommands);
   // A denial anywhere in the required set takes precedence over pairing approval.
   const denied = params.requiredCommands.find((cmd) => params.withheldCommands.includes(cmd));
-  if (denied) {
-    return { command: denied, state: "unauthorized" };
+  const command =
+    denied ||
+    params.requiredCommands.find(
+      (cmd) =>
+        !effectiveCommands.has(cmd) ||
+        !isNodeCommandAllowed({
+          command: cmd,
+          declaredCommands: params.effectiveCommands,
+          allowlist: params.allowlist,
+        }).ok,
+    );
+  if (command === undefined) {
+    const first = params.requiredCommands[0];
+    return first ? { command: first, state: "invocable" } : undefined;
   }
-  for (const command of params.requiredCommands) {
-    if (
-      effectiveCommands.has(command) &&
-      isNodeCommandAllowed({
-        command,
-        declaredCommands: params.effectiveCommands,
-        allowlist: params.allowlist,
-      }).ok
-    ) {
-      continue;
-    }
-    if (declaredCommands.has(command) && !effectiveCommands.has(command)) {
-      return { command, state: "pending-approval" };
-    }
-    if (declaredCommands.has(command)) {
-      return { command, state: "unauthorized" };
-    }
-    return { command, state: "undeclared" };
-  }
-  const command = params.requiredCommands[0];
-  return command ? { command, state: "invocable" } : undefined;
+  const state: UnavailableNodeCommandState = denied
+    ? "unauthorized"
+    : !declaredCommands.has(command)
+      ? "undeclared"
+      : effectiveCommands.has(command)
+        ? "unauthorized"
+        : "pending-approval";
+  return {
+    command,
+    state,
+    message: formatRequiredNodeCommandUnavailable(command, state, params.nodeId),
+  };
 }

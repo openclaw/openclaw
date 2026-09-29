@@ -189,6 +189,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
     bundledProviderPolicySurfaces: new Map(),
     staticCatalogStates: new WeakMap(),
     modelSuppressionResolvers: new WeakMap(),
+    mcpAuthDeclarations: new WeakMap(),
   };
 }
 

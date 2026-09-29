@@ -137,13 +137,157 @@ it.each([
   ).toBeNull();
 });
 
+it("negotiates reclaimable idle capacity without changing old Gateway inventory", async () => {
+  const { connection, request, start } = startConnectionFixture(true);
+  try {
+    start.mock.calls[0]![0].onRunnerCapacityChanged?.({
+      total: 2,
+      available: 0,
+      reclaimableIdle: 2,
+    });
+    for (const supported of [false, true, false]) {
+      connection.connect({
+        ...gateway,
+        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION] : [],
+      });
+      const declaration = request.mock.calls.findLast(
+        ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      )?.[1];
+      expect(declaration).toEqual({
+        protocolFeatures: ["node-worker-supervisor-v6"],
+        workerHost: {
+          enabled: true,
+          capacity: { total: 2, available: 0, ...(supported ? { reclaimableIdle: 2 } : {}) },
+          ...(supported ? { idleRetention: true } : {}),
+          bundlePrewarm: 1,
+        },
+      });
+      expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
+    }
+  } finally {
+    await connection.close();
+  }
+});
+
+it.each([false, true])(
+  "joins idle retirement before fresh reconnect capacity, failure=%s",
+  async (fails) => {
+    const { connection, request, start, runtime } = startConnectionFixture(true);
+    const retirement = createDeferred();
+    runtime.cancelAll.mockReturnValueOnce(retirement.promise);
+    if (fails) {
+      runtime.cancelAll.mockRejectedValueOnce(new Error("idle retirement retry failed"));
+    }
+    const replacement = { request: vi.fn().mockResolvedValue({}) };
+    try {
+      start.mock.calls[0]![0].onRunnerCapacityChanged?.({
+        total: 1,
+        available: 0,
+        reclaimableIdle: 1,
+      });
+      connection.connect(gateway);
+      connection.disconnect();
+      const callsBefore = request.mock.calls.length;
+      connection.connect(gateway);
+      connection.connect(gateway, replacement);
+      start.mock.calls[0]![0].onRunnerCapacityChanged?.({
+        total: 1,
+        available: 1,
+        reclaimableIdle: 0,
+      });
+      expect(request).toHaveBeenCalledTimes(callsBefore);
+      expect(replacement.request).not.toHaveBeenCalled();
+      if (fails) {
+        retirement.reject(new Error("idle retirement failed"));
+      } else {
+        retirement.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.cancelAll).toHaveBeenCalledTimes(fails ? 2 : 1);
+      expect(request).toHaveBeenCalledTimes(callsBefore);
+      if (fails) {
+        expect(replacement.request).not.toHaveBeenCalled();
+      } else {
+        expect(replacement.request).toHaveBeenCalledWith(
+          NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+          expect.objectContaining({
+            workerHost: expect.objectContaining({ capacity: { total: 1, available: 1 } }),
+          }),
+        );
+      }
+    } finally {
+      retirement.resolve();
+      await connection.close();
+    }
+  },
+);
+
+it.each([false, true])(
+  "retries rejected disconnect cleanup on reconnect, repeated failure=%s",
+  async (fails) => {
+    const { connection, request, start, runtime } = startConnectionFixture(true);
+    const retirement = createDeferred();
+    const retry = createDeferred();
+    runtime.cancelAll.mockReturnValueOnce(retirement.promise).mockReturnValueOnce(retry.promise);
+    const replacement = { request: vi.fn().mockResolvedValue({}) };
+    const retired = { request: vi.fn().mockResolvedValue({}) };
+    try {
+      start.mock.calls[0]![0].onRunnerCapacityChanged?.({
+        total: 1,
+        available: 0,
+        reclaimableIdle: 1,
+      });
+      connection.connect(gateway);
+      connection.disconnect();
+      const rejected = expect(retirement.promise).rejects.toThrow("idle retirement failed");
+      retirement.reject(new Error("idle retirement failed"));
+      await rejected;
+      const callsBefore = request.mock.calls.length;
+      connection.connect(gateway, retired);
+      connection.connect(gateway, replacement);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.cancelAll).toHaveBeenCalledTimes(2);
+      expect(retired.request).not.toHaveBeenCalled();
+      expect(replacement.request).not.toHaveBeenCalled();
+      start.mock.calls[0]![0].onRunnerCapacityChanged?.({
+        total: 1,
+        available: 1,
+        reclaimableIdle: 0,
+      });
+      if (fails) {
+        retry.reject(new Error("idle retirement retry failed"));
+      } else {
+        retry.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.cancelAll).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenCalledTimes(callsBefore);
+      expect(retired.request).not.toHaveBeenCalled();
+      if (fails) {
+        expect(replacement.request).not.toHaveBeenCalled();
+      } else {
+        expect(replacement.request).toHaveBeenCalledWith(
+          NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+          expect.objectContaining({
+            workerHost: expect.objectContaining({ capacity: { total: 1, available: 1 } }),
+          }),
+        );
+      }
+    } finally {
+      retirement.resolve();
+      retry.resolve();
+      await connection.close();
+    }
+  },
+);
+
 function startConnectionFixture(workerHostingEnabled = false, preparedWorkspacesEnabled = false) {
   const request = vi.fn().mockResolvedValue({ ok: true, handled: false });
   const runtime = {
     invoke: vi.fn(),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn<() => Promise<void>>(async () => undefined),
     tryPauseForUpdate: vi.fn(async () => true),
     resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),
@@ -166,7 +310,7 @@ function startConnectionFixture(workerHostingEnabled = false, preparedWorkspaces
     writeStderrLine,
   });
   const publications = () => request.mock.calls.filter(([method]) => method === "node.event");
-  return { connection, request, publications, writeStderrLine, start, prepared };
+  return { connection, request, publications, writeStderrLine, start, prepared, runtime };
 }
 
 beforeEach(() => {

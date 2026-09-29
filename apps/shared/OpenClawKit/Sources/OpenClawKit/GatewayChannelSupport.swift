@@ -114,6 +114,7 @@ extension GatewayChannelActor.SelectedConnectAuth {
         }
         return GatewayAuthBinding(
             source: self.authSource,
-            credentialFingerprint: credentialFingerprint)
+            credentialFingerprint: credentialFingerprint,
+            deviceId: deviceId)
     }
 }

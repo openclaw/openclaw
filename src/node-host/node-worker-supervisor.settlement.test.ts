@@ -3,20 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
-import {
-  fixture,
-  recoveryFixture,
-  settlementMocks,
-} from "./node-worker-supervisor.settlement.test-support.js";
+import { createNodeWorkerSupervisor, mocks } from "./node-worker-supervisor.mock.test-support.js";
+import { fixture, recoveryFixture } from "./node-worker-supervisor.settlement.test-support.js";
 import {
   TEST_WORKER_ENDPOINT,
   testNodeWorkerLaunchIdentity,
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
-
-// Load after the fixture registers its journal and process mocks.
-const { createNodeWorkerSupervisor } = await import("./node-worker-supervisor.js");
-const mocks = settlementMocks();
 
 afterEach(() => vi.resetAllMocks());
 

@@ -97,6 +97,7 @@ export function startNodeHostConnection({
   let connectedGatewayProtocol = 0;
   let gatewayCapabilities: ReadonlySet<string> = new Set();
   let hostStatsTimer: NodeJS.Timeout | undefined;
+  let disconnectCleanup: Promise<void> | undefined;
   const optionalPublicationStates = new Map<
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
@@ -330,7 +331,16 @@ export function startNodeHostConnection({
         workerHost: hostingCapacity
           ? {
               enabled: true,
-              capacity: hostingCapacity,
+              capacity: {
+                total: hostingCapacity.total,
+                available: hostingCapacity.available,
+                ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION)
+                  ? { reclaimableIdle: hostingCapacity.reclaimableIdle ?? 0 }
+                  : {}),
+              },
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION)
+                ? { idleRetention: true }
+                : {}),
               ...(prepared.preparedWorkspacesEnabled
                 ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
                 : {}),
@@ -388,7 +398,7 @@ export function startNodeHostConnection({
   const disconnect = () => {
     retireGatewayConnection();
     runtime.updateGatewayConnection();
-    runtime.cancelAll();
+    disconnectCleanup = runtime.cancelAll();
   };
   const runtime = prepared.start({
     client,
@@ -423,20 +433,33 @@ export function startNodeHostConnection({
     },
     connect(connection: NodeHostGatewayConnection, connectionClient: NodeHostClient = client) {
       retireGatewayConnection();
-      publicationClient = connectionClient;
-      runtime.updateGatewayConnection({
-        url: connection.url,
-        ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
-        ...(connection.cloudflareAccess ? { cloudflareAccess: connection.cloudflareAccess } : {}),
-      });
-      gatewayHelloReceived = true;
-      if (!prepared.restrictedSurface) {
-        startHostStatsPublication();
+      const generation = gatewayConnectionGeneration;
+      const publish = () => {
+        if (generation !== gatewayConnectionGeneration) {
+          return;
+        }
+        publicationClient = connectionClient;
+        runtime.updateGatewayConnection(connection);
+        gatewayHelloReceived = true;
+        if (!prepared.restrictedSurface) {
+          startHostStatsPublication();
+        }
+        connectedGatewayProtocol = connection.protocol;
+        gatewayCapabilities = new Set(connection.capabilities);
+        publishRunnerInventory();
+        publishInventory();
+      };
+      if (disconnectCleanup) {
+        disconnectCleanup = disconnectCleanup.catch((error: unknown) => {
+          if (generation !== gatewayConnectionGeneration) {
+            throw error;
+          }
+          return runtime.cancelAll();
+        });
+        void disconnectCleanup.then(publish, () => {});
+      } else {
+        publish();
       }
-      connectedGatewayProtocol = connection.protocol;
-      gatewayCapabilities = new Set(connection.capabilities);
-      publishRunnerInventory();
-      publishInventory();
     },
     disconnect,
     close() {

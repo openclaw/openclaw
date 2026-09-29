@@ -1,4 +1,5 @@
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { availableWorkerSlots } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   formatNodeRunnerInventoryIssue,
@@ -290,7 +291,7 @@ export function isNodeWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
-    (!requirements.launchEligibility || current.workerHost.capacity.available > 0) &&
+    (!requirements.launchEligibility || availableWorkerSlots(current.workerHost.capacity) > 0) &&
     (!requirements.environmentSession ||
       current.workerHost.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION) &&
     (!requirements.statusWait ||

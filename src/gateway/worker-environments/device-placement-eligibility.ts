@@ -1,3 +1,4 @@
+import { availableWorkerSlots } from "../../../packages/gateway-protocol/src/worker-capacity.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import {
@@ -5,7 +6,6 @@ import {
   type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
 import {
-  formatRequiredNodeCommandUnavailable,
   resolveNodeCommandAllowlist,
   resolveRequiredNodeCommandAuthority,
   isNodeCommandAllowed,
@@ -127,19 +127,18 @@ export async function resolveDevicePlacementEligibility(params: {
     approvedCommands: declaredCommands,
   });
   const requiredNodeCommand = resolveRequiredNodeCommandAuthority({
+    nodeId: deviceId,
     requiredCommands: requirement.requiredNodeCommands,
     declaredCommands: params.currentNode?.declaredCommands ?? declaredCommands,
     effectiveCommands: params.currentNode?.commands ?? declaredCommands,
     withheldCommands: params.currentNode ? readNodeSessionWithheldCommands(params.currentNode) : [],
     allowlist,
   });
-  const commandError = requiredNodeCommand
-    ? formatRequiredNodeCommandUnavailable(requiredNodeCommand, deviceId)
-    : undefined;
-  if (commandError) {
-    return { ok: false, error: commandError };
+  if (requiredNodeCommand && requiredNodeCommand.state !== "invocable") {
+    return { ok: false, error: requiredNodeCommand.message };
   }
-  if (requirement.consumesWorkerSlot && node.workerHost.capacity.available <= 0) {
+  const availableSlots = availableWorkerSlots(node.workerHost.capacity);
+  if (requirement.consumesWorkerSlot && availableSlots <= 0) {
     return {
       ok: false,
       error: deviceUnavailableText(deviceId, {
@@ -148,5 +147,5 @@ export async function resolveDevicePlacementEligibility(params: {
       }),
     };
   }
-  return { ok: true, availableSlots: node.workerHost.capacity.available, node };
+  return { ok: true, availableSlots, node };
 }

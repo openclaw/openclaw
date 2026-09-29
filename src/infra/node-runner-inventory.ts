@@ -87,7 +87,12 @@ const WorkerHost = z
       preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
       capturedExecPolicy: z.literal(true).optional(),
       launchToolNames: LaunchToolNames.optional(),
-    }).refine((host) => host.bundleStatus === undefined || host.bundleRetention !== undefined),
+      idleRetention: z.literal(true).optional(),
+    }).refine(
+      (host) =>
+        (host.bundleStatus === undefined || host.bundleRetention !== undefined) &&
+        (host.capacity.reclaimableIdle === undefined || host.idleRetention === true),
+    ),
   ])
   .transform((host) => {
     // Optional undefined values are absent in the reconnect declaration.

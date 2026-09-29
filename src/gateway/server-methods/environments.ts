@@ -28,7 +28,6 @@ import {
 } from "../method-scopes.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import {
-  formatRequiredNodeCommandUnavailable,
   isNodeCommandAllowed,
   resolveNodeCommandAllowlist,
   resolveRequiredNodeCommandAuthority,
@@ -92,6 +91,7 @@ function summarizeNodeEnvironment(
   const requiredNodeCommand =
     allowlist && liveNode
       ? resolveRequiredNodeCommandAuthority({
+          nodeId: node.nodeId,
           requiredCommands,
           declaredCommands: liveNode.declaredCommands,
           effectiveCommands: liveNode.commands,
@@ -99,9 +99,6 @@ function summarizeNodeEnvironment(
           allowlist,
         })
       : undefined;
-  const commandMessage = requiredNodeCommand
-    ? formatRequiredNodeCommandUnavailable(requiredNodeCommand, node.nodeId)
-    : undefined;
   return {
     id: `node:${node.nodeId}`,
     type: "node",
@@ -124,14 +121,7 @@ function summarizeNodeEnvironment(
       : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
     ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
-    ...(requiredNodeCommand
-      ? {
-          requiredNodeCommand: {
-            ...requiredNodeCommand,
-            ...(commandMessage ? { message: commandMessage } : {}),
-          },
-        }
-      : {}),
+    ...(requiredNodeCommand ? { requiredNodeCommand } : {}),
     ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }

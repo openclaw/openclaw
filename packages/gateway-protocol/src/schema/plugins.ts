@@ -553,7 +553,34 @@ export const PluginsInspectResultSchema = closedObject({
       capabilities: Type.Optional(PluginOverviewCapabilitiesSchema),
     }),
   ),
-  credentials: Type.Optional(Type.Array(PluginCredentialDescriptorSchema)),
+  credentials: Type.Optional(
+    Type.Array(
+      closedObject({
+        ...PluginCredentialDescriptorSchema.properties,
+        /** Presence/configuration only; never secret values or service-health validation. */
+        status: Type.Union([
+          Type.Literal("configured"),
+          Type.Literal("missing"),
+          Type.Literal("invalid"),
+          Type.Literal("unresolved"),
+        ]),
+      }),
+    ),
+  ),
+  /** Stored shared OAuth state for matching plugin-owned, operator-configured HTTP servers. */
+  mcpAuth: Type.Optional(
+    Type.Array(
+      closedObject({
+        serverName: NonEmptyString,
+        state: Type.Union([
+          Type.Literal("authorized"),
+          Type.Literal("requires-authorization"),
+          Type.Literal("pending-authorization"),
+          Type.Literal("unauthenticated"),
+        ]),
+      }),
+    ),
+  ),
   decisions: Type.Optional(Type.Array(PluginDecisionProviderStatusSchema)),
   plugin: closedObject({
     id: NonEmptyString,
