@@ -155,6 +155,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     const patchSnapshot = host.snapshot();
     const pendingConversation =
       hasSettingsPatch ||
+      patchParams.label !== undefined ||
       patchParams.category !== undefined ||
       patchParams.pinned !== undefined ||
       patchParams.unread === false ||

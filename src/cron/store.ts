@@ -12,10 +12,6 @@ import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
 import { resolveCronJobsStorePath } from "./store/paths.js";
-import {
-  deleteCronQuarantinedJobsFromDatabase,
-  saveCronQuarantinedJobs,
-} from "./store/quarantine.js";
 import { assertCronStoreCanPersist, readCronJobsFingerprint } from "./store/row-codec.js";
 import type { CronJobFamilyIdentity } from "./store/row-codec.js";
 import { prepareCronRunReceiptWriteSchema } from "./store/run-receipt-write-admission.js";
@@ -27,7 +23,6 @@ import type {
 import {
   isCronRuntimeOnlySave,
   prepareCronStoreChanges,
-  replaceCronStoreRowsInDatabase,
   saveCronStoreChangesInDatabase,
   saveCronStoreInDatabase,
 } from "./store/save.kernel.js";
@@ -346,27 +341,7 @@ export async function saveCronJobsStoreWithMetadata(
     if (!acquireMetadata(database.db)) {
       return false;
     }
-    if (opts?.quarantine?.entries.length) {
-      saveCronQuarantinedJobs({
-        storePath: resolvedStorePath,
-        entries: opts.quarantine.entries,
-        nowMs: opts.quarantine.nowMs,
-        database,
-      });
-    }
-    if (opts?.deleteQuarantineEntries?.length) {
-      deleteCronQuarantinedJobsFromDatabase({
-        database: database.db,
-        storePath: resolvedStorePath,
-        entries: opts.deleteQuarantineEntries,
-      });
-    }
-    replaceCronStoreRowsInDatabase(
-      database.db,
-      storeKey,
-      store,
-      opts?.preserveRuntimeState === true,
-    );
+    saveCronStoreInDatabase(database, storeKey, store, { ...opts, stateOnly: false });
     return true;
   });
   if (committed) {

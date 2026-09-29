@@ -35,10 +35,17 @@ class MemberReader extends PluginHostObject {
   }
 }
 
-class IteratorResultReader extends PluginHostObject {
-  #reader: { read: () => unknown; admission: PluginIteratorAdmission };
+type IteratorDataRead = { data?: object };
+type PluginIteratorResultReader = {
+  read: () => unknown;
+  readWithData: (read: IteratorDataRead) => unknown;
+  admission: PluginIteratorAdmission;
+};
 
-  constructor(value: object, reader: { read: () => unknown; admission: PluginIteratorAdmission }) {
+class IteratorResultReader extends PluginHostObject {
+  #reader: PluginIteratorResultReader;
+
+  constructor(value: object, reader: PluginIteratorResultReader) {
     super(value);
     this.#reader = reader;
   }
@@ -586,7 +593,11 @@ export function createPluginValueView(
       pending += 1;
       return bindings.invoke(run, { token, release: releaseOperation });
     };
-    const readResultMember = (result: object, key: "done" | "value"): unknown => {
+    const readResultMember = (
+      result: object,
+      key: "done" | "value",
+      dataRead?: IteratorDataRead,
+    ): unknown => {
       assertActive();
       const view = MemberReader.get(result, factory);
       // Caller-defined shadow properties keep the Proxy's descriptor/identity contract.
@@ -598,19 +609,31 @@ export function createPluginValueView(
         descriptor &&
         ("value" in descriptor || (reader?.admission.active && descriptor.get === reader.read))
       ) {
-        const value: unknown = "value" in descriptor ? descriptor.value : reader?.read();
+        const value: unknown =
+          "value" in descriptor ? descriptor.value : reader?.readWithData(dataRead ?? {});
         // Ordinary data reads need authority, but only executable Promise inspection needs scope.
         if (
           value === null ||
           (typeof value !== "object" && typeof value !== "function") ||
-          ((!project || isPluginData(value)) &&
+          ((!project || dataRead?.data === value || isPluginData(value)) &&
             !types.isPromise(value) &&
             !pluginMemberNeedsAdmission(value, "then") &&
             typeof Reflect.get(value, "then") !== "function")
         ) {
+          // Share only a completed classification in this synchronous reader chain.
+          // A later read starts fresh, so mutations never retain a data exemption.
+          if (project && dataRead && value !== null && typeof value === "object") {
+            dataRead.data = value;
+          }
           return value;
         }
+        if (dataRead) {
+          dataRead.data = undefined;
+        }
         return invoke(() => (project ? project.read(key, source, () => value) : value));
+      }
+      if (dataRead) {
+        dataRead.data = undefined;
       }
       return invoke(() => Reflect.get(result, key));
     };
@@ -657,15 +680,16 @@ export function createPluginValueView(
             // IteratorClose ends this admission even when a generator yields in finally.
             // A later explicit next can acquire a new lease only while the instance is live.
             state = complete ? "done" : key === "return" ? "returned" : state;
-            const readValue = () =>
-              active ? readResultMember(next, "value") : Reflect.get(next, "value");
+            const readWithData = (dataRead: IteratorDataRead) =>
+              active ? readResultMember(next, "value", dataRead) : Reflect.get(next, "value");
+            const readValue = () => readWithData({});
             // Completion may join disposal; value stays lazy and checks the exact inner lease.
             const result = Object.defineProperty({ done: complete }, "value", {
               get: readValue,
               enumerable: true,
               configurable: true,
             });
-            void new IteratorResultReader(result, { read: readValue, admission });
+            void new IteratorResultReader(result, { read: readValue, readWithData, admission });
             return result;
           } catch (error) {
             state = "done";

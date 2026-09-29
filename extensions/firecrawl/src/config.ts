@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-fetch";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { resolveReadOnlyEnvSecretRef } from "openclaw/plugin-sdk/secret-ref-readonly";
@@ -98,18 +99,11 @@ export function resolveFirecrawlOnlyMainContent(cfg?: OpenClawConfig, override?:
 }
 
 export function resolveFirecrawlMaxAgeMs(cfg?: OpenClawConfig, override?: number): number {
-  if (typeof override === "number" && Number.isFinite(override) && override >= 0) {
-    return Math.floor(override);
-  }
-  const fetch = resolveFirecrawlFetchConfig(cfg);
-  if (
-    typeof fetch?.maxAgeMs === "number" &&
-    Number.isFinite(fetch.maxAgeMs) &&
-    fetch.maxAgeMs >= 0
-  ) {
-    return Math.floor(fetch.maxAgeMs);
-  }
-  return DEFAULT_FIRECRAWL_MAX_AGE_MS;
+  return Math.floor(
+    asNonNegativeFiniteNumber(override) ??
+      asNonNegativeFiniteNumber(resolveFirecrawlFetchConfig(cfg)?.maxAgeMs) ??
+      DEFAULT_FIRECRAWL_MAX_AGE_MS,
+  );
 }
 
 export function resolveFirecrawlScrapeTimeoutSeconds(

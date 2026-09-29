@@ -100,6 +100,12 @@ Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
 
+Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
+session rows and model catalogs. Agent rosters, session policy, store topology,
+configured model references, and channel activation still invalidate their affected
+facts. When model or provider authentication inputs change, catalog requests wait
+for the replacement publication instead of reporting that startup is incomplete.
+
 Changing `session.store` does not migrate conversations. Queued notifications
 bound to the previous physical store end with a recorded `store-replaced` outcome.
 Pending child-result delivery is suspended while the result and completed task

@@ -68,11 +68,11 @@ export function getPluginCommandEntrySpecs(
   provider?: string,
   options: PluginCommandSpecOptions = {},
 ): PluginCommandEntrySpec[] {
-  const providerName = normalizeOptionalLowercaseString(provider);
-  const nativeCommandsEnabled = pluginNativeCommandsEnabled(providerName, options);
-  return listRegisteredPluginCommands(requireActivePluginRegistry())
-    .map((cmd) => serializePluginCommandEntrySpec(cmd, providerName, nativeCommandsEnabled))
-    .filter((spec): spec is PluginCommandEntrySpec => spec !== null);
+  return getPluginCommandEntrySpecsFromRegistrations(
+    requireActivePluginRegistry().commands,
+    provider,
+    options,
+  );
 }
 
 export function getPluginCommandEntrySpecsFromRegistrations(

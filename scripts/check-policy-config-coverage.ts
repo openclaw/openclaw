@@ -24,18 +24,6 @@ type CoverageConfig = {
   readonly classifications: readonly CoverageClassification[];
 };
 
-type ConfigDocBaseline = {
-  readonly coreEntries: readonly ConfigDocBaselineEntry[];
-  readonly channelEntries: readonly ConfigDocBaselineEntry[];
-  readonly pluginEntries: readonly ConfigDocBaselineEntry[];
-};
-
-function flattenConfigDocBaselineEntries(
-  baseline: ConfigDocBaseline,
-): readonly ConfigDocBaselineEntry[] {
-  return [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries];
-}
-
 type ClassifiedEntry = {
   readonly path: string;
   readonly kind: ConfigDocBaselineEntry["kind"];
@@ -67,11 +55,14 @@ const configPath = path.join(repoRoot, "scripts/lib/policy-config-coverage.jsonc
 
 const config = JSON5.parse(await fs.readFile(configPath, "utf8")) as CoverageConfig;
 const { baseline } = await renderConfigDocBaselineArtifacts();
-const monitoredEntries = flattenConfigDocBaselineEntries(baseline)
-  .filter((entry) => !entry.hasChildren)
-  .filter((entry) => matchesAny(config.monitored, entry.path))
+const leafEntries = [
+  ...baseline.coreEntries,
+  ...baseline.channelEntries,
+  ...baseline.pluginEntries,
+].filter((entry) => !entry.hasChildren);
+const monitoredEntries = leafEntries
+  .filter((entry) => config.monitored.some((pattern) => pathMatchesPattern(pattern, entry.path)))
   .toSorted((left, right) => left.path.localeCompare(right.path));
-const leafEntries = flattenConfigDocBaselineEntries(baseline).filter((entry) => !entry.hasChildren);
 const unmatchedMonitored = config.monitored
   .filter(
     (pattern) =>
@@ -194,10 +185,6 @@ function summarize(entries: readonly ClassifiedEntry[]): Record<string, number> 
     counts[key] = (counts[key] ?? 0) + 1;
   }
   return counts;
-}
-
-function matchesAny(patterns: readonly string[], value: string): boolean {
-  return patterns.some((pattern) => pathMatchesPattern(pattern, value));
 }
 
 function pathMatchesPattern(pattern: string, value: string): boolean {

@@ -100,7 +100,7 @@ describe("readBrowserVersion", () => {
       return appDir;
     }
 
-    it("reads PE product metadata without interpolating the executable path", () => {
+    it("reads PE product metadata with the executable path passed as environment data", () => {
       stubPlatform("win32");
       const exePath = "C:\\Users\\Example\\Browser's Path\\chrome.exe";
       execFileSyncMock.mockReturnValue("148.0.7778.179\r\n");
@@ -121,10 +121,13 @@ describe("readBrowserVersion", () => {
           "-NoProfile",
           "-NonInteractive",
           "-Command",
-          "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($args[0]).ProductVersion",
-          exePath,
+          "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:OPENCLAW_BROWSER_EXECUTABLE_PATH).ProductVersion",
         ],
-        expect.objectContaining({ timeout: 4000 }),
+        expect.objectContaining({
+          timeout: 4000,
+          stdio: ["ignore", "pipe", "ignore"],
+          env: expect.objectContaining({ OPENCLAW_BROWSER_EXECUTABLE_PATH: exePath }),
+        }),
       );
     });
 

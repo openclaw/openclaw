@@ -103,18 +103,30 @@ to the same plugin route and signature verifier. Set
 An omitted object `host` binds to `127.0.0.1`; explicit hosts, including wildcard
 addresses, are preserved. Account entries inherit the root setting, and
 `accounts.<id>.legacyWebhook: false` disables forwarding for that account.
-A shared legacy socket stays open while another account still uses that endpoint.
+On supported 2026.9.6 hosts that predate Gateway-owned forwarding, Feishu keeps
+an account-owned compatibility listener at that endpoint, using the same
+signature checks and dispatch path. Those hosts require distinct legacy endpoints
+for separate accounts. Newer hosts keep listener ownership in the Gateway, where
+a shared legacy socket stays open while another account still uses that endpoint.
 On account shutdown, authenticated responses may finish for up to five seconds,
 matching the previous listener's close grace period. Unfinished responses close
 at that deadline; other accounts keep their routes and listeners.
 During that grace period, correctly signed callbacks for the stopping account
 receive a retryable `503` unless a live successor already accepts their signature.
 
-On update, the plugin's Doctor migration moves `webhookPort` and `webhookHost`
+The plugin's Doctor migration moves `webhookPort` and `webhookHost`
 into `legacyWebhook: { port, host }`, preserving the effective old defaults when
-only one key was set. Doctor's normal config backup protects the original
+only one key was set. The normal config backup protects the original
 settings. Existing canonical `legacyWebhook` settings, including `false`, win.
 An install that omitted both old settings keeps receiving traffic on port `3000`.
+
+When updating from a 2026.9.6 host with these old keys, first update OpenClaw core
+to a release containing the [plugin-update migration repair](https://github.com/openclaw/openclaw/pull/160682).
+Then explicitly update any pinned Feishu package to your chosen release. The core
+updater preserves explicit plugin version pins. The updated installer applies
+Feishu's migration before activating the replacement package; the published
+2026.9.6 installer rejects the new schema before it can run that repair. A refused
+plugin-only update leaves the previous installation and settings intact.
 
 The deprecated TypeScript `webhookPort` and `webhookHost` input fields remain
 source-compatible until the next Plugin SDK major. Runtime config uses

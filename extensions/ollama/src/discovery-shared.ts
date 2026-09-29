@@ -40,7 +40,7 @@ type OllamaDiscoveryContext = {
   };
 };
 
-function readOllamaStringValue(value: unknown): string | undefined {
+export function readOllamaStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
   }

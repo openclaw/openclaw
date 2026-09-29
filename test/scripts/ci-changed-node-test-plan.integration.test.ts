@@ -47,6 +47,21 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
   );
 }
 
+it("keeps the hybrid hourly plan within the main-tier cap", () => {
+  const hourly = createNodeTestShardBundles({
+    runnerBackend: "hybrid",
+    compactMode: "pull-request",
+    compactNodeJobCap: 77,
+    includeProofTests: true,
+    includeReleaseOnlyToolingShards: true,
+    includePrExemptRuntimeTests: true,
+    includeReleaseOnlyRuntimeTests: false,
+    includeReleaseOnlyPluginShards: false,
+  });
+  expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+  expect(hourly.length).toBeLessThanOrEqual(79);
+});
+
 it("retains every PR-exempt file in hourly and release plans with its canonical owner", () => {
   const prExemptFiles = listPrExemptRuntimeTestFiles();
   expect(prExemptFiles.length).toBeGreaterThan(0);
@@ -182,6 +197,7 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
   const hourlyUiOwners = dedicatedGroups(uiHourly);
   const releaseUiOwners = dedicatedGroups(uiRelease);
   expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+  expect(hourly.length).toBeLessThanOrEqual(79);
   // Node retains canonical jsdom ownership. The UI package independently runs
   // those projects; native Chromium and mocked E2E have dedicated owners only.
   const projectNodeOwners = (jobs: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) =>
@@ -287,17 +303,17 @@ it("retains every PR-exempt file in hourly and release plans with its canonical 
   }
 });
 
-it("opts in a PR-exempt process proof for test and opaque subject edits beside hub inputs", () => {
-  const target = "test/scripts/bench-gateway-installed.test.ts";
-  const source = "scripts/bench-gateway-startup.ts";
-  expect(listPrExemptRuntimeTestFiles()).toContain(target);
-  const options = {
-    runnerBackend: "github",
-    includeReleaseOnlyRuntimeTests: false,
-    includePrExemptRuntimeTests: false,
-    includeReleaseOnlyToolingShards: false,
-  };
-  for (const changedPath of [target, source]) {
+it.each(["test/scripts/bench-gateway-installed.test.ts", "scripts/bench-gateway-startup.ts"])(
+  "opts in a PR-exempt process proof beside hub inputs: %s",
+  (changedPath) => {
+    const target = "test/scripts/bench-gateway-installed.test.ts";
+    expect(listPrExemptRuntimeTestFiles()).toContain(target);
+    const options = {
+      runnerBackend: "github",
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyToolingShards: false,
+    };
     const precise = createChangedNodeTestShards([changedPath], options);
     expect(precise, changedPath).not.toBeNull();
     expect(selectedFiles(precise), changedPath).toContain(target);
@@ -307,8 +323,8 @@ it("opts in a PR-exempt process proof for test and opaque subject edits beside h
     expect(selectedFiles(withHub)).not.toContain(
       "extensions/acpx/src/runtime-advertised-model.process.test.ts",
     );
-  }
-});
+  },
+);
 
 it("keeps precise first-signin targets under exclusive Gateway admission", () => {
   const target = "src/gateway/setup-inference.first-signin.integration.test.ts";

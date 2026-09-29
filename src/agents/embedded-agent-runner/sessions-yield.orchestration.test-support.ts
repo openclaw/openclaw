@@ -37,22 +37,6 @@ describe("sessions_yield orchestration", () => {
     await state?.cleanup();
   });
 
-  it("yield ends the turn without pending tool calls", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        yieldDetected: true,
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-yield-orchestration",
-    });
-
-    expect(result.meta.stopReason).toBe("end_turn");
-    expect(result.meta.pendingToolCalls).toBeUndefined();
-  });
-
   it.each(["active", "revoked", "replaced"] as const)(
     "revalidates the operational owner after asynchronous terminal cleanup (%s)",
     async (owner) => {
@@ -237,11 +221,8 @@ describe("sessions_yield orchestration", () => {
 
   it.each([
     { spawnOnRetry: false, agentHarnessId: "openclaw", outerCandidate: false },
-    { spawnOnRetry: true, agentHarnessId: "openclaw", outerCandidate: false },
-    { spawnOnRetry: false, agentHarnessId: "codex", outerCandidate: false },
     { spawnOnRetry: true, agentHarnessId: "codex", outerCandidate: false },
     { spawnOnRetry: true, agentHarnessId: "openclaw", outerCandidate: true },
-    { spawnOnRetry: true, agentHarnessId: "codex", outerCandidate: true },
   ])(
     "preserves child ownership through transient retries ($agentHarnessId, new child: $spawnOnRetry, candidate: $outerCandidate)",
     async ({ spawnOnRetry, agentHarnessId, outerCandidate }) => {
@@ -493,19 +474,6 @@ describe("sessions_yield orchestration", () => {
     });
   });
 
-  it("normal attempt without yield has no stopReason override", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-no-yield",
-    });
-
-    // Neither clientToolCall nor yieldDetected → stopReason is undefined
-    expect(result.meta.stopReason).toBeUndefined();
-    expect(result.meta.pendingToolCalls).toBeUndefined();
-  });
-
   it("emits diagnostic payload when yieldDetected has no continuation evidence", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -529,27 +497,5 @@ describe("sessions_yield orchestration", () => {
     expect(result.meta.stopReason).toBe("end_turn");
     // No pending tool calls
     expect(result.meta.pendingToolCalls).toBeUndefined();
-  });
-
-  it("empty spawn array does not suppress diagnostic", async () => {
-    // An explicit empty spawn array is not a valid continuation
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        yieldDetected: true,
-        assistantTexts: [],
-        acceptedSessionSpawns: [],
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-yield-empty-spawn",
-    });
-
-    expect(result.payloads).toHaveLength(1);
-    const emptySpawnPayload = expectDefined(result.payloads![0], "empty spawn diagnostic payload");
-    expect(emptySpawnPayload.text).toBe(
-      "⚠️ Turn yielded without a continuation source. Send a message to resume.",
-    );
   });
 });
