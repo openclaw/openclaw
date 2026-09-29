@@ -1,16 +1,15 @@
 // Verifies metadata-backed setup registry descriptor lookup.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   clearBundledDiscoveryModeMemo,
   prepareBundledDiscoveryMode,
 } from "./bundled-discovery-state.js";
-import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -65,6 +64,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    for (const stateDir of tempDirs.dirs) {
+      closeOpenClawStateDatabaseByPath(
+        resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+      );
+    }
+    cleanup();
+  }),
+);
+
 function createCurrentSnapshot(params: {
   manifestHash: string;
   cliBackends: string[];
@@ -94,12 +104,8 @@ describe("setup-registry descriptor lookup", () => {
   it("keeps prepared CLI activation in the caller's machine-state root", async () => {
     const { resolvePluginSetupCliBackendDescriptor, resolvePluginSetupCliBackendIds } =
       await import("./setup-registry.runtime.js");
-    const compatRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compat-")),
-    );
-    const strictRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-strict-")),
-    );
+    const compatRoot = tempDirs.make("openclaw-cli-compat-");
+    const strictRoot = tempDirs.make("openclaw-cli-strict-");
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     const cache = createPluginCache();
     try {
@@ -159,8 +165,6 @@ describe("setup-registry descriptor lookup", () => {
       } finally {
         envSnapshot.restore();
       }
-      await removeBundledDiscoveryStateRoot(compatRoot);
-      await removeBundledDiscoveryStateRoot(strictRoot);
     }
   });
 
