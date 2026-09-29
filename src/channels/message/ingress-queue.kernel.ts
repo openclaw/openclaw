@@ -77,21 +77,41 @@ export function readChannelIngressClaimSnapshotInDatabase(
       ...claimed.flatMap((row) => (row.lane_key ? [row.lane_key] : [])),
     ]),
   ];
-  if (!input.deriveLaneKey && blocked.length) {
+  // Stored keys are authoritative unless a reconcile callback can remap them;
+  // reconcilable rows must stay visible to the JS-level pass. The blocked set is
+  // bound as one JSON table value so a retry-heavy account cannot exceed SQLite's
+  // per-query bind-variable budget; the JS pass still rechecks every row.
+  if (!input.reconcileStoredLaneKey && blocked.length) {
     pending = pending.where((eb) =>
-      eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", blocked)]),
+      eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", sqliteStringSet(blocked))]),
     );
   }
   const ordered =
     input.orderBy === "id"
       ? pending.orderBy("event_id", "asc")
       : pending.orderBy("received_at", "asc").orderBy("event_id", "asc");
+  let paged = ordered;
+  if (input.claimAfter) {
+    const cursor = input.claimAfter;
+    paged =
+      input.orderBy === "id"
+        ? paged.where("event_id", ">", cursor.eventId)
+        : paged.where((eb) =>
+            eb.or([
+              eb("received_at", ">", cursor.receivedAt),
+              eb.and([
+                eb("received_at", "=", cursor.receivedAt),
+                eb("event_id", ">", cursor.eventId),
+              ]),
+            ]),
+          );
+  }
   // Repair can expose up to 100 later rows without changing the caller's scan window.
   return {
     claimed,
     pending: executeSqliteQuerySync(
       db,
-      ordered.limit(normalizeLimit(input.scanLimit) + CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT),
+      paged.limit(normalizeLimit(input.scanLimit) + CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT),
     ).rows,
   };
 }

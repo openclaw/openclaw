@@ -8,6 +8,7 @@ import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-work
 import { resolveChannelIngressStateEnv } from "./ingress-queue-client.js";
 import {
   baseRecord,
+  CHANNEL_INGRESS_CLAIM_SCAN_PAGE_BUDGET,
   claimedRecord,
   completedRecord,
   corruptClaimRecord,
@@ -16,6 +17,7 @@ import {
   selectChannelIngressClaim,
 } from "./ingress-queue.codec.js";
 import type {
+  ChannelIngressClaimCursor,
   ChannelIngressClaimRequest,
   ChannelIngressListInput,
   ChannelIngressQueue,
@@ -256,13 +258,13 @@ export function createChannelIngressQueue<
     if (candidateIds?.length === 0) {
       return null;
     }
-    const request: ChannelIngressClaimRequest = {
+    const requestBase: ChannelIngressClaimRequest = {
       queueName,
       candidateIds,
       blockedLaneKeys: [...(claimOptions?.blockedLaneKeys ?? [])]
         .map((key) => key.trim())
         .filter(Boolean),
-      deriveLaneKey: Boolean(deriveLaneKey),
+      reconcileStoredLaneKey: Boolean(reconcileStoredLaneKey),
       orderBy: claimOptions?.orderBy,
       scanLimit: claimOptions?.scanLimit,
     };
@@ -286,7 +288,15 @@ export function createChannelIngressQueue<
         ? derived
         : stored;
     };
+    // A fully blocked snapshot holds only the first scanLimit + repair rows; page
+    // forward with a keyset cursor so a free lane beyond a blocked prefix stays
+    // reachable, bounded by the claim scan budget for stop responsiveness.
+    let claimAfter: ChannelIngressClaimCursor | undefined;
+    let claimPages = 0;
     while (true) {
+      const request: ChannelIngressClaimRequest = claimAfter
+        ? { ...requestBase, claimAfter }
+        : requestBase;
       const snapshot = await execute("channelIngress.claimSnapshot", request, context);
       // Native fingerprinting owns row freshness; retain only the lane observations to recheck.
       const preparedLanes: Array<{ row: ChannelIngressRow; laneKey: string | undefined }> = [];
@@ -320,7 +330,19 @@ export function createChannelIngressQueue<
         if (result.kind === "conflict") {
           continue;
         }
-        return result.row ? claimedRecord<TPayload, TMetadata>(result.row) : null;
+        if (result.row) {
+          return claimedRecord<TPayload, TMetadata>(result.row);
+        }
+        if (selection.more && claimPages < CHANNEL_INGRESS_CLAIM_SCAN_PAGE_BUDGET) {
+          const last = snapshot.pending.at(-1);
+          if (!last) {
+            return null;
+          }
+          claimAfter = { receivedAt: last.received_at, eventId: last.event_id };
+          claimPages += 1;
+          continue;
+        }
+        return null;
       } catch (error) {
         // Only our refused grant plus native rollback settlement permits another claim.
         if (

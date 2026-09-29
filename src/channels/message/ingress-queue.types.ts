@@ -263,16 +263,27 @@ export type ChannelIngressClaimRequest = {
   queueName: string;
   candidateIds?: string[];
   blockedLaneKeys: string[];
-  deriveLaneKey: boolean;
+  /** Stored lane keys are authoritative unless a reconcile callback can remap them. */
+  reconcileStoredLaneKey?: boolean;
   scanLimit?: number;
   orderBy?: "received" | "id";
+  /** Keyset cursor past the last scanned row, used to page beyond a blocked snapshot. */
+  claimAfter?: ChannelIngressClaimCursor;
 };
 export type ChannelIngressClaimSnapshot = {
   pending: ChannelIngressRow[];
   claimed: ChannelIngressRow[];
 };
 
+/** Keyset cursor matching the pending ordering; the row after it opens the next claim page. */
+export type ChannelIngressClaimCursor = {
+  receivedAt: number;
+  eventId: string;
+};
+
 export type ChannelIngressClaimSelection = {
   corruptIds: string[];
   selected?: { id: string; laneKey?: string };
+  /** The snapshot consumed its full allowance with no eligible row; another page may exist. */
+  more?: boolean;
 };
