@@ -140,12 +140,14 @@ type SessionEntryLifecycleRemovalBase = {
 export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
   (
     | {
-        /** Doctor repair only: compare-and-delete an entry_json blob that cannot be parsed. */
+        /** Doctor repair only: compare the rejected hot blob and its detached snapshot revision. */
         expectedRawEntryJson: string;
+        expectedSnapshotRevision: number;
         expectedEntry: SessionEntry;
       }
     | {
         expectedRawEntryJson?: never;
+        expectedSnapshotRevision?: never;
         expectedEntry?: SessionEntry;
       }
   );

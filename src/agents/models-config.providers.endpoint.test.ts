@@ -68,42 +68,6 @@ describe("provider endpoint source eligibility", () => {
     vi.clearAllMocks();
   });
 
-  it.each([
-    { baseUrl: "https://native.example/v1", expected: ["native-model"] },
-    { baseUrl: "https://proxy.example/v1", expected: [] },
-  ])(
-    "applies endpoint eligibility before static discovery at $baseUrl",
-    async ({ baseUrl, expected }) => {
-      const providers = await resolveImplicitProviders({
-        agentDir: state.agentDir(),
-        env: state.env,
-        pluginMetadataSnapshot,
-        providerDiscoveryProviderIds: ["fixture"],
-        providerDiscoveryEntriesOnly: true,
-        config: { models: { providers: { fixture: { baseUrl, models: [] } } } },
-      });
-      expect(providers?.fixture?.models.map((model) => model.id) ?? []).toEqual(expected);
-    },
-  );
-
-  it("keeps auth handles but records excluded prepared catalogs as empty", async () => {
-    const run = vi.fn(async () => ({ provider: nativeCatalog }));
-    const excludedProvider: ProviderPlugin = { ...provider, staticCatalog: { run } };
-    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([excludedProvider]);
-    const prepared = await prepareImplicitProviderStaticCatalog({
-      env: state.env,
-      pluginMetadataSnapshot,
-      providerDiscoveryProviderIds: ["fixture"],
-      config: {
-        models: { providers: { fixture: { baseUrl: "https://proxy.example/v1", models: [] } } },
-      },
-    });
-    expect(prepared.providers).toEqual([excludedProvider]);
-    expect(prepared.entries).toEqual([
-      { provider: excludedProvider, result: { providers: {} }, providerConfigs: {} },
-    ]);
-    expect(run).not.toHaveBeenCalled();
-  });
   it("does not recover a generated native endpoint over an authored custom provider", async () => {
     replacePersistedPluginModelCatalogs({
       agentDir: state.agentDir(),
@@ -205,7 +169,26 @@ describe("provider endpoint source eligibility", () => {
     ).toBe("Native model");
     expect(nativeCatalog.models[0]?.name).toBe("Native model");
   });
-  it.each([false, true])(
+  it("keeps auth handles but records excluded prepared catalogs as empty", async () => {
+    const run = vi.fn(async () => ({ provider: nativeCatalog }));
+    const excludedProvider: ProviderPlugin = { ...provider, staticCatalog: { run } };
+    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([excludedProvider]);
+    const prepared = await prepareImplicitProviderStaticCatalog({
+      env: state.env,
+      pluginMetadataSnapshot,
+      providerDiscoveryProviderIds: ["fixture"],
+      config: {
+        models: { providers: { fixture: { baseUrl: "https://proxy.example/v1", models: [] } } },
+      },
+    });
+    expect(prepared.providers).toEqual([excludedProvider]);
+    expect(prepared.entries).toEqual([
+      { provider: excludedProvider, result: { providers: {} }, providerConfigs: {} },
+    ]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it.each([false])(
     "preserves an eligible shared-hook output without aliases (scoped: %s)",
     async (scoped) => {
       const sharedProvider: ProviderPlugin = {

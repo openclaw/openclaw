@@ -289,6 +289,7 @@ describe("SQLite historical session disk budget", () => {
         updatedAt: 100,
         archivedAt: 100,
         archiveReason: "active-session-cap",
+        skillsSnapshot: { prompt: "retained archived instructions", skills: [] },
       },
     );
     settlePhysicalUsage();

@@ -7,13 +7,13 @@ import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equal
 import {
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
-  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryCount,
   rehomeSessionWindows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import {
+  assertRawSessionEntryRemovalUnchanged,
   deleteMaterializedSessionStatePlans,
   shouldRemoveSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
@@ -44,8 +44,7 @@ function readProjectedRemovalEntry(
   projected: ProjectedLifecycleMutation["removals"][number],
   allowCanonicalRepair = false,
 ): SessionEntry | undefined {
-  const expectedRawEntryJson = projected.removal.expectedRawEntryJson;
-  if (expectedRawEntryJson === undefined) {
+  if (projected.removal.expectedRawEntryJson === undefined) {
     return (
       allowCanonicalRepair
         ? readExactSessionEntryRowForCanonicalRepair(database, projected.sessionKey, {
@@ -54,11 +53,7 @@ function readProjectedRemovalEntry(
         : readExactSessionEntryRow(database, projected.sessionKey)
     )?.entry;
   }
-  if (readExactSessionEntryJson(database, projected.sessionKey) !== expectedRawEntryJson) {
-    throw new Error(
-      `SQLite session entry changed before raw lifecycle removal for ${projected.sessionKey}`,
-    );
-  }
+  assertRawSessionEntryRemovalUnchanged(database, projected.sessionKey, projected.removal);
   return projected.expectedEntry;
 }
 

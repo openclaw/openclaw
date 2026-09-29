@@ -19,7 +19,9 @@ import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-opt
 import {
   bindsClaudeThinkingPrefix,
   requiresClaudeAdaptiveThinking,
+  requiresClaudeBetweenToolsThinking,
   resolveAnthropicThinkingEffort,
+  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
@@ -338,14 +340,11 @@ export function buildAnthropicGenerationParams({
 }) {
   const params: Pick<
     MessageCreateParamsStreaming,
-    | "temperature"
-    | "stop_sequences"
-    | "tools"
-    | "thinking"
-    | "output_config"
-    | "metadata"
-    | "tool_choice"
-  > = {};
+    "temperature" | "stop_sequences" | "tools" | "output_config" | "metadata" | "tool_choice"
+  > & {
+    // SDK 0.127.0 does not yet include Sonnet 5.5's between_tools setting.
+    thinking?: MessageCreateParamsStreaming["thinking"] | { type: "between_tools" };
+  } = {};
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   // Thinking and post-4.6 Claude models reject custom temperature values.
   if (
@@ -390,7 +389,9 @@ export function buildAnthropicGenerationParams({
         };
       }
     } else if (options?.thinkingEnabled === false) {
-      params.thinking = { type: "disabled" };
+      params.thinking = requiresClaudeBetweenToolsThinking(model)
+        ? { type: "between_tools" }
+        : { type: "disabled" };
     }
   }
 
@@ -403,7 +404,9 @@ export function buildAnthropicGenerationParams({
 
   if (options?.toolChoice) {
     const normalizedToolChoice = normalizeAnthropicToolChoice(
-      mandatoryAdaptiveThinking || options?.thinkingEnabled === true,
+      mandatoryAdaptiveThinking ||
+        options?.thinkingEnabled === true ||
+        resolveClaudeSonnet55ModelIdentity(model) !== undefined,
       options.toolChoice,
     );
     const projectedToolChoice = toolProjection

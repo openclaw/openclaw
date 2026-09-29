@@ -9,8 +9,8 @@ import {
   getOptionalBrowserStateRuntime,
   setBrowserStateRuntime,
   type BrowserStateRuntime,
-  type BrowserDashboardRegistration,
   type BrowserSessionTabOperationKey,
+  type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
 import {
   clearDurableTabAliases,
@@ -116,12 +116,6 @@ export function parseBrowserDashboardStopIntent(
     ? parsed.data
     : undefined;
 }
-
-export type BrowserSessionTabAuthority = {
-  runtime?: BrowserStateRuntime;
-  assertCurrent?: () => void;
-  dashboardRegistration?: BrowserDashboardRegistration;
-};
 
 export async function readBrowserDashboardStopIntent(
   identity: BrowserDashboardIdentity,

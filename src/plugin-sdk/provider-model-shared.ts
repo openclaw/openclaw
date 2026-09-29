@@ -145,6 +145,7 @@ export {
   resolveClaudeNativeThinkingLevelMap,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   supportsClaude1MContext,
