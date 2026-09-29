@@ -17,6 +17,8 @@ export function createWorkerRuntimeInstallProgressPublisher(params: {
   // Transfer callbacks can inherit a caller's temporary read admission.
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const pendingNodes = new Set<string>();
+  // Notifications name their environments: a completed install no longer lists them.
+  const pendingEnvironments = new Set<string>();
   let publication: Promise<void> | undefined;
   let stopped = false;
   const publishPending = () => {
@@ -30,17 +32,16 @@ export function createWorkerRuntimeInstallProgressPublisher(params: {
             return;
           }
           const nodeIds = new Set(pendingNodes);
+          const notifiedEnvironments = new Set(pendingEnvironments);
           pendingNodes.clear();
+          pendingEnvironments.clear();
           try {
-            const observedEnvironments = new Set(
-              [...nodeIds].flatMap((nodeId) => params.readInstall(nodeId)?.environmentIds ?? []),
-            );
             const sessionIds = uniqueStrings(
               params.environments
                 .listForReconcile()
                 .flatMap((environment) =>
                   (environment.nodeDeviceId && nodeIds.has(environment.nodeDeviceId)) ||
-                  observedEnvironments.has(environment.environmentId)
+                  notifiedEnvironments.has(environment.environmentId)
                     ? environment.attachedSessionIds
                     : [],
                 ),
@@ -79,7 +80,7 @@ export function createWorkerRuntimeInstallProgressPublisher(params: {
                 );
               if (
                 !(environment.nodeDeviceId && nodeIds.has(environment.nodeDeviceId)) &&
-                !observation?.environmentIds.includes(environment.environmentId)
+                !notifiedEnvironments.has(environment.environmentId)
               ) {
                 continue;
               }
@@ -118,15 +119,19 @@ export function createWorkerRuntimeInstallProgressPublisher(params: {
       });
   };
   return {
-    changed: (nodeId: string) => {
+    changed: (nodeId: string, environmentIds: readonly string[]) => {
       if (!stopped) {
         pendingNodes.add(nodeId);
+        for (const environmentId of environmentIds) {
+          pendingEnvironments.add(environmentId);
+        }
         publishPending();
       }
     },
     stop: async () => {
       stopped = true;
       pendingNodes.clear();
+      pendingEnvironments.clear();
       await publication;
     },
   };

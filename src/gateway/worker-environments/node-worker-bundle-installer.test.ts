@@ -120,7 +120,7 @@ describe("Gateway node worker bundle installer", () => {
       updatedAtMs: 1_000,
     });
     expect(h.ensure.version()).toBe(1);
-    expect(h.changed).toHaveBeenCalledExactlyOnceWith(node.nodeId);
+    expect(h.changed).toHaveBeenCalledExactlyOnceWith(node.nodeId, ["environment-1"]);
     expect(h.log.info).toHaveBeenCalledWith(
       "worker runtime install started (refresh): node=node-1 bundle=aaaaaaaaaaaa size=4.0 MB",
     );
@@ -157,6 +157,7 @@ describe("Gateway node worker bundle installer", () => {
     await call.pending;
     expect(h.ensure.readInstall(node.nodeId)).toBeUndefined();
     expect(h.changed).toHaveBeenCalledTimes(5);
+    expect(h.changed).toHaveBeenLastCalledWith(node.nodeId, ["environment-1"]);
     expect(h.ensure.version()).toBe(7);
     expect(h.log.info).toHaveBeenLastCalledWith(
       "worker runtime install: node=node-1 bundle=aaaaaaaaaaaa installed in 31.0s",
@@ -207,6 +208,7 @@ describe("Gateway node worker bundle installer", () => {
     expect(h.ensure.readInstall(node.nodeId)?.environmentIds).toEqual(["environment-2"]);
     expect(h.ensure.version()).toBe(version + 1);
     expect(h.changed).toHaveBeenCalledTimes(changes + 1);
+    expect(h.changed).toHaveBeenLastCalledWith(node.nodeId, ["environment-2", "environment-1"]);
     expect(h.ensure.readInstallForEnvironment("environment-2")?.phase).toBe("installing");
     refresh.succeed();
     await refresh.pending;

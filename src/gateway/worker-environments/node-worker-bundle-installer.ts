@@ -52,15 +52,15 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
   transfer: NodeWorkerBundleTransferService;
   log: { info: (message: string) => void; warn: (message: string) => void };
   now?: () => number;
-  onObservationChange?: (nodeId: string) => void;
+  onObservationChange?: (nodeId: string, environmentIds: readonly string[]) => void;
 }) {
   const now = options.now ?? Date.now;
   const active = new Map<string, ActiveInstall>();
   let version = 0;
-  const publish = (entry: ActiveInstall) => {
+  const publish = (entry: ActiveInstall, environmentIds = entry.observation.environmentIds) => {
     entry.lastPublicationAtMs = now();
     try {
-      options.onObservationChange?.(entry.observation.nodeId);
+      options.onObservationChange?.(entry.observation.nodeId, environmentIds);
     } catch {
       // Session projection observers do not own installation success.
     }
@@ -262,7 +262,8 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
             active.delete(key);
           }
           version++;
-          publish(currentEntry);
+          // The released environment may have no node binding yet; name it so its projection clears.
+          publish(currentEntry, [...currentEntry.observation.environmentIds, params.environmentId]);
         } else {
           currentEntry.environmentReferences.set(params.environmentId, remaining);
         }

@@ -141,8 +141,8 @@ it("coalesces changes and emits only for sessions still attached to the node's n
     placement("active", "detached"),
   ]);
   try {
-    harness.publisher.changed("node-1");
-    harness.publisher.changed("node-1");
+    harness.publisher.changed("node-1", []);
+    harness.publisher.changed("node-1", []);
     expect(await harness.entered.promise).not.toContain("other-node");
     active.attachedSessionIds = ["active"];
     moved.nodeDeviceId = "node-2";
@@ -164,12 +164,12 @@ it("coalesces changes and emits only for sessions still attached to the node's n
 it("stops pending publication and ignores later changes", async () => {
   const harness = createHarness([environment("active")], [placement("active")]);
   try {
-    harness.publisher.changed("node-1");
+    harness.publisher.changed("node-1", []);
     await harness.entered.promise;
     const stopping = harness.publisher.stop();
     harness.release.resolve();
     await stopping;
-    harness.publisher.changed("node-1");
+    harness.publisher.changed("node-1", []);
     await harness.publisher.stop();
     expect(harness.readProjection).toHaveBeenCalledOnce();
     expect(harness.events).not.toHaveBeenCalled();
@@ -221,7 +221,7 @@ it("touches existing activity only for unclaimed stale placements on the observe
     new Map([["node-1", { bundleHash: "new-build", environmentIds: ["waiting"] }]]),
   );
   try {
-    harness.publisher.changed("node-1");
+    harness.publisher.changed("node-1", ["waiting"]);
     await harness.entered.promise;
     harness.release.resolve();
     await harness.published.promise;
@@ -240,45 +240,54 @@ it("touches existing activity only for unclaimed stale placements on the observe
   }
 });
 
-it("publishes provisioning progress before a node lease is committed", async () => {
-  const provisioning: WorkerEnvironmentRecord = {
-    ...environment("provisioning"),
-    state: "provisioning",
-    nodeDeviceId: null,
-    leaseId: null,
-    sshEndpoint: null,
-  };
-  const record = placement("provisioning");
-  markDiagnosticRunProgress({
-    sessionId: record.sessionId,
-    sessionKey: record.sessionKey,
-    reason: "global_lane:waiting",
-  });
-  const harness = createHarness(
-    [
-      provisioning,
-      { ...provisioning, environmentId: "unrelated", attachedSessionIds: ["unrelated"] },
-    ],
-    [record, placement("unrelated")],
-    new Map([["node-1", { bundleHash: "new-build", environmentIds: ["provisioning"] }]]),
-  );
-  try {
-    harness.release.resolve();
-    harness.publisher.changed("node-1");
-    await Promise.resolve();
-    expect(harness.readProjection).toHaveBeenCalledWith(["provisioning"], { current: true });
-    await harness.published.promise;
-    await harness.publisher.stop();
-    expect(harness.events).toHaveBeenCalledExactlyOnceWith({
+it.each([
+  ["in-flight", true],
+  ["completed", false],
+] as const)(
+  "publishes %s provisioning installs before a node lease is committed",
+  async (_, inFlight) => {
+    const provisioning: WorkerEnvironmentRecord = {
+      ...environment("provisioning"),
+      state: "provisioning",
+      nodeDeviceId: null,
+      leaseId: null,
+      sshEndpoint: null,
+    };
+    const record = placement("provisioning");
+    markDiagnosticRunProgress({
+      sessionId: record.sessionId,
       sessionKey: record.sessionKey,
-      agentId: "main",
-      reason: "worker-runtime-install",
-      scope: "runtime",
+      reason: "global_lane:waiting",
     });
-    expect(getDiagnosticSessionActivitySnapshot(record)).toMatchObject({
-      lastProgressReason: "worker:runtime_install",
-    });
-  } finally {
-    await harness.close();
-  }
-});
+    const harness = createHarness(
+      [
+        provisioning,
+        { ...provisioning, environmentId: "unrelated", attachedSessionIds: ["unrelated"] },
+      ],
+      [record, placement("unrelated")],
+      // A completed install has no observation left to name its environments.
+      inFlight
+        ? new Map([["node-1", { bundleHash: "new-build", environmentIds: ["provisioning"] }]])
+        : new Map(),
+    );
+    try {
+      harness.release.resolve();
+      harness.publisher.changed("node-1", ["provisioning"]);
+      await Promise.resolve();
+      expect(harness.readProjection).toHaveBeenCalledWith(["provisioning"], { current: true });
+      await harness.published.promise;
+      await harness.publisher.stop();
+      expect(harness.events).toHaveBeenCalledExactlyOnceWith({
+        sessionKey: record.sessionKey,
+        agentId: "main",
+        reason: "worker-runtime-install",
+        scope: "runtime",
+      });
+      expect(getDiagnosticSessionActivitySnapshot(record)).toMatchObject({
+        lastProgressReason: inFlight ? "worker:runtime_install" : "global_lane:waiting",
+      });
+    } finally {
+      await harness.close();
+    }
+  },
+);
