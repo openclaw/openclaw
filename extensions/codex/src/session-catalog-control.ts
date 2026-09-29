@@ -21,7 +21,6 @@ import { findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
 import {
   createCodexCatalogRequestSnapshot,
   createCodexSessionCatalogControlFromRequests,
-  type CodexSessionCatalogRequestSnapshot,
 } from "./session-catalog-control-requests.js";
 import {
   startCodexCatalogPageDiagnostics,
@@ -33,6 +32,7 @@ import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import { currentCodexCatalogListRequest } from "./session-catalog-list-request.js";
 import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
+import type { CodexSessionCatalogRequestSnapshot } from "./session-catalog-request-types.js";
 import { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
 import type {
   CodexSessionCatalogControl,

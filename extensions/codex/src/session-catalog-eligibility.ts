@@ -1,13 +1,13 @@
 import type { CodexManagedThreadStore } from "./app-server/managed-thread-store.js";
 import type { CodexThread } from "./app-server/protocol.js";
 import { withTimeout } from "./app-server/timeout.js";
-import type { CodexSessionCatalogRequestSnapshot } from "./session-catalog-control-requests.js";
 import {
   CatalogParamsError,
   isInteractiveThreadSource,
   readControlCursor,
 } from "./session-catalog-parsing.js";
 import { readCodexSessionMeta } from "./session-catalog-provenance.js";
+import type { CodexSessionCatalogRequestSnapshot } from "./session-catalog-request-types.js";
 
 /** Exact identity and native membership are independent of resident retention. */
 export async function requireEligibleCodexThread(params: {

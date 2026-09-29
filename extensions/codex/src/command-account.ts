@@ -19,7 +19,7 @@ import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
 } from "./app-server/rate-limits.js";
-import { isLikelyEmailAddress } from "./command-formatters.js";
+import { isLikelyEmailAddress } from "./command-account-email.js";
 import type {
   SafeCodexControlRequestFn as SafeCodexControlRequest,
   SafeValue,
