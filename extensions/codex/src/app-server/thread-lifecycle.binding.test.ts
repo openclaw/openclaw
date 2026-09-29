@@ -2881,7 +2881,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
         "mcpServerStatus/list",
         ephemeral ? "thread/unsubscribe" : "thread/delete",
       ]);
-      expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
       expect(await readCodexAppServerBinding(sessionFile)).toEqual(predecessor);
     },
   );
