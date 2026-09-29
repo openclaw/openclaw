@@ -138,6 +138,7 @@ async function readOllamaEmbeddingJsonResponse(
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     throw new Error("Ollama embed response returned a non-object JSON payload");
   }
+  // SAFETY: readProviderJsonResponse returns unknown; after the object/null/array guard above, this narrowing to the Ollama embed payload shape is safe.
   return payload as { embeddings?: unknown };
 }
 
@@ -508,6 +509,7 @@ export async function createOllamaEmbeddingProvider(
       if (optionsValue?.inputType === "query") {
         return await embedQuery(text, optionsValue);
       }
+      // SAFETY: optionsValue is the SDK opaque options object; widening to Record<symbol, unknown> allows accessing the MEMORY_SEARCH_DEADLINE_CONTROL symbol key, and the outer cast narrows to the known deadline control shape.
       const deadlineControl = (optionsValue as Record<symbol, unknown> | undefined)?.[MEMORY_SEARCH_DEADLINE_CONTROL] as
         | { report: (action: "pause" | "resume") => void }
         | undefined;
