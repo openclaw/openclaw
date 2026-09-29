@@ -218,6 +218,8 @@ export type RunEmbeddedAgentParams = {
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => unknown;
+  /** Reports canonical completion of a settled current-source message-tool reply. */
+  onSourceReplyDelivered?: () => void;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;

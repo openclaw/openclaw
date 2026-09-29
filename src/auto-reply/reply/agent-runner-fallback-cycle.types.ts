@@ -56,6 +56,8 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions & {
 };
 
 export type AgentFallbackCycleState = {
+  /** Canonical current-source message-tool delivery completed during this logical turn. */
+  sourceReplyDelivered?: boolean;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager;

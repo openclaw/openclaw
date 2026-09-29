@@ -300,6 +300,51 @@ describe("executeAgentTurn: message tool progress", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
+  it("does not fallback or surface an error after a completed source reply", async () => {
+    state.runEmbeddedAgentMock
+      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        params.onSourceReplyDelivered?.();
+        throw new Error("plugin state failed after delivery");
+      })
+      .mockRejectedValueOnce(new Error("401 Unauthorized"));
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      try {
+        return {
+          result: await params.run("anthropic", "primary", initialFallbackAttemptOptions(params)),
+          provider: "anthropic",
+          model: "primary",
+          attempts: [],
+        };
+      } catch (error) {
+        if (params.canFallbackAfterError?.() === false) {
+          throw error;
+        }
+        return {
+          result: await params.run("xai", "fallback", fallbackAttemptOptions(params, "unknown")),
+          provider: "xai",
+          model: "fallback",
+          attempts: [],
+        };
+      }
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    const result = await executeAgentTurn({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: {} satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      ...createAgentTurnExecutionDefaults(),
+      resolvedVerboseLevel: "on",
+    });
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ kind: "final", payload: { text: "NO_REPLY" } });
+  });
+
   it("keeps opted-in progress callbacks active after message-tool-only delivery completes", async () => {
     const onToolStart = vi.fn();
     const onCommandOutput = vi.fn();

@@ -21,6 +21,7 @@ import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
@@ -132,6 +133,9 @@ export async function handleAgentExecutionError(params: {
   const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
+  }
+  if (params.state.sourceReplyDelivered) {
+    return await settleFailure({ text: SILENT_REPLY_TOKEN });
   }
   if (err instanceof LiveSessionModelSwitchError) {
     if (params.liveModelSwitchRetries <= MAX_LIVE_SWITCH_RETRIES) {
