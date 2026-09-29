@@ -257,13 +257,12 @@ export async function createLmstudioEmbeddingProvider(
     onReadinessWait?: (waiting: boolean) => void,
   ): Promise<T> => {
     signal?.throwIfAborted();
-    const target = onReadinessWait && localServiceTarget
-      ? { ...localServiceTarget, onReadinessWait }
-      : localServiceTarget;
+    const target =
+      onReadinessWait && localServiceTarget
+        ? { ...localServiceTarget, onReadinessWait }
+        : localServiceTarget;
     const lease =
-      target && acquireLocalService
-        ? await acquireLocalService(target, signal)
-        : undefined;
+      target && acquireLocalService ? await acquireLocalService(target, signal) : undefined;
     try {
       signal?.throwIfAborted();
       return await action();
@@ -407,7 +406,9 @@ export async function createLmstudioEmbeddingProvider(
         return await resolveRequestProvider(prepared).embed(input, callOptions);
       },
       // SAFETY: callOptions is the SDK opaque options type; widening to Record allows symbol-keyed deadline control extraction without breaking the provider contract.
-      resolveCallOptionsOnReadinessWait(callOptions as Record<string | symbol, unknown> | undefined),
+      resolveCallOptionsOnReadinessWait(
+        callOptions as Record<string | symbol, unknown> | undefined,
+      ),
     );
   const embedBatch: MemoryEmbeddingProvider["embedBatch"] = async (inputs, callOptions) => {
     if (inputs.length === 0) {
@@ -425,7 +426,9 @@ export async function createLmstudioEmbeddingProvider(
         return await resolveRequestProvider(prepared).embedBatch(inputs, callOptions);
       },
       // SAFETY: callOptions is the SDK opaque options type; widening to Record allows symbol-keyed deadline control extraction without breaking the provider contract.
-      resolveCallOptionsOnReadinessWait(callOptions as Record<string | symbol, unknown> | undefined),
+      resolveCallOptionsOnReadinessWait(
+        callOptions as Record<string | symbol, unknown> | undefined,
+      ),
     );
   };
   const provider: MemoryEmbeddingProvider = {
