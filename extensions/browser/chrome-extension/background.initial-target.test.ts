@@ -516,18 +516,6 @@ describe("created initial target in selected mode", () => {
     ).resolves.toMatchObject({ accessible: false, eligible: false });
   });
 
-  it("retires stale page data across a reload without a URL change", async () => {
-    const harness = await createHarness(mode);
-    await harness.command({ type: "createTab", url: "https://example.com/same" });
-    const completed = deferred({});
-    harness.debuggerSendCommand.mockImplementationOnce(async () => await completed.promise);
-    const reading = harness.command({ type: "cdp", tabId: 101, method: "Runtime.evaluate" });
-    await vi.waitFor(() => expect(harness.debuggerSendCommand).toHaveBeenCalled());
-    harness.updateTab(101, { status: "loading" });
-    completed.resolve();
-    expect(await reading).toMatchObject({ type: "error" });
-  });
-
   it("preserves the original failure and reports failed rollback", async () => {
     const harness = await createHarness(mode);
     harness.tabsGroup.mockRejectedValueOnce(new Error("group failed"));

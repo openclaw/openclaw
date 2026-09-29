@@ -292,9 +292,6 @@ export function resolveCodexAppServerUnixSocketPath(
 }
 
 function websocketFrameToBuffer(data: RawData): Buffer {
-  if (typeof data === "string") {
-    return Buffer.from(data);
-  }
   if (Buffer.isBuffer(data)) {
     return data;
   }

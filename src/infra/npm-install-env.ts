@@ -6,6 +6,7 @@ import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveNpmCommand } from "./npm-command.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 /** Options that scope npm config and cache paths for project-local installs. */
@@ -162,7 +163,7 @@ function buildNpmGlobalConfigPathCacheKey(env: NodeJS.ProcessEnv, scope: NpmConf
     ].filter((file): file is string => Boolean(file)),
   );
   return JSON.stringify({
-    cwd: scope.npmConfigCwd?.trim() || safeCwd(),
+    cwd: scope.npmConfigCwd?.trim() || tryProcessCwd() || "",
     prefix: scope.npmConfigPrefix?.trim() ?? "",
     env: Object.fromEntries(
       NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS.map((key) => [key, env[key] ?? process.env[key] ?? ""]),
@@ -179,16 +180,8 @@ function readFileSignature(filePath: string): string {
   return stat ? `${stat.mtimeMs}:${stat.size}` : "missing";
 }
 
-function safeCwd(): string {
-  try {
-    return process.cwd();
-  } catch {
-    return "";
-  }
-}
-
 function resolveScopedProjectNpmrc(scope: NpmConfigScope): string | null {
-  const cwd = scope.npmConfigCwd?.trim() || safeCwd();
+  const cwd = scope.npmConfigCwd?.trim() || tryProcessCwd();
   return cwd ? path.join(cwd, ".npmrc") : null;
 }
 

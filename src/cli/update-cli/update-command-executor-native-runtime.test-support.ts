@@ -32,6 +32,16 @@ export const updateExecutorNativeEntrypoints = {
     sourceWorkerName: "update-command-run",
     distWorkerPath: "cli/update-cli/update-command-run.js",
   },
+  candidateStepWriter: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/update-run-write.async",
+    distWorkerPath: "infra/update-run-write.async.js",
+  },
+  executionGuards: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-execution-guards",
+    distWorkerPath: "cli/update-cli/update-command-execution-guards.js",
+  },
   commandTarget: {
     currentModuleUrl,
     sourceWorkerName: "update-command-target",

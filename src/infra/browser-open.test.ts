@@ -1,4 +1,5 @@
 // Covers platform browser-open command resolution.
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec-result.js";
@@ -6,10 +7,10 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 type DetectBinary = typeof import("./detect-binary.js").detectBinary;
 
-const { detectBinaryMock, getWindowsInstallRootsMock, readFileMock, runCommandWithTimeoutMock } =
-  vi.hoisted(() => ({
+const { detectBinaryMock, execFileSyncMock, readFileMock, runCommandWithTimeoutMock } = vi.hoisted(
+  () => ({
     detectBinaryMock: vi.fn<DetectBinary>(async () => false),
-    getWindowsInstallRootsMock: vi.fn(() => ({ systemRoot: "C:\\Windows" })),
+    execFileSyncMock: vi.fn<(file: string, args: readonly string[]) => string>(() => ""),
     readFileMock: vi.fn(async () => "6.8.0-generic"),
     runCommandWithTimeoutMock: vi.fn<() => Promise<SpawnResult>>(async () => ({
       stdout: "",
@@ -19,17 +20,16 @@ const { detectBinaryMock, getWindowsInstallRootsMock, readFileMock, runCommandWi
       killed: false,
       termination: "exit",
     })),
-  }));
+  }),
+);
 
 vi.mock("./detect-binary.js", () => ({
   detectBinary: detectBinaryMock,
 }));
 
-vi.mock("./windows-install-roots.js", async () => {
-  const actual = await vi.importActual<typeof import("./windows-install-roots.js")>(
-    "./windows-install-roots.js",
-  );
-  return { ...actual, getWindowsInstallRoots: getWindowsInstallRootsMock };
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, execFileSync: execFileSyncMock };
 });
 
 vi.mock("../process/exec.js", () => ({
@@ -53,7 +53,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   detectBinaryMock.mockReset().mockResolvedValue(false);
-  getWindowsInstallRootsMock.mockReset().mockReturnValue({ systemRoot: "C:\\Windows" });
+  execFileSyncMock.mockReset().mockReturnValue("");
   readFileMock.mockReset().mockResolvedValue("6.8.0-generic");
   runCommandWithTimeoutMock.mockReset().mockResolvedValue({
     stdout: "",
@@ -151,11 +151,16 @@ describe("resolveBrowserOpenCommand", () => {
   });
 
   it("prefers the registry-backed Windows system root over process env", async () => {
-    getWindowsInstallRootsMock.mockReturnValue({ systemRoot: "D:\\Windows" });
+    vi.resetModules();
+    const { resolveBrowserOpenCommand: resolveCommand } = await import("./browser-open.js");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    execFileSyncMock.mockImplementation((_file: string, args: readonly string[]) =>
+      args[3] === "SystemRoot" ? "SystemRoot    REG_SZ    D:\\Windows\r\n" : "",
+    );
     mockProcessPlatform("win32");
     vi.stubEnv("SystemRoot", "C:\\PoisonedWindows");
 
-    const resolved = await resolveBrowserOpenCommand();
+    const resolved = await resolveCommand();
 
     const rundll32 = path.win32.join("D:\\Windows", "System32", "rundll32.exe");
     expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);

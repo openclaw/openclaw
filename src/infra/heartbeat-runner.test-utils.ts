@@ -15,7 +15,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeCronJobScratch } from "../cron/scratch-store.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { createJob } from "../cron/service/jobs.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
@@ -118,7 +118,7 @@ export async function seedHeartbeatScratchForTest(params: {
     // Fixture preparation needs persisted rows, not a cold scheduler worker per case.
     seedCronStoreInCurrentDatabase(storePath, { ...store, jobs: [...store.jobs, job] });
   }
-  writeCronJobScratch({ storePath, jobId: job.id, content: params.content });
+  writeCronJobScratchForMaintenance({ storePath, jobId: job.id, content: params.content });
   return job.id;
 }
 

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
@@ -36,6 +37,7 @@ export type InitializedUpdate = UpdateInitializationAdmission &
     stagedPackage?: StagedPackageInstallUpdate;
     candidateAdmission?: UpdateCandidateAdmissionResult;
     downgradeConfirmed?: boolean;
+    callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
   };
 
 export async function confirmFreshUpdateDowngrade(params: {

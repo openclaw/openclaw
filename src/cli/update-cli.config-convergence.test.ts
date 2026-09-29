@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as configIo from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -57,6 +58,13 @@ import {
 } from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
+
+async function useFileBackedConfigIO() {
+  const { createConfigIO } =
+    await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  vi.spyOn(configIo, "createConfigIO").mockImplementation(createConfigIO);
+  return createConfigIO;
+}
 
 describe("update-cli", () => {
   const {
@@ -169,71 +177,99 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(["stable"] as const)(
-    "keeps the caller legacy plan out of a same-version service-profile switch from %s",
-    async (serviceChannel) => {
-      const root = await mockPackageInstallAtCaseDir("openclaw-current-legacy-config", VERSION);
-      const callerState = profileStateDir("personal");
-      initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: callerState });
-      const serviceState = profileStateDir("work");
-      initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: serviceState });
-      tempDirsToCleanup.add(callerState);
-      tempDirsToCleanup.add(serviceState);
-      await fs.mkdir(callerState, { recursive: true });
-      await fs.mkdir(serviceState, { recursive: true });
-      const callerPath = path.join(callerState, "openclaw.json");
-      const servicePath = path.join(serviceState, "openclaw.json");
-      await writeJsonFixture(callerPath, { gateway: { mode: "local", bind: "localhost" } });
-      await writeJsonFixture(servicePath, {
-        gateway: { mode: "local", bind: "lan" },
-        update: { channel: serviceChannel },
-      });
-      const callerBefore = await fs.readFile(callerPath, "utf8");
-      readPackageVersion.mockResolvedValue(VERSION);
-      primeNpmChannelTag("beta", VERSION);
-      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
-      primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: serviceState,
-        OPENCLAW_CONFIG_PATH: servicePath,
-      });
-      const { createConfigIO } = await import("../config/io.js");
-      const { replaceConfigFile: writeActualConfig } = await import("../config/mutate.js");
-      vi.mocked(readConfigFileSnapshot).mockImplementation(() =>
-        createConfigIO({ observe: false, pluginValidation: "skip" }).readConfigFileSnapshot(),
-      );
-      vi.mocked(replaceConfigFile).mockImplementation(writeActualConfig);
-      await withEnvAsync(
-        {
-          OPENCLAW_PROFILE: "personal",
-          OPENCLAW_STATE_DIR: callerState,
-          OPENCLAW_CONFIG_PATH: callerPath,
-        },
-        () => updateCommand({ channel: "beta", yes: true, json: true }),
-      );
-      expect(await fs.readFile(callerPath, "utf8")).toBe(callerBefore);
-      const serviceAfter = await createConfigIO({
-        env: { ...process.env, OPENCLAW_CONFIG_PATH: servicePath },
-        observe: false,
-        pluginValidation: "skip",
-      }).readConfigFileSnapshot();
-      expect(serviceAfter.config.gateway?.bind).toBe("lan");
-      expect(serviceAfter.config.update?.channel).toBe("beta");
-      expect(legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).not.toHaveBeenCalled();
-      expectNoSideEffects(serviceStop, serviceRestart, candidateValidation);
-      expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-      expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
-        expect.objectContaining({ coreVersion: VERSION, updateChannel: "beta" }),
+  it.each([
+    {
+      name: "keeps the caller legacy plan out of a same-version service-profile switch from stable",
+      requestedChannel: "beta",
+    },
+    {
+      name: "refuses a foreign legacy caller without an explicit channel request",
+      requestedChannel: undefined,
+    },
+  ] as const)("$name", async ({ requestedChannel }) => {
+    const root = await mockPackageInstallAtCaseDir("openclaw-current-legacy-config", VERSION);
+    const callerState = profileStateDir("personal");
+    initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: callerState });
+    const serviceState = profileStateDir("work");
+    initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: serviceState });
+    tempDirsToCleanup.add(callerState);
+    tempDirsToCleanup.add(serviceState);
+    await fs.mkdir(callerState, { recursive: true });
+    await fs.mkdir(serviceState, { recursive: true });
+    const callerPath = path.join(callerState, "openclaw.json");
+    const servicePath = path.join(serviceState, "openclaw.json");
+    await writeJsonFixture(callerPath, { gateway: { mode: "local", bind: "localhost" } });
+    await writeJsonFixture(servicePath, {
+      gateway: { mode: "local", bind: "lan" },
+      update: { channel: "stable" },
+    });
+    const callerBefore = await fs.readFile(callerPath, "utf8");
+    const serviceBefore = await fs.readFile(servicePath, "utf8");
+    readPackageVersion.mockResolvedValue(VERSION);
+    primeNpmChannelTag(requestedChannel ? "beta" : "latest", VERSION);
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+    primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: serviceState,
+      OPENCLAW_CONFIG_PATH: servicePath,
+    });
+    const createConfigIO = await useFileBackedConfigIO();
+    const { replaceConfigFile: writeActualConfig } = await import("../config/mutate.js");
+    vi.mocked(readConfigFileSnapshot).mockImplementation(() =>
+      createConfigIO({ observe: false, pluginValidation: "skip" }).readConfigFileSnapshot(),
+    );
+    vi.mocked(replaceConfigFile).mockImplementation(writeActualConfig);
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: callerPath,
+      },
+      async () => {
+        const update = updateCommand({ channel: requestedChannel, yes: true, json: true });
+        if (requestedChannel) {
+          await update;
+        } else {
+          await expect(update).rejects.toEqual(new ExitError(1));
+        }
+      },
+    );
+    expect(await fs.readFile(callerPath, "utf8")).toBe(callerBefore);
+    if (!requestedChannel) {
+      expect(await fs.readFile(servicePath, "utf8")).toBe(serviceBefore);
+      expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "invalid-config" });
+      expectNoSideEffects(
+        serviceStop,
+        serviceRestart,
+        candidateValidation,
+        replaceConfigFile,
+        updateNpmInstalledPlugins,
+        legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
       );
       expect(packageInstallCommandCall()).toBeUndefined();
-      expect(lastWriteJsonCall()).toMatchObject({
-        status: "ok",
-      });
-      expect(replaceConfigFile).toHaveBeenCalledTimes(1);
-    },
-  );
+      return;
+    }
+    const serviceAfter = await createConfigIO({
+      env: { ...process.env, OPENCLAW_CONFIG_PATH: servicePath },
+      observe: false,
+      pluginValidation: "skip",
+    }).readConfigFileSnapshot();
+    expect(serviceAfter.config.gateway?.bind).toBe("lan");
+    expect(serviceAfter.config.update?.channel).toBe("beta");
+    expect(legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).not.toHaveBeenCalled();
+    expectNoSideEffects(serviceStop, serviceRestart, candidateValidation);
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ coreVersion: VERSION, updateChannel: "beta" }),
+    );
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "ok",
+    });
+    expect(replaceConfigFile).toHaveBeenCalledTimes(1);
+  });
 
   it("validates a legacy projection without changing authored config on candidate refusal", async () => {
     await mockPackageInstallAtCaseDir();
@@ -293,7 +329,7 @@ describe("update-cli", () => {
       OPENCLAW_STATE_DIR: serviceState,
       OPENCLAW_CONFIG_PATH: servicePath,
     });
-    const { createConfigIO } = await import("../config/io.js");
+    const createConfigIO = await useFileBackedConfigIO();
     vi.mocked(readConfigFileSnapshot).mockImplementation(() =>
       createConfigIO({ observe: false, pluginValidation: "skip" }).readConfigFileSnapshot(),
     );

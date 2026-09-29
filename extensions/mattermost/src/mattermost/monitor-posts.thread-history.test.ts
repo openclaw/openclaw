@@ -243,17 +243,19 @@ describe("Mattermost server thread recovery through the post handler", () => {
     },
   );
 
-  it("rejects same-session lifecycle rotation and deletion while fetching", async () => {
-    const f = await setup("channel");
-    // Hold the response race's clock; the separate deadline case exercises real elapsed time.
+  it("rejects same-session rotation and deletion during recovered-history authorization", async () => {
+    const f = await setup("direct");
+    f.monitor.account.config.dmPolicy = "pairing";
+    // Hold authorization's deadline; the separate deadline case exercises real elapsed time.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     try {
       for (const remove of [false, true]) {
         const entered = createDeferred<void>();
         const release = createDeferred<void>();
-        beforeResponse = async () => {
+        f.monitor.pairing.readAllowFromStore = async () => {
           entered.resolve();
           await release.promise;
+          return ["trusted"];
         };
         const pending = f.recover(f.turn);
         try {

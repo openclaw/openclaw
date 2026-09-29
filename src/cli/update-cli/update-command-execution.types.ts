@@ -36,6 +36,7 @@ export type MutableUpdateExecutionParams = {
   managedServiceRoot?: string;
   invocationCwd?: string;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
+  callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
   recoveryState: UpdateCommandRecoveryState;
   prepareMutableUpdate: (
     env: NodeJS.ProcessEnv | undefined,

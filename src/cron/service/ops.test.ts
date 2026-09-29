@@ -1232,7 +1232,7 @@ describe("cron service ops seam coverage", () => {
       job.state = { runningAtMs: startedAt, nextRunAtMs: startedAt };
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       expect(
-        writeCronJobScratch({
+        await writeCronJobScratch({
           storePath,
           jobId: job.id,
           content: "completed one-shot scratch",

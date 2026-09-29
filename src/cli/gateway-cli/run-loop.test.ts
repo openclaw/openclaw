@@ -1019,7 +1019,7 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  registerGatewayStartupFailureTests();
+  registerGatewayStartupFailureTests(gatewayLog);
 
   registerGracefulGatewayShutdownTest({
     acquireGatewayLock,

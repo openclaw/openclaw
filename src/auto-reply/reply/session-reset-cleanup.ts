@@ -1,4 +1,3 @@
-/** Clears reset-related queues and system events for session keys. */
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -62,7 +61,6 @@ export async function stopSessionResetSubagents(
   }
 }
 
-/** Runtime cleanup result for reset-related queues and system events. */
 type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
   systemEventsCleared: number;
 };

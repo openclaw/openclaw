@@ -38,23 +38,22 @@ type ProviderChunkConfig = {
   accounts?: Record<string, { textChunkLimit?: number; streaming?: unknown }>;
 };
 
-function resolveChunkLimitForProvider(
-  cfgSection: ProviderChunkConfig | undefined,
-  provider: TextChunkProvider,
+function resolveChunkConfig(
+  cfg: OpenClawConfig | undefined,
+  provider?: TextChunkProvider,
   accountId?: string | null,
-): number | undefined {
-  if (!cfgSection) {
-    return undefined;
+): { channel?: ProviderChunkConfig; account?: ProviderChunkConfig } {
+  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
+    return {};
   }
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const accounts = cfgSection.accounts;
-  if (accounts && typeof accounts === "object") {
-    const direct = resolveChannelAccountEntry(accounts, normalizedAccountId, provider);
-    if (typeof direct?.textChunkLimit === "number") {
-      return direct.textChunkLimit;
-    }
-  }
-  return cfgSection.textChunkLimit;
+  const channels = cfg?.channels as Record<string, ProviderChunkConfig> | undefined;
+  const channel = channels?.[provider];
+  const accounts = channel?.accounts;
+  const account =
+    accounts && typeof accounts === "object"
+      ? resolveChannelAccountEntry(accounts, normalizeAccountId(accountId), provider)
+      : undefined;
+  return { channel, account };
 }
 
 export function resolveTextChunkLimit(
@@ -67,38 +66,13 @@ export function resolveTextChunkLimit(
     typeof opts?.fallbackLimit === "number" && opts.fallbackLimit > 0
       ? opts.fallbackLimit
       : DEFAULT_CHUNK_LIMIT;
-  const providerOverride = (() => {
-    if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
-      return undefined;
-    }
-    const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
-    const providerConfig = channelsConfig?.[provider] as ProviderChunkConfig | undefined;
-    return resolveChunkLimitForProvider(providerConfig, provider, accountId);
-  })();
+  const { channel, account } = resolveChunkConfig(cfg, provider, accountId);
+  const providerOverride =
+    typeof account?.textChunkLimit === "number" ? account.textChunkLimit : channel?.textChunkLimit;
   if (typeof providerOverride === "number" && providerOverride > 0) {
     return providerOverride;
   }
   return fallback;
-}
-
-function resolveChunkModeForProvider(
-  cfgSection: ProviderChunkConfig | undefined,
-  provider: TextChunkProvider,
-  accountId?: string | null,
-): ChunkMode | undefined {
-  if (!cfgSection) {
-    return undefined;
-  }
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const accounts = cfgSection.accounts;
-  if (accounts && typeof accounts === "object") {
-    const direct = resolveChannelAccountEntry(accounts, normalizedAccountId, provider);
-    const directMode = resolveChannelStreamingChunkMode(direct);
-    if (directMode) {
-      return directMode;
-    }
-  }
-  return resolveChannelStreamingChunkMode(cfgSection);
 }
 
 export function resolveChunkMode(
@@ -106,13 +80,12 @@ export function resolveChunkMode(
   provider?: TextChunkProvider,
   accountId?: string | null,
 ): ChunkMode {
-  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
-    return DEFAULT_CHUNK_MODE;
-  }
-  const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
-  const providerConfig = channelsConfig?.[provider] as ProviderChunkConfig | undefined;
-  const mode = resolveChunkModeForProvider(providerConfig, provider, accountId);
-  return mode ?? DEFAULT_CHUNK_MODE;
+  const { channel, account } = resolveChunkConfig(cfg, provider, accountId);
+  return (
+    resolveChannelStreamingChunkMode(account) ??
+    resolveChannelStreamingChunkMode(channel) ??
+    DEFAULT_CHUNK_MODE
+  );
 }
 
 /**
@@ -214,10 +187,7 @@ export function chunkByParagraph(
   // boundaries, not only exceeding a length limit.)
   const paragraphRe = /\n[\t ]*\n+/;
   if (!paragraphRe.test(normalized)) {
-    if (normalized.length <= limit) {
-      return [normalized];
-    }
-    if (!splitLongParagraphs) {
+    if (normalized.length <= limit || !splitLongParagraphs) {
       return [normalized];
     }
     return chunkText(normalized, limit);
@@ -286,9 +256,6 @@ export function chunkByParagraph(
   return chunks;
 }
 
-/**
- * Unified chunking function that dispatches based on mode.
- */
 export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
   if (mode === "newline") {
     return chunkByParagraph(text, limit);
@@ -304,15 +271,13 @@ export function chunkMarkdownTextWithMode(text: string, limit: number, mode: Chu
     const paragraphChunks = chunkByParagraph(text, normalizedLimit, {
       splitLongParagraphs: false,
     });
-    const out: string[] = [];
-    for (const chunk of paragraphChunks.flatMap((paragraphChunk) =>
-      paragraphChunk.length > normalizedLimit
-        ? splitPackedFenceParagraphChunk(paragraphChunk)
-        : paragraphChunk,
-    )) {
-      out.push(...chunkMarkdownText(chunk, normalizedLimit));
-    }
-    return out;
+    return paragraphChunks
+      .flatMap((paragraphChunk) =>
+        paragraphChunk.length > normalizedLimit
+          ? splitPackedFenceParagraphChunk(paragraphChunk)
+          : paragraphChunk,
+      )
+      .flatMap((chunk) => chunkMarkdownText(chunk, normalizedLimit));
   }
   return chunkMarkdownText(text, normalizedLimit);
 }

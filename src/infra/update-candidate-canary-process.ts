@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { signalProcessTree } from "../process/kill-tree.js";
 import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function launchCanary(params: {
   entry: string;
@@ -185,4 +187,41 @@ export async function terminateCanary(
     Math.min(1_000, Math.max(0, deadline - Date.now())),
   );
   return outcome.status === "completed";
+}
+
+export async function stopCanary(params: {
+  running: Pick<ReturnType<typeof launchCanary>, "child" | "closed">;
+  name: string;
+  root: string;
+  deadline: number;
+  recordStep: (step: UpdateStepResult) => Promise<void>;
+  primaryFailure?: unknown;
+}): Promise<void> {
+  const cleanupStarted = Date.now();
+  try {
+    if (await terminateCanary(params.running.child, params.running.closed, params.deadline)) {
+      return;
+    }
+    await params.recordStep({
+      name: `${params.name}-cleanup`,
+      command: "SIGTERM, SIGKILL",
+      cwd: params.root,
+      durationMs: Date.now() - cleanupStarted,
+      exitCode: null,
+      advisory: {
+        kind: "recoverable-maintenance",
+        message:
+          "Update cleanup deadline elapsed before process close and termination requests both completed. Update validation results are unchanged.",
+      },
+    });
+  } catch (cleanupError) {
+    if (hasCommandProcessCleanupError(params.primaryFailure)) {
+      throw new AggregateError(
+        [params.primaryFailure, cleanupError],
+        "Candidate startup and cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    throw cleanupError;
+  }
 }

@@ -218,6 +218,11 @@ export class SpawnBrokerHost {
   }
 
   sealNativeResources(): Promise<void> {
+    if (this.resourceClaims && !this.available) {
+      return Promise.reject(
+        new SpawnBrokerError("Native resource broker is not ready for cleanup"),
+      );
+    }
     return (
       this.resourceClaims?.seal() ??
       Promise.reject(new SpawnBrokerError("Native resources are disabled"))

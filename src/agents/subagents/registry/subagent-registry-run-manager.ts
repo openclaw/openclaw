@@ -164,6 +164,8 @@ class SubagentRunManager extends SubagentLaunchManager {
     withdrawQueuedReservation?: () => void;
     assertCurrent?: () => void;
     assertPublicationCurrent?: () => void;
+    /** Retain the committed count while cleanup continues under current authority. */
+    onPublished?: (count: number) => void;
     context?: OpenClawStateWorkerContext;
   }): Promise<number> => {
     const runIds = new Set<string>();
@@ -371,6 +373,7 @@ class SubagentRunManager extends SubagentLaunchManager {
           assertPublicationCurrent: () => assertCurrent(true),
           onPublished: () => {
             published = true;
+            markParams.onPublished?.(updated);
           },
         });
         if (result.publication !== "published") {

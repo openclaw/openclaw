@@ -10,20 +10,18 @@ describe("buildDirectoryCacheKey", () => {
       input: {
         channel: "workspace",
         kind: "channel",
-        source: "cache",
       },
-      expected: "workspace:default:channel:cache:default:query:",
+      expected: "workspace:default:channel:default:query:",
     },
     {
       input: {
         channel: "richchat",
         accountId: "work",
         kind: "user",
-        source: "live",
         signature: "v2",
         query: "alice",
       },
-      expected: "richchat:work:user:live:v2:query:alice",
+      expected: "richchat:work:user:v2:query:alice",
     },
   ] satisfies Array<{
     input: Parameters<typeof buildDirectoryCacheKey>[0];

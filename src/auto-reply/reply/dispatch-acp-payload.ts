@@ -1,4 +1,3 @@
-// Prepares ACP reply payloads and applies TTS before delivery.
 import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
@@ -55,10 +54,7 @@ export async function maybeApplyAcpTts(params: {
   ttsAuto?: TtsAutoMode;
   skipTts?: boolean;
 }): Promise<ReplyPayload> {
-  if (params.skipTts) {
-    return params.payload;
-  }
-  if (isReplyPayloadStatusNotice(params.payload)) {
+  if (params.skipTts || isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
   }
   const ttsStatus = resolveStatusTtsSnapshot({
@@ -68,10 +64,7 @@ export async function maybeApplyAcpTts(params: {
     channelId: params.channel,
     accountId: params.accountId,
   });
-  if (!ttsStatus) {
-    return params.payload;
-  }
-  if (ttsStatus.autoMode === "inbound" && !params.inboundAudio) {
+  if (!ttsStatus || (ttsStatus.autoMode === "inbound" && !params.inboundAudio)) {
     return params.payload;
   }
   if (
@@ -121,13 +114,7 @@ export async function shouldTreatDeliveredTextAsVisible(params: {
   const outbound = getChannelPlugin(channelId)?.outbound;
   const visibilityOverride =
     outbound?.shouldTreatDeliveredTextAsVisible ?? outbound?.shouldTreatRoutedTextAsVisible;
-  if (visibilityOverride) {
-    return visibilityOverride({
-      kind: params.kind,
-      text: params.text,
-    });
-  }
-  return false;
+  return visibilityOverride?.({ kind: params.kind, text: params.text }) ?? false;
 }
 
 export function getAcpBlockTranscriptText(

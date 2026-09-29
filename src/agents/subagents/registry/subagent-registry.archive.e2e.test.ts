@@ -453,7 +453,7 @@ describe("subagent registry archive behavior", () => {
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("retains cancellation evidence when the native retirement commit is rejected", async () => {
+  it("retains cancellation evidence when the retirement write is rejected", async () => {
     const now = Date.now();
     const runId = "run-killed-tombstone-retry";
     addCanonicalSubagentRunForTests({
@@ -477,21 +477,21 @@ describe("subagent registry archive behavior", () => {
     // The stopped execution no longer owns session effects, but its native row
     // still owns durable cancellation evidence until retirement commits.
     entry.execution.suppressSessionEffects = true;
-    const persist = registryState.persistSubagentRunsToDiskOrThrow;
-    persist(subagentRuns, [runId]);
-    let rejectedCommits = 0;
+    registryState.persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+    const persist = registryState.persistSubagentRunsToDiskAsyncOrThrow;
+    let rejectedWrites = 0;
     const writer = vi
-      .spyOn(registryState, "persistSubagentRunsToDiskOrThrow")
-      .mockImplementation((runs, changedRunIds) => {
-        if (changedRunIds?.includes(runId) && !runs.has(runId)) {
-          rejectedCommits += 1;
-          throw new Error("native retirement commit rejected");
+      .spyOn(registryState, "persistSubagentRunsToDiskAsyncOrThrow")
+      .mockImplementation(async (runs, changedRunIds, options) => {
+        if (changedRunIds.includes(runId) && options.retireRunIds?.includes(runId)) {
+          rejectedWrites += 1;
+          throw new Error("retirement write rejected");
         }
-        persist(runs, changedRunIds);
+        await persist(runs, changedRunIds, options);
       });
     try {
       await sweepAndSettleCleanup();
-      expect(rejectedCommits).toBe(1);
+      expect(rejectedWrites).toBe(1);
       expect(subagentRuns.get(runId)).toBe(entry);
       expect(entry).toMatchObject({
         endedReason: "subagent-killed",

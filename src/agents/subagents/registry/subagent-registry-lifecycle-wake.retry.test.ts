@@ -136,7 +136,7 @@ describe("requester settle retry lifetime", () => {
             persistedWakes.push(structuredClone(entry.requesterSettleWake));
           },
           clearPendingLifecycleError: vi.fn(),
-          countPendingDescendantRuns: () => 0,
+          countPendingDescendantRuns: async () => 0,
           getLatestRunForChildSession: () => null,
           suppressAnnounceForSteerRestart: () => false,
           shouldEmitEndedHookForRun: () => false,

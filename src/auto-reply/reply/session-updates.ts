@@ -1,4 +1,3 @@
-/** Session update helpers for skill snapshots and completed compaction accounting. */
 import crypto from "node:crypto";
 import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {

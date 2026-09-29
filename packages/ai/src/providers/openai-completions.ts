@@ -41,7 +41,7 @@ import {
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
 import { resolveCacheRetention } from "./cache-retention.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { buildCopilotDynamicHeaders } from "./github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "./openai-completions-tool-calls.js";
 import { createOpenAIProviderClient } from "./openai-provider-client.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -254,12 +254,7 @@ function createClient(
 
   const headers = { ...model.headers };
   if (model.provider === "github-copilot") {
-    const hasImages = hasCopilotVisionInput(context.messages);
-    const copilotHeaders = buildCopilotDynamicHeaders({
-      messages: context.messages,
-      hasImages,
-    });
-    Object.assign(headers, copilotHeaders);
+    Object.assign(headers, buildCopilotDynamicHeaders(context.messages));
   }
 
   if (sessionId && compat.sessionAffinity !== "none") {
