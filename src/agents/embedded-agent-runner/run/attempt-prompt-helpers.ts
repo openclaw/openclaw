@@ -57,11 +57,6 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
-/**
- * Resolves prompt-build hook contributions for one attempt. Next-turn
- * injections are drained once per run and cached for retries so destructive
- * session-store reads do not lose plugin context after a failed first attempt.
- */
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
@@ -340,14 +335,8 @@ function extractUserMessagePromptText(content: unknown): string | undefined {
 function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: string): boolean {
   const normalizedPrompt = prompt.replace(/\r\n/g, "\n");
   const normalizedOrphanText = orphanText.replace(/\r\n/g, "\n").trim();
-  if (!normalizedOrphanText) {
-    return false;
-  }
-  const queuedBlockPrefix = `${QUEUED_USER_MESSAGE_MARKER}\n${normalizedOrphanText}`;
   return (
-    normalizedPrompt === queuedBlockPrefix ||
-    normalizedPrompt.startsWith(`${queuedBlockPrefix}\n`) ||
-    normalizedPrompt.includes(`\n${queuedBlockPrefix}\n`) ||
+    normalizedOrphanText.length > 0 &&
     `\n${normalizedPrompt}\n`.includes(`\n${normalizedOrphanText}\n`)
   );
 }
@@ -363,7 +352,6 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
-  trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
@@ -458,7 +446,6 @@ function resolveRuntimeContextSessionTarget(params: {
   };
 }
 
-/** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
   attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;

@@ -114,6 +114,10 @@ export async function handleSendChat(
   ) {
     return undefined;
   }
+  if (opts?.intent && chatProviderReviewRow(host)?.sendDisabledReason) {
+    host.requestUpdate?.();
+    return undefined;
+  }
   const previousDraft = host.chatMessage;
   const previousMentions = host.chatMentions?.map((mention) => ({ ...mention }));
   const previousReplyTarget = host.chatReplyTarget ? { ...host.chatReplyTarget } : null;
@@ -237,9 +241,9 @@ export async function handleSendChat(
       return undefined;
     }
 
-    host.chatRunError = null;
     const parsed = rawParsedCommand;
     if (/^\/(?:btw|side)(?::|\s|$)/i.test(userMessage)) {
+      host.chatRunError = null;
       const question = extractCompanionCommandQuestion(userMessage);
       const submitKey = chatSubmitKey(host, "local", message, []);
       await withChatSubmitGuard(host, submitKey, async () => {
@@ -279,6 +283,7 @@ export async function handleSendChat(
         if (host.sessionKey !== submittedSessionKey) {
           return "handled" as const;
         }
+        host.chatRunError = null;
         if (messageOverride == null) {
           clearComposer();
           recordNonTranscriptInputHistory(host, message);
@@ -290,6 +295,16 @@ export async function handleSendChat(
         return undefined;
       }
     }
+    const forwardModel =
+      parsed?.command.key === "model" && shouldForwardModelCommandToServer(parsed.args);
+    if (
+      (!parsed?.command.executeLocal || forwardModel) &&
+      chatProviderReviewRow(host)?.sendDisabledReason
+    ) {
+      host.requestUpdate?.();
+      return undefined;
+    }
+    host.chatRunError = null;
     // Approval controls also precede the first snapshot that hydrates the local run.
     if (
       parsed?.command.key === "approve" &&
@@ -328,8 +343,6 @@ export async function handleSendChat(
       return undefined;
     }
 
-    const forwardModel =
-      parsed?.command.key === "model" && shouldForwardModelCommandToServer(parsed.args);
     if (parsed?.command.executeLocal && !forwardModel) {
       if (shouldQueueLocalSlashCommand(parsed.command.key)) {
         if (chatSendHoldReason(host, submittedSessionKey)) {
@@ -520,7 +533,7 @@ export async function handleSendChat(
     ) {
       return;
     }
-    if (chatSendHoldReason(host, submittedSessionKey)) {
+    if (chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId)) {
       // The composer owns transient recovery notices, including their removal.
       host.requestUpdate?.();
       return;
@@ -580,7 +593,7 @@ export async function handleSendChat(
         return;
       }
       queued = { ...queued, ...payload.update };
-      const hold = chatSendHoldReason(host, submittedSessionKey);
+      const hold = chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId);
       if (hold || (intent && (isChatBusy(host) || hasDirectSessionRun(host)))) {
         retireOutboxPayload(queued);
         if (hold) {

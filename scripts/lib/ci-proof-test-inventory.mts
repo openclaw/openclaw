@@ -1059,7 +1059,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/embedded-agent-helpers/error-text.test.ts",
   "src/agents/embedded-agent-runner.guard.test.ts",
   "src/agents/embedded-agent-runner.openai-tool-id-preservation.test.ts",
-  "src/agents/embedded-agent-runner.sanitize-session-history.policy.test.ts",
   "src/agents/embedded-agent-runner.sanitize-session-history.test.ts",
   "src/agents/embedded-agent-runner/compact.auth-preparation.test.ts",
   "src/agents/embedded-agent-runner/compact.delegate.test.ts",

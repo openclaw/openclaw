@@ -229,11 +229,7 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
   return (
     (attempt.clientToolCalls?.length ?? 0) > 0 ||
     attempt.didSendDeterministicApprovalPrompt === true ||
-    hasCommittedMessagingToolDeliveryEvidence({
-      messagingToolSentTexts: attempt.messagingToolSentTexts ?? [],
-      messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls ?? [],
-      messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
-    }) ||
+    hasCommittedMessagingToolDeliveryEvidence(attempt) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.runtimeContinuationStarted === true ||
     hasAsyncActivity(attempt.toolMetas) ||

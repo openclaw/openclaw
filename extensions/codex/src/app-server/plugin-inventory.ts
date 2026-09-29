@@ -205,11 +205,11 @@ export async function readCodexPluginInventory(
         .map((app) => app.id)
         .filter(Boolean)
         .toSorted() ?? [];
-    const appOwnership = resolveAppOwnership({
-      detail,
-      appInventory,
-      summary,
-    });
+    const appOwnership = detail?.apps.length
+      ? "proven"
+      : appInventory?.snapshot?.apps.some((app) => app.pluginDisplayNames.includes(summary.name))
+        ? "ambiguous"
+        : "none";
     if (appOwnership === "ambiguous") {
       diagnostics.push({
         code: "app_ownership_ambiguous",
@@ -484,20 +484,6 @@ async function readPluginDetail(
   }
 }
 
-function resolveAppOwnership(params: {
-  detail?: v2.PluginDetail;
-  appInventory?: CodexAppInventoryCacheRead;
-  summary: v2.PluginSummary;
-}): "proven" | "ambiguous" | "none" {
-  if (params.detail && params.detail.apps.length > 0) {
-    return "proven";
-  }
-  const apps = params.appInventory?.snapshot?.apps ?? [];
-  return apps.some((app) => app.pluginDisplayNames.includes(params.summary.name))
-    ? "ambiguous"
-    : "none";
-}
-
 function resolveOwnedApps(params: {
   pluginPolicy: ResolvedCodexPluginPolicy;
   detail?: v2.PluginDetail;
@@ -561,32 +547,24 @@ function resolveOwnedAppApprovalOverrideKeys(
     return {};
   }
   const appName = app.name.trim();
-  const appNameLower = appName.toLowerCase();
+  const prefixes = [...new Set([appName, appName.toLowerCase()])].filter(Boolean);
   // Agents: app/read includes disabled tools. Keep every non-read-only alias,
   // including collisions with read-only titles; retired names cannot authorize
   // a current tool and must not prevent the entire app from being admitted.
-  const keys = app.toolSummaries
-    .filter((tool) => !tool.isReadOnly)
-    .flatMap((tool) => resolveAppToolConfigKeys({ appName, appNameLower, tool }));
-  return { approvalOverrideToolConfigKeys: Array.from(new Set(keys)).toSorted() };
-}
-
-function resolveAppToolConfigKeys(params: {
-  appName: string;
-  appNameLower: string;
-  tool: { name: string; title?: string | null };
-}): string[] {
-  const keys = [params.tool.name];
-  if (params.tool.title) {
-    keys.push(params.tool.title);
+  const keys = new Set<string>();
+  for (const tool of app.toolSummaries) {
+    if (tool.isReadOnly) {
+      continue;
+    }
+    keys.add(tool.name);
+    if (tool.title) {
+      keys.add(tool.title);
+    }
+    for (const prefix of prefixes) {
+      keys.add(`${prefix}_${tool.name}`);
+    }
   }
-  if (params.appName) {
-    keys.push(`${params.appName}_${params.tool.name}`);
-  }
-  if (params.appNameLower && params.appNameLower !== params.appName) {
-    keys.push(`${params.appNameLower}_${params.tool.name}`);
-  }
-  return keys;
+  return { approvalOverrideToolConfigKeys: Array.from(keys).toSorted() };
 }
 
 function findPluginSummary(

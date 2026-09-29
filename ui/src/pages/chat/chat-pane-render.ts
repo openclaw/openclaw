@@ -184,8 +184,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
     // Placement progress explains this gate; other gates need a reason or sessionDisabledBanner.
     const disabledReason =
-      sessionParticipationBlocked && !suggestionViewer
-        ? t("chat.sessionSharing.readOnlyNotice")
+      !catalogKey && !suggestionViewer
+        ? (selectedSession?.sendDisabledReason ??
+          (sessionParticipationBlocked ? t("chat.sessionSharing.readOnlyNotice") : null))
         : null;
     const modelRequiredReason = catalogKey || suggestionViewer ? undefined : requiredReason;
     const typingEnabled =
@@ -350,6 +351,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         (state.connected && (placementStartup || initialHistoryUnavailable) ? null : pendingReason),
       disabledReasonTone:
         !composerAccess.canSend ||
+        disabledReason ||
         placementComposer.busyMessage ||
         (sessionParticipationBlocked && !suggestionViewer)
           ? ("info" as const)

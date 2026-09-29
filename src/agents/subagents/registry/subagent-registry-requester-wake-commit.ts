@@ -1,9 +1,12 @@
+import { isDeepStrictEqual } from "node:util";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
 import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { captureRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
 
 // Reporting thresholds never change the durable obligation or retry cadence.
 const REQUESTER_SETTLE_WAKE_COMMIT_SUSTAINED_FAILURES = 5;
@@ -12,6 +15,10 @@ const REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS = 120_000;
 
 // Count emitted reports separately: not every reported rejection advances commit failures.
 const REQUESTER_SETTLE_WAKE_FAILURE_REPORT_BUDGET = 5;
+
+type WakeCommitFailureRetention =
+  | boolean
+  | ((error: unknown, pending: PendingRequesterSettleWakeCommit) => boolean);
 
 function clearPendingWakeCommit(
   context: SubagentLifecycleWakeContext,
@@ -106,45 +113,69 @@ export function commitRequesterWake(
   context: SubagentLifecycleWakeContext,
   entries: readonly SubagentRunRecord[],
   generation: number | undefined,
-  commit: (entries: readonly SubagentRunRecord[]) => boolean | Promise<boolean>,
-  retainOnFailure: boolean,
+  commit: PendingRequesterSettleWakeCommit["commit"],
+  retainOnFailure: WakeCommitFailureRetention,
   retryWholeBatch = false,
+  stateContext?: OpenClawStateWorkerContext,
 ): Promise<void> {
   const owners = new Map(
     entries.map((entry) => [
       entry,
       {
-        runId: entry.runId,
-        createdAt: entry.createdAt,
-        taskRunId: entry.taskRunId,
+        identity: captureRequesterSettleRunIdentity(entry),
         wake: entry.requesterSettleWake,
         wakeJson: JSON.stringify(entry.requesterSettleWake),
         deliveryGeneration: entry.delivery?.generation,
-        generation: entry.generation,
         execution: entry.execution,
         cancellation: entry.killReconciliation,
         suppressed: entry.suppressCompletionDelivery,
+        published: false,
+        retired: false,
       },
     ]),
   );
   const pending: PendingRequesterSettleWakeCommit = {
     entries: [...entries],
+    generation,
+    stateContext,
     commit,
     retryWholeBatch,
     failures: 0,
     nextAttemptAt: 0,
+    isPublishedRetirement: (entry) => {
+      const owner = owners.get(entry);
+      return owner?.published === true && owner.retired;
+    },
+    adoptPublished(members) {
+      for (const entry of members) {
+        const owner = owners.get(entry);
+        if (!owner) {
+          continue;
+        }
+        owner.published = true;
+        owner.retired =
+          pending.committedWake?.result.retiredRunIds.includes(owner.identity.runId) === true;
+        owner.wake = entry.requesterSettleWake;
+        owner.wakeJson = JSON.stringify(owner.wake);
+        owner.execution = entry.execution;
+        owner.cancellation = entry.killReconciliation;
+        owner.suppressed = entry.suppressCompletionDelivery;
+      }
+    },
     isCurrent: (entry) => {
       const owner = owners.get(entry);
       if (
         !owner ||
-        context.options.runs.get(owner.runId) !== entry ||
-        entry.runId !== owner.runId ||
-        entry.createdAt !== owner.createdAt ||
-        entry.taskRunId !== owner.taskRunId ||
-        entry.generation !== owner.generation ||
-        !entry.requesterSettleWake ||
-        entry.requesterSettleWake.rearmGeneration !== generation ||
+        !isDeepStrictEqual(captureRequesterSettleRunIdentity(entry), owner.identity) ||
         context.newerGenerationOwnsSession(entry)
+      ) {
+        return false;
+      }
+      const live = context.options.runs.get(owner.identity.runId);
+      if (
+        (owner.published && owner.retired ? live !== undefined : live !== entry) ||
+        (!owner.published &&
+          (!entry.requesterSettleWake || entry.requesterSettleWake.rearmGeneration !== generation))
       ) {
         return false;
       }
@@ -156,10 +187,9 @@ export function commitRequesterWake(
       ) {
         return true;
       }
-      // Independent blocking republishes the row but does not consume its wake.
-      // Keep that exact closed member in settlement: the store must validate its
-      // durable state and consume the obsolete wake without rewriting its failure.
+      // Independent blocking keeps the same closed member in its frozen wave.
       return (
+        !owner.published &&
         entry.execution.status === "terminal" &&
         entry.pauseReason !== "sessions_yield" &&
         entry.suppressCompletionDelivery === true &&
@@ -192,14 +222,34 @@ export function retryPendingWakeCommit(
   return runPendingWakeCommit(context, pending, true, "retry");
 }
 
+export function rearmRequesterWakeAfterCommit(
+  context: SubagentLifecycleWakeContext,
+  pending: PendingRequesterSettleWakeCommit,
+  entry: SubagentRunRecord,
+  isSourceCurrent: () => boolean,
+): void {
+  if (
+    pending.needsWakeContinuation &&
+    isSourceCurrent() &&
+    pending.isCurrent(entry) &&
+    entry.requesterSettleWake &&
+    getPendingWakeCommit(context, entry) === undefined
+  ) {
+    pending.needsWakeContinuation = false;
+    context.pendingRequesterSettleWakeRearms.add(entry);
+  }
+}
+
 function runPendingWakeCommit(
   context: SubagentLifecycleWakeContext,
   pending: PendingRequesterSettleWakeCommit,
-  retainOnFailure: boolean,
+  retainOnFailure: WakeCommitFailureRetention,
   attempt: "initial" | "retry",
 ): Promise<void> {
-  const retain = () => {
-    if (retainOnFailure) {
+  const retain = (error?: unknown) => {
+    const shouldRetain =
+      typeof retainOnFailure === "function" ? retainOnFailure(error, pending) : retainOnFailure;
+    if (shouldRetain) {
       deferWakeCommit(context, pending);
     } else {
       clearPendingWakeCommit(context, pending);
@@ -213,7 +263,11 @@ function runPendingWakeCommit(
         );
         // A no-wake decision belongs to its complete original batch. Storage may
         // retry it unchanged; changed membership needs a fresh sweeper decision.
-        if (pending.retryWholeBatch && members.length !== pending.entries.length) {
+        if (
+          pending.retryWholeBatch &&
+          !pending.committedWake &&
+          members.length !== pending.entries.length
+        ) {
           clearPendingWakeCommit(context, pending);
           return;
         }
@@ -223,14 +277,14 @@ function runPendingWakeCommit(
           retain();
           return;
         }
-        if (members.length === 0 || (await pending.commit(members))) {
+        if (members.length === 0 || (await pending.commit(members, pending))) {
           clearPendingWakeCommit(context, pending);
         } else {
           // A temporarily closed Gateway cannot erase already observed delivery.
           retain();
         }
       } catch (error) {
-        retain();
+        retain(error);
         throw error;
       }
     })

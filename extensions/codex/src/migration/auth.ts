@@ -50,7 +50,7 @@ const CODEX_REASON_MISSING_AUTH_METADATA = "missing auth metadata";
 const CODEX_REASON_AUTH_STORAGE_NOT_IMPORTABLE = "credential storage is not importable";
 type CodexConfigPatchMode = "apply" | "none" | "return";
 
-export type CodexAuthSource = Pick<CodexSource, "codexHome" | "authPath" | "modelsCachePath">;
+export type CodexAuthSource = Pick<CodexSource, "codexHome" | "modelsCachePath">;
 
 type CodexAuthProfileConfig = {
   profileId: string;
