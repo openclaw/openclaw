@@ -1,4 +1,5 @@
 // Msteams tests cover message handler.authz plugin behavior.
+import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
@@ -75,17 +76,10 @@ describe("msteams monitor handler authz", () => {
   ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
     const upsertPairingRequest = vi.fn(async () => null);
-    const recordInboundSession = vi.fn(async () => undefined);
 
     return createMessageHandlerDeps(cfg, {
       readAllowFromStore,
       upsertPairingRequest,
-      recordInboundSession,
-      resolveAgentRoute: vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
-        sessionKey: `msteams:${peer.kind}:${peer.id}`,
-        agentId: "default",
-        accountId: "default",
-      })),
       hasControlCommand: options.hasControlCommand,
       isControlCommandMessage: options.isControlCommandMessage,
       shouldComputeCommandAuthorized: options.shouldComputeCommandAuthorized,
@@ -97,7 +91,7 @@ describe("msteams monitor handler authz", () => {
 
   function resetThreadMocks() {
     currentParentMessageId = `parent-msg-${++parentMessageSequence}`;
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
     graphThreadMockState.resolveTeamGroupId.mockClear();
     graphThreadMockState.fetchChannelMessage.mockReset();
     graphThreadMockState.fetchThreadReplies.mockReset();
@@ -282,11 +276,7 @@ describe("msteams monitor handler authz", () => {
   }
 
   function firstSettledDispatch(): { ctxPayload?: unknown } {
-    const dispatched = mockCallArg(
-      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher,
-      0,
-      0,
-    );
+    const dispatched = mockCallArg(runtimeApiMockState.dispatchReplyFromConfig, 0, 0);
     return { ctxPayload: recordFromMockCall(dispatched).ctx };
   }
 
@@ -351,7 +341,7 @@ describe("msteams monitor handler authz", () => {
   });
 
   it("keeps the DM pairing path wired through shared access resolution", async () => {
-    const { conversationStore, deps, upsertPairingRequest, recordInboundSession } = createDeps({
+    const { conversationStore, deps, upsertPairingRequest, resolveStorePath } = createDeps({
       channels: {
         msteams: {
           dmPolicy: "pairing",
@@ -424,8 +414,10 @@ describe("msteams monitor handler authz", () => {
       locale: "en-US",
       timezone: "America/New_York",
     });
-    expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(
+      listSessionEntries({ agentId: "main", storePath: resolveStorePath(), readOnly: true }),
+    ).toEqual([]);
+    expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
   // Regression coverage for #58774: proactive sends fail with HTTP 403 when
@@ -647,7 +639,7 @@ describe("msteams monitor handler authz", () => {
     await handler(createAttackerGroupActivity());
 
     expect(conversationStore.upsert).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(logMeta(deps.log.info, "dropping group message (not in groupAllowFrom)").sender).toBe(
       "attacker-aad",
     );
@@ -673,7 +665,7 @@ describe("msteams monitor handler authz", () => {
 
     expect(hasControlCommand).toHaveBeenCalledWith("/config set foo bar", deps.cfg);
     expect(conversationStore.upsert).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
   it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
@@ -700,7 +692,7 @@ describe("msteams monitor handler authz", () => {
     await handler(createAttackerGroupActivity({ text: "hello /status" }));
 
     expect(isControlCommandMessage).toHaveBeenCalledWith("hello /status", deps.cfg);
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     const dispatched = firstSettledDispatch();
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
     expect(ctxPayload.BodyForAgent).toBe("hello /status");
@@ -739,14 +731,17 @@ describe("msteams monitor handler authz", () => {
       }),
     );
 
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
       ([text]) => text === "Teams message in channel from Member",
     );
     if (!systemEventCall) {
       throw new Error("expected skipped Teams message system event");
     }
-    expect(systemEventCall[1]).toMatchObject({});
+    expect(systemEventCall[1]).toEqual({
+      sessionKey: "agent:main:msteams:channel:19:channel@thread.tacv2",
+      contextKey: "msteams:message:19:channel@thread.tacv2:msg-skip-mention",
+    });
     expect(systemEventCall[0]).not.toContain("please run the deployment");
   });
 
@@ -785,7 +780,7 @@ describe("msteams monitor handler authz", () => {
       }),
     );
 
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
       ([text]) => text === "Teams message in channel from Member",
     );
@@ -796,7 +791,7 @@ describe("msteams monitor handler authz", () => {
     const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched.ctxPayload).BodyForAgent).toBe("please check the build");
     const dispatchParams = recordFromMockCall(
-      mockCallArg(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher, 0, 0),
+      mockCallArg(runtimeApiMockState.dispatchReplyFromConfig, 0, 0),
     );
     expect(dispatchParams.cfg).not.toBe(deps.cfg);
     expect(recordFromMockCall(dispatchParams.cfg).agents).toEqual({

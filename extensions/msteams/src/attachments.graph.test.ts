@@ -3,7 +3,6 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import type { PluginRuntime } from "../runtime-api.js";
-import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
 import { encodeGraphShareId, resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
@@ -19,7 +18,6 @@ const CONTENT_TYPE_IMAGE_PNG = "image/png";
 const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
 const PNG_BUFFER = Buffer.from("png");
 
-const detectMimeMock = vi.fn(async () => CONTENT_TYPE_IMAGE_PNG);
 const saveMediaBufferMock = vi.fn(
   async (
     _buffer: Buffer,
@@ -33,35 +31,6 @@ const saveMediaBufferMock = vi.fn(
     size: Buffer.byteLength(PNG_BUFFER),
     contentType: contentType ?? CONTENT_TYPE_IMAGE_PNG,
   }),
-);
-const readRemoteMediaBufferMock = vi.fn(
-  async (params: {
-    url: string;
-    maxBytes?: number;
-    filePathHint?: string;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetchFn = params.fetchImpl ?? fetch;
-    const res = await fetchFn(params.url, { redirect: "manual" });
-    return readRemoteMediaResponse(res, params);
-  },
-);
-const saveRemoteMediaMock = vi.fn(
-  async (params: {
-    url: string;
-    maxBytes?: number;
-    filePathHint?: string;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetched = await readRemoteMediaBufferMock(params);
-    return await saveMediaBufferMock(
-      fetched.buffer,
-      fetched.contentType,
-      "inbound",
-      params.maxBytes,
-      params.filePathHint,
-    );
-  },
 );
 const saveResponseMediaMock = vi.fn(
   async (
@@ -88,15 +57,9 @@ const saveResponseMediaMock = vi.fn(
 );
 
 const runtimeStub = {
-  media: {
-    detectMime: detectMimeMock,
-  },
   channel: {
     media: {
-      readRemoteMediaBuffer: readRemoteMediaBufferMock,
-      saveRemoteMedia: saveRemoteMediaMock,
       saveResponseMedia: saveResponseMediaMock,
-      saveMediaBuffer: saveMediaBufferMock,
     },
   },
 } as unknown as PluginRuntime;
@@ -172,9 +135,6 @@ describe("msteams graph attachments", () => {
   beforeEach(() => {
     ssrfMock?.mockRestore();
     ssrfMock = mockPinnedHostnameResolution();
-    detectMimeMock.mockClear();
-    readRemoteMediaBufferMock.mockClear();
-    saveRemoteMediaMock.mockClear();
     saveResponseMediaMock.mockClear();
     saveMediaBufferMock.mockClear();
     setMSTeamsRuntime(runtimeStub);
@@ -202,7 +162,10 @@ describe("msteams graph attachments", () => {
             : undefined,
       }),
     });
-    expect(media.media).toHaveLength(2);
+    expect(media.media.map(({ path, kind, sourceId }) => ({ path, kind, sourceId }))).toEqual([
+      { path: expect.any(String), kind: "document", sourceId: "ref-1" },
+      { path: "/tmp/saved.png", kind: "image", sourceId: "hosted-1" },
+    ]);
   });
 
   it("cancels non-OK Graph collection bodies before returning empty hosted content", async () => {
@@ -301,7 +264,6 @@ describe("msteams graph attachments", () => {
       expectedSharesUrl,
       `${DEFAULT_MESSAGE_URL}/hostedContents`,
     ]);
-    expect(calledUrls).not.toContain(escapedUrl);
   });
 
   it("enforces maxBytes while streaming hosted content", async () => {

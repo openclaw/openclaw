@@ -70,7 +70,7 @@ async function sendChannelMessage(params: {
 
 describe("Teams mention policy in bot-created channel threads", () => {
   beforeEach(() => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
   });
   afterEach(() => {
     clearRuntimeConfigSnapshot();
@@ -188,9 +188,7 @@ describe("Teams mention policy in bot-created channel threads", () => {
       sendActivity: vi.fn(async () => undefined),
     } as unknown as Parameters<typeof handler>[0]);
 
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-      testCase.expected,
-    );
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(testCase.expected);
   });
 
   it.each([
@@ -241,9 +239,7 @@ describe("Teams mention policy in bot-created channel threads", () => {
         sendActivity: vi.fn(async () => undefined),
       } as unknown as Parameters<typeof handler>[0]);
 
-      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-        expected,
-      );
+      expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(expected);
     },
   );
 
@@ -293,9 +289,7 @@ describe("Teams mention policy in bot-created channel threads", () => {
         sendActivity: vi.fn(async () => undefined),
       } as unknown as Parameters<typeof handler>[0]);
 
-      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-        expected,
-      );
+      expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(expected);
     },
   );
 
@@ -360,7 +354,7 @@ describe("Teams mention policy in bot-created channel threads", () => {
     await queued.promise;
     await flushAndDrain();
     await Promise.all(handlers);
-    const dispatch = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher;
+    const dispatch = runtimeApiMockState.dispatchReplyFromConfig;
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({

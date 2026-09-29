@@ -120,9 +120,9 @@ async function runMessageActivity(params: {
 }
 
 function lastDispatchedCtxPayload(): Record<string, unknown> {
-  const dispatched = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls.at(
-    -1,
-  )?.[0] as { ctx?: Record<string, unknown> } | undefined;
+  const dispatched = runtimeApiMockState.dispatchReplyFromConfig.mock.calls.at(-1)?.[0] as
+    | { ctx?: Record<string, unknown> }
+    | undefined;
   if (!dispatched?.ctx) {
     throw new Error("expected dispatched context payload");
   }
@@ -131,7 +131,7 @@ function lastDispatchedCtxPayload(): Record<string, unknown> {
 
 describe("msteams adaptive card action invoke", () => {
   beforeEach(() => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
   });
 
   it("forwards adaptive card submitted data to the agent as message text", async () => {
@@ -150,13 +150,13 @@ describe("msteams adaptive card action invoke", () => {
 
     await runAdaptiveCardInvoke(registered, payload);
 
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     const expectedBody = JSON.stringify(payload.action.data);
     const ctxPayload = lastDispatchedCtxPayload();
     expect(ctxPayload.RawBody).toBe(expectedBody);
     expect(ctxPayload.BodyForAgent).toBe(expectedBody);
     expect(ctxPayload.CommandBody).toBe(expectedBody);
-    expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
+    expect(ctxPayload.SessionKey).toBe("agent:main:msteams:direct:user-aad");
     expect(ctxPayload.SenderId).toBe("user-aad");
   });
 
@@ -246,7 +246,7 @@ describe("msteams adaptive card action invoke", () => {
         await runMessageActivity({ value: data, deps });
       }
 
-      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
       expect(deps.log.info).toHaveBeenCalledWith("msteams approval ignored", {
         reason: token ? "unknown or expired card token" : "missing card token",
       });
@@ -261,7 +261,7 @@ describe("msteams adaptive card action invoke", () => {
     const ctxPayload = lastDispatchedCtxPayload();
     expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(data));
     expect(ctxPayload.CommandBody).toBe(JSON.stringify(data));
-    expect(ctxPayload.SessionKey).toBe("msteams:direct:user-aad");
+    expect(ctxPayload.SessionKey).toBe("agent:main:msteams:direct:user-aad");
     expect(ctxPayload.SenderId).toBe("user-aad");
   });
 

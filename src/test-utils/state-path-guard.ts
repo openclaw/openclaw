@@ -1,5 +1,6 @@
 // Test instrumentation rejects state access outside the shared worker home without redirecting it.
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, vi } from "vitest";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -39,7 +40,21 @@ export function useIsolatedStateGuard(): void {
       .spyOn(nodeSqlite, "openNodeSqliteDatabase")
       .mockImplementation((location, options) => {
         if (location !== ":memory:") {
-          assertOwnedPath(location);
+          // SQLite also accepts query-bearing URIs; Windows encodes the entire
+          // namespaced path rather than using file://. Check the same physical file.
+          const uriPath = location.startsWith("file:")
+            ? location.slice(5).split(/[?#]/, 1)[0]!
+            : undefined;
+          // SQLite may stop at NUL before URL normalization removes later segments.
+          if (location.includes("\0") || uriPath?.includes("%00")) {
+            throw new Error("State isolation checks reject NUL in SQLite paths.");
+          }
+          const pathname = location.startsWith("file://")
+            ? fileURLToPath(location)
+            : location.startsWith("file:")
+              ? decodeURIComponent(uriPath!)
+              : location;
+          assertOwnedPath(pathname);
         }
         return openDatabase(location, options);
       });

@@ -28,7 +28,7 @@ const taglessHtmlAttachment = {
 };
 
 function firstDispatchedContext(): Record<string, unknown> {
-  const call = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0];
+  const call = runtimeApiMockState.dispatchReplyFromConfig.mock.calls[0];
   const params = call?.[0] as { ctx?: unknown } | undefined;
   if (!params?.ctx || typeof params.ctx !== "object") {
     throw new Error("expected dispatched Teams context");
@@ -45,7 +45,7 @@ describe("msteams message handler Graph media recovery", () => {
 
   beforeEach(() => {
     inboundMediaMockState.resolve.mockReset();
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
   });
 
   it.each([
@@ -95,7 +95,7 @@ describe("msteams message handler Graph media recovery", () => {
           resolveTeamAadGroupId: expect.any(Function),
         }),
       );
-      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
       expect(firstDispatchedContext()).toMatchObject({
         BodyForAgent: "Describe the attached image file",
         media: [
@@ -178,7 +178,7 @@ describe("msteams message handler Graph media recovery", () => {
 
     expect(inboundMediaMockState.resolve).toHaveBeenCalledTimes(1);
     expect(getTeamDetails).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
@@ -283,6 +283,6 @@ describe("msteams message handler Graph media recovery", () => {
     expect(getTeamDetails).not.toHaveBeenCalled();
     expect(inboundMediaMockState.resolve).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 // Conversation allowlists authorize group threads without widening sender or DM access.
+import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 // Preserve module setup before modules that consume it.
@@ -35,12 +36,6 @@ function createDeps(cfg: OpenClawConfig) {
   return createMessageHandlerDeps(cfg, {
     readAllowFromStore: vi.fn(async () => ["attacker-aad"]),
     upsertPairingRequest: vi.fn(async () => null),
-    recordInboundSession: vi.fn(async () => undefined),
-    resolveAgentRoute: vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
-      sessionKey: `msteams:${peer.kind}:${peer.id}`,
-      agentId: "default",
-      accountId: "default",
-    })),
   });
 }
 
@@ -114,7 +109,7 @@ describe("msteams group conversation allowlist authorization", () => {
       conversationType: "groupChat" as const,
     },
   ])("authorizes $label by its group conversation allowlist", async (testCase) => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
     const { conversationStore, deps } = createDeps({
       channels: {
         msteams: {
@@ -142,11 +137,11 @@ describe("msteams group conversation allowlist authorization", () => {
     );
 
     expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("authorizes a group conversation from the documented direct allowlist fallback", async () => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
     const { conversationStore, deps } = createDeps({
       channels: {
         msteams: {
@@ -174,7 +169,7 @@ describe("msteams group conversation allowlist authorization", () => {
     );
 
     expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(runtimeApiMockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   const rejectedCases: ConversationCase[] = [
@@ -205,8 +200,8 @@ describe("msteams group conversation allowlist authorization", () => {
   it.each(rejectedCases)(
     "does not authorize $label by a group conversation allowlist",
     async (testCase) => {
-      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
-      const { conversationStore, deps } = createDeps({
+      runtimeApiMockState.dispatchReplyFromConfig.mockClear();
+      const { conversationStore, deps, resolveStorePath } = createDeps({
         channels: {
           msteams: {
             dmPolicy: "allowlist",
@@ -236,12 +231,15 @@ describe("msteams group conversation allowlist authorization", () => {
       );
 
       expect(conversationStore.upsert).not.toHaveBeenCalled();
-      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+      expect(
+        listSessionEntries({ agentId: "main", storePath: resolveStorePath(), readOnly: true }),
+      ).toEqual([]);
     },
   );
 
   it("drops a personal message with contradictory team scope before routing", async () => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyFromConfig.mockClear();
     const { conversationStore, deps, enqueueSystemEvent, resolveAgentRoute } = createDeps({
       channels: {
         msteams: {
@@ -264,6 +262,6 @@ describe("msteams group conversation allowlist authorization", () => {
     expect(conversationStore.upsert).not.toHaveBeenCalled();
     expect(resolveAgentRoute).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 });
